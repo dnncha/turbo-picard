@@ -63,7 +63,6 @@ impl From<rust_htslib::errors::Error> for MarkDuplicatesError {
 struct DuplicateKey {
     reference_name: String,
     position: i64,
-    cigar: String,
     mate_reference_name: String,
     mate_position: i64,
     template_length: i64,
@@ -246,7 +245,6 @@ fn duplicate_key(fields: &[String], flag: u16) -> DuplicateKey {
     DuplicateKey {
         reference_name: fields[2].clone(),
         position: fields[3].parse::<i64>().unwrap_or_default(),
-        cigar: fields[5].clone(),
         mate_reference_name: fields[6].clone(),
         mate_position: fields[7].parse::<i64>().unwrap_or_default(),
         template_length: fields[8].parse::<i64>().unwrap_or_default(),
@@ -255,15 +253,59 @@ fn duplicate_key(fields: &[String], flag: u16) -> DuplicateKey {
 }
 
 fn duplicate_key_bam(record: &bam::Record) -> DuplicateKey {
+    let reverse_strand = record.flags() & 0x10 != 0;
+    let cigar = record.cigar().to_string();
     DuplicateKey {
         reference_name: record.tid().to_string(),
-        position: record.pos(),
-        cigar: record.cigar().to_string(),
+        position: unclipped_five_prime_position(record.pos(), &cigar, reverse_strand),
         mate_reference_name: record.mtid().to_string(),
         mate_position: record.mpos(),
         template_length: record.insert_size(),
-        reverse_strand: record.flags() & 0x10 != 0,
+        reverse_strand,
     }
+}
+
+fn unclipped_five_prime_position(position: i64, cigar: &str, reverse_strand: bool) -> i64 {
+    let operations = parse_cigar(cigar);
+    if reverse_strand {
+        let reference_len: i64 = operations
+            .iter()
+            .filter(|(_, op)| matches!(op, 'M' | 'D' | 'N' | '=' | 'X'))
+            .map(|(len, _)| *len)
+            .sum();
+        let trailing_clip = operations
+            .iter()
+            .rev()
+            .take_while(|(_, op)| matches!(op, 'S' | 'H'))
+            .map(|(len, _)| *len)
+            .sum::<i64>();
+        position + reference_len + trailing_clip - 1
+    } else {
+        let leading_clip = operations
+            .iter()
+            .take_while(|(_, op)| matches!(op, 'S' | 'H'))
+            .map(|(len, _)| *len)
+            .sum::<i64>();
+        position - leading_clip
+    }
+}
+
+fn parse_cigar(cigar: &str) -> Vec<(i64, char)> {
+    let mut operations = Vec::new();
+    let mut length = String::new();
+
+    for character in cigar.chars() {
+        if character.is_ascii_digit() {
+            length.push(character);
+            continue;
+        }
+        if !length.is_empty() {
+            operations.push((length.parse::<i64>().unwrap_or_default(), character));
+            length.clear();
+        }
+    }
+
+    operations
 }
 
 fn quality_score(record: &bam::Record) -> u64 {
