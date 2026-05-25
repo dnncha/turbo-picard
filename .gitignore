@@ -1,2 +1,4 @@
 /target/
+/.conda-jeanluc/
+/benchmarks/runs/
 
