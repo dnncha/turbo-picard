@@ -184,7 +184,7 @@ fn run_bam(config: &MarkDuplicatesConfig) -> Result<MarkDuplicatesSummary, MarkD
     let header = bam::Header::from_template(reader.header());
     let mut writer = bam::Writer::from_path(&config.output, &header, bam::Format::Bam)?;
     let mut records = Vec::new();
-    let mut duplicate_groups = HashMap::<DuplicateKey, Vec<usize>>::new();
+    let mut eligible_indices = Vec::new();
     let mut summary = MarkDuplicatesSummary {
         library,
         unpaired_reads_examined: 0,
@@ -218,20 +218,21 @@ fn run_bam(config: &MarkDuplicatesConfig) -> Result<MarkDuplicatesSummary, MarkD
         } else {
             summary.unpaired_reads_examined += 1;
         }
-        let key = duplicate_key_bam(&record);
-        duplicate_groups.entry(key).or_default().push(record_index);
+        eligible_indices.push(record_index);
         records.push(record);
     }
+
+    let duplicate_groups = duplicate_groups(&records, &eligible_indices);
 
     for group in duplicate_groups.values() {
         if group.len() < 2 {
             continue;
         }
 
-        let representative = best_duplicate_representative(group, &records);
+        let representative_name = best_duplicate_representative_name(group, &records);
 
         for index in group.iter().copied() {
-            if index == representative {
+            if query_name(&records[index]) == representative_name {
                 continue;
             }
             let flag = records[index].flags();
@@ -266,17 +267,77 @@ fn duplicate_key(fields: &[String], flag: u16) -> DuplicateKey {
     }
 }
 
-fn duplicate_key_bam(record: &bam::Record) -> DuplicateKey {
+fn duplicate_groups(
+    records: &[bam::Record],
+    eligible_indices: &[usize],
+) -> HashMap<DuplicateKey, Vec<usize>> {
+    let mut paired_by_name = HashMap::<String, Vec<usize>>::new();
+    let mut duplicate_groups = HashMap::<DuplicateKey, Vec<usize>>::new();
+
+    for index in eligible_indices.iter().copied() {
+        let record = &records[index];
+        if record.flags() & PAIRED_FLAG != 0 {
+            paired_by_name
+                .entry(query_name(record))
+                .or_default()
+                .push(index);
+        } else {
+            duplicate_groups
+                .entry(single_duplicate_key_bam(record))
+                .or_default()
+                .push(index);
+        }
+    }
+
+    for indices in paired_by_name.into_values() {
+        let key = if indices.len() >= 2 {
+            pair_duplicate_key_bam(&records[indices[0]], &records[indices[1]])
+        } else {
+            single_duplicate_key_bam(&records[indices[0]])
+        };
+        duplicate_groups.entry(key).or_default().extend(indices);
+    }
+
+    duplicate_groups
+}
+
+fn single_duplicate_key_bam(record: &bam::Record) -> DuplicateKey {
     let reverse_strand = record.flags() & 0x10 != 0;
     let cigar = record.cigar().to_string();
+    let position = unclipped_five_prime_position(record.pos(), &cigar, reverse_strand);
     DuplicateKey {
         reference_name: record.tid().to_string(),
-        position: unclipped_five_prime_position(record.pos(), &cigar, reverse_strand),
+        position,
         mate_reference_name: record.mtid().to_string(),
         mate_position: record.mpos(),
         template_length: record.insert_size(),
         reverse_strand,
     }
+}
+
+fn pair_duplicate_key_bam(first: &bam::Record, second: &bam::Record) -> DuplicateKey {
+    let first_position = unclipped_record_position(first);
+    let second_position = unclipped_record_position(second);
+    let (left, right) = if (first.tid(), first_position) <= (second.tid(), second_position) {
+        (first, second)
+    } else {
+        (second, first)
+    };
+
+    DuplicateKey {
+        reference_name: left.tid().to_string(),
+        position: unclipped_record_position(left),
+        mate_reference_name: right.tid().to_string(),
+        mate_position: unclipped_record_position(right),
+        template_length: first.insert_size().abs().max(second.insert_size().abs()),
+        reverse_strand: false,
+    }
+}
+
+fn unclipped_record_position(record: &bam::Record) -> i64 {
+    let reverse_strand = record.flags() & 0x10 != 0;
+    let cigar = record.cigar().to_string();
+    unclipped_five_prime_position(record.pos(), &cigar, reverse_strand)
 }
 
 fn unclipped_five_prime_position(position: i64, cigar: &str, reverse_strand: bool) -> i64 {
@@ -330,19 +391,30 @@ fn quality_score(record: &bam::Record) -> u64 {
         .sum()
 }
 
-fn best_duplicate_representative(group: &[usize], records: &[bam::Record]) -> usize {
-    let mut best_index = group[0];
-    let mut best_score = quality_score(&records[best_index]);
+fn best_duplicate_representative_name(group: &[usize], records: &[bam::Record]) -> String {
+    let mut scores = Vec::<(String, u64, usize)>::new();
 
-    for index in group.iter().copied().skip(1) {
-        let score = quality_score(&records[index]);
-        if score > best_score {
-            best_index = index;
-            best_score = score;
+    for index in group.iter().copied() {
+        let name = query_name(&records[index]);
+        if let Some((_, score, _)) = scores
+            .iter_mut()
+            .find(|(existing_name, _, _)| existing_name == &name)
+        {
+            *score += quality_score(&records[index]);
+        } else {
+            scores.push((name, quality_score(&records[index]), index));
         }
     }
 
-    best_index
+    scores
+        .into_iter()
+        .max_by(|left, right| left.1.cmp(&right.1).then_with(|| right.2.cmp(&left.2)))
+        .map(|(name, _, _)| name)
+        .expect("non-empty duplicate group")
+}
+
+fn query_name(record: &bam::Record) -> String {
+    String::from_utf8_lossy(record.qname()).into_owned()
 }
 
 fn metrics_text(summary: &MarkDuplicatesSummary) -> String {
