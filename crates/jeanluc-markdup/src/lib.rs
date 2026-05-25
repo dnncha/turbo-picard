@@ -176,7 +176,8 @@ fn run_bam(config: &MarkDuplicatesConfig) -> Result<MarkDuplicatesSummary, MarkD
     let library = first_library_name(reader.header());
     let header = bam::Header::from_template(reader.header());
     let mut writer = bam::Writer::from_path(&config.output, &header, bam::Format::Bam)?;
-    let mut seen = HashMap::<DuplicateKey, usize>::new();
+    let mut records = Vec::new();
+    let mut duplicate_groups = HashMap::<DuplicateKey, Vec<usize>>::new();
     let mut summary = MarkDuplicatesSummary {
         library,
         unpaired_reads_examined: 0,
@@ -187,12 +188,13 @@ fn run_bam(config: &MarkDuplicatesConfig) -> Result<MarkDuplicatesSummary, MarkD
     };
 
     for result in reader.records() {
-        let mut record = result?;
-        let mut flag = record.flags();
+        let record = result?;
+        let flag = record.flags();
+        let record_index = records.len();
 
         if flag & UNMAPPED_FLAG != 0 {
             summary.unmapped_records += 1;
-            writer.write(&record)?;
+            records.push(record);
             continue;
         }
 
@@ -204,23 +206,36 @@ fn run_bam(config: &MarkDuplicatesConfig) -> Result<MarkDuplicatesSummary, MarkD
             summary.unpaired_reads_examined += 1;
         }
         let key = duplicate_key_bam(&record);
-        let seen_count = seen.entry(key).or_insert(0);
-        let duplicate = *seen_count > 0;
-        *seen_count += 1;
+        duplicate_groups.entry(key).or_default().push(record_index);
+        records.push(record);
+    }
 
-        if duplicate {
+    for group in duplicate_groups.values() {
+        if group.len() < 2 {
+            continue;
+        }
+
+        let representative = best_duplicate_representative(group, &records);
+
+        for index in group.iter().copied() {
+            if index == representative {
+                continue;
+            }
+            let flag = records[index].flags();
             if flag & PAIRED_FLAG != 0 {
                 summary.duplicate_pair_records += 1;
             } else {
                 summary.unpaired_duplicate_records += 1;
             }
-            flag |= DUPLICATE_FLAG;
-            record.set_flags(flag);
+            records[index].set_flags(flag | DUPLICATE_FLAG);
         }
+    }
 
-        if !(duplicate && config.remove_duplicates) {
-            writer.write(&record)?;
+    for record in records {
+        if config.remove_duplicates && record.flags() & DUPLICATE_FLAG != 0 {
+            continue;
         }
+        writer.write(&record)?;
     }
 
     fs::write(&config.metrics_file, metrics_text(&summary))?;
@@ -249,6 +264,29 @@ fn duplicate_key_bam(record: &bam::Record) -> DuplicateKey {
         template_length: record.insert_size(),
         reverse_strand: record.flags() & 0x10 != 0,
     }
+}
+
+fn quality_score(record: &bam::Record) -> u64 {
+    record
+        .qual()
+        .iter()
+        .map(|quality| u64::from(*quality))
+        .sum()
+}
+
+fn best_duplicate_representative(group: &[usize], records: &[bam::Record]) -> usize {
+    let mut best_index = group[0];
+    let mut best_score = quality_score(&records[best_index]);
+
+    for index in group.iter().copied().skip(1) {
+        let score = quality_score(&records[index]);
+        if score > best_score {
+            best_index = index;
+            best_score = score;
+        }
+    }
+
+    best_index
 }
 
 fn metrics_text(summary: &MarkDuplicatesSummary) -> String {

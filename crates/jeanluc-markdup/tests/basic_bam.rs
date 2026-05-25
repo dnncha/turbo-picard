@@ -50,6 +50,29 @@ fn marks_duplicate_pairs_and_reports_paired_metrics() {
     assert!(metrics_text.contains("lib1\t0\t3\t0\t0\t0\t1\t0\t0.333333\t3\n"));
 }
 
+#[test]
+fn keeps_highest_quality_duplicate_representative() {
+    let tempdir = tempfile::tempdir().expect("tempdir exists");
+    let output = tempdir.path().join("output.bam");
+    let metrics = tempdir.path().join("metrics.txt");
+    let input = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../fixtures/markduplicates/scoring/input.bam");
+    let config = MarkDuplicatesConfig {
+        input: input.display().to_string(),
+        output: output.display().to_string(),
+        metrics_file: metrics.display().to_string(),
+        remove_duplicates: false,
+        assume_sorted: true,
+        validation_stringency: Some("SILENT".to_string()),
+        quiet: true,
+    };
+
+    jeanluc_markdup::run(&config).expect("BAM duplicate marking succeeds");
+
+    let flags = read_flags(&output);
+    assert_eq!(flags, vec![1024, 0, 0]);
+}
+
 fn read_flags(path: &std::path::Path) -> Vec<u16> {
     let mut reader = bam::Reader::from_path(path).expect("BAM opens");
     reader
