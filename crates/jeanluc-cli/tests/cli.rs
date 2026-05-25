@@ -76,5 +76,5 @@ fn markduplicates_marks_duplicate_sam_records() {
 
     let metrics_text = fs::read_to_string(&metrics).expect("metrics file exists");
     assert!(metrics_text.contains("UNPAIRED_READ_DUPLICATES"));
-    assert!(metrics_text.contains("Unknown Library\t3\t0\t0\t0\t1"));
+    assert!(metrics_text.contains("Unknown Library\t3\t0\t0\t0\t1\t0\t0\t0.333333\t\n"));
 }

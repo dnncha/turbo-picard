@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 
 use jeanluc_core::markdup_config::MarkDuplicatesConfig;
+use rust_htslib::bam::{self, Read};
 use std::collections::HashMap;
 use std::fmt;
 use std::fs;
@@ -20,6 +21,7 @@ pub struct MarkDuplicatesSummary {
 pub enum MarkDuplicatesError {
     UnsupportedInputFormat(String),
     Io(std::io::Error),
+    Htslib(rust_htslib::errors::Error),
     MalformedSam { line_number: usize, reason: String },
 }
 
@@ -31,6 +33,7 @@ impl fmt::Display for MarkDuplicatesError {
                 "unsupported MarkDuplicates input format for {path}; this engine milestone supports SAM text only"
             ),
             Self::Io(error) => write!(f, "{error}"),
+            Self::Htslib(error) => write!(f, "{error}"),
             Self::MalformedSam {
                 line_number,
                 reason,
@@ -47,18 +50,28 @@ impl From<std::io::Error> for MarkDuplicatesError {
     }
 }
 
+impl From<rust_htslib::errors::Error> for MarkDuplicatesError {
+    fn from(value: rust_htslib::errors::Error) -> Self {
+        Self::Htslib(value)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct DuplicateKey {
     reference_name: String,
-    position: String,
+    position: i64,
     cigar: String,
     mate_reference_name: String,
-    mate_position: String,
-    template_length: String,
+    mate_position: i64,
+    template_length: i64,
     reverse_strand: bool,
 }
 
 pub fn run(config: &MarkDuplicatesConfig) -> Result<MarkDuplicatesSummary, MarkDuplicatesError> {
+    if is_bam_input(&config.input) {
+        return run_bam(config);
+    }
+
     ensure_sam_input(&config.input)?;
 
     let input = fs::read_to_string(&config.input)?;
@@ -136,15 +149,75 @@ fn ensure_sam_input(input: &str) -> Result<(), MarkDuplicatesError> {
     }
 }
 
+fn is_bam_input(input: &str) -> bool {
+    Path::new(input)
+        .extension()
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("bam"))
+}
+
+fn run_bam(config: &MarkDuplicatesConfig) -> Result<MarkDuplicatesSummary, MarkDuplicatesError> {
+    let mut reader = bam::Reader::from_path(&config.input)?;
+    let header = bam::Header::from_template(reader.header());
+    let mut writer = bam::Writer::from_path(&config.output, &header, bam::Format::Bam)?;
+    let mut seen = HashMap::<DuplicateKey, usize>::new();
+    let mut summary = MarkDuplicatesSummary {
+        records_examined: 0,
+        duplicate_records: 0,
+        unmapped_records: 0,
+    };
+
+    for result in reader.records() {
+        let mut record = result?;
+        let mut flag = record.flags();
+
+        if flag & UNMAPPED_FLAG != 0 {
+            summary.unmapped_records += 1;
+            writer.write(&record)?;
+            continue;
+        }
+
+        summary.records_examined += 1;
+        let key = duplicate_key_bam(&record);
+        let seen_count = seen.entry(key).or_insert(0);
+        let duplicate = *seen_count > 0;
+        *seen_count += 1;
+
+        if duplicate {
+            summary.duplicate_records += 1;
+            flag |= DUPLICATE_FLAG;
+            record.set_flags(flag);
+        }
+
+        if !(duplicate && config.remove_duplicates) {
+            writer.write(&record)?;
+        }
+    }
+
+    fs::write(&config.metrics_file, metrics_text(&summary))?;
+    Ok(summary)
+}
+
 fn duplicate_key(fields: &[String], flag: u16) -> DuplicateKey {
     DuplicateKey {
         reference_name: fields[2].clone(),
-        position: fields[3].clone(),
+        position: fields[3].parse::<i64>().unwrap_or_default(),
         cigar: fields[5].clone(),
         mate_reference_name: fields[6].clone(),
-        mate_position: fields[7].clone(),
-        template_length: fields[8].clone(),
+        mate_position: fields[7].parse::<i64>().unwrap_or_default(),
+        template_length: fields[8].parse::<i64>().unwrap_or_default(),
         reverse_strand: flag & 0x10 != 0,
+    }
+}
+
+fn duplicate_key_bam(record: &bam::Record) -> DuplicateKey {
+    DuplicateKey {
+        reference_name: record.tid().to_string(),
+        position: record.pos(),
+        cigar: record.cigar().to_string(),
+        mate_reference_name: record.mtid().to_string(),
+        mate_position: record.mpos(),
+        template_length: record.insert_size(),
+        reverse_strand: record.flags() & 0x10 != 0,
     }
 }
 
@@ -165,8 +238,6 @@ fn metrics_text(summary: &MarkDuplicatesSummary) -> String {
         summary.unmapped_records,
         summary.duplicate_records,
         percent_duplication,
-        summary
-            .records_examined
-            .saturating_sub(summary.duplicate_records)
+        ""
     )
 }

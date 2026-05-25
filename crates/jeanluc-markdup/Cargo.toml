@@ -5,3 +5,7 @@ edition = "2024"
 
 [dependencies]
 jeanluc-core = { path = "../jeanluc-core" }
+rust-htslib = "1.0.0"
+
+[dev-dependencies]
+tempfile = "3.23.0"
