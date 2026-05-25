@@ -15,6 +15,7 @@ pub struct MarkDuplicatesSummary {
     pub library: String,
     pub unpaired_reads_examined: u64,
     pub read_pairs_examined: u64,
+    pub secondary_or_supplementary_records: u64,
     pub unpaired_duplicate_records: u64,
     pub duplicate_pair_records: u64,
     pub unmapped_records: u64,
@@ -83,6 +84,7 @@ pub fn run(config: &MarkDuplicatesConfig) -> Result<MarkDuplicatesSummary, MarkD
         library: "Unknown Library".to_string(),
         unpaired_reads_examined: 0,
         read_pairs_examined: 0,
+        secondary_or_supplementary_records: 0,
         unpaired_duplicate_records: 0,
         duplicate_pair_records: 0,
         unmapped_records: 0,
@@ -113,6 +115,12 @@ pub fn run(config: &MarkDuplicatesConfig) -> Result<MarkDuplicatesSummary, MarkD
 
         if flag & UNMAPPED_FLAG != 0 {
             summary.unmapped_records += 1;
+            output.push_str(line);
+            output.push('\n');
+            continue;
+        }
+        if flag & SECONDARY_OR_SUPPLEMENTARY_FLAGS != 0 {
+            summary.secondary_or_supplementary_records += 1;
             output.push_str(line);
             output.push('\n');
             continue;
@@ -181,6 +189,7 @@ fn run_bam(config: &MarkDuplicatesConfig) -> Result<MarkDuplicatesSummary, MarkD
         library,
         unpaired_reads_examined: 0,
         read_pairs_examined: 0,
+        secondary_or_supplementary_records: 0,
         unpaired_duplicate_records: 0,
         duplicate_pair_records: 0,
         unmapped_records: 0,
@@ -193,6 +202,11 @@ fn run_bam(config: &MarkDuplicatesConfig) -> Result<MarkDuplicatesSummary, MarkD
 
         if flag & UNMAPPED_FLAG != 0 {
             summary.unmapped_records += 1;
+            records.push(record);
+            continue;
+        }
+        if flag & SECONDARY_OR_SUPPLEMENTARY_FLAGS != 0 {
+            summary.secondary_or_supplementary_records += 1;
             records.push(record);
             continue;
         }
@@ -350,11 +364,12 @@ fn metrics_text(summary: &MarkDuplicatesSummary) -> String {
         concat!(
             "## METRICS CLASS\tpicard.sam.DuplicationMetrics\n",
             "LIBRARY\tUNPAIRED_READS_EXAMINED\tREAD_PAIRS_EXAMINED\tSECONDARY_OR_SUPPLEMENTARY_RDS\tUNMAPPED_READS\tUNPAIRED_READ_DUPLICATES\tREAD_PAIR_DUPLICATES\tREAD_PAIR_OPTICAL_DUPLICATES\tPERCENT_DUPLICATION\tESTIMATED_LIBRARY_SIZE\n",
-            "{}\t{}\t{}\t0\t{}\t{}\t{}\t0\t{:.6}\t{}\n"
+            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t0\t{:.6}\t{}\n"
         ),
         summary.library,
         summary.unpaired_reads_examined,
         summary.read_pairs_examined,
+        summary.secondary_or_supplementary_records,
         summary.unmapped_records,
         summary.unpaired_duplicate_records,
         summary.read_pair_duplicates(),
@@ -365,6 +380,7 @@ fn metrics_text(summary: &MarkDuplicatesSummary) -> String {
 
 const PAIRED_FLAG: u16 = 0x1;
 const FIRST_IN_PAIR_FLAG: u16 = 0x40;
+const SECONDARY_OR_SUPPLEMENTARY_FLAGS: u16 = 0x100 | 0x800;
 
 impl MarkDuplicatesSummary {
     fn read_pair_duplicates(&self) -> u64 {
