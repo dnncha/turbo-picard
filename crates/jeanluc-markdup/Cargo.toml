@@ -1,0 +1,7 @@
+[package]
+name = "jeanluc-markdup"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+jeanluc-core = { path = "../jeanluc-core" }

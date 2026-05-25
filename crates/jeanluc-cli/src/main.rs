@@ -27,8 +27,9 @@ fn main() {
 
 fn run_markduplicates(args: &[String]) -> Result<(), String> {
     let picard_args = normalize_picard_args(args).map_err(|error| error.to_string())?;
-    let _config =
+    let config =
         MarkDuplicatesConfig::try_from_args(&picard_args).map_err(|error| error.to_string())?;
 
-    Err("MarkDuplicates native engine is not implemented yet".to_string())
+    jeanluc_markdup::run(&config).map_err(|error| error.to_string())?;
+    Ok(())
 }
