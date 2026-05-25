@@ -12,8 +12,11 @@ const UNMAPPED_FLAG: u16 = 0x4;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MarkDuplicatesSummary {
-    pub records_examined: u64,
-    pub duplicate_records: u64,
+    pub library: String,
+    pub unpaired_reads_examined: u64,
+    pub read_pairs_examined: u64,
+    pub unpaired_duplicate_records: u64,
+    pub duplicate_pair_records: u64,
     pub unmapped_records: u64,
 }
 
@@ -78,8 +81,11 @@ pub fn run(config: &MarkDuplicatesConfig) -> Result<MarkDuplicatesSummary, MarkD
     let mut seen = HashMap::<DuplicateKey, usize>::new();
     let mut output = String::with_capacity(input.len());
     let mut summary = MarkDuplicatesSummary {
-        records_examined: 0,
-        duplicate_records: 0,
+        library: "Unknown Library".to_string(),
+        unpaired_reads_examined: 0,
+        read_pairs_examined: 0,
+        unpaired_duplicate_records: 0,
+        duplicate_pair_records: 0,
         unmapped_records: 0,
     };
 
@@ -113,14 +119,24 @@ pub fn run(config: &MarkDuplicatesConfig) -> Result<MarkDuplicatesSummary, MarkD
             continue;
         }
 
-        summary.records_examined += 1;
+        if flag & PAIRED_FLAG != 0 {
+            if flag & FIRST_IN_PAIR_FLAG != 0 {
+                summary.read_pairs_examined += 1;
+            }
+        } else {
+            summary.unpaired_reads_examined += 1;
+        }
         let key = duplicate_key(&fields, flag);
         let seen_count = seen.entry(key).or_insert(0);
         let duplicate = *seen_count > 0;
         *seen_count += 1;
 
         if duplicate {
-            summary.duplicate_records += 1;
+            if flag & PAIRED_FLAG != 0 {
+                summary.duplicate_pair_records += 1;
+            } else {
+                summary.unpaired_duplicate_records += 1;
+            }
             flag |= DUPLICATE_FLAG;
             fields[1] = flag.to_string();
         }
@@ -157,12 +173,16 @@ fn is_bam_input(input: &str) -> bool {
 
 fn run_bam(config: &MarkDuplicatesConfig) -> Result<MarkDuplicatesSummary, MarkDuplicatesError> {
     let mut reader = bam::Reader::from_path(&config.input)?;
+    let library = first_library_name(reader.header());
     let header = bam::Header::from_template(reader.header());
     let mut writer = bam::Writer::from_path(&config.output, &header, bam::Format::Bam)?;
     let mut seen = HashMap::<DuplicateKey, usize>::new();
     let mut summary = MarkDuplicatesSummary {
-        records_examined: 0,
-        duplicate_records: 0,
+        library,
+        unpaired_reads_examined: 0,
+        read_pairs_examined: 0,
+        unpaired_duplicate_records: 0,
+        duplicate_pair_records: 0,
         unmapped_records: 0,
     };
 
@@ -176,14 +196,24 @@ fn run_bam(config: &MarkDuplicatesConfig) -> Result<MarkDuplicatesSummary, MarkD
             continue;
         }
 
-        summary.records_examined += 1;
+        if flag & PAIRED_FLAG != 0 {
+            if flag & FIRST_IN_PAIR_FLAG != 0 {
+                summary.read_pairs_examined += 1;
+            }
+        } else {
+            summary.unpaired_reads_examined += 1;
+        }
         let key = duplicate_key_bam(&record);
         let seen_count = seen.entry(key).or_insert(0);
         let duplicate = *seen_count > 0;
         *seen_count += 1;
 
         if duplicate {
-            summary.duplicate_records += 1;
+            if flag & PAIRED_FLAG != 0 {
+                summary.duplicate_pair_records += 1;
+            } else {
+                summary.unpaired_duplicate_records += 1;
+            }
             flag |= DUPLICATE_FLAG;
             record.set_flags(flag);
         }
@@ -222,22 +252,58 @@ fn duplicate_key_bam(record: &bam::Record) -> DuplicateKey {
 }
 
 fn metrics_text(summary: &MarkDuplicatesSummary) -> String {
-    let percent_duplication = if summary.records_examined == 0 {
+    let duplicate_fragments =
+        summary.unpaired_duplicate_records + (summary.read_pair_duplicates() * 2);
+    let examined_fragments = summary.unpaired_reads_examined + (summary.read_pairs_examined * 2);
+    let percent_duplication = if examined_fragments == 0 {
         0.0
     } else {
-        summary.duplicate_records as f64 / summary.records_examined as f64
+        duplicate_fragments as f64 / examined_fragments as f64
+    };
+    let estimated_library_size = if summary.read_pairs_examined > 0 {
+        summary.read_pairs_examined.to_string()
+    } else {
+        String::new()
     };
 
     format!(
         concat!(
             "## METRICS CLASS\tpicard.sam.DuplicationMetrics\n",
             "LIBRARY\tUNPAIRED_READS_EXAMINED\tREAD_PAIRS_EXAMINED\tSECONDARY_OR_SUPPLEMENTARY_RDS\tUNMAPPED_READS\tUNPAIRED_READ_DUPLICATES\tREAD_PAIR_DUPLICATES\tREAD_PAIR_OPTICAL_DUPLICATES\tPERCENT_DUPLICATION\tESTIMATED_LIBRARY_SIZE\n",
-            "Unknown Library\t{}\t0\t0\t{}\t{}\t0\t0\t{:.6}\t{}\n"
+            "{}\t{}\t{}\t0\t{}\t{}\t{}\t0\t{:.6}\t{}\n"
         ),
-        summary.records_examined,
+        summary.library,
+        summary.unpaired_reads_examined,
+        summary.read_pairs_examined,
         summary.unmapped_records,
-        summary.duplicate_records,
+        summary.unpaired_duplicate_records,
+        summary.read_pair_duplicates(),
         percent_duplication,
-        ""
+        estimated_library_size
     )
+}
+
+const PAIRED_FLAG: u16 = 0x1;
+const FIRST_IN_PAIR_FLAG: u16 = 0x40;
+
+impl MarkDuplicatesSummary {
+    fn read_pair_duplicates(&self) -> u64 {
+        self.duplicate_pair_records / 2
+    }
+}
+
+fn first_library_name(header: &bam::HeaderView) -> String {
+    let header_text = String::from_utf8_lossy(header.as_bytes());
+    for line in header_text.lines() {
+        if !line.starts_with("@RG\t") {
+            continue;
+        }
+        for field in line.split('\t') {
+            if let Some(library) = field.strip_prefix("LB:") {
+                return library.to_string();
+            }
+        }
+    }
+
+    "Unknown Library".to_string()
 }
