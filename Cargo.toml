@@ -1,0 +1,6 @@
+[workspace]
+members = [
+  "crates/jeanluc-cli",
+  "crates/jeanluc-core",
+]
+resolver = "3"
