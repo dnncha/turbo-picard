@@ -7,6 +7,9 @@ pub struct MarkDuplicatesConfig {
     pub output: String,
     pub metrics_file: String,
     pub remove_duplicates: bool,
+    pub assume_sorted: bool,
+    pub validation_stringency: Option<String>,
+    pub quiet: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -52,6 +55,9 @@ impl MarkDuplicatesConfig {
             output: required_scalar(args, "OUTPUT")?,
             metrics_file: required_scalar(args, "METRICS_FILE")?,
             remove_duplicates: optional_bool(args, "REMOVE_DUPLICATES")?.unwrap_or(false),
+            assume_sorted: optional_bool(args, "ASSUME_SORTED")?.unwrap_or(false),
+            validation_stringency: optional_scalar(args, "VALIDATION_STRINGENCY")?,
+            quiet: optional_bool(args, "QUIET")?.unwrap_or(false),
         })
     }
 }
@@ -59,7 +65,15 @@ impl MarkDuplicatesConfig {
 fn reject_unsupported(
     args: &BTreeMap<String, Vec<String>>,
 ) -> Result<(), MarkDuplicatesConfigError> {
-    let supported = BTreeSet::from(["INPUT", "OUTPUT", "METRICS_FILE", "REMOVE_DUPLICATES"]);
+    let supported = BTreeSet::from([
+        "INPUT",
+        "OUTPUT",
+        "METRICS_FILE",
+        "REMOVE_DUPLICATES",
+        "ASSUME_SORTED",
+        "VALIDATION_STRINGENCY",
+        "QUIET",
+    ]);
 
     for key in args.keys() {
         if !supported.contains(key.as_str()) {
@@ -98,6 +112,17 @@ fn optional_bool(
             value,
         }),
     }
+}
+
+fn optional_scalar(
+    args: &BTreeMap<String, Vec<String>>,
+    key: &str,
+) -> Result<Option<String>, MarkDuplicatesConfigError> {
+    let Some(values) = args.get(key) else {
+        return Ok(None);
+    };
+
+    scalar_value(values, key).map(Some)
 }
 
 fn scalar_value(values: &[String], key: &str) -> Result<String, MarkDuplicatesConfigError> {

@@ -13,6 +13,9 @@ fn marks_duplicate_records_in_bam() {
         output: output.display().to_string(),
         metrics_file: metrics.display().to_string(),
         remove_duplicates: false,
+        assume_sorted: true,
+        validation_stringency: Some("SILENT".to_string()),
+        quiet: true,
     };
 
     jeanluc_markdup::run(&config).expect("BAM duplicate marking succeeds");

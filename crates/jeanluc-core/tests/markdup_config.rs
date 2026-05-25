@@ -34,6 +34,25 @@ fn parses_remove_duplicates_boolean() {
 }
 
 #[test]
+fn accepts_common_picard_runtime_options() {
+    let args = vec![
+        "I=in.bam".to_string(),
+        "O=out.bam".to_string(),
+        "M=metrics.txt".to_string(),
+        "ASSUME_SORTED=true".to_string(),
+        "VALIDATION_STRINGENCY=SILENT".to_string(),
+        "QUIET=true".to_string(),
+    ];
+    let parsed = normalize_picard_args(&args).expect("arguments parse");
+
+    let config = MarkDuplicatesConfig::try_from_args(&parsed).expect("config validates");
+
+    assert!(config.assume_sorted);
+    assert_eq!(config.validation_stringency.as_deref(), Some("SILENT"));
+    assert!(config.quiet);
+}
+
+#[test]
 fn rejects_missing_metrics_file() {
     let args = vec!["I=in.bam".to_string(), "O=out.bam".to_string()];
     let parsed = normalize_picard_args(&args).expect("arguments parse");
