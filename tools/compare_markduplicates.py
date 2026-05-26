@@ -64,8 +64,14 @@ def main() -> int:
 
     picard_metrics = read_metrics(args.picard_metrics)
     turbo_picard_metrics = read_metrics(args.turbo_picard_metrics)
-    if picard_metrics != turbo_picard_metrics:
-        differences.append("metrics files differ after comment/header normalization")
+    differences.extend(
+        metric_differences(
+            picard_metrics,
+            turbo_picard_metrics,
+            args.picard_metrics,
+            args.turbo_picard_metrics,
+        )
+    )
 
     result = {
         "ok": not differences,
@@ -83,6 +89,28 @@ def main() -> int:
         print("MarkDuplicates outputs are semantically equivalent")
 
     return 0 if not differences else 1
+
+
+def metric_differences(
+    picard_metrics: list[list[str]],
+    turbo_picard_metrics: list[list[str]],
+    picard_metrics_path: Path,
+    turbo_picard_metrics_path: Path,
+) -> list[str]:
+    differences = []
+    if not picard_metrics:
+        differences.append(
+            "Picard metrics file has no picard.sam.DuplicationMetrics block: "
+            f"{picard_metrics_path}"
+        )
+    if not turbo_picard_metrics:
+        differences.append(
+            "turbo-picard metrics file has no picard.sam.DuplicationMetrics block: "
+            f"{turbo_picard_metrics_path}"
+        )
+    if picard_metrics and turbo_picard_metrics and picard_metrics != turbo_picard_metrics:
+        differences.append("metrics files differ after comment/header normalization")
+    return differences
 
 
 def read_alignment_records(path: Path) -> Iterable[RecordKey]:

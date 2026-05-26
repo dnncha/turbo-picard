@@ -96,7 +96,7 @@ impl MarkDuplicatesConfig {
                 args,
                 "OPTICAL_DUPLICATE_PIXEL_DISTANCE",
             )?,
-            compression_level: optional_u32(args, "COMPRESSION_LEVEL")?,
+            compression_level: optional_compression_level(args)?,
         })
     }
 }
@@ -316,6 +316,22 @@ fn optional_u32(
         .parse::<u32>()
         .map(Some)
         .map_err(|_| MarkDuplicatesConfigError::UnsupportedOption(format!("{key}={value}")))
+}
+
+fn optional_compression_level(
+    args: &BTreeMap<String, Vec<String>>,
+) -> Result<Option<u32>, MarkDuplicatesConfigError> {
+    let Some(value) = optional_u32(args, "COMPRESSION_LEVEL")? else {
+        return Ok(None);
+    };
+
+    if value <= 9 {
+        Ok(Some(value))
+    } else {
+        Err(MarkDuplicatesConfigError::UnsupportedOption(format!(
+            "COMPRESSION_LEVEL={value}"
+        )))
+    }
 }
 
 fn optional_f64(

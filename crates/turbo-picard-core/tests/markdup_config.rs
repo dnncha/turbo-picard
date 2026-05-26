@@ -270,3 +270,21 @@ fn rejects_unsupported_options() {
         MarkDuplicatesConfigError::UnsupportedOption("TAGGING_POLICY=Invalid".to_string())
     );
 }
+
+#[test]
+fn rejects_out_of_range_compression_level() {
+    let args = vec![
+        "I=in.bam".to_string(),
+        "O=out.bam".to_string(),
+        "M=metrics.txt".to_string(),
+        "COMPRESSION_LEVEL=10".to_string(),
+    ];
+    let parsed = normalize_picard_args(&args).expect("arguments parse");
+
+    let err = MarkDuplicatesConfig::try_from_args(&parsed).unwrap_err();
+
+    assert_eq!(
+        err,
+        MarkDuplicatesConfigError::UnsupportedOption("COMPRESSION_LEVEL=10".to_string())
+    );
+}
