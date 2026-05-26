@@ -7,8 +7,27 @@ pub fn run_cli(program_name: &str, raw_args: impl IntoIterator<Item = String>) -
     let mut args = raw_args.into_iter();
 
     match args.next().as_deref() {
+        Some("--help" | "-h" | "help") => {
+            print_top_level_help(program_name);
+            0
+        }
+        Some("--version" | "version") => {
+            println!("{program_name} {}", env!("CARGO_PKG_VERSION"));
+            0
+        }
         Some("MarkDuplicates") => {
             let command_args = args.collect::<Vec<_>>();
+            if command_args
+                .iter()
+                .any(|arg| arg == "--help" || arg == "-h")
+            {
+                print_markduplicates_help();
+                return 0;
+            }
+            if command_args.iter().any(|arg| arg == "--version") {
+                println!("MarkDuplicates {}", env!("CARGO_PKG_VERSION"));
+                return 0;
+            }
             if let Err(error) = run_markduplicates(&command_args) {
                 eprintln!("{error}");
                 return 2;
@@ -24,6 +43,38 @@ pub fn run_cli(program_name: &str, raw_args: impl IntoIterator<Item = String>) -
             2
         }
     }
+}
+
+fn print_top_level_help(program_name: &str) {
+    println!(
+        "\
+Usage: {program_name} <PicardCommand> [KEY=VALUE ...]
+
+Available commands:
+  MarkDuplicates    Identifies duplicate reads in SAM or BAM files"
+    );
+}
+
+fn print_markduplicates_help() {
+    println!(
+        "\
+Usage: picard MarkDuplicates I=<input.bam> O=<output.bam> M=<metrics.txt> [options]
+
+Required arguments:
+  INPUT / I             Input SAM or BAM file
+  OUTPUT / O            Output SAM or BAM file
+  METRICS_FILE / M      Duplication metrics file
+
+Common options:
+  ASSUME_SORTED / AS
+  ASSUME_SORT_ORDER / ASO
+  REMOVE_DUPLICATES
+  CREATE_INDEX
+  CREATE_MD5_FILE
+  VALIDATION_STRINGENCY
+  TMP_DIR
+  MAX_RECORDS_IN_RAM"
+    );
 }
 
 fn run_markduplicates(args: &[String]) -> Result<(), String> {

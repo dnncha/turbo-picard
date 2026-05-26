@@ -109,3 +109,24 @@ fn picard_binary_dispatches_markduplicates() {
     let output_sam = fs::read_to_string(&output).expect("output SAM exists");
     assert!(output_sam.contains("read-b\t1024\tchr1\t10"));
 }
+
+#[test]
+fn picard_binary_supports_help_and_version_smoke_checks() {
+    let mut cmd = Command::cargo_bin("picard").expect("binary exists");
+    cmd.arg("--help")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("MarkDuplicates"));
+
+    let mut cmd = Command::cargo_bin("picard").expect("binary exists");
+    cmd.args(["MarkDuplicates", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("INPUT"));
+
+    let mut cmd = Command::cargo_bin("picard").expect("binary exists");
+    cmd.arg("--version")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(env!("CARGO_PKG_VERSION")));
+}
