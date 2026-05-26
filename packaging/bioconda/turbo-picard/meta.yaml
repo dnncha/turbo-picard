@@ -42,6 +42,7 @@ test:
     - turbo-picard MarkDuplicates --help
     - turbo-picard SortSam --help
     - turbo-picard SamToFastq --help
+    - turbo-picard AddOrReplaceReadGroups --help
 
 about:
   home: https://github.com/turbo-picard/turbo-picard
@@ -52,9 +53,9 @@ about:
   summary: Fast Picard-compatible toolkit with native high-impact Picard commands.
   description: |
     turbo-picard is a Rust implementation of high-impact Picard workflows.
-    The current native engines target MarkDuplicates, SortSam, and SamToFastq
-    BAM/SAM workflows and install both turbo-picard and picard command
-    entrypoints.
+    The current native engines target MarkDuplicates, SortSam, SamToFastq, and
+    AddOrReplaceReadGroups BAM/SAM workflows and install both turbo-picard and
+    picard command entrypoints.
 
 extra:
   recipe-maintainers:

@@ -63,3 +63,19 @@ fastq_output="${tempdir}/reads.fastq"
 
 test -s "${fastq_output}"
 grep -q '^@read-c$' "${fastq_output}"
+
+readgroups_output="${tempdir}/readgroups.sam"
+"${install_root}/bin/picard" AddOrReplaceReadGroups \
+  "I=${sortsam_input}" \
+  "O=${readgroups_output}" \
+  RGID=new \
+  RGLB=library-a \
+  RGPL=ILLUMINA \
+  RGPU=unit-a \
+  RGSM=sample-a \
+  VALIDATION_STRINGENCY=SILENT \
+  QUIET=true
+
+test -s "${readgroups_output}"
+grep -q $'@RG\tID:new\tLB:library-a\tPL:ILLUMINA\tSM:sample-a\tPU:unit-a' "${readgroups_output}"
+grep -q $'RG:Z:new' "${readgroups_output}"

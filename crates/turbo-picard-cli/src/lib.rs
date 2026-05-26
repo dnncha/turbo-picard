@@ -4,6 +4,7 @@ use flate2::Compression;
 use flate2::write::GzEncoder;
 use rust_htslib::bam::header::HeaderRecord;
 use rust_htslib::bam::index;
+use rust_htslib::bam::record::Aux;
 use rust_htslib::bam::{self, Read};
 use std::cmp::Ordering;
 use std::fs;
@@ -84,6 +85,24 @@ pub fn run_cli(program_name: &str, raw_args: impl IntoIterator<Item = String>) -
             }
             0
         }
+        Some("AddOrReplaceReadGroups") => {
+            let command_args = args.cloned().collect::<Vec<_>>();
+            if command_args
+                .iter()
+                .any(|arg| arg == "--help" || arg == "-h")
+            {
+                print_addorreplacereadgroups_help();
+                return 0;
+            }
+            if let Err(error) = run_addorreplacereadgroups(&command_args) {
+                if let Some(exit_code) = try_run_fallback(&raw_args) {
+                    return exit_code;
+                }
+                eprintln!("{error}");
+                return 2;
+            }
+            0
+        }
         Some(command) => {
             if let Some(exit_code) = try_run_fallback(&raw_args) {
                 return exit_code;
@@ -104,6 +123,8 @@ fn print_top_level_help(program_name: &str) {
 Usage: {program_name} <PicardCommand> [KEY=VALUE ...]
 
 Available commands:
+  AddOrReplaceReadGroups
+                    Adds or replaces a single read group in SAM or BAM files
   MarkDuplicates    Identifies duplicate reads in SAM or BAM files
   SamToFastq        Converts SAM or BAM records to FASTQ
   SortSam           Sorts SAM or BAM files by coordinate or query name"
@@ -158,6 +179,30 @@ Common options:
   UNPAIRED_FASTQ        Output FASTQ for unpaired reads
   INTERLEAVE            Write paired reads interleaved to FASTQ
   RE_REVERSE            Reverse-complement reverse-strand reads"
+    );
+}
+
+fn print_addorreplacereadgroups_help() {
+    println!(
+        "\
+Usage: picard AddOrReplaceReadGroups I=<input.bam> O=<output.bam> RGLB=<library> RGPL=<platform> RGPU=<unit> RGSM=<sample> [options]
+
+Required arguments:
+  INPUT / I             Input SAM or BAM file
+  OUTPUT / O            Output SAM or BAM file
+  RGLB                  Read-group library
+  RGPL                  Read-group platform
+  RGPU                  Read-group platform unit
+  RGSM                  Read-group sample
+
+Common options:
+  RGID                  Read-group ID; defaults to 1
+  RGCN
+  RGDS
+  RGDT
+  RGPI
+  RGPG
+  RGPM"
     );
 }
 
@@ -277,6 +322,176 @@ fn run_samtofastq(args: &[String]) -> Result<(), String> {
     }
 
     Ok(())
+}
+
+fn run_addorreplacereadgroups(args: &[String]) -> Result<(), String> {
+    let args = normalize_picard_args(args).map_err(|error| error.to_string())?;
+    reject_unsupported_addorreplacereadgroups_args(&args)?;
+    let input = required_scalar_for(&args, "INPUT", "AddOrReplaceReadGroups")?;
+    let output = required_scalar_for(&args, "OUTPUT", "AddOrReplaceReadGroups")?;
+    let read_group = ReadGroup {
+        id: optional_scalar(&args, "RGID")?.unwrap_or_else(|| "1".to_string()),
+        library: required_scalar_for(&args, "RGLB", "AddOrReplaceReadGroups")?,
+        platform: required_scalar_for(&args, "RGPL", "AddOrReplaceReadGroups")?,
+        platform_unit: required_scalar_for(&args, "RGPU", "AddOrReplaceReadGroups")?,
+        sample: required_scalar_for(&args, "RGSM", "AddOrReplaceReadGroups")?,
+        sequencing_center: optional_scalar(&args, "RGCN")?,
+        description: optional_scalar(&args, "RGDS")?,
+        run_date: optional_scalar(&args, "RGDT")?,
+        predicted_insert_size: optional_scalar(&args, "RGPI")?,
+        program_group: optional_scalar(&args, "RGPG")?,
+        platform_model: optional_scalar(&args, "RGPM")?,
+    };
+
+    let mut reader = bam::Reader::from_path(&input).map_err(|error| error.to_string())?;
+    let header = read_group_header(reader.header(), &read_group);
+    let format = output_format(&output)?;
+    let mut writer =
+        bam::Writer::from_path(&output, &header, format).map_err(|error| error.to_string())?;
+    if let Some(level) = optional_u32(&args, "COMPRESSION_LEVEL")? {
+        writer
+            .set_compression_level(bam::CompressionLevel::Level(level))
+            .map_err(|error| error.to_string())?;
+    }
+
+    for record in reader.records() {
+        let mut record = record.map_err(|error| error.to_string())?;
+        set_record_read_group(&mut record, &read_group.id)?;
+        writer.write(&record).map_err(|error| error.to_string())?;
+    }
+
+    Ok(())
+}
+
+#[derive(Debug)]
+struct ReadGroup {
+    id: String,
+    library: String,
+    platform: String,
+    platform_unit: String,
+    sample: String,
+    sequencing_center: Option<String>,
+    description: Option<String>,
+    run_date: Option<String>,
+    predicted_insert_size: Option<String>,
+    program_group: Option<String>,
+    platform_model: Option<String>,
+}
+
+fn reject_unsupported_addorreplacereadgroups_args(
+    args: &std::collections::BTreeMap<String, Vec<String>>,
+) -> Result<(), String> {
+    let supported = [
+        "INPUT",
+        "OUTPUT",
+        "RGID",
+        "RGLB",
+        "RGPL",
+        "RGPU",
+        "RGSM",
+        "RGCN",
+        "RGDS",
+        "RGDT",
+        "RGPI",
+        "RGPG",
+        "RGPM",
+        "VALIDATION_STRINGENCY",
+        "QUIET",
+        "VERBOSITY",
+        "COMPRESSION_LEVEL",
+    ];
+
+    for key in args.keys() {
+        if !supported.contains(&key.as_str()) {
+            return Err(format!(
+                "unsupported AddOrReplaceReadGroups argument: {key}"
+            ));
+        }
+    }
+
+    optional_scalar(args, "VALIDATION_STRINGENCY")?;
+    optional_scalar(args, "VERBOSITY")?;
+    optional_bool(args, "QUIET")?;
+    if let Some(level) = optional_u32(args, "COMPRESSION_LEVEL")? {
+        if level > 9 {
+            return Err(format!(
+                "unsupported AddOrReplaceReadGroups COMPRESSION_LEVEL: {level}"
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn read_group_header(source: &bam::HeaderView, read_group: &ReadGroup) -> bam::Header {
+    let header_text = String::from_utf8_lossy(source.as_bytes());
+    let mut header = bam::Header::new();
+
+    for line in header_text.lines() {
+        if line.is_empty() || line.starts_with("@RG\t") {
+            continue;
+        }
+        if line.starts_with("@CO") {
+            header.push_comment(line.strip_prefix("@CO\t").unwrap_or("").as_bytes());
+            continue;
+        }
+        let Some(record_type) = line.get(1..3) else {
+            continue;
+        };
+        let mut record = HeaderRecord::new(record_type.as_bytes());
+        for field in line.split('\t').skip(1) {
+            let Some((tag, value)) = field.split_once(':') else {
+                continue;
+            };
+            record.push_tag(tag.as_bytes(), value);
+        }
+        header.push_record(&record);
+    }
+
+    let mut rg_record = HeaderRecord::new(b"RG");
+    rg_record
+        .push_tag(b"ID", &read_group.id)
+        .push_tag(b"LB", &read_group.library)
+        .push_tag(b"PL", &read_group.platform)
+        .push_tag(b"SM", &read_group.sample)
+        .push_tag(b"PU", &read_group.platform_unit);
+    push_optional_header_tag(
+        &mut rg_record,
+        b"CN",
+        read_group.sequencing_center.as_deref(),
+    );
+    push_optional_header_tag(&mut rg_record, b"DS", read_group.description.as_deref());
+    push_optional_header_tag(&mut rg_record, b"DT", read_group.run_date.as_deref());
+    push_optional_header_tag(
+        &mut rg_record,
+        b"PI",
+        read_group.predicted_insert_size.as_deref(),
+    );
+    push_optional_header_tag(&mut rg_record, b"PG", read_group.program_group.as_deref());
+    push_optional_header_tag(&mut rg_record, b"PM", read_group.platform_model.as_deref());
+    header.push_record(&rg_record);
+
+    header
+}
+
+fn push_optional_header_tag(
+    record: &mut HeaderRecord<'_>,
+    tag: &'static [u8],
+    value: Option<&str>,
+) {
+    if let Some(value) = value {
+        record.push_tag(tag, value);
+    }
+}
+
+fn set_record_read_group(record: &mut bam::Record, read_group_id: &str) -> Result<(), String> {
+    if record.aux(b"RG").is_ok() {
+        record
+            .remove_aux(b"RG")
+            .map_err(|error| error.to_string())?;
+    }
+    record
+        .push_aux(b"RG", Aux::String(read_group_id))
+        .map_err(|error| error.to_string())
 }
 
 fn reject_unsupported_samtofastq_args(

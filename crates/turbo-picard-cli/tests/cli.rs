@@ -386,6 +386,44 @@ fn samtofastq_writes_gzip_fastq_outputs() {
 }
 
 #[test]
+fn addorreplacereadgroups_rewrites_header_and_record_tags() {
+    let tempdir = tempfile::tempdir().expect("tempdir exists");
+    let input = tempdir.path().join("input.sam");
+    let output = tempdir.path().join("output.sam");
+    fs::write(
+        &input,
+        concat!(
+            "@HD\tVN:1.6\tSO:coordinate\n",
+            "@SQ\tSN:chr1\tLN:1000\n",
+            "@RG\tID:old\tLB:old-lib\tPL:ILLUMINA\tPU:old-unit\tSM:old-sample\n",
+            "read-a\t0\tchr1\t10\t60\t4M\t*\t0\t0\tACGT\tFFFF\tRG:Z:old\n",
+        ),
+    )
+    .expect("input fixture is written");
+
+    let mut cmd = Command::cargo_bin("picard").expect("binary exists");
+    cmd.args([
+        "AddOrReplaceReadGroups",
+        &format!("I={}", input.display()),
+        &format!("O={}", output.display()),
+        "RGID=new",
+        "RGLB=library-a",
+        "RGPL=ILLUMINA",
+        "RGPU=unit-a",
+        "RGSM=sample-a",
+    ])
+    .assert()
+    .success();
+
+    let output_sam = fs::read_to_string(&output).expect("output SAM exists");
+    assert!(!output_sam.contains("ID:old"));
+    assert!(
+        output_sam.contains("@RG\tID:new\tLB:library-a\tPL:ILLUMINA\tSM:sample-a\tPU:unit-a\n")
+    );
+    assert!(output_sam.contains("read-a\t0\tchr1\t10\t60\t4M\t*\t0\t0\tACGT\tFFFF\tRG:Z:new"));
+}
+
+#[test]
 fn picard_binary_dispatches_markduplicates() {
     let tempdir = tempfile::tempdir().expect("tempdir exists");
     let input = tempdir.path().join("input.sam");

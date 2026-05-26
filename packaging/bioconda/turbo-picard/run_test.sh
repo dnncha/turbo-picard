@@ -57,3 +57,18 @@ turbo-picard SamToFastq \
 
 test -s reads.fastq
 grep -q '^@read-a$' reads.fastq
+
+turbo-picard AddOrReplaceReadGroups \
+  I=input.sam \
+  O=readgroups.sam \
+  RGID=new \
+  RGLB=library-a \
+  RGPL=ILLUMINA \
+  RGPU=unit-a \
+  RGSM=sample-a \
+  VALIDATION_STRINGENCY=SILENT \
+  QUIET=true
+
+test -s readgroups.sam
+grep -q $'@RG\tID:new\tLB:library-a\tPL:ILLUMINA\tSM:sample-a\tPU:unit-a' readgroups.sam
+grep -q $'RG:Z:new' readgroups.sam
