@@ -1,6 +1,7 @@
 use assert_cmd::Command;
 use predicates::prelude::*;
 use std::fs;
+use std::os::unix::fs::PermissionsExt;
 
 #[test]
 fn unsupported_command_fails_clearly() {
@@ -39,6 +40,97 @@ fn markduplicates_rejects_unsupported_option() {
     .stderr(predicate::str::contains(
         "unsupported MarkDuplicates argument: TAGGING_POLICY=Invalid",
     ));
+}
+
+#[test]
+fn unsupported_command_delegates_to_configured_fallback() {
+    let tempdir = tempfile::tempdir().expect("tempdir exists");
+    let fallback = fallback_script(tempdir.path(), 17);
+    let log = tempdir.path().join("fallback.args");
+
+    let mut cmd = Command::cargo_bin("picard").expect("binary exists");
+    cmd.env(
+        "TURBO_PICARD_FALLBACK_COMMAND",
+        fallback.display().to_string(),
+    )
+    .env("TURBO_PICARD_FALLBACK_LOG", log.display().to_string())
+    .args(["SortSam", "I=in.bam", "O=out.bam", "SORT_ORDER=queryname"])
+    .assert()
+    .code(17);
+
+    let fallback_args = fs::read_to_string(log).expect("fallback log exists");
+    assert_eq!(
+        fallback_args,
+        "SortSam\nI=in.bam\nO=out.bam\nSORT_ORDER=queryname\n"
+    );
+}
+
+#[test]
+fn markduplicates_delegates_unsupported_native_surface_to_configured_fallback() {
+    let tempdir = tempfile::tempdir().expect("tempdir exists");
+    let fallback = fallback_script(tempdir.path(), 0);
+    let log = tempdir.path().join("fallback.args");
+
+    let mut cmd = Command::cargo_bin("picard").expect("binary exists");
+    cmd.env(
+        "TURBO_PICARD_FALLBACK_COMMAND",
+        fallback.display().to_string(),
+    )
+    .env("TURBO_PICARD_FALLBACK_LOG", log.display().to_string())
+    .args([
+        "MarkDuplicates",
+        "I=in.bam",
+        "O=out.bam",
+        "M=metrics.txt",
+        "TAGGING_POLICY=Invalid",
+    ])
+    .assert()
+    .success();
+
+    let fallback_args = fs::read_to_string(log).expect("fallback log exists");
+    assert_eq!(
+        fallback_args,
+        "MarkDuplicates\nI=in.bam\nO=out.bam\nM=metrics.txt\nTAGGING_POLICY=Invalid\n"
+    );
+}
+
+#[test]
+fn markduplicates_uses_native_engine_before_configured_fallback() {
+    let tempdir = tempfile::tempdir().expect("tempdir exists");
+    let fallback = fallback_script(tempdir.path(), 99);
+    let log = tempdir.path().join("fallback.args");
+    let input = tempdir.path().join("input.sam");
+    let output = tempdir.path().join("output.sam");
+    let metrics = tempdir.path().join("metrics.txt");
+    fs::write(
+        &input,
+        concat!(
+            "@HD\tVN:1.6\tSO:coordinate\n",
+            "@SQ\tSN:chr1\tLN:1000\n",
+            "read-a\t0\tchr1\t10\t60\t10M\t*\t0\t0\tAAAAAAAAAA\tFFFFFFFFFF\n",
+            "read-b\t0\tchr1\t10\t60\t10M\t*\t0\t0\tAAAAAAAAAA\tFFFFFFFFFF\n",
+        ),
+    )
+    .expect("input fixture is written");
+
+    let mut cmd = Command::cargo_bin("picard").expect("binary exists");
+    cmd.env(
+        "TURBO_PICARD_FALLBACK_COMMAND",
+        fallback.display().to_string(),
+    )
+    .env("TURBO_PICARD_FALLBACK_LOG", log.display().to_string())
+    .args([
+        "MarkDuplicates",
+        &format!("I={}", input.display()),
+        &format!("O={}", output.display()),
+        &format!("M={}", metrics.display()),
+    ])
+    .assert()
+    .success();
+
+    assert!(!log.exists());
+    let output_sam = fs::read_to_string(&output).expect("output SAM exists");
+    assert!(output_sam.contains("read-b\t1024\tchr1\t10"));
 }
 
 #[test]
@@ -129,4 +221,21 @@ fn picard_binary_supports_help_and_version_smoke_checks() {
         .assert()
         .success()
         .stdout(predicate::str::contains(env!("CARGO_PKG_VERSION")));
+}
+
+fn fallback_script(dir: &std::path::Path, exit_code: i32) -> std::path::PathBuf {
+    let script = dir.join("fallback.sh");
+    fs::write(
+        &script,
+        format!(
+            "#!/usr/bin/env bash\nset -euo pipefail\nprintf '%s\\n' \"$@\" > \"$TURBO_PICARD_FALLBACK_LOG\"\nexit {exit_code}\n"
+        ),
+    )
+    .expect("fallback script is written");
+    let mut permissions = fs::metadata(&script)
+        .expect("fallback metadata exists")
+        .permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(&script, permissions).expect("fallback script is executable");
+    script
 }

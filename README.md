@@ -33,8 +33,19 @@ The compatibility entrypoint accepts the same command shape:
 picard MarkDuplicates I=input.bam O=marked.bam M=metrics.txt
 ```
 
-Unsupported Picard commands fail clearly instead of silently delegating to a
-different implementation.
+By default, unsupported Picard commands fail clearly. For drop-in deployments
+that need the rest of Picard to keep working, set a fallback command:
+
+```bash
+export TURBO_PICARD_FALLBACK_COMMAND='mamba run -p /opt/conda/envs/picard picard'
+picard SortSam I=input.bam O=queryname.bam SORT_ORDER=queryname
+```
+
+When configured, `turbo-picard` runs native accelerated commands first. If a
+command is unsupported, or the requested `MarkDuplicates` surface is outside the
+native implementation, it delegates the original Picard arguments to the
+fallback command and returns the fallback exit code. The fallback value is a
+shell command prefix, so `java -jar /path/to/picard.jar` works too.
 
 ## Supported MarkDuplicates Surface
 
@@ -88,6 +99,8 @@ change the current native implementation:
 ## Runtime Knobs
 
 - `TURBO_PICARD_THREADS`: worker threads for CPU-heavy MarkDuplicates phases.
+- `TURBO_PICARD_FALLBACK_COMMAND`: Picard command prefix used for unsupported
+  commands or unsupported native `MarkDuplicates` surfaces.
 - `COMPRESSION_LEVEL`: Picard-style output compression level, from `0` to `9`.
 
 ## Correctness Checks
@@ -118,6 +131,5 @@ tagged release URL and `sha256`, and replace the maintainer placeholder.
 
 `turbo-picard` is not a full Picard suite yet. The shipped native command is
 `MarkDuplicates`, and outputs are intended to be semantically compatible rather
-than byte-for-byte identical to Picard. The current BAM engine still keeps the
-record set in memory for large duplicate-marking runs; a streaming
-coordinate-window engine is the next major scaling step.
+than byte-for-byte identical to Picard. Set `TURBO_PICARD_FALLBACK_COMMAND` for
+drop-in environments that need unsupported Picard tools to continue working.

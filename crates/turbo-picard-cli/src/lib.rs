@@ -1,12 +1,14 @@
 #![forbid(unsafe_code)]
 
+use std::process::Command;
 use turbo_picard_core::markdup_config::MarkDuplicatesConfig;
 use turbo_picard_core::picard_args::normalize_picard_args;
 
 pub fn run_cli(program_name: &str, raw_args: impl IntoIterator<Item = String>) -> i32 {
-    let mut args = raw_args.into_iter();
+    let raw_args = raw_args.into_iter().collect::<Vec<_>>();
+    let mut args = raw_args.iter();
 
-    match args.next().as_deref() {
+    match args.next().map(String::as_str) {
         Some("--help" | "-h" | "help") => {
             print_top_level_help(program_name);
             0
@@ -16,7 +18,7 @@ pub fn run_cli(program_name: &str, raw_args: impl IntoIterator<Item = String>) -
             0
         }
         Some("MarkDuplicates") => {
-            let command_args = args.collect::<Vec<_>>();
+            let command_args = args.cloned().collect::<Vec<_>>();
             if command_args
                 .iter()
                 .any(|arg| arg == "--help" || arg == "-h")
@@ -29,12 +31,18 @@ pub fn run_cli(program_name: &str, raw_args: impl IntoIterator<Item = String>) -
                 return 0;
             }
             if let Err(error) = run_markduplicates(&command_args) {
+                if let Some(exit_code) = try_run_fallback(&raw_args) {
+                    return exit_code;
+                }
                 eprintln!("{error}");
                 return 2;
             }
             0
         }
         Some(command) => {
+            if let Some(exit_code) = try_run_fallback(&raw_args) {
+                return exit_code;
+            }
             eprintln!("unsupported Picard command: {command}");
             2
         }
@@ -84,4 +92,41 @@ fn run_markduplicates(args: &[String]) -> Result<(), String> {
 
     turbo_picard_markdup::run(&config).map_err(|error| error.to_string())?;
     Ok(())
+}
+
+fn try_run_fallback(args: &[String]) -> Option<i32> {
+    let fallback_command = std::env::var("TURBO_PICARD_FALLBACK_COMMAND")
+        .ok()
+        .filter(|command| !command.trim().is_empty())?;
+
+    match fallback_status(&fallback_command, args) {
+        Ok(exit_code) => Some(exit_code),
+        Err(error) => {
+            eprintln!("{error}");
+            Some(2)
+        }
+    }
+}
+
+fn fallback_status(fallback_command: &str, args: &[String]) -> Result<i32, String> {
+    let mut command = if cfg!(windows) {
+        let mut command = Command::new("cmd");
+        command.arg("/C").arg(format!("{fallback_command} %*"));
+        command
+    } else {
+        let mut command = Command::new("sh");
+        command
+            .arg("-c")
+            .arg(format!("exec {fallback_command} \"$@\""))
+            .arg("turbo-picard-fallback");
+        command
+    };
+
+    let status = command
+        .args(args)
+        .env_remove("TURBO_PICARD_FALLBACK_COMMAND")
+        .status()
+        .map_err(|error| format!("failed to run Picard fallback command: {error}"))?;
+
+    Ok(status.code().unwrap_or(1))
 }
