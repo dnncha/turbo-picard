@@ -4,6 +4,7 @@ use std::fmt;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MarkDuplicatesConfig {
     pub input: String,
+    pub inputs: Vec<String>,
     pub output: String,
     pub metrics_file: String,
     pub remove_duplicates: bool,
@@ -63,9 +64,11 @@ impl MarkDuplicatesConfig {
     ) -> Result<Self, MarkDuplicatesConfigError> {
         reject_unsupported(args)?;
         validate_passthrough_options(args)?;
+        let inputs = required_values(args, "INPUT")?;
 
         Ok(Self {
-            input: required_scalar(args, "INPUT")?,
+            input: inputs[0].clone(),
+            inputs,
             output: required_scalar(args, "OUTPUT")?,
             metrics_file: required_scalar(args, "METRICS_FILE")?,
             remove_duplicates: optional_bool(args, "REMOVE_DUPLICATES")?.unwrap_or(false),
@@ -175,6 +178,16 @@ fn required_scalar(
         .ok_or(MarkDuplicatesConfigError::MissingRequired(key))?;
 
     scalar_value(values, key)
+}
+
+fn required_values(
+    args: &BTreeMap<String, Vec<String>>,
+    key: &'static str,
+) -> Result<Vec<String>, MarkDuplicatesConfigError> {
+    args.get(key)
+        .filter(|values| !values.is_empty())
+        .cloned()
+        .ok_or(MarkDuplicatesConfigError::MissingRequired(key))
 }
 
 fn optional_bool(

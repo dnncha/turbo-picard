@@ -61,7 +61,7 @@ fn print_markduplicates_help() {
 Usage: picard MarkDuplicates I=<input.bam> O=<output.bam> M=<metrics.txt> [options]
 
 Required arguments:
-  INPUT / I             Input SAM or BAM file
+  INPUT / I             Input SAM or BAM file; may be repeated for BAM
   OUTPUT / O            Output SAM or BAM file
   METRICS_FILE / M      Duplication metrics file
 

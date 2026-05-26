@@ -37,7 +37,7 @@ impl fmt::Display for MarkDuplicatesError {
         match self {
             Self::UnsupportedInputFormat(path) => write!(
                 f,
-                "unsupported MarkDuplicates input format for {path}; this engine milestone supports SAM text only"
+                "unsupported MarkDuplicates input format for {path}; this engine supports BAM inputs and single SAM text input"
             ),
             Self::Io(error) => write!(f, "{error}"),
             Self::Htslib(error) => write!(f, "{error}"),
@@ -86,10 +86,15 @@ struct BamDuplicateKey {
 }
 
 pub fn run(config: &MarkDuplicatesConfig) -> Result<MarkDuplicatesSummary, MarkDuplicatesError> {
-    if is_bam_input(&config.input) {
+    if config.inputs.iter().all(|input| is_bam_input(input)) {
         return run_bam(config);
     }
 
+    if config.inputs.len() > 1 {
+        return Err(MarkDuplicatesError::UnsupportedInputFormat(
+            config.inputs.join(","),
+        ));
+    }
     ensure_sam_input(&config.input)?;
 
     let input = fs::read_to_string(&config.input)?;
@@ -204,7 +209,8 @@ fn is_bam_input(input: &str) -> bool {
 }
 
 fn run_bam(config: &MarkDuplicatesConfig) -> Result<MarkDuplicatesSummary, MarkDuplicatesError> {
-    let mut reader = bam::Reader::from_path(&config.input)?;
+    let first_input = &config.inputs[0];
+    let mut reader = bam::Reader::from_path(first_input)?;
     let library = first_library_name(reader.header());
     let mut header = bam::Header::from_template(reader.header());
     if config.add_pg_tag_to_reads {
@@ -228,31 +234,20 @@ fn run_bam(config: &MarkDuplicatesConfig) -> Result<MarkDuplicatesSummary, MarkD
         unmapped_records: 0,
     };
 
-    for result in reader.records() {
-        let record = result?;
-        let flag = record.flags();
-        let record_index = records.len();
-
-        if flag & UNMAPPED_FLAG != 0 {
-            summary.unmapped_records += 1;
-            records.push(record);
-            continue;
-        }
-        if flag & SECONDARY_OR_SUPPLEMENTARY_FLAGS != 0 {
-            summary.secondary_or_supplementary_records += 1;
-            records.push(record);
-            continue;
-        }
-
-        if flag & PAIRED_FLAG != 0 {
-            if flag & FIRST_IN_PAIR_FLAG != 0 {
-                summary.read_pairs_examined += 1;
-            }
-        } else {
-            summary.unpaired_reads_examined += 1;
-        }
-        eligible_indices.push(record_index);
-        records.push(record);
+    read_bam_records(
+        &mut reader,
+        &mut records,
+        &mut eligible_indices,
+        &mut summary,
+    )?;
+    for input in config.inputs.iter().skip(1) {
+        let mut reader = bam::Reader::from_path(input)?;
+        read_bam_records(
+            &mut reader,
+            &mut records,
+            &mut eligible_indices,
+            &mut summary,
+        )?;
     }
 
     let duplicate_groups = duplicate_groups(&records, &eligible_indices, config);
@@ -287,6 +282,9 @@ fn run_bam(config: &MarkDuplicatesConfig) -> Result<MarkDuplicatesSummary, MarkD
     }
 
     {
+        if config.inputs.len() > 1 {
+            records.sort_by(|left, right| bam_output_order(left).cmp(&bam_output_order(right)));
+        }
         for mut record in records {
             if config.remove_duplicates && record.flags() & DUPLICATE_FLAG != 0 {
                 continue;
@@ -323,6 +321,51 @@ fn run_bam(config: &MarkDuplicatesConfig) -> Result<MarkDuplicatesSummary, MarkD
         )?;
     }
     Ok(summary)
+}
+
+fn read_bam_records<R: bam::Read>(
+    reader: &mut R,
+    records: &mut Vec<bam::Record>,
+    eligible_indices: &mut Vec<usize>,
+    summary: &mut MarkDuplicatesSummary,
+) -> Result<(), MarkDuplicatesError> {
+    for result in reader.records() {
+        let record = result?;
+        let flag = record.flags();
+        let record_index = records.len();
+
+        if flag & UNMAPPED_FLAG != 0 {
+            summary.unmapped_records += 1;
+            records.push(record);
+            continue;
+        }
+        if flag & SECONDARY_OR_SUPPLEMENTARY_FLAGS != 0 {
+            summary.secondary_or_supplementary_records += 1;
+            records.push(record);
+            continue;
+        }
+
+        if flag & PAIRED_FLAG != 0 {
+            if flag & FIRST_IN_PAIR_FLAG != 0 {
+                summary.read_pairs_examined += 1;
+            }
+        } else {
+            summary.unpaired_reads_examined += 1;
+        }
+        eligible_indices.push(record_index);
+        records.push(record);
+    }
+
+    Ok(())
+}
+
+fn bam_output_order(record: &bam::Record) -> (i32, i64, Vec<u8>, u16) {
+    (
+        record.tid(),
+        record.pos(),
+        record.qname().to_vec(),
+        record.flags(),
+    )
 }
 
 fn clear_duplicate_type_tag(record: &mut bam::Record) -> Result<(), MarkDuplicatesError> {

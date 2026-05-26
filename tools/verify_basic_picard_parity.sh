@@ -6,7 +6,7 @@ conda_prefix="${JEANLUC_CONDA_PREFIX:-$repo_root/.conda-jeanluc}"
 workdir="$(mktemp -d)"
 trap 'rm -rf "$workdir"' EXIT
 
-for fixture in basic paired scoring softclip secondary pair-score-tie clear-dt tagging-all duplicate-set-members barcode-tag read-barcode-tags optical; do
+for fixture in basic paired scoring softclip secondary pair-score-tie clear-dt tagging-all duplicate-set-members barcode-tag read-barcode-tags optical multi-input; do
   fixture_dir="$repo_root/fixtures/markduplicates/$fixture"
   fixture_workdir="$workdir/$fixture"
   tagging_policy="DontTag"
@@ -37,8 +37,13 @@ for fixture in basic paired scoring softclip secondary pair-score-tie clear-dt t
   mkdir -p "$fixture_workdir"
 
   command=(cargo run -q -p jeanluc-cli --bin picard -- \
-    MarkDuplicates \
-    "I=$fixture_dir/input.bam" \
+    MarkDuplicates)
+  if [[ "$fixture" == "multi-input" ]]; then
+    command+=("I=$fixture_dir/input1.bam" "I=$fixture_dir/input2.bam")
+  else
+    command+=("I=$fixture_dir/input.bam")
+  fi
+  command+=(\
     "O=$fixture_workdir/jeanluc.bam" \
     "M=$fixture_workdir/jeanluc.metrics.txt" \
     ASSUME_SORTED=true \

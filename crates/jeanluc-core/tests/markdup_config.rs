@@ -13,6 +13,7 @@ fn accepts_minimal_required_picard_arguments() {
     let config = MarkDuplicatesConfig::try_from_args(&parsed).expect("config validates");
 
     assert_eq!(config.input, "in.bam");
+    assert_eq!(config.inputs, vec!["in.bam".to_string()]);
     assert_eq!(config.output, "out.bam");
     assert_eq!(config.metrics_file, "metrics.txt");
     assert!(!config.remove_duplicates);
@@ -197,7 +198,7 @@ fn rejects_missing_metrics_file() {
 }
 
 #[test]
-fn rejects_duplicate_scalar_values() {
+fn accepts_multiple_input_values() {
     let args = vec![
         "I=in.bam".to_string(),
         "I=second.bam".to_string(),
@@ -206,12 +207,13 @@ fn rejects_duplicate_scalar_values() {
     ];
     let parsed = normalize_picard_args(&args).expect("arguments parse");
 
-    let err = MarkDuplicatesConfig::try_from_args(&parsed).unwrap_err();
+    let config = MarkDuplicatesConfig::try_from_args(&parsed).expect("config validates");
 
     assert_eq!(
-        err,
-        MarkDuplicatesConfigError::DuplicateScalar("INPUT".to_string())
+        config.inputs,
+        vec!["in.bam".to_string(), "second.bam".to_string()]
     );
+    assert_eq!(config.input, "in.bam");
 }
 
 #[test]

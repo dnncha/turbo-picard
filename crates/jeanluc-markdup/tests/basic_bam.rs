@@ -11,6 +11,7 @@ fn marks_duplicate_records_in_bam() {
         .join("../../fixtures/markduplicates/basic/input.bam");
     let config = MarkDuplicatesConfig {
         input: input.display().to_string(),
+        inputs: vec![input.display().to_string()],
         output: output.display().to_string(),
         metrics_file: metrics.display().to_string(),
         remove_duplicates: false,
@@ -47,6 +48,7 @@ fn marks_duplicate_pairs_and_reports_paired_metrics() {
         .join("../../fixtures/markduplicates/paired/input.bam");
     let config = MarkDuplicatesConfig {
         input: input.display().to_string(),
+        inputs: vec![input.display().to_string()],
         output: output.display().to_string(),
         metrics_file: metrics.display().to_string(),
         remove_duplicates: false,
@@ -86,6 +88,7 @@ fn keeps_highest_quality_duplicate_representative() {
         .join("../../fixtures/markduplicates/scoring/input.bam");
     let config = MarkDuplicatesConfig {
         input: input.display().to_string(),
+        inputs: vec![input.display().to_string()],
         output: output.display().to_string(),
         metrics_file: metrics.display().to_string(),
         remove_duplicates: false,
@@ -122,6 +125,7 @@ fn groups_duplicates_by_unclipped_five_prime_position() {
         .join("../../fixtures/markduplicates/softclip/input.bam");
     let config = MarkDuplicatesConfig {
         input: input.display().to_string(),
+        inputs: vec![input.display().to_string()],
         output: output.display().to_string(),
         metrics_file: metrics.display().to_string(),
         remove_duplicates: false,
@@ -158,6 +162,7 @@ fn excludes_secondary_alignments_from_duplicate_testing() {
         .join("../../fixtures/markduplicates/secondary/input.bam");
     let config = MarkDuplicatesConfig {
         input: input.display().to_string(),
+        inputs: vec![input.display().to_string()],
         output: output.display().to_string(),
         metrics_file: metrics.display().to_string(),
         remove_duplicates: false,
@@ -197,6 +202,7 @@ fn chooses_duplicate_representative_per_pair_not_per_mate() {
         .join("../../fixtures/markduplicates/pair-score-tie/input.bam");
     let config = MarkDuplicatesConfig {
         input: input.display().to_string(),
+        inputs: vec![input.display().to_string()],
         output: output.display().to_string(),
         metrics_file: metrics.display().to_string(),
         remove_duplicates: false,
@@ -233,6 +239,7 @@ fn creates_bam_index_when_requested() {
         .join("../../fixtures/markduplicates/basic/input.bam");
     let config = MarkDuplicatesConfig {
         input: input.display().to_string(),
+        inputs: vec![input.display().to_string()],
         output: output.display().to_string(),
         metrics_file: metrics.display().to_string(),
         remove_duplicates: false,
@@ -268,6 +275,7 @@ fn creates_md5_sidecar_when_requested() {
         .join("../../fixtures/markduplicates/basic/input.bam");
     let config = MarkDuplicatesConfig {
         input: input.display().to_string(),
+        inputs: vec![input.display().to_string()],
         output: output.display().to_string(),
         metrics_file: metrics.display().to_string(),
         remove_duplicates: false,
@@ -305,6 +313,7 @@ fn adds_picard_program_group_header_and_read_tags_by_default() {
         .join("../../fixtures/markduplicates/basic/input.bam");
     let config = MarkDuplicatesConfig {
         input: input.display().to_string(),
+        inputs: vec![input.display().to_string()],
         output: output.display().to_string(),
         metrics_file: metrics.display().to_string(),
         remove_duplicates: false,
@@ -346,6 +355,7 @@ fn tags_library_duplicates_when_tagging_policy_is_all() {
         .join("../../fixtures/markduplicates/basic/input.bam");
     let config = MarkDuplicatesConfig {
         input: input.display().to_string(),
+        inputs: vec![input.display().to_string()],
         output: output.display().to_string(),
         metrics_file: metrics.display().to_string(),
         remove_duplicates: false,
@@ -382,6 +392,7 @@ fn tags_duplicate_set_members_when_requested() {
         .join("../../fixtures/markduplicates/paired/input.bam");
     let config = MarkDuplicatesConfig {
         input: input.display().to_string(),
+        inputs: vec![input.display().to_string()],
         output: output.display().to_string(),
         metrics_file: metrics.display().to_string(),
         remove_duplicates: false,
@@ -427,6 +438,7 @@ fn separates_duplicate_groups_by_barcode_tag() {
         .join("../../fixtures/markduplicates/barcode-tag/input.bam");
     let config = MarkDuplicatesConfig {
         input: input.display().to_string(),
+        inputs: vec![input.display().to_string()],
         output: output.display().to_string(),
         metrics_file: metrics.display().to_string(),
         remove_duplicates: false,
@@ -462,6 +474,7 @@ fn separates_duplicate_groups_by_read_one_and_read_two_barcode_tags() {
         .join("../../fixtures/markduplicates/read-barcode-tags/input.bam");
     let config = MarkDuplicatesConfig {
         input: input.display().to_string(),
+        inputs: vec![input.display().to_string()],
         output: output.display().to_string(),
         metrics_file: metrics.display().to_string(),
         remove_duplicates: false,
@@ -497,6 +510,7 @@ fn tags_optical_duplicate_pairs_and_reports_metrics() {
         .join("../../fixtures/markduplicates/optical/input.bam");
     let config = MarkDuplicatesConfig {
         input: input.display().to_string(),
+        inputs: vec![input.display().to_string()],
         output: output.display().to_string(),
         metrics_file: metrics.display().to_string(),
         remove_duplicates: false,
@@ -537,6 +551,7 @@ fn removes_duplicate_pairs_when_requested() {
         .join("../../fixtures/markduplicates/paired/input.bam");
     let config = MarkDuplicatesConfig {
         input: input.display().to_string(),
+        inputs: vec![input.display().to_string()],
         output: output.display().to_string(),
         metrics_file: metrics.display().to_string(),
         remove_duplicates: true,
@@ -573,6 +588,7 @@ fn clears_existing_duplicate_type_tags_when_requested() {
         .join("../../fixtures/markduplicates/clear-dt/input.bam");
     let config = MarkDuplicatesConfig {
         input: input.display().to_string(),
+        inputs: vec![input.display().to_string()],
         output: output.display().to_string(),
         metrics_file: metrics.display().to_string(),
         remove_duplicates: false,
@@ -608,6 +624,7 @@ fn preserves_existing_duplicate_type_tags_when_clear_dt_is_false() {
         .join("../../fixtures/markduplicates/clear-dt/input.bam");
     let config = MarkDuplicatesConfig {
         input: input.display().to_string(),
+        inputs: vec![input.display().to_string()],
         output: output.display().to_string(),
         metrics_file: metrics.display().to_string(),
         remove_duplicates: false,
@@ -632,6 +649,46 @@ fn preserves_existing_duplicate_type_tags_when_clear_dt_is_false() {
     jeanluc_markdup::run(&config).expect("BAM duplicate marking succeeds");
 
     assert!(read_has_dt_tags(&output));
+}
+
+#[test]
+fn marks_duplicate_pairs_across_multiple_bam_inputs() {
+    let tempdir = tempfile::tempdir().expect("tempdir exists");
+    let output = tempdir.path().join("output.bam");
+    let metrics = tempdir.path().join("metrics.txt");
+    let fixture_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../fixtures/markduplicates/multi-input");
+    let input1 = fixture_dir.join("input1.bam");
+    let input2 = fixture_dir.join("input2.bam");
+    let config = MarkDuplicatesConfig {
+        input: input1.display().to_string(),
+        inputs: vec![input1.display().to_string(), input2.display().to_string()],
+        output: output.display().to_string(),
+        metrics_file: metrics.display().to_string(),
+        remove_duplicates: false,
+        assume_sorted: true,
+        assume_sort_order: None,
+        validation_stringency: Some("SILENT".to_string()),
+        quiet: true,
+        create_index: false,
+        create_md5_file: false,
+        add_pg_tag_to_reads: true,
+        tag_duplicate_set_members: false,
+        duplicate_scoring_strategy: None,
+        read_name_regex: Some("null".to_string()),
+        tagging_policy: Some("DontTag".to_string()),
+        barcode_tag: None,
+        read_one_barcode_tag: None,
+        read_two_barcode_tag: None,
+        clear_dt: true,
+        optical_duplicate_pixel_distance: None,
+    };
+
+    jeanluc_markdup::run(&config).expect("BAM duplicate marking succeeds");
+
+    assert_eq!(read_flags(&output), vec![99, 1123, 147, 1171]);
+    let metrics_text = std::fs::read_to_string(&metrics).expect("metrics file exists");
+    assert!(metrics_text.contains("lib1\t0\t2\t0\t0\t0\t1\t0\t0.5\t2\n"));
 }
 
 fn read_flags(path: &std::path::Path) -> Vec<u16> {
