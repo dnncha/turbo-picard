@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 
 use jeanluc_core::markdup_config::MarkDuplicatesConfig;
+use rust_htslib::bam::record::Cigar;
 use rust_htslib::bam::{self, Read, index};
 use std::collections::HashMap;
 use std::fmt;
@@ -295,13 +296,15 @@ fn write_md5_sidecar(output: &str) -> Result<(), MarkDuplicatesError> {
 }
 
 fn duplicate_key(fields: &[String], flag: u16) -> DuplicateKey {
+    let reverse_strand = flag & 0x10 != 0;
+    let position = fields[3].parse::<i64>().unwrap_or_default() - 1;
     DuplicateKey {
         reference_name: fields[2].clone(),
-        position: fields[3].parse::<i64>().unwrap_or_default(),
+        position: unclipped_five_prime_position(position, &fields[5], reverse_strand),
         mate_reference_name: fields[6].clone(),
         mate_position: fields[7].parse::<i64>().unwrap_or_default(),
         template_length: fields[8].parse::<i64>().unwrap_or_default(),
-        reverse_strand: flag & 0x10 != 0,
+        reverse_strand,
     }
 }
 
@@ -341,8 +344,7 @@ fn duplicate_groups(
 
 fn single_duplicate_key_bam(record: &bam::Record) -> DuplicateKey {
     let reverse_strand = record.flags() & 0x10 != 0;
-    let cigar = record.cigar().to_string();
-    let position = unclipped_five_prime_position(record.pos(), &cigar, reverse_strand);
+    let position = unclipped_record_position(record);
     DuplicateKey {
         reference_name: record.tid().to_string(),
         position,
@@ -374,8 +376,53 @@ fn pair_duplicate_key_bam(first: &bam::Record, second: &bam::Record) -> Duplicat
 
 fn unclipped_record_position(record: &bam::Record) -> i64 {
     let reverse_strand = record.flags() & 0x10 != 0;
-    let cigar = record.cigar().to_string();
-    unclipped_five_prime_position(record.pos(), &cigar, reverse_strand)
+    let cigar = record.cigar();
+    if reverse_strand {
+        let reference_len: i64 = cigar
+            .iter()
+            .filter(|operation| consumes_reference(operation))
+            .map(cigar_len)
+            .sum();
+        let trailing_clip: i64 = cigar
+            .iter()
+            .rev()
+            .take_while(|operation| is_clip(operation))
+            .map(cigar_len)
+            .sum();
+        record.pos() + reference_len + trailing_clip - 1
+    } else {
+        let leading_clip: i64 = cigar
+            .iter()
+            .take_while(|operation| is_clip(operation))
+            .map(cigar_len)
+            .sum();
+        record.pos() - leading_clip
+    }
+}
+
+fn consumes_reference(operation: &Cigar) -> bool {
+    matches!(
+        operation,
+        Cigar::Match(_) | Cigar::Del(_) | Cigar::RefSkip(_) | Cigar::Equal(_) | Cigar::Diff(_)
+    )
+}
+
+fn is_clip(operation: &Cigar) -> bool {
+    matches!(operation, Cigar::SoftClip(_) | Cigar::HardClip(_))
+}
+
+fn cigar_len(operation: &Cigar) -> i64 {
+    match operation {
+        Cigar::Match(len)
+        | Cigar::Ins(len)
+        | Cigar::Del(len)
+        | Cigar::RefSkip(len)
+        | Cigar::SoftClip(len)
+        | Cigar::HardClip(len)
+        | Cigar::Pad(len)
+        | Cigar::Equal(len)
+        | Cigar::Diff(len) => i64::from(*len),
+    }
 }
 
 fn unclipped_five_prime_position(position: i64, cigar: &str, reverse_strand: bool) -> i64 {
