@@ -6,20 +6,24 @@ conda_prefix="${JEANLUC_CONDA_PREFIX:-$repo_root/.conda-jeanluc}"
 workdir="$(mktemp -d)"
 trap 'rm -rf "$workdir"' EXIT
 
-for fixture in basic paired scoring softclip secondary pair-score-tie clear-dt tagging-all duplicate-set-members; do
+for fixture in basic paired scoring softclip secondary pair-score-tie clear-dt tagging-all duplicate-set-members barcode-tag; do
   fixture_dir="$repo_root/fixtures/markduplicates/$fixture"
   fixture_workdir="$workdir/$fixture"
   tagging_policy="DontTag"
   tag_duplicate_set_members="false"
+  barcode_tag=""
   if [[ "$fixture" == "tagging-all" ]]; then
     tagging_policy="All"
   fi
   if [[ "$fixture" == "duplicate-set-members" ]]; then
     tag_duplicate_set_members="true"
   fi
+  if [[ "$fixture" == "barcode-tag" ]]; then
+    barcode_tag="RX"
+  fi
   mkdir -p "$fixture_workdir"
 
-  cargo run -q -p jeanluc-cli --bin picard -- \
+  command=(cargo run -q -p jeanluc-cli --bin picard -- \
     MarkDuplicates \
     "I=$fixture_dir/input.bam" \
     "O=$fixture_workdir/jeanluc.bam" \
@@ -30,7 +34,11 @@ for fixture in basic paired scoring softclip secondary pair-score-tie clear-dt t
     CLEAR_DT=true \
     READ_NAME_REGEX=null \
     "TAGGING_POLICY=$tagging_policy" \
-    "TAG_DUPLICATE_SET_MEMBERS=$tag_duplicate_set_members"
+    "TAG_DUPLICATE_SET_MEMBERS=$tag_duplicate_set_members")
+  if [[ -n "$barcode_tag" ]]; then
+    command+=("BARCODE_TAG=$barcode_tag")
+  fi
+  "${command[@]}"
 
   mamba run -p "$conda_prefix" samtools view -h "$fixture_workdir/jeanluc.bam" > "$fixture_workdir/jeanluc.sam"
   mamba run -p "$conda_prefix" samtools view -h "$fixture_dir/picard.bam" > "$fixture_workdir/picard.sam"

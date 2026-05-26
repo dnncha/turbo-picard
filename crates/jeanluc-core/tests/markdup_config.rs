@@ -131,6 +131,7 @@ fn accepts_common_duplicate_tagging_options() {
         "READ_NAME_REGEX=null".to_string(),
         "TAGGING_POLICY=All".to_string(),
         "TAG_DUPLICATE_SET_MEMBERS=true".to_string(),
+        "BARCODE_TAG=RX".to_string(),
         "CLEAR_DT=true".to_string(),
         "OPTICAL_DUPLICATE_PIXEL_DISTANCE=2500".to_string(),
     ];
@@ -141,6 +142,7 @@ fn accepts_common_duplicate_tagging_options() {
     assert_eq!(config.read_name_regex.as_deref(), Some("null"));
     assert_eq!(config.tagging_policy.as_deref(), Some("All"));
     assert!(config.tag_duplicate_set_members);
+    assert_eq!(config.barcode_tag.as_deref(), Some("RX"));
     assert!(config.clear_dt);
     assert_eq!(config.optical_duplicate_pixel_distance, Some(2500));
 }

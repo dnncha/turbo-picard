@@ -18,6 +18,7 @@ pub struct MarkDuplicatesConfig {
     pub duplicate_scoring_strategy: Option<String>,
     pub read_name_regex: Option<String>,
     pub tagging_policy: Option<String>,
+    pub barcode_tag: Option<String>,
     pub clear_dt: bool,
     pub optical_duplicate_pixel_distance: Option<u32>,
 }
@@ -78,6 +79,7 @@ impl MarkDuplicatesConfig {
             duplicate_scoring_strategy: optional_duplicate_scoring_strategy(args)?,
             read_name_regex: optional_read_name_regex(args)?,
             tagging_policy: optional_tagging_policy(args)?,
+            barcode_tag: optional_tag_name(args, "BARCODE_TAG")?,
             clear_dt: optional_bool(args, "CLEAR_DT")?.unwrap_or(true),
             optical_duplicate_pixel_distance: optional_u32(
                 args,
@@ -106,6 +108,7 @@ fn reject_unsupported(
         "READ_NAME_REGEX",
         "TAGGING_POLICY",
         "TAG_DUPLICATE_SET_MEMBERS",
+        "BARCODE_TAG",
         "CLEAR_DT",
         "OPTICAL_DUPLICATE_PIXEL_DISTANCE",
         "MAX_RECORDS_IN_RAM",
@@ -272,6 +275,23 @@ fn optional_tagging_policy(
     } else {
         Err(MarkDuplicatesConfigError::UnsupportedOption(format!(
             "TAGGING_POLICY={value}"
+        )))
+    }
+}
+
+fn optional_tag_name(
+    args: &BTreeMap<String, Vec<String>>,
+    key: &str,
+) -> Result<Option<String>, MarkDuplicatesConfigError> {
+    let Some(value) = optional_scalar(args, key)? else {
+        return Ok(None);
+    };
+
+    if value.len() == 2 && value.bytes().all(|byte| byte.is_ascii_alphanumeric()) {
+        Ok(Some(value))
+    } else {
+        Err(MarkDuplicatesConfigError::UnsupportedOption(format!(
+            "{key}={value}"
         )))
     }
 }

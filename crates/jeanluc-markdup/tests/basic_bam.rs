@@ -25,6 +25,7 @@ fn marks_duplicate_records_in_bam() {
         duplicate_scoring_strategy: None,
         read_name_regex: None,
         tagging_policy: None,
+        barcode_tag: None,
         clear_dt: true,
         optical_duplicate_pixel_distance: None,
     };
@@ -58,6 +59,7 @@ fn marks_duplicate_pairs_and_reports_paired_metrics() {
         duplicate_scoring_strategy: None,
         read_name_regex: None,
         tagging_policy: None,
+        barcode_tag: None,
         clear_dt: true,
         optical_duplicate_pixel_distance: None,
     };
@@ -94,6 +96,7 @@ fn keeps_highest_quality_duplicate_representative() {
         duplicate_scoring_strategy: None,
         read_name_regex: None,
         tagging_policy: None,
+        barcode_tag: None,
         clear_dt: true,
         optical_duplicate_pixel_distance: None,
     };
@@ -127,6 +130,7 @@ fn groups_duplicates_by_unclipped_five_prime_position() {
         duplicate_scoring_strategy: None,
         read_name_regex: None,
         tagging_policy: None,
+        barcode_tag: None,
         clear_dt: true,
         optical_duplicate_pixel_distance: None,
     };
@@ -160,6 +164,7 @@ fn excludes_secondary_alignments_from_duplicate_testing() {
         duplicate_scoring_strategy: None,
         read_name_regex: None,
         tagging_policy: None,
+        barcode_tag: None,
         clear_dt: true,
         optical_duplicate_pixel_distance: None,
     };
@@ -196,6 +201,7 @@ fn chooses_duplicate_representative_per_pair_not_per_mate() {
         duplicate_scoring_strategy: None,
         read_name_regex: None,
         tagging_policy: None,
+        barcode_tag: None,
         clear_dt: true,
         optical_duplicate_pixel_distance: None,
     };
@@ -229,6 +235,7 @@ fn creates_bam_index_when_requested() {
         duplicate_scoring_strategy: None,
         read_name_regex: None,
         tagging_policy: None,
+        barcode_tag: None,
         clear_dt: true,
         optical_duplicate_pixel_distance: None,
     };
@@ -261,6 +268,7 @@ fn creates_md5_sidecar_when_requested() {
         duplicate_scoring_strategy: None,
         read_name_regex: None,
         tagging_policy: None,
+        barcode_tag: None,
         clear_dt: true,
         optical_duplicate_pixel_distance: None,
     };
@@ -295,6 +303,7 @@ fn adds_picard_program_group_header_and_read_tags_by_default() {
         duplicate_scoring_strategy: None,
         read_name_regex: None,
         tagging_policy: None,
+        barcode_tag: None,
         clear_dt: true,
         optical_duplicate_pixel_distance: None,
     };
@@ -333,6 +342,7 @@ fn tags_library_duplicates_when_tagging_policy_is_all() {
         duplicate_scoring_strategy: None,
         read_name_regex: Some("null".to_string()),
         tagging_policy: Some("All".to_string()),
+        barcode_tag: None,
         clear_dt: true,
         optical_duplicate_pixel_distance: None,
     };
@@ -366,6 +376,7 @@ fn tags_duplicate_set_members_when_requested() {
         duplicate_scoring_strategy: None,
         read_name_regex: Some("null".to_string()),
         tagging_policy: None,
+        barcode_tag: None,
         clear_dt: true,
         optical_duplicate_pixel_distance: None,
     };
@@ -383,6 +394,39 @@ fn tags_duplicate_set_members_when_requested() {
             ("pair-c".to_string(), None),
         ]
     );
+}
+
+#[test]
+fn separates_duplicate_groups_by_barcode_tag() {
+    let tempdir = tempfile::tempdir().expect("tempdir exists");
+    let output = tempdir.path().join("output.bam");
+    let metrics = tempdir.path().join("metrics.txt");
+    let input = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../fixtures/markduplicates/barcode-tag/input.bam");
+    let config = MarkDuplicatesConfig {
+        input: input.display().to_string(),
+        output: output.display().to_string(),
+        metrics_file: metrics.display().to_string(),
+        remove_duplicates: false,
+        assume_sorted: true,
+        assume_sort_order: None,
+        validation_stringency: Some("SILENT".to_string()),
+        quiet: true,
+        create_index: false,
+        create_md5_file: false,
+        add_pg_tag_to_reads: true,
+        tag_duplicate_set_members: false,
+        duplicate_scoring_strategy: None,
+        read_name_regex: Some("null".to_string()),
+        tagging_policy: None,
+        barcode_tag: Some("RX".to_string()),
+        clear_dt: true,
+        optical_duplicate_pixel_distance: None,
+    };
+
+    jeanluc_markdup::run(&config).expect("BAM duplicate marking succeeds");
+
+    assert_eq!(read_flags(&output), vec![0, 1024, 0, 0]);
 }
 
 #[test]
@@ -408,6 +452,7 @@ fn removes_duplicate_pairs_when_requested() {
         duplicate_scoring_strategy: None,
         read_name_regex: None,
         tagging_policy: None,
+        barcode_tag: None,
         clear_dt: true,
         optical_duplicate_pixel_distance: None,
     };
@@ -441,6 +486,7 @@ fn clears_existing_duplicate_type_tags_when_requested() {
         duplicate_scoring_strategy: None,
         read_name_regex: Some("null".to_string()),
         tagging_policy: Some("DontTag".to_string()),
+        barcode_tag: None,
         clear_dt: true,
         optical_duplicate_pixel_distance: Some(2500),
     };
@@ -473,6 +519,7 @@ fn preserves_existing_duplicate_type_tags_when_clear_dt_is_false() {
         duplicate_scoring_strategy: None,
         read_name_regex: Some("null".to_string()),
         tagging_policy: Some("DontTag".to_string()),
+        barcode_tag: None,
         clear_dt: false,
         optical_duplicate_pixel_distance: Some(2500),
     };

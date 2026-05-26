@@ -70,6 +70,7 @@ struct DuplicateKey {
     mate_position: i64,
     template_length: i64,
     reverse_strand: bool,
+    barcode: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -80,6 +81,7 @@ struct BamDuplicateKey {
     mate_position: i64,
     template_length: i64,
     reverse_strand: bool,
+    barcode: Option<Vec<u8>>,
 }
 
 pub fn run(config: &MarkDuplicatesConfig) -> Result<MarkDuplicatesSummary, MarkDuplicatesError> {
@@ -145,7 +147,7 @@ pub fn run(config: &MarkDuplicatesConfig) -> Result<MarkDuplicatesSummary, MarkD
         } else {
             summary.unpaired_reads_examined += 1;
         }
-        let key = duplicate_key(&fields, flag);
+        let key = duplicate_key(&fields, flag, config);
         let seen_count = seen.entry(key).or_insert(0);
         let duplicate = *seen_count > 0;
         *seen_count += 1;
@@ -250,7 +252,7 @@ fn run_bam(config: &MarkDuplicatesConfig) -> Result<MarkDuplicatesSummary, MarkD
         records.push(record);
     }
 
-    let duplicate_groups = duplicate_groups(&records, &eligible_indices);
+    let duplicate_groups = duplicate_groups(&records, &eligible_indices, config);
 
     for group in duplicate_groups.values() {
         if group.len() < 2 {
@@ -422,7 +424,7 @@ fn write_md5_sidecar(output: &str) -> Result<(), MarkDuplicatesError> {
     Ok(())
 }
 
-fn duplicate_key(fields: &[String], flag: u16) -> DuplicateKey {
+fn duplicate_key(fields: &[String], flag: u16, config: &MarkDuplicatesConfig) -> DuplicateKey {
     let reverse_strand = flag & 0x10 != 0;
     let position = fields[3].parse::<i64>().unwrap_or_default() - 1;
     DuplicateKey {
@@ -432,12 +434,14 @@ fn duplicate_key(fields: &[String], flag: u16) -> DuplicateKey {
         mate_position: fields[7].parse::<i64>().unwrap_or_default(),
         template_length: fields[8].parse::<i64>().unwrap_or_default(),
         reverse_strand,
+        barcode: sam_barcode(fields, config),
     }
 }
 
 fn duplicate_groups(
     records: &[bam::Record],
     eligible_indices: &[usize],
+    config: &MarkDuplicatesConfig,
 ) -> HashMap<BamDuplicateKey, Vec<usize>> {
     let mut paired_by_name = HashMap::<Vec<u8>, Vec<usize>>::new();
     let mut duplicate_groups = HashMap::<BamDuplicateKey, Vec<usize>>::new();
@@ -451,17 +455,21 @@ fn duplicate_groups(
                 .push(index);
         } else {
             duplicate_groups
-                .entry(single_duplicate_key_bam(record))
+                .entry(single_duplicate_key_bam(
+                    record,
+                    &bam_barcode(record, config),
+                ))
                 .or_default()
                 .push(index);
         }
     }
 
     for indices in paired_by_name.into_values() {
+        let barcode = first_barcode(records, &indices, config);
         let key = if indices.len() >= 2 {
-            pair_duplicate_key_bam(&records[indices[0]], &records[indices[1]])
+            pair_duplicate_key_bam(&records[indices[0]], &records[indices[1]], barcode)
         } else {
-            single_duplicate_key_bam(&records[indices[0]])
+            single_duplicate_key_bam(&records[indices[0]], &barcode)
         };
         duplicate_groups.entry(key).or_default().extend(indices);
     }
@@ -469,7 +477,35 @@ fn duplicate_groups(
     duplicate_groups
 }
 
-fn single_duplicate_key_bam(record: &bam::Record) -> BamDuplicateKey {
+fn sam_barcode(fields: &[String], config: &MarkDuplicatesConfig) -> Option<String> {
+    let tag = config.barcode_tag.as_deref()?;
+    let prefix = format!("{tag}:Z:");
+    fields
+        .iter()
+        .skip(11)
+        .find_map(|field| field.strip_prefix(&prefix).map(str::to_string))
+}
+
+fn first_barcode(
+    records: &[bam::Record],
+    indices: &[usize],
+    config: &MarkDuplicatesConfig,
+) -> Option<Vec<u8>> {
+    indices
+        .iter()
+        .find_map(|index| bam_barcode(&records[*index], config))
+}
+
+fn bam_barcode(record: &bam::Record, config: &MarkDuplicatesConfig) -> Option<Vec<u8>> {
+    let tag = config.barcode_tag.as_deref()?;
+    match record.aux(tag.as_bytes()) {
+        Ok(Aux::String(value)) => Some(value.as_bytes().to_vec()),
+        Ok(Aux::Char(value)) => Some(vec![value]),
+        _ => None,
+    }
+}
+
+fn single_duplicate_key_bam(record: &bam::Record, barcode: &Option<Vec<u8>>) -> BamDuplicateKey {
     let reverse_strand = record.flags() & 0x10 != 0;
     let position = unclipped_record_position(record);
     BamDuplicateKey {
@@ -479,10 +515,15 @@ fn single_duplicate_key_bam(record: &bam::Record) -> BamDuplicateKey {
         mate_position: record.mpos(),
         template_length: record.insert_size(),
         reverse_strand,
+        barcode: barcode.clone(),
     }
 }
 
-fn pair_duplicate_key_bam(first: &bam::Record, second: &bam::Record) -> BamDuplicateKey {
+fn pair_duplicate_key_bam(
+    first: &bam::Record,
+    second: &bam::Record,
+    barcode: Option<Vec<u8>>,
+) -> BamDuplicateKey {
     let first_position = unclipped_record_position(first);
     let second_position = unclipped_record_position(second);
     let (left, right) = if (first.tid(), first_position) <= (second.tid(), second_position) {
@@ -498,6 +539,7 @@ fn pair_duplicate_key_bam(first: &bam::Record, second: &bam::Record) -> BamDupli
         mate_position: unclipped_record_position(right),
         template_length: first.insert_size().abs().max(second.insert_size().abs()),
         reverse_strand: false,
+        barcode,
     }
 }
 

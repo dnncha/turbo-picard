@@ -22,6 +22,7 @@ class RecordKey:
     duplicate_type: str | None
     duplicate_set_size: int | None
     duplicate_set_index: int | None
+    rx_barcode: str | None
     reference_name: str
     position: int
     mate_reference_name: str
@@ -106,6 +107,7 @@ def read_sam_records(path: Path) -> list[RecordKey]:
                     duplicate_type=optional_tag(fields[11:], "DT"),
                     duplicate_set_size=optional_int_tag(fields[11:], "DS"),
                     duplicate_set_index=optional_int_tag(fields[11:], "DI"),
+                    rx_barcode=optional_tag(fields[11:], "RX"),
                     reference_name=fields[2],
                     position=int(fields[3]),
                     mate_reference_name=fields[6],
@@ -135,6 +137,7 @@ def read_hts_records(path: Path) -> list[RecordKey]:
                     duplicate_type=record.get_tag("DT") if record.has_tag("DT") else None,
                     duplicate_set_size=record.get_tag("DS") if record.has_tag("DS") else None,
                     duplicate_set_index=record.get_tag("DI") if record.has_tag("DI") else None,
+                    rx_barcode=record.get_tag("RX") if record.has_tag("RX") else None,
                     reference_name=handle.get_reference_name(record.reference_id)
                     if record.reference_id >= 0
                     else "*",
