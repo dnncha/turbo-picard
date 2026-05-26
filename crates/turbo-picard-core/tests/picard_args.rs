@@ -64,6 +64,8 @@ fn normalizes_common_markduplicates_short_aliases() {
     let args = vec![
         "-AS".to_string(),
         "true".to_string(),
+        "-SO".to_string(),
+        "coordinate".to_string(),
         "-ASO".to_string(),
         "coordinate".to_string(),
         "-DS".to_string(),
@@ -76,6 +78,10 @@ fn normalizes_common_markduplicates_short_aliases() {
 
     let parsed = normalize_picard_args(&args).expect("arguments parse");
 
+    assert_eq!(
+        parsed.get("SORT_ORDER").unwrap(),
+        &vec!["coordinate".to_string()]
+    );
     assert_eq!(
         parsed.get("ASSUME_SORTED").unwrap(),
         &vec!["true".to_string()]

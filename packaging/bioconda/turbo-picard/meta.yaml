@@ -40,6 +40,7 @@ test:
     - turbo-picard --version
     - picard --version
     - turbo-picard MarkDuplicates --help
+    - turbo-picard SortSam --help
 
 about:
   home: https://github.com/turbo-picard/turbo-picard

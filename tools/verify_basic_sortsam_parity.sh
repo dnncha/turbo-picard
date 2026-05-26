@@ -1,0 +1,69 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+conda_prefix="${TURBO_PICARD_CONDA_PREFIX:-$repo_root/.conda-turbo-picard}"
+workdir="$(mktemp -d)"
+trap 'rm -rf "$workdir"' EXIT
+
+if command -v mamba >/dev/null 2>&1; then
+  conda_runner=(mamba)
+elif command -v micromamba >/dev/null 2>&1; then
+  conda_runner=(micromamba)
+else
+  echo "mamba or micromamba is required for Picard parity verification" >&2
+  exit 127
+fi
+
+cat > "$workdir/input.sam" <<'SAM'
+@HD	VN:1.6	SO:unsorted
+@SQ	SN:chr1	LN:1000
+read-c	0	chr1	90	60	10M	*	0	0	CCCCCCCCCC	FFFFFFFFFF
+read-a	0	chr1	10	60	10M	*	0	0	AAAAAAAAAA	FFFFFFFFFF
+read-b	0	chr1	50	60	10M	*	0	0	BBBBBBBBBB	FFFFFFFFFF
+SAM
+
+for sort_order in coordinate queryname; do
+  cargo run -q -p turbo-picard-cli --bin picard -- \
+    SortSam \
+    "I=$workdir/input.sam" \
+    "O=$workdir/turbo-$sort_order.sam" \
+    "SORT_ORDER=$sort_order" \
+    VALIDATION_STRINGENCY=SILENT \
+    QUIET=true
+
+  "${conda_runner[@]}" run -p "$conda_prefix" picard SortSam \
+    "I=$workdir/input.sam" \
+    "O=$workdir/picard-$sort_order.sam" \
+    "SORT_ORDER=$sort_order" \
+    VALIDATION_STRINGENCY=SILENT \
+    QUIET=true
+
+  python3 - "$sort_order" "$workdir/turbo-$sort_order.sam" "$workdir/picard-$sort_order.sam" <<'PY'
+import sys
+sort_order, turbo_path, picard_path = sys.argv[1:]
+
+def header_sort_order(path):
+    with open(path, encoding="utf-8") as handle:
+        for line in handle:
+            if line.startswith("@HD\t"):
+                for field in line.rstrip("\n").split("\t")[1:]:
+                    if field.startswith("SO:"):
+                        return field[3:]
+    return None
+
+def record_names(path):
+    names = []
+    with open(path, encoding="utf-8") as handle:
+        for line in handle:
+            if not line.startswith("@"):
+                names.append(line.split("\t", 1)[0])
+    return names
+
+if header_sort_order(turbo_path) != sort_order:
+    raise SystemExit(f"turbo-picard SortSam did not set SO:{sort_order}")
+if record_names(turbo_path) != record_names(picard_path):
+    raise SystemExit("SortSam record order differs from Picard")
+print(f"SortSam {sort_order} output order matches Picard")
+PY
+done

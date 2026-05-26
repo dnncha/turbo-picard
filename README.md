@@ -1,8 +1,8 @@
 # turbo-picard
 
 `turbo-picard` is a Picard-shaped Rust toolkit focused on high-impact, drop-in
-replacement workflows. The current native engine targets `MarkDuplicates` and
-installs two command-line entrypoints:
+replacement workflows. The current native engines target `MarkDuplicates` and
+`SortSam`, and install two command-line entrypoints:
 
 - `turbo-picard`
 - `picard`
@@ -31,6 +31,13 @@ The compatibility entrypoint accepts the same command shape:
 
 ```bash
 picard MarkDuplicates I=input.bam O=marked.bam M=metrics.txt
+```
+
+Native `SortSam` supports coordinate and queryname sorting:
+
+```bash
+picard SortSam I=input.bam O=coordinate.bam SORT_ORDER=coordinate
+picard SortSam I=input.bam O=queryname.bam SO=queryname
 ```
 
 By default, unsupported Picard commands fail clearly. For drop-in deployments
@@ -96,6 +103,31 @@ change the current native implementation:
 - `REFERENCE_SEQUENCE`
 - `COMMENT`
 
+## Supported SortSam Surface
+
+Implemented input/output coverage:
+
+- BAM input and output
+- SAM text input and output
+- Picard-style `KEY=VALUE` arguments and short aliases such as `I`, `O`, and
+  `SO`
+
+Implemented options include:
+
+- `SORT_ORDER=coordinate|queryname`
+- `VALIDATION_STRINGENCY`
+- `QUIET`
+- `TMP_DIR`
+- `MAX_RECORDS_IN_RAM`
+- `COMPRESSION_LEVEL`
+
+Accepted compatibility options that are validated or ignored when they do not
+change the current native implementation:
+
+- `CREATE_INDEX`
+- `CREATE_MD5_FILE`
+- `VERBOSITY`
+
 ## Runtime Knobs
 
 - `TURBO_PICARD_THREADS`: worker threads for CPU-heavy MarkDuplicates phases.
@@ -109,10 +141,11 @@ change the current native implementation:
 cargo test --workspace
 python3 -m unittest tools/test_compare_markduplicates.py
 ./tools/verify_basic_picard_parity.sh
+./tools/verify_basic_sortsam_parity.sh
 ```
 
-`verify_basic_picard_parity.sh` compares `turbo-picard MarkDuplicates` against a
-Picard installation from the local conda environment when available.
+The parity scripts compare native `turbo-picard` output against a Picard
+installation from the local conda environment when available.
 
 ## Packaging
 
@@ -129,7 +162,8 @@ tagged release URL and `sha256`, and replace the maintainer placeholder.
 
 ## Current Limits
 
-`turbo-picard` is not a full Picard suite yet. The shipped native command is
-`MarkDuplicates`, and outputs are intended to be semantically compatible rather
-than byte-for-byte identical to Picard. Set `TURBO_PICARD_FALLBACK_COMMAND` for
-drop-in environments that need unsupported Picard tools to continue working.
+`turbo-picard` is not a full Picard suite yet. The shipped native commands are
+`MarkDuplicates` and `SortSam`, and outputs are intended to be semantically
+compatible rather than byte-for-byte identical to Picard. Set
+`TURBO_PICARD_FALLBACK_COMMAND` for drop-in environments that need unsupported
+Picard tools to continue working.

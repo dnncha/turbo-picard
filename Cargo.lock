@@ -1031,6 +1031,7 @@ version = "0.1.0"
 dependencies = [
  "assert_cmd",
  "predicates",
+ "rust-htslib",
  "tempfile",
  "turbo-picard-core",
  "turbo-picard-markdup",

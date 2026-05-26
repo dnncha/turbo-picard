@@ -103,6 +103,7 @@ fn canonical_key(key: &str) -> Result<String, PicardArgError> {
         "I" => "INPUT",
         "O" => "OUTPUT",
         "M" => "METRICS_FILE",
+        "SO" => "SORT_ORDER",
         "AS" => "ASSUME_SORTED",
         "ASO" => "ASSUME_SORT_ORDER",
         "DS" => "DUPLICATE_SCORING_STRATEGY",

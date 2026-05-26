@@ -17,6 +17,7 @@ name = "picard"
 path = "src/bin/picard.rs"
 
 [dependencies]
+rust-htslib = "1.0.0"
 turbo-picard-core = { path = "../turbo-picard-core" }
 turbo-picard-markdup = { path = "../turbo-picard-markdup" }
 

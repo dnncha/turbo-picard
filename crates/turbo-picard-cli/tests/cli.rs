@@ -6,11 +6,11 @@ use std::os::unix::fs::PermissionsExt;
 #[test]
 fn unsupported_command_fails_clearly() {
     let mut cmd = Command::cargo_bin("turbo-picard").expect("binary exists");
-    cmd.arg("SortSam")
+    cmd.arg("ValidateSamFile")
         .assert()
         .failure()
         .stderr(predicate::str::contains(
-            "unsupported Picard command: SortSam",
+            "unsupported Picard command: ValidateSamFile",
         ));
 }
 
@@ -54,15 +54,12 @@ fn unsupported_command_delegates_to_configured_fallback() {
         fallback.display().to_string(),
     )
     .env("TURBO_PICARD_FALLBACK_LOG", log.display().to_string())
-    .args(["SortSam", "I=in.bam", "O=out.bam", "SORT_ORDER=queryname"])
+    .args(["ValidateSamFile", "I=in.bam", "MODE=SUMMARY"])
     .assert()
     .code(17);
 
     let fallback_args = fs::read_to_string(log).expect("fallback log exists");
-    assert_eq!(
-        fallback_args,
-        "SortSam\nI=in.bam\nO=out.bam\nSORT_ORDER=queryname\n"
-    );
+    assert_eq!(fallback_args, "ValidateSamFile\nI=in.bam\nMODE=SUMMARY\n");
 }
 
 #[test]
@@ -172,6 +169,76 @@ fn markduplicates_marks_duplicate_sam_records() {
 }
 
 #[test]
+fn sortsam_sorts_sam_by_coordinate() {
+    let tempdir = tempfile::tempdir().expect("tempdir exists");
+    let input = tempdir.path().join("input.sam");
+    let output = tempdir.path().join("coordinate.sam");
+    fs::write(
+        &input,
+        concat!(
+            "@HD\tVN:1.6\tSO:unsorted\n",
+            "@SQ\tSN:chr1\tLN:1000\n",
+            "read-c\t0\tchr1\t90\t60\t10M\t*\t0\t0\tCCCCCCCCCC\tFFFFFFFFFF\n",
+            "read-a\t0\tchr1\t10\t60\t10M\t*\t0\t0\tAAAAAAAAAA\tFFFFFFFFFF\n",
+            "read-b\t0\tchr1\t50\t60\t10M\t*\t0\t0\tBBBBBBBBBB\tFFFFFFFFFF\n",
+        ),
+    )
+    .expect("input fixture is written");
+
+    let mut cmd = Command::cargo_bin("picard").expect("binary exists");
+    cmd.args([
+        "SortSam",
+        &format!("I={}", input.display()),
+        &format!("O={}", output.display()),
+        "SORT_ORDER=coordinate",
+    ])
+    .assert()
+    .success();
+
+    let output_sam = fs::read_to_string(&output).expect("output SAM exists");
+    assert!(output_sam.contains("@HD\tVN:1.6\tSO:coordinate"));
+    assert_eq!(
+        record_names(&output_sam),
+        vec!["read-a", "read-b", "read-c"]
+    );
+}
+
+#[test]
+fn sortsam_sorts_sam_by_queryname() {
+    let tempdir = tempfile::tempdir().expect("tempdir exists");
+    let input = tempdir.path().join("input.sam");
+    let output = tempdir.path().join("queryname.sam");
+    fs::write(
+        &input,
+        concat!(
+            "@HD\tVN:1.6\tSO:coordinate\n",
+            "@SQ\tSN:chr1\tLN:1000\n",
+            "read-c\t0\tchr1\t90\t60\t10M\t*\t0\t0\tCCCCCCCCCC\tFFFFFFFFFF\n",
+            "read-a\t0\tchr1\t10\t60\t10M\t*\t0\t0\tAAAAAAAAAA\tFFFFFFFFFF\n",
+            "read-b\t0\tchr1\t50\t60\t10M\t*\t0\t0\tBBBBBBBBBB\tFFFFFFFFFF\n",
+        ),
+    )
+    .expect("input fixture is written");
+
+    let mut cmd = Command::cargo_bin("turbo-picard").expect("binary exists");
+    cmd.args([
+        "SortSam",
+        &format!("I={}", input.display()),
+        &format!("O={}", output.display()),
+        "SO=queryname",
+    ])
+    .assert()
+    .success();
+
+    let output_sam = fs::read_to_string(&output).expect("output SAM exists");
+    assert!(output_sam.contains("@HD\tVN:1.6\tSO:queryname"));
+    assert_eq!(
+        record_names(&output_sam),
+        vec!["read-a", "read-b", "read-c"]
+    );
+}
+
+#[test]
 fn picard_binary_dispatches_markduplicates() {
     let tempdir = tempfile::tempdir().expect("tempdir exists");
     let input = tempdir.path().join("input.sam");
@@ -238,4 +305,11 @@ fn fallback_script(dir: &std::path::Path, exit_code: i32) -> std::path::PathBuf 
     permissions.set_mode(0o755);
     fs::set_permissions(&script, permissions).expect("fallback script is executable");
     script
+}
+
+fn record_names(sam: &str) -> Vec<&str> {
+    sam.lines()
+        .filter(|line| !line.starts_with('@'))
+        .map(|line| line.split('\t').next().expect("record has qname"))
+        .collect()
 }

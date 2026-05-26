@@ -29,3 +29,22 @@ picard MarkDuplicates \
 
 test -s picard-shim.sam
 test -s picard-shim.metrics.txt
+
+cat > unsorted.sam <<'SAM'
+@HD	VN:1.6	SO:unsorted
+@SQ	SN:chr1	LN:1000
+read-c	0	chr1	90	60	10M	*	0	0	CCCCCCCCCC	FFFFFFFFFF
+read-a	0	chr1	10	60	10M	*	0	0	AAAAAAAAAA	FFFFFFFFFF
+read-b	0	chr1	50	60	10M	*	0	0	BBBBBBBBBB	FFFFFFFFFF
+SAM
+
+turbo-picard SortSam \
+  I=unsorted.sam \
+  O=coordinate.sam \
+  SORT_ORDER=coordinate \
+  VALIDATION_STRINGENCY=SILENT \
+  QUIET=true
+
+test -s coordinate.sam
+grep -q $'@HD\tVN:1.6\tSO:coordinate' coordinate.sam
+awk '!/^@/ { print $1 }' coordinate.sam | tr '\n' ' ' | grep -q '^read-a read-b read-c $'
