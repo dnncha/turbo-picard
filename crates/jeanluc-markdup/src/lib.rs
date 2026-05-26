@@ -212,9 +212,14 @@ fn is_bam_input(input: &str) -> bool {
 fn run_bam(config: &MarkDuplicatesConfig) -> Result<MarkDuplicatesSummary, MarkDuplicatesError> {
     let first_input = &config.inputs[0];
     let mut reader = bam::Reader::from_path(first_input)?;
-    let library_lookup = library_lookup(reader.header());
-    let library = first_library_name_from_lookup(&library_lookup);
+    let first_library_lookup = library_lookup(reader.header());
+    let library = first_library_name_from_lookup(&first_library_lookup);
     let mut header = bam::Header::from_template(reader.header());
+    let mut known_read_groups = read_group_ids(reader.header());
+    for input in config.inputs.iter().skip(1) {
+        let reader = bam::Reader::from_path(input)?;
+        append_missing_read_groups(&mut header, reader.header(), &mut known_read_groups);
+    }
     if config.add_pg_tag_to_reads {
         header.push_record(
             HeaderRecord::new(b"PG")
@@ -243,18 +248,19 @@ fn run_bam(config: &MarkDuplicatesConfig) -> Result<MarkDuplicatesSummary, MarkD
         &mut records,
         &mut record_libraries,
         &mut eligible_indices,
-        &library_lookup,
+        &first_library_lookup,
         &mut library_summaries,
         &mut summary,
     )?;
     for input in config.inputs.iter().skip(1) {
         let mut reader = bam::Reader::from_path(input)?;
+        let input_library_lookup = library_lookup(reader.header());
         read_bam_records(
             &mut reader,
             &mut records,
             &mut record_libraries,
             &mut eligible_indices,
-            &library_lookup,
+            &input_library_lookup,
             &mut library_summaries,
             &mut summary,
         )?;
@@ -1028,6 +1034,44 @@ fn library_lookup(header: &bam::HeaderView) -> HashMap<Vec<u8>, String> {
     }
 
     lookup
+}
+
+fn read_group_ids(header: &bam::HeaderView) -> HashSet<Vec<u8>> {
+    let header_text = String::from_utf8_lossy(header.as_bytes());
+    header_text
+        .lines()
+        .filter(|line| line.starts_with("@RG\t"))
+        .filter_map(read_group_id)
+        .collect()
+}
+
+fn append_missing_read_groups(
+    header: &mut bam::Header,
+    source: &bam::HeaderView,
+    known_read_groups: &mut HashSet<Vec<u8>>,
+) {
+    let header_text = String::from_utf8_lossy(source.as_bytes());
+    for line in header_text.lines().filter(|line| line.starts_with("@RG\t")) {
+        let Some(read_group_id) = read_group_id(line) else {
+            continue;
+        };
+        if !known_read_groups.insert(read_group_id) {
+            continue;
+        }
+        let mut record = HeaderRecord::new(b"RG");
+        for field in line.split('\t').skip(1) {
+            if let Some((tag, value)) = field.split_once(':') {
+                record.push_tag(tag.as_bytes(), value);
+            }
+        }
+        header.push_record(&record);
+    }
+}
+
+fn read_group_id(line: &str) -> Option<Vec<u8>> {
+    line.split('\t')
+        .find_map(|field| field.strip_prefix("ID:"))
+        .map(|id| id.as_bytes().to_vec())
 }
 
 fn first_library_name_from_lookup(lookup: &HashMap<Vec<u8>, String>) -> String {

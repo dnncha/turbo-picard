@@ -1,0 +1,5 @@
+@HD	VN:1.6	SO:coordinate
+@SQ	SN:chr1	LN:1000
+@RG	ID:rgB	LB:libB	SM:sample1
+libB_pair	99	chr1	10	60	10M	=	100	90	AAAAAAAAAA	FFFFFFFFFF	RG:Z:rgB
+libB_pair	147	chr1	100	60	10M	=	10	-90	TTTTTTTTTT	FFFFFFFFFF	RG:Z:rgB
