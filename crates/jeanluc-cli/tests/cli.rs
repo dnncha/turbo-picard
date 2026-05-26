@@ -78,3 +78,34 @@ fn markduplicates_marks_duplicate_sam_records() {
     assert!(metrics_text.contains("UNPAIRED_READ_DUPLICATES"));
     assert!(metrics_text.contains("Unknown Library\t3\t0\t0\t0\t1\t0\t0\t0.333333\t\n"));
 }
+
+#[test]
+fn picard_binary_dispatches_markduplicates() {
+    let tempdir = tempfile::tempdir().expect("tempdir exists");
+    let input = tempdir.path().join("input.sam");
+    let output = tempdir.path().join("output.sam");
+    let metrics = tempdir.path().join("metrics.txt");
+    fs::write(
+        &input,
+        concat!(
+            "@HD\tVN:1.6\tSO:coordinate\n",
+            "@SQ\tSN:chr1\tLN:1000\n",
+            "read-a\t0\tchr1\t10\t60\t10M\t*\t0\t0\tAAAAAAAAAA\tFFFFFFFFFF\n",
+            "read-b\t0\tchr1\t10\t60\t10M\t*\t0\t0\tAAAAAAAAAA\tFFFFFFFFFF\n",
+        ),
+    )
+    .expect("input fixture is written");
+
+    let mut cmd = Command::cargo_bin("picard").expect("binary exists");
+    cmd.args([
+        "MarkDuplicates",
+        &format!("I={}", input.display()),
+        &format!("O={}", output.display()),
+        &format!("M={}", metrics.display()),
+    ])
+    .assert()
+    .success();
+
+    let output_sam = fs::read_to_string(&output).expect("output SAM exists");
+    assert!(output_sam.contains("read-b\t1024\tchr1\t10"));
+}

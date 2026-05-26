@@ -103,6 +103,17 @@ fn canonical_key(key: &str) -> Result<String, PicardArgError> {
         "I" => "INPUT",
         "O" => "OUTPUT",
         "M" => "METRICS_FILE",
+        "AS" => "ASSUME_SORTED",
+        "ASO" => "ASSUME_SORT_ORDER",
+        "DS" => "DUPLICATE_SCORING_STRATEGY",
+        "MAX_FILE_HANDLES" => "MAX_FILE_HANDLES_FOR_READ_ENDS_MAP",
+        "MAX_SEQS" => "MAX_SEQUENCES_FOR_DISK_READ_ENDS_MAP",
+        "PG" => "PROGRAM_RECORD_ID",
+        "PG_COMMAND" => "PROGRAM_GROUP_COMMAND_LINE",
+        "PG_NAME" => "PROGRAM_GROUP_NAME",
+        "PG_VERSION" => "PROGRAM_GROUP_VERSION",
+        "R" => "REFERENCE_SEQUENCE",
+        "CO" => "COMMENT",
         _ => upper.as_str(),
     };
 

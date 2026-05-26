@@ -60,6 +60,45 @@ fn normalizes_short_picard_options() {
 }
 
 #[test]
+fn normalizes_common_markduplicates_short_aliases() {
+    let args = vec![
+        "-AS".to_string(),
+        "true".to_string(),
+        "-ASO".to_string(),
+        "coordinate".to_string(),
+        "-DS".to_string(),
+        "SUM_OF_BASE_QUALITIES".to_string(),
+        "-PG".to_string(),
+        "null".to_string(),
+        "-R".to_string(),
+        "reference.fa".to_string(),
+    ];
+
+    let parsed = normalize_picard_args(&args).expect("arguments parse");
+
+    assert_eq!(
+        parsed.get("ASSUME_SORTED").unwrap(),
+        &vec!["true".to_string()]
+    );
+    assert_eq!(
+        parsed.get("ASSUME_SORT_ORDER").unwrap(),
+        &vec!["coordinate".to_string()]
+    );
+    assert_eq!(
+        parsed.get("DUPLICATE_SCORING_STRATEGY").unwrap(),
+        &vec!["SUM_OF_BASE_QUALITIES".to_string()]
+    );
+    assert_eq!(
+        parsed.get("PROGRAM_RECORD_ID").unwrap(),
+        &vec!["null".to_string()]
+    );
+    assert_eq!(
+        parsed.get("REFERENCE_SEQUENCE").unwrap(),
+        &vec!["reference.fa".to_string()]
+    );
+}
+
+#[test]
 fn rejects_positional_arguments() {
     let args = vec!["in.bam".to_string()];
 

@@ -53,6 +53,28 @@ fn accepts_common_picard_runtime_options() {
 }
 
 #[test]
+fn add_pg_tag_to_reads_defaults_true_and_parses_false() {
+    let args = vec![
+        "I=in.bam".to_string(),
+        "O=out.bam".to_string(),
+        "M=metrics.txt".to_string(),
+    ];
+    let parsed = normalize_picard_args(&args).expect("arguments parse");
+    let config = MarkDuplicatesConfig::try_from_args(&parsed).expect("config validates");
+    assert!(config.add_pg_tag_to_reads);
+
+    let args = vec![
+        "I=in.bam".to_string(),
+        "O=out.bam".to_string(),
+        "M=metrics.txt".to_string(),
+        "ADD_PG_TAG_TO_READS=false".to_string(),
+    ];
+    let parsed = normalize_picard_args(&args).expect("arguments parse");
+    let config = MarkDuplicatesConfig::try_from_args(&parsed).expect("config validates");
+    assert!(!config.add_pg_tag_to_reads);
+}
+
+#[test]
 fn parses_create_index_boolean() {
     let args = vec![
         "I=in.bam".to_string(),
@@ -119,6 +141,38 @@ fn accepts_common_duplicate_tagging_options() {
     assert_eq!(config.tagging_policy.as_deref(), Some("DontTag"));
     assert!(config.clear_dt);
     assert_eq!(config.optical_duplicate_pixel_distance, Some(2500));
+}
+
+#[test]
+fn accepts_common_workflow_passthrough_options_when_semantically_default() {
+    let args = vec![
+        "I=in.bam".to_string(),
+        "O=out.bam".to_string(),
+        "M=metrics.txt".to_string(),
+        "ASSUME_SORT_ORDER=coordinate".to_string(),
+        "REMOVE_SEQUENCING_DUPLICATES=false".to_string(),
+        "MAX_RECORDS_IN_RAM=1000000".to_string(),
+        "MAX_FILE_HANDLES_FOR_READ_ENDS_MAP=4000".to_string(),
+        "SORTING_COLLECTION_SIZE_RATIO=0.15".to_string(),
+        "COMPRESSION_LEVEL=1".to_string(),
+        "TMP_DIR=/tmp".to_string(),
+        "TMP_DIR=/scratch".to_string(),
+        "VERBOSITY=ERROR".to_string(),
+        "ADD_PG_TAG_TO_READS=true".to_string(),
+        "USE_JDK_INFLATER=false".to_string(),
+        "USE_JDK_DEFLATER=false".to_string(),
+        "PROGRAM_RECORD_ID=MarkDuplicates".to_string(),
+        "PROGRAM_GROUP_NAME=MarkDuplicates".to_string(),
+        "PROGRAM_GROUP_VERSION=1.0.0".to_string(),
+        "PROGRAM_GROUP_COMMAND_LINE=picard MarkDuplicates I=in.bam O=out.bam M=metrics.txt"
+            .to_string(),
+        "REFERENCE_SEQUENCE=reference.fa".to_string(),
+    ];
+    let parsed = normalize_picard_args(&args).expect("arguments parse");
+
+    let config = MarkDuplicatesConfig::try_from_args(&parsed).expect("config validates");
+
+    assert_eq!(config.assume_sort_order.as_deref(), Some("coordinate"));
 }
 
 #[test]

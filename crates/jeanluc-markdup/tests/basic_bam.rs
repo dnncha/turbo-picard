@@ -1,4 +1,5 @@
 use jeanluc_core::markdup_config::MarkDuplicatesConfig;
+use rust_htslib::bam::record::Aux;
 use rust_htslib::bam::{self, Read};
 
 #[test]
@@ -14,10 +15,12 @@ fn marks_duplicate_records_in_bam() {
         metrics_file: metrics.display().to_string(),
         remove_duplicates: false,
         assume_sorted: true,
+        assume_sort_order: None,
         validation_stringency: Some("SILENT".to_string()),
         quiet: true,
         create_index: false,
         create_md5_file: false,
+        add_pg_tag_to_reads: true,
         duplicate_scoring_strategy: None,
         read_name_regex: None,
         tagging_policy: None,
@@ -44,10 +47,12 @@ fn marks_duplicate_pairs_and_reports_paired_metrics() {
         metrics_file: metrics.display().to_string(),
         remove_duplicates: false,
         assume_sorted: true,
+        assume_sort_order: None,
         validation_stringency: Some("SILENT".to_string()),
         quiet: true,
         create_index: false,
         create_md5_file: false,
+        add_pg_tag_to_reads: true,
         duplicate_scoring_strategy: None,
         read_name_regex: None,
         tagging_policy: None,
@@ -77,10 +82,12 @@ fn keeps_highest_quality_duplicate_representative() {
         metrics_file: metrics.display().to_string(),
         remove_duplicates: false,
         assume_sorted: true,
+        assume_sort_order: None,
         validation_stringency: Some("SILENT".to_string()),
         quiet: true,
         create_index: false,
         create_md5_file: false,
+        add_pg_tag_to_reads: true,
         duplicate_scoring_strategy: None,
         read_name_regex: None,
         tagging_policy: None,
@@ -107,10 +114,12 @@ fn groups_duplicates_by_unclipped_five_prime_position() {
         metrics_file: metrics.display().to_string(),
         remove_duplicates: false,
         assume_sorted: true,
+        assume_sort_order: None,
         validation_stringency: Some("SILENT".to_string()),
         quiet: true,
         create_index: false,
         create_md5_file: false,
+        add_pg_tag_to_reads: true,
         duplicate_scoring_strategy: None,
         read_name_regex: None,
         tagging_policy: None,
@@ -137,10 +146,12 @@ fn excludes_secondary_alignments_from_duplicate_testing() {
         metrics_file: metrics.display().to_string(),
         remove_duplicates: false,
         assume_sorted: true,
+        assume_sort_order: None,
         validation_stringency: Some("SILENT".to_string()),
         quiet: true,
         create_index: false,
         create_md5_file: false,
+        add_pg_tag_to_reads: true,
         duplicate_scoring_strategy: None,
         read_name_regex: None,
         tagging_policy: None,
@@ -170,10 +181,12 @@ fn chooses_duplicate_representative_per_pair_not_per_mate() {
         metrics_file: metrics.display().to_string(),
         remove_duplicates: false,
         assume_sorted: true,
+        assume_sort_order: None,
         validation_stringency: Some("SILENT".to_string()),
         quiet: true,
         create_index: false,
         create_md5_file: false,
+        add_pg_tag_to_reads: true,
         duplicate_scoring_strategy: None,
         read_name_regex: None,
         tagging_policy: None,
@@ -200,10 +213,12 @@ fn creates_bam_index_when_requested() {
         metrics_file: metrics.display().to_string(),
         remove_duplicates: false,
         assume_sorted: true,
+        assume_sort_order: None,
         validation_stringency: Some("SILENT".to_string()),
         quiet: true,
         create_index: true,
         create_md5_file: false,
+        add_pg_tag_to_reads: true,
         duplicate_scoring_strategy: None,
         read_name_regex: None,
         tagging_policy: None,
@@ -229,10 +244,12 @@ fn creates_md5_sidecar_when_requested() {
         metrics_file: metrics.display().to_string(),
         remove_duplicates: false,
         assume_sorted: true,
+        assume_sort_order: None,
         validation_stringency: Some("SILENT".to_string()),
         quiet: true,
         create_index: false,
         create_md5_file: true,
+        add_pg_tag_to_reads: true,
         duplicate_scoring_strategy: None,
         read_name_regex: None,
         tagging_policy: None,
@@ -248,6 +265,43 @@ fn creates_md5_sidecar_when_requested() {
 }
 
 #[test]
+fn adds_picard_program_group_header_and_read_tags_by_default() {
+    let tempdir = tempfile::tempdir().expect("tempdir exists");
+    let output = tempdir.path().join("output.bam");
+    let metrics = tempdir.path().join("metrics.txt");
+    let input = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../fixtures/markduplicates/basic/input.bam");
+    let config = MarkDuplicatesConfig {
+        input: input.display().to_string(),
+        output: output.display().to_string(),
+        metrics_file: metrics.display().to_string(),
+        remove_duplicates: false,
+        assume_sorted: true,
+        assume_sort_order: None,
+        validation_stringency: Some("SILENT".to_string()),
+        quiet: true,
+        create_index: false,
+        create_md5_file: false,
+        add_pg_tag_to_reads: true,
+        duplicate_scoring_strategy: None,
+        read_name_regex: None,
+        tagging_policy: None,
+        clear_dt: true,
+        optical_duplicate_pixel_distance: None,
+    };
+
+    jeanluc_markdup::run(&config).expect("BAM duplicate marking succeeds");
+
+    let mut reader = bam::Reader::from_path(&output).expect("BAM opens");
+    let header = String::from_utf8_lossy(reader.header().as_bytes());
+    assert!(header.contains("@PG\tID:MarkDuplicates"));
+    assert!(reader.records().all(|record| matches!(
+        record.expect("record decodes").aux(b"PG"),
+        Ok(Aux::String("MarkDuplicates"))
+    )));
+}
+
+#[test]
 fn removes_duplicate_pairs_when_requested() {
     let tempdir = tempfile::tempdir().expect("tempdir exists");
     let output = tempdir.path().join("output.bam");
@@ -260,10 +314,12 @@ fn removes_duplicate_pairs_when_requested() {
         metrics_file: metrics.display().to_string(),
         remove_duplicates: true,
         assume_sorted: true,
+        assume_sort_order: None,
         validation_stringency: Some("SILENT".to_string()),
         quiet: true,
         create_index: false,
         create_md5_file: false,
+        add_pg_tag_to_reads: true,
         duplicate_scoring_strategy: None,
         read_name_regex: None,
         tagging_policy: None,
@@ -290,10 +346,12 @@ fn clears_existing_duplicate_type_tags_when_requested() {
         metrics_file: metrics.display().to_string(),
         remove_duplicates: false,
         assume_sorted: true,
+        assume_sort_order: None,
         validation_stringency: Some("SILENT".to_string()),
         quiet: true,
         create_index: false,
         create_md5_file: false,
+        add_pg_tag_to_reads: true,
         duplicate_scoring_strategy: None,
         read_name_regex: Some("null".to_string()),
         tagging_policy: Some("DontTag".to_string()),
@@ -319,10 +377,12 @@ fn preserves_existing_duplicate_type_tags_when_clear_dt_is_false() {
         metrics_file: metrics.display().to_string(),
         remove_duplicates: false,
         assume_sorted: true,
+        assume_sort_order: None,
         validation_stringency: Some("SILENT".to_string()),
         quiet: true,
         create_index: false,
         create_md5_file: false,
+        add_pg_tag_to_reads: true,
         duplicate_scoring_strategy: None,
         read_name_regex: Some("null".to_string()),
         tagging_policy: Some("DontTag".to_string()),

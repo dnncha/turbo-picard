@@ -2,10 +2,15 @@
 name = "jeanluc-cli"
 version = "0.1.0"
 edition = "2024"
+default-run = "jeanluc"
 
 [[bin]]
 name = "jeanluc"
 path = "src/main.rs"
+
+[[bin]]
+name = "picard"
+path = "src/bin/picard.rs"
 
 [dependencies]
 jeanluc-core = { path = "../jeanluc-core" }

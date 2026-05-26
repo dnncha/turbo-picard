@@ -11,7 +11,7 @@ for fixture in basic paired scoring softclip secondary pair-score-tie clear-dt; 
   fixture_workdir="$workdir/$fixture"
   mkdir -p "$fixture_workdir"
 
-  cargo run -q -p jeanluc-cli -- \
+  cargo run -q -p jeanluc-cli --bin picard -- \
     MarkDuplicates \
     "I=$fixture_dir/input.bam" \
     "O=$fixture_workdir/jeanluc.bam" \

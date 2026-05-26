@@ -1,7 +1,8 @@
 #![forbid(unsafe_code)]
 
 use jeanluc_core::markdup_config::MarkDuplicatesConfig;
-use rust_htslib::bam::record::Cigar;
+use rust_htslib::bam::header::HeaderRecord;
+use rust_htslib::bam::record::{Aux, Cigar};
 use rust_htslib::bam::{self, Read, index};
 use std::collections::HashMap;
 use std::fmt;
@@ -160,11 +161,17 @@ pub fn run(config: &MarkDuplicatesConfig) -> Result<MarkDuplicatesSummary, MarkD
         }
 
         if !(duplicate && config.remove_duplicates) {
+            if config.add_pg_tag_to_reads {
+                add_program_group_to_sam_fields(&mut fields);
+            }
             output.push_str(&fields.join("\t"));
             output.push('\n');
         }
     }
 
+    if config.add_pg_tag_to_reads {
+        add_program_group_to_sam_header(&mut output);
+    }
     fs::write(&config.output, output)?;
     fs::write(&config.metrics_file, metrics_text(&summary))?;
     Ok(summary)
@@ -192,7 +199,14 @@ fn is_bam_input(input: &str) -> bool {
 fn run_bam(config: &MarkDuplicatesConfig) -> Result<MarkDuplicatesSummary, MarkDuplicatesError> {
     let mut reader = bam::Reader::from_path(&config.input)?;
     let library = first_library_name(reader.header());
-    let header = bam::Header::from_template(reader.header());
+    let mut header = bam::Header::from_template(reader.header());
+    if config.add_pg_tag_to_reads {
+        header.push_record(
+            HeaderRecord::new(b"PG")
+                .push_tag(b"ID", "MarkDuplicates")
+                .push_tag(b"PN", "MarkDuplicates"),
+        );
+    }
     let mut writer = bam::Writer::from_path(&config.output, &header, bam::Format::Bam)?;
     let mut records = Vec::new();
     let mut eligible_indices = Vec::new();
@@ -264,6 +278,9 @@ fn run_bam(config: &MarkDuplicatesConfig) -> Result<MarkDuplicatesSummary, MarkD
             if config.clear_dt {
                 clear_duplicate_type_tag(&mut record)?;
             }
+            if config.add_pg_tag_to_reads {
+                add_program_group_to_bam_record(&mut record)?;
+            }
             writer.write(&record)?;
         }
     }
@@ -289,6 +306,28 @@ fn clear_duplicate_type_tag(record: &mut bam::Record) -> Result<(), MarkDuplicat
         record.remove_aux(b"DT")?;
     }
     Ok(())
+}
+
+fn add_program_group_to_bam_record(record: &mut bam::Record) -> Result<(), MarkDuplicatesError> {
+    if record.aux(b"PG").is_ok() {
+        record.remove_aux(b"PG")?;
+    }
+    record.push_aux(b"PG", Aux::String("MarkDuplicates"))?;
+    Ok(())
+}
+
+fn add_program_group_to_sam_fields(fields: &mut Vec<String>) {
+    fields.retain(|field| !field.starts_with("PG:Z:"));
+    fields.push("PG:Z:MarkDuplicates".to_string());
+}
+
+fn add_program_group_to_sam_header(output: &mut String) {
+    let insert_at = output
+        .lines()
+        .take_while(|line| line.starts_with('@'))
+        .map(|line| line.len() + 1)
+        .sum::<usize>();
+    output.insert_str(insert_at, "@PG\tID:MarkDuplicates\tPN:MarkDuplicates\n");
 }
 
 fn picard_bai_path(output: &str) -> String {
