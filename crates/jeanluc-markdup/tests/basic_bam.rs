@@ -489,6 +489,46 @@ fn separates_duplicate_groups_by_read_one_and_read_two_barcode_tags() {
 }
 
 #[test]
+fn tags_optical_duplicate_pairs_and_reports_metrics() {
+    let tempdir = tempfile::tempdir().expect("tempdir exists");
+    let output = tempdir.path().join("output.bam");
+    let metrics = tempdir.path().join("metrics.txt");
+    let input = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../fixtures/markduplicates/optical/input.bam");
+    let config = MarkDuplicatesConfig {
+        input: input.display().to_string(),
+        output: output.display().to_string(),
+        metrics_file: metrics.display().to_string(),
+        remove_duplicates: false,
+        assume_sorted: true,
+        assume_sort_order: None,
+        validation_stringency: Some("SILENT".to_string()),
+        quiet: true,
+        create_index: false,
+        create_md5_file: false,
+        add_pg_tag_to_reads: true,
+        tag_duplicate_set_members: false,
+        duplicate_scoring_strategy: None,
+        read_name_regex: None,
+        tagging_policy: Some("All".to_string()),
+        barcode_tag: None,
+        read_one_barcode_tag: None,
+        read_two_barcode_tag: None,
+        clear_dt: true,
+        optical_duplicate_pixel_distance: Some(100),
+    };
+
+    jeanluc_markdup::run(&config).expect("BAM duplicate marking succeeds");
+
+    assert_eq!(
+        duplicate_dt_tags(&output),
+        vec![Some("SQ".to_string()), Some("SQ".to_string())]
+    );
+    let metrics_text = std::fs::read_to_string(&metrics).expect("metrics file exists");
+    assert!(metrics_text.contains("lib1\t0\t2\t0\t0\t0\t1\t1\t0.5\t\n"));
+}
+
+#[test]
 fn removes_duplicate_pairs_when_requested() {
     let tempdir = tempfile::tempdir().expect("tempdir exists");
     let output = tempdir.path().join("output.bam");

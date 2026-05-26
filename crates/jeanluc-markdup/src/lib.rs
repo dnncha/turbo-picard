@@ -4,7 +4,7 @@ use jeanluc_core::markdup_config::MarkDuplicatesConfig;
 use rust_htslib::bam::header::HeaderRecord;
 use rust_htslib::bam::record::{Aux, Cigar};
 use rust_htslib::bam::{self, Read, index};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::fs;
 use std::path::Path;
@@ -20,6 +20,7 @@ pub struct MarkDuplicatesSummary {
     pub secondary_or_supplementary_records: u64,
     pub unpaired_duplicate_records: u64,
     pub duplicate_pair_records: u64,
+    pub read_pair_optical_duplicates: u64,
     pub unmapped_records: u64,
 }
 
@@ -101,6 +102,7 @@ pub fn run(config: &MarkDuplicatesConfig) -> Result<MarkDuplicatesSummary, MarkD
         secondary_or_supplementary_records: 0,
         unpaired_duplicate_records: 0,
         duplicate_pair_records: 0,
+        read_pair_optical_duplicates: 0,
         unmapped_records: 0,
     };
 
@@ -163,7 +165,7 @@ pub fn run(config: &MarkDuplicatesConfig) -> Result<MarkDuplicatesSummary, MarkD
         }
 
         if !(duplicate && config.remove_duplicates) {
-            if should_tag_library_duplicate(config, flag) {
+            if config.tagging_policy.as_deref() == Some("All") && flag & DUPLICATE_FLAG != 0 {
                 add_duplicate_type_tag_to_sam_fields(&mut fields);
             }
             if config.add_pg_tag_to_reads {
@@ -222,6 +224,7 @@ fn run_bam(config: &MarkDuplicatesConfig) -> Result<MarkDuplicatesSummary, MarkD
         secondary_or_supplementary_records: 0,
         unpaired_duplicate_records: 0,
         duplicate_pair_records: 0,
+        read_pair_optical_duplicates: 0,
         unmapped_records: 0,
     };
 
@@ -253,6 +256,7 @@ fn run_bam(config: &MarkDuplicatesConfig) -> Result<MarkDuplicatesSummary, MarkD
     }
 
     let duplicate_groups = duplicate_groups(&records, &eligible_indices, config);
+    let mut optical_duplicate_name_set = HashSet::<Vec<u8>>::new();
 
     for group in duplicate_groups.values() {
         if group.len() < 2 {
@@ -260,6 +264,10 @@ fn run_bam(config: &MarkDuplicatesConfig) -> Result<MarkDuplicatesSummary, MarkD
         }
 
         let representative_name = best_duplicate_representative_name(group, &records);
+        let optical_names =
+            optical_duplicate_names(group, &records, representative_name.as_slice(), config);
+        summary.read_pair_optical_duplicates += optical_names.len() as u64;
+        optical_duplicate_name_set.extend(optical_names);
         if config.tag_duplicate_set_members && !config.remove_duplicates {
             add_duplicate_set_member_tags(group, &mut records, representative_name.as_slice())?;
         }
@@ -286,8 +294,13 @@ fn run_bam(config: &MarkDuplicatesConfig) -> Result<MarkDuplicatesSummary, MarkD
             if config.clear_dt {
                 clear_duplicate_type_tag(&mut record)?;
             }
-            if should_tag_library_duplicate(config, record.flags()) {
-                add_duplicate_type_tag(&mut record)?;
+            if let Some(duplicate_type) = duplicate_type_tag(
+                config,
+                record.flags(),
+                record.qname(),
+                &optical_duplicate_name_set,
+            ) {
+                add_duplicate_type_tag(&mut record, duplicate_type)?;
             }
             if config.add_pg_tag_to_reads {
                 add_program_group_to_bam_record(&mut record)?;
@@ -319,16 +332,104 @@ fn clear_duplicate_type_tag(record: &mut bam::Record) -> Result<(), MarkDuplicat
     Ok(())
 }
 
-fn should_tag_library_duplicate(config: &MarkDuplicatesConfig, flags: u16) -> bool {
-    config.tagging_policy.as_deref() == Some("All") && flags & DUPLICATE_FLAG != 0
+fn duplicate_type_tag<'a>(
+    config: &'a MarkDuplicatesConfig,
+    flags: u16,
+    name: &[u8],
+    optical_duplicate_names: &HashSet<Vec<u8>>,
+) -> Option<&'a str> {
+    if flags & DUPLICATE_FLAG == 0 {
+        return None;
+    }
+    if optical_duplicate_names.contains(name) {
+        return match config.tagging_policy.as_deref() {
+            Some("All" | "OpticalOnly") => Some("SQ"),
+            _ => None,
+        };
+    }
+    if config.tagging_policy.as_deref() == Some("All") {
+        Some("LB")
+    } else {
+        None
+    }
 }
 
-fn add_duplicate_type_tag(record: &mut bam::Record) -> Result<(), MarkDuplicatesError> {
+fn add_duplicate_type_tag(
+    record: &mut bam::Record,
+    duplicate_type: &str,
+) -> Result<(), MarkDuplicatesError> {
     if record.aux(b"DT").is_ok() {
         record.remove_aux(b"DT")?;
     }
-    record.push_aux(b"DT", Aux::String("LB"))?;
+    record.push_aux(b"DT", Aux::String(duplicate_type))?;
     Ok(())
+}
+
+fn optical_duplicate_names(
+    group: &[usize],
+    records: &[bam::Record],
+    representative_name: &[u8],
+    config: &MarkDuplicatesConfig,
+) -> Vec<Vec<u8>> {
+    if config.read_name_regex.as_deref() == Some("null") {
+        return Vec::new();
+    }
+    let Some(representative_location) = read_location_for_name(group, records, representative_name)
+    else {
+        return Vec::new();
+    };
+    let pixel_distance = i64::from(config.optical_duplicate_pixel_distance.unwrap_or(100));
+    let mut optical_names = Vec::<Vec<u8>>::new();
+
+    for index in group.iter().copied() {
+        let name = records[index].qname();
+        if name == representative_name || optical_names.iter().any(|existing| existing == name) {
+            continue;
+        }
+        let Some(location) = parse_read_location(name) else {
+            continue;
+        };
+        if representative_location.is_within(&location, pixel_distance) {
+            optical_names.push(name.to_vec());
+        }
+    }
+
+    optical_names
+}
+
+fn read_location_for_name(
+    group: &[usize],
+    records: &[bam::Record],
+    name: &[u8],
+) -> Option<ReadLocation> {
+    group
+        .iter()
+        .find(|index| records[**index].qname() == name)
+        .and_then(|index| parse_read_location(records[*index].qname()))
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ReadLocation {
+    tile: i64,
+    x: i64,
+    y: i64,
+}
+
+impl ReadLocation {
+    fn is_within(&self, other: &Self, pixel_distance: i64) -> bool {
+        self.tile == other.tile
+            && (self.x - other.x).abs() <= pixel_distance
+            && (self.y - other.y).abs() <= pixel_distance
+    }
+}
+
+fn parse_read_location(name: &[u8]) -> Option<ReadLocation> {
+    let text = std::str::from_utf8(name).ok()?;
+    let mut parts = text.rsplit(':');
+    let y = parts.next()?.parse::<i64>().ok()?;
+    let x = parts.next()?.parse::<i64>().ok()?;
+    let tile = parts.next()?.parse::<i64>().ok()?;
+    Some(ReadLocation { tile, x, y })
 }
 
 fn add_duplicate_set_member_tags(
@@ -729,17 +830,18 @@ fn metrics_text(summary: &MarkDuplicatesSummary) -> String {
     } else {
         duplicate_fragments as f64 / examined_fragments as f64
     };
-    let estimated_library_size = if summary.read_pairs_examined > 0 {
-        summary.read_pairs_examined.to_string()
-    } else {
-        String::new()
-    };
+    let estimated_library_size =
+        if summary.read_pairs_examined > 0 && summary.read_pair_optical_duplicates == 0 {
+            summary.read_pairs_examined.to_string()
+        } else {
+            String::new()
+        };
 
     format!(
         concat!(
             "## METRICS CLASS\tpicard.sam.DuplicationMetrics\n",
             "LIBRARY\tUNPAIRED_READS_EXAMINED\tREAD_PAIRS_EXAMINED\tSECONDARY_OR_SUPPLEMENTARY_RDS\tUNMAPPED_READS\tUNPAIRED_READ_DUPLICATES\tREAD_PAIR_DUPLICATES\tREAD_PAIR_OPTICAL_DUPLICATES\tPERCENT_DUPLICATION\tESTIMATED_LIBRARY_SIZE\n",
-            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t0\t{:.6}\t{}\n"
+            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n"
         ),
         summary.library,
         summary.unpaired_reads_examined,
@@ -748,9 +850,18 @@ fn metrics_text(summary: &MarkDuplicatesSummary) -> String {
         summary.unmapped_records,
         summary.unpaired_duplicate_records,
         summary.read_pair_duplicates(),
-        percent_duplication,
+        summary.read_pair_optical_duplicates,
+        format_metric_float(percent_duplication),
         estimated_library_size
     )
+}
+
+fn format_metric_float(value: f64) -> String {
+    let formatted = format!("{value:.6}");
+    formatted
+        .trim_end_matches('0')
+        .trim_end_matches('.')
+        .to_string()
 }
 
 const PAIRED_FLAG: u16 = 0x1;

@@ -6,7 +6,7 @@ conda_prefix="${JEANLUC_CONDA_PREFIX:-$repo_root/.conda-jeanluc}"
 workdir="$(mktemp -d)"
 trap 'rm -rf "$workdir"' EXIT
 
-for fixture in basic paired scoring softclip secondary pair-score-tie clear-dt tagging-all duplicate-set-members barcode-tag read-barcode-tags; do
+for fixture in basic paired scoring softclip secondary pair-score-tie clear-dt tagging-all duplicate-set-members barcode-tag read-barcode-tags optical; do
   fixture_dir="$repo_root/fixtures/markduplicates/$fixture"
   fixture_workdir="$workdir/$fixture"
   tagging_policy="DontTag"
@@ -14,6 +14,8 @@ for fixture in basic paired scoring softclip secondary pair-score-tie clear-dt t
   barcode_tag=""
   read_one_barcode_tag=""
   read_two_barcode_tag=""
+  read_name_regex="null"
+  optical_duplicate_pixel_distance=""
   if [[ "$fixture" == "tagging-all" ]]; then
     tagging_policy="All"
   fi
@@ -27,6 +29,11 @@ for fixture in basic paired scoring softclip secondary pair-score-tie clear-dt t
     read_one_barcode_tag="BX"
     read_two_barcode_tag="BY"
   fi
+  if [[ "$fixture" == "optical" ]]; then
+    tagging_policy="All"
+    read_name_regex=""
+    optical_duplicate_pixel_distance="100"
+  fi
   mkdir -p "$fixture_workdir"
 
   command=(cargo run -q -p jeanluc-cli --bin picard -- \
@@ -38,9 +45,14 @@ for fixture in basic paired scoring softclip secondary pair-score-tie clear-dt t
     VALIDATION_STRINGENCY=SILENT \
     QUIET=true \
     CLEAR_DT=true \
-    READ_NAME_REGEX=null \
     "TAGGING_POLICY=$tagging_policy" \
     "TAG_DUPLICATE_SET_MEMBERS=$tag_duplicate_set_members")
+  if [[ -n "$read_name_regex" ]]; then
+    command+=("READ_NAME_REGEX=$read_name_regex")
+  fi
+  if [[ -n "$optical_duplicate_pixel_distance" ]]; then
+    command+=("OPTICAL_DUPLICATE_PIXEL_DISTANCE=$optical_duplicate_pixel_distance")
+  fi
   if [[ -n "$barcode_tag" ]]; then
     command+=("BARCODE_TAG=$barcode_tag")
   fi
