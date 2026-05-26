@@ -71,6 +71,16 @@ struct DuplicateKey {
     reverse_strand: bool,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct BamDuplicateKey {
+    reference_id: i32,
+    position: i64,
+    mate_reference_id: i32,
+    mate_position: i64,
+    template_length: i64,
+    reverse_strand: bool,
+}
+
 pub fn run(config: &MarkDuplicatesConfig) -> Result<MarkDuplicatesSummary, MarkDuplicatesError> {
     if is_bam_input(&config.input) {
         return run_bam(config);
@@ -233,7 +243,7 @@ fn run_bam(config: &MarkDuplicatesConfig) -> Result<MarkDuplicatesSummary, MarkD
         let representative_name = best_duplicate_representative_name(group, &records);
 
         for index in group.iter().copied() {
-            if query_name(&records[index]) == representative_name {
+            if records[index].qname() == representative_name.as_slice() {
                 continue;
             }
             let flag = records[index].flags();
@@ -311,15 +321,15 @@ fn duplicate_key(fields: &[String], flag: u16) -> DuplicateKey {
 fn duplicate_groups(
     records: &[bam::Record],
     eligible_indices: &[usize],
-) -> HashMap<DuplicateKey, Vec<usize>> {
-    let mut paired_by_name = HashMap::<String, Vec<usize>>::new();
-    let mut duplicate_groups = HashMap::<DuplicateKey, Vec<usize>>::new();
+) -> HashMap<BamDuplicateKey, Vec<usize>> {
+    let mut paired_by_name = HashMap::<Vec<u8>, Vec<usize>>::new();
+    let mut duplicate_groups = HashMap::<BamDuplicateKey, Vec<usize>>::new();
 
     for index in eligible_indices.iter().copied() {
         let record = &records[index];
         if record.flags() & PAIRED_FLAG != 0 {
             paired_by_name
-                .entry(query_name(record))
+                .entry(record.qname().to_vec())
                 .or_default()
                 .push(index);
         } else {
@@ -342,20 +352,20 @@ fn duplicate_groups(
     duplicate_groups
 }
 
-fn single_duplicate_key_bam(record: &bam::Record) -> DuplicateKey {
+fn single_duplicate_key_bam(record: &bam::Record) -> BamDuplicateKey {
     let reverse_strand = record.flags() & 0x10 != 0;
     let position = unclipped_record_position(record);
-    DuplicateKey {
-        reference_name: record.tid().to_string(),
+    BamDuplicateKey {
+        reference_id: record.tid(),
         position,
-        mate_reference_name: record.mtid().to_string(),
+        mate_reference_id: record.mtid(),
         mate_position: record.mpos(),
         template_length: record.insert_size(),
         reverse_strand,
     }
 }
 
-fn pair_duplicate_key_bam(first: &bam::Record, second: &bam::Record) -> DuplicateKey {
+fn pair_duplicate_key_bam(first: &bam::Record, second: &bam::Record) -> BamDuplicateKey {
     let first_position = unclipped_record_position(first);
     let second_position = unclipped_record_position(second);
     let (left, right) = if (first.tid(), first_position) <= (second.tid(), second_position) {
@@ -364,10 +374,10 @@ fn pair_duplicate_key_bam(first: &bam::Record, second: &bam::Record) -> Duplicat
         (second, first)
     };
 
-    DuplicateKey {
-        reference_name: left.tid().to_string(),
+    BamDuplicateKey {
+        reference_id: left.tid(),
         position: unclipped_record_position(left),
-        mate_reference_name: right.tid().to_string(),
+        mate_reference_id: right.tid(),
         mate_position: unclipped_record_position(right),
         template_length: first.insert_size().abs().max(second.insert_size().abs()),
         reverse_strand: false,
@@ -476,11 +486,11 @@ fn quality_score(record: &bam::Record) -> u64 {
         .sum()
 }
 
-fn best_duplicate_representative_name(group: &[usize], records: &[bam::Record]) -> String {
-    let mut scores = Vec::<(String, u64, usize)>::new();
+fn best_duplicate_representative_name(group: &[usize], records: &[bam::Record]) -> Vec<u8> {
+    let mut scores = Vec::<(Vec<u8>, u64, usize)>::new();
 
     for index in group.iter().copied() {
-        let name = query_name(&records[index]);
+        let name = records[index].qname().to_vec();
         if let Some((_, score, _)) = scores
             .iter_mut()
             .find(|(existing_name, _, _)| existing_name == &name)
@@ -496,10 +506,6 @@ fn best_duplicate_representative_name(group: &[usize], records: &[bam::Record]) 
         .max_by(|left, right| left.1.cmp(&right.1).then_with(|| right.2.cmp(&left.2)))
         .map(|(name, _, _)| name)
         .expect("non-empty duplicate group")
-}
-
-fn query_name(record: &bam::Record) -> String {
-    String::from_utf8_lossy(record.qname()).into_owned()
 }
 
 fn metrics_text(summary: &MarkDuplicatesSummary) -> String {
