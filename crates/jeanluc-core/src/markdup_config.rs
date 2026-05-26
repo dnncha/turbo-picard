@@ -12,6 +12,7 @@ pub struct MarkDuplicatesConfig {
     pub quiet: bool,
     pub create_index: bool,
     pub create_md5_file: bool,
+    pub duplicate_scoring_strategy: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -62,6 +63,7 @@ impl MarkDuplicatesConfig {
             quiet: optional_bool(args, "QUIET")?.unwrap_or(false),
             create_index: optional_bool(args, "CREATE_INDEX")?.unwrap_or(false),
             create_md5_file: optional_bool(args, "CREATE_MD5_FILE")?.unwrap_or(false),
+            duplicate_scoring_strategy: optional_duplicate_scoring_strategy(args)?,
         })
     }
 }
@@ -79,6 +81,7 @@ fn reject_unsupported(
         "QUIET",
         "CREATE_INDEX",
         "CREATE_MD5_FILE",
+        "DUPLICATE_SCORING_STRATEGY",
     ]);
 
     for key in args.keys() {
@@ -129,6 +132,22 @@ fn optional_scalar(
     };
 
     scalar_value(values, key).map(Some)
+}
+
+fn optional_duplicate_scoring_strategy(
+    args: &BTreeMap<String, Vec<String>>,
+) -> Result<Option<String>, MarkDuplicatesConfigError> {
+    let Some(strategy) = optional_scalar(args, "DUPLICATE_SCORING_STRATEGY")? else {
+        return Ok(None);
+    };
+
+    if strategy == "SUM_OF_BASE_QUALITIES" {
+        Ok(Some(strategy))
+    } else {
+        Err(MarkDuplicatesConfigError::UnsupportedOption(format!(
+            "DUPLICATE_SCORING_STRATEGY={strategy}"
+        )))
+    }
 }
 
 fn scalar_value(values: &[String], key: &str) -> Result<String, MarkDuplicatesConfigError> {

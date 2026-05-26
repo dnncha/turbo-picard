@@ -18,6 +18,7 @@ fn marks_duplicate_records_in_bam() {
         quiet: true,
         create_index: false,
         create_md5_file: false,
+        duplicate_scoring_strategy: None,
     };
 
     jeanluc_markdup::run(&config).expect("BAM duplicate marking succeeds");
@@ -43,6 +44,7 @@ fn marks_duplicate_pairs_and_reports_paired_metrics() {
         quiet: true,
         create_index: false,
         create_md5_file: false,
+        duplicate_scoring_strategy: None,
     };
 
     jeanluc_markdup::run(&config).expect("BAM duplicate marking succeeds");
@@ -71,6 +73,7 @@ fn keeps_highest_quality_duplicate_representative() {
         quiet: true,
         create_index: false,
         create_md5_file: false,
+        duplicate_scoring_strategy: None,
     };
 
     jeanluc_markdup::run(&config).expect("BAM duplicate marking succeeds");
@@ -96,6 +99,7 @@ fn groups_duplicates_by_unclipped_five_prime_position() {
         quiet: true,
         create_index: false,
         create_md5_file: false,
+        duplicate_scoring_strategy: None,
     };
 
     jeanluc_markdup::run(&config).expect("BAM duplicate marking succeeds");
@@ -121,6 +125,7 @@ fn excludes_secondary_alignments_from_duplicate_testing() {
         quiet: true,
         create_index: false,
         create_md5_file: false,
+        duplicate_scoring_strategy: None,
     };
 
     jeanluc_markdup::run(&config).expect("BAM duplicate marking succeeds");
@@ -149,6 +154,7 @@ fn chooses_duplicate_representative_per_pair_not_per_mate() {
         quiet: true,
         create_index: false,
         create_md5_file: false,
+        duplicate_scoring_strategy: None,
     };
 
     jeanluc_markdup::run(&config).expect("BAM duplicate marking succeeds");
@@ -174,6 +180,7 @@ fn creates_bam_index_when_requested() {
         quiet: true,
         create_index: true,
         create_md5_file: false,
+        duplicate_scoring_strategy: None,
     };
 
     jeanluc_markdup::run(&config).expect("BAM duplicate marking succeeds");
@@ -198,6 +205,7 @@ fn creates_md5_sidecar_when_requested() {
         quiet: true,
         create_index: false,
         create_md5_file: true,
+        duplicate_scoring_strategy: None,
     };
 
     jeanluc_markdup::run(&config).expect("BAM duplicate marking succeeds");

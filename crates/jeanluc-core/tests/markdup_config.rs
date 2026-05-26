@@ -83,6 +83,24 @@ fn parses_create_md5_file_boolean() {
 }
 
 #[test]
+fn accepts_explicit_default_duplicate_scoring_strategy() {
+    let args = vec![
+        "I=in.bam".to_string(),
+        "O=out.bam".to_string(),
+        "M=metrics.txt".to_string(),
+        "DUPLICATE_SCORING_STRATEGY=SUM_OF_BASE_QUALITIES".to_string(),
+    ];
+    let parsed = normalize_picard_args(&args).expect("arguments parse");
+
+    let config = MarkDuplicatesConfig::try_from_args(&parsed).expect("config validates");
+
+    assert_eq!(
+        config.duplicate_scoring_strategy.as_deref(),
+        Some("SUM_OF_BASE_QUALITIES")
+    );
+}
+
+#[test]
 fn rejects_missing_metrics_file() {
     let args = vec!["I=in.bam".to_string(), "O=out.bam".to_string()];
     let parsed = normalize_picard_args(&args).expect("arguments parse");
