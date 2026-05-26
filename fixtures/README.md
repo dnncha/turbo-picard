@@ -1,6 +1,6 @@
 # Fixtures
 
-Jeanluc fixtures must be small, deterministic, and legal to redistribute.
+turbo-picard fixtures must be small, deterministic, and legal to redistribute.
 
 Use SAM fixtures for parser and semantic-comparison tests where possible. Use BAM
 fixtures only when compression, indexing, or HTS library behavior is under test.

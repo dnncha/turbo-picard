@@ -1,6 +1,6 @@
-use jeanluc_core::markdup_config::MarkDuplicatesConfig;
 use rust_htslib::bam::record::Aux;
 use rust_htslib::bam::{self, Read};
+use turbo_picard_core::markdup_config::MarkDuplicatesConfig;
 
 #[test]
 fn marks_duplicate_records_in_bam() {
@@ -34,7 +34,7 @@ fn marks_duplicate_records_in_bam() {
         optical_duplicate_pixel_distance: None,
     };
 
-    jeanluc_markdup::run(&config).expect("BAM duplicate marking succeeds");
+    turbo_picard_markdup::run(&config).expect("BAM duplicate marking succeeds");
 
     let flags = read_flags(&output);
     assert_eq!(flags, vec![0, 1024, 0]);
@@ -72,7 +72,7 @@ fn marks_duplicate_pairs_and_reports_paired_metrics() {
         optical_duplicate_pixel_distance: None,
     };
 
-    jeanluc_markdup::run(&config).expect("BAM duplicate marking succeeds");
+    turbo_picard_markdup::run(&config).expect("BAM duplicate marking succeeds");
 
     let flags = read_flags(&output);
     assert_eq!(flags, vec![99, 1123, 99, 147, 1171, 147]);
@@ -113,7 +113,7 @@ fn keeps_highest_quality_duplicate_representative() {
         optical_duplicate_pixel_distance: None,
     };
 
-    jeanluc_markdup::run(&config).expect("BAM duplicate marking succeeds");
+    turbo_picard_markdup::run(&config).expect("BAM duplicate marking succeeds");
 
     let flags = read_flags(&output);
     assert_eq!(flags, vec![1024, 0, 0]);
@@ -151,7 +151,7 @@ fn groups_duplicates_by_unclipped_five_prime_position() {
         optical_duplicate_pixel_distance: None,
     };
 
-    jeanluc_markdup::run(&config).expect("BAM duplicate marking succeeds");
+    turbo_picard_markdup::run(&config).expect("BAM duplicate marking succeeds");
 
     let flags = read_flags(&output);
     assert_eq!(flags, vec![0, 1024, 0]);
@@ -189,7 +189,7 @@ fn excludes_secondary_alignments_from_duplicate_testing() {
         optical_duplicate_pixel_distance: None,
     };
 
-    jeanluc_markdup::run(&config).expect("BAM duplicate marking succeeds");
+    turbo_picard_markdup::run(&config).expect("BAM duplicate marking succeeds");
 
     let flags = read_flags(&output);
     assert_eq!(flags, vec![0, 256, 1024, 0]);
@@ -230,7 +230,7 @@ fn chooses_duplicate_representative_per_pair_not_per_mate() {
         optical_duplicate_pixel_distance: None,
     };
 
-    jeanluc_markdup::run(&config).expect("BAM duplicate marking succeeds");
+    turbo_picard_markdup::run(&config).expect("BAM duplicate marking succeeds");
 
     let flags = read_flags(&output);
     assert_eq!(flags, vec![99, 1123, 99, 147, 1171, 147]);
@@ -268,7 +268,7 @@ fn creates_bam_index_when_requested() {
         optical_duplicate_pixel_distance: None,
     };
 
-    jeanluc_markdup::run(&config).expect("BAM duplicate marking succeeds");
+    turbo_picard_markdup::run(&config).expect("BAM duplicate marking succeeds");
 
     assert!(output.with_extension("bai").exists());
 }
@@ -305,7 +305,7 @@ fn creates_md5_sidecar_when_requested() {
         optical_duplicate_pixel_distance: None,
     };
 
-    jeanluc_markdup::run(&config).expect("BAM duplicate marking succeeds");
+    turbo_picard_markdup::run(&config).expect("BAM duplicate marking succeeds");
 
     let md5_path = output.with_extension("bam.md5");
     let md5_text = std::fs::read_to_string(md5_path).expect("MD5 sidecar exists");
@@ -344,7 +344,7 @@ fn adds_picard_program_group_header_and_read_tags_by_default() {
         optical_duplicate_pixel_distance: None,
     };
 
-    jeanluc_markdup::run(&config).expect("BAM duplicate marking succeeds");
+    turbo_picard_markdup::run(&config).expect("BAM duplicate marking succeeds");
 
     let mut reader = bam::Reader::from_path(&output).expect("BAM opens");
     let header = String::from_utf8_lossy(reader.header().as_bytes());
@@ -387,7 +387,7 @@ fn tags_library_duplicates_when_tagging_policy_is_all() {
         optical_duplicate_pixel_distance: None,
     };
 
-    jeanluc_markdup::run(&config).expect("BAM duplicate marking succeeds");
+    turbo_picard_markdup::run(&config).expect("BAM duplicate marking succeeds");
 
     let duplicate_dt_tags = duplicate_dt_tags(&output);
     assert_eq!(duplicate_dt_tags, vec![Some("LB".to_string())]);
@@ -425,7 +425,7 @@ fn tags_duplicate_set_members_when_requested() {
         optical_duplicate_pixel_distance: None,
     };
 
-    jeanluc_markdup::run(&config).expect("BAM duplicate marking succeeds");
+    turbo_picard_markdup::run(&config).expect("BAM duplicate marking succeeds");
 
     assert_eq!(
         duplicate_set_member_tags(&output),
@@ -472,7 +472,7 @@ fn separates_duplicate_groups_by_barcode_tag() {
         optical_duplicate_pixel_distance: None,
     };
 
-    jeanluc_markdup::run(&config).expect("BAM duplicate marking succeeds");
+    turbo_picard_markdup::run(&config).expect("BAM duplicate marking succeeds");
 
     assert_eq!(read_flags(&output), vec![0, 1024, 0, 0]);
 }
@@ -509,7 +509,7 @@ fn separates_duplicate_groups_by_read_one_and_read_two_barcode_tags() {
         optical_duplicate_pixel_distance: None,
     };
 
-    jeanluc_markdup::run(&config).expect("BAM duplicate marking succeeds");
+    turbo_picard_markdup::run(&config).expect("BAM duplicate marking succeeds");
 
     assert_eq!(read_flags(&output), vec![99, 1123, 99, 147, 1171, 147]);
 }
@@ -546,7 +546,7 @@ fn tags_optical_duplicate_pairs_and_reports_metrics() {
         optical_duplicate_pixel_distance: Some(100),
     };
 
-    jeanluc_markdup::run(&config).expect("BAM duplicate marking succeeds");
+    turbo_picard_markdup::run(&config).expect("BAM duplicate marking succeeds");
 
     assert_eq!(
         duplicate_dt_tags(&output),
@@ -588,7 +588,7 @@ fn removes_only_optical_duplicates_when_requested() {
         optical_duplicate_pixel_distance: Some(100),
     };
 
-    jeanluc_markdup::run(&config).expect("BAM duplicate marking succeeds");
+    turbo_picard_markdup::run(&config).expect("BAM duplicate marking succeeds");
 
     assert_eq!(read_flags(&output), vec![99, 1123, 147, 1171]);
     assert_eq!(
@@ -631,7 +631,7 @@ fn removes_duplicate_pairs_when_requested() {
         optical_duplicate_pixel_distance: None,
     };
 
-    jeanluc_markdup::run(&config).expect("BAM duplicate marking succeeds");
+    turbo_picard_markdup::run(&config).expect("BAM duplicate marking succeeds");
 
     let flags = read_flags(&output);
     assert_eq!(flags, vec![99, 99, 147, 147]);
@@ -669,7 +669,7 @@ fn clears_existing_duplicate_type_tags_when_requested() {
         optical_duplicate_pixel_distance: Some(2500),
     };
 
-    jeanluc_markdup::run(&config).expect("BAM duplicate marking succeeds");
+    turbo_picard_markdup::run(&config).expect("BAM duplicate marking succeeds");
 
     assert!(read_has_no_dt_tags(&output));
 }
@@ -706,7 +706,7 @@ fn preserves_existing_duplicate_type_tags_when_clear_dt_is_false() {
         optical_duplicate_pixel_distance: Some(2500),
     };
 
-    jeanluc_markdup::run(&config).expect("BAM duplicate marking succeeds");
+    turbo_picard_markdup::run(&config).expect("BAM duplicate marking succeeds");
 
     assert!(read_has_dt_tags(&output));
 }
@@ -745,7 +745,7 @@ fn marks_duplicate_pairs_across_multiple_bam_inputs() {
         optical_duplicate_pixel_distance: None,
     };
 
-    jeanluc_markdup::run(&config).expect("BAM duplicate marking succeeds");
+    turbo_picard_markdup::run(&config).expect("BAM duplicate marking succeeds");
 
     assert_eq!(read_flags(&output), vec![99, 1123, 147, 1171]);
     let metrics_text = std::fs::read_to_string(&metrics).expect("metrics file exists");
@@ -784,7 +784,7 @@ fn keeps_duplicate_positions_separate_by_library() {
         optical_duplicate_pixel_distance: None,
     };
 
-    jeanluc_markdup::run(&config).expect("BAM duplicate marking succeeds");
+    turbo_picard_markdup::run(&config).expect("BAM duplicate marking succeeds");
 
     assert_eq!(read_flags(&output), vec![99, 99, 147, 147]);
     let metrics_text = std::fs::read_to_string(&metrics).expect("metrics file exists");
@@ -826,7 +826,7 @@ fn preserves_libraries_from_later_bam_inputs() {
         optical_duplicate_pixel_distance: None,
     };
 
-    jeanluc_markdup::run(&config).expect("BAM duplicate marking succeeds");
+    turbo_picard_markdup::run(&config).expect("BAM duplicate marking succeeds");
 
     assert_eq!(read_flags(&output), vec![99, 99, 147, 147]);
     assert!(header_text(&output).contains("@RG\tID:rgB\tLB:libB\tSM:sample1"));

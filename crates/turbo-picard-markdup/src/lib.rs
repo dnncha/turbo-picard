@@ -1,6 +1,5 @@
 #![forbid(unsafe_code)]
 
-use jeanluc_core::markdup_config::MarkDuplicatesConfig;
 use rust_htslib::bam::header::HeaderRecord;
 use rust_htslib::bam::record::{Aux, Cigar};
 use rust_htslib::bam::{self, Read, index};
@@ -8,6 +7,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt;
 use std::fs;
 use std::path::Path;
+use turbo_picard_core::markdup_config::MarkDuplicatesConfig;
 
 const DUPLICATE_FLAG: u16 = 0x400;
 const UNMAPPED_FLAG: u16 = 0x4;

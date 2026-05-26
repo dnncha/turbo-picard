@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Benchmark Picard and Jeanluc MarkDuplicates with reproducible JSONL output."""
+"""Benchmark Picard and turbo-picard MarkDuplicates with reproducible JSONL output."""
 
 from __future__ import annotations
 
@@ -31,10 +31,10 @@ class BenchmarkResult:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Run repeatable Picard vs Jeanluc MarkDuplicates benchmarks.",
+        description="Run repeatable Picard vs turbo-picard MarkDuplicates benchmarks.",
     )
     parser.add_argument("--picard-command", required=True, help="Base Picard command.")
-    parser.add_argument("--jeanluc-command", required=True, help="Base Jeanluc command.")
+    parser.add_argument("--turbo-picard-command", required=True, help="Base turbo-picard command.")
     parser.add_argument("--input-bam", required=True, type=Path)
     parser.add_argument("--output-dir", required=True, type=Path)
     parser.add_argument("--repeats", type=int, default=3)
@@ -60,7 +60,7 @@ def main() -> int:
     results = []
     for tool, base_command in [
         ("picard", args.picard_command),
-        ("jeanluc", args.jeanluc_command),
+        ("turbo-picard", args.turbo_picard_command),
     ]:
         for phase, count in [("warmup", args.warmup), ("benchmark", args.repeats)]:
             for iteration in range(1, count + 1):

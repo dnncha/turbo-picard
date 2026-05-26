@@ -1,10 +1,10 @@
 [package]
-name = "jeanluc-markdup"
+name = "turbo-picard-markdup"
 version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-jeanluc-core = { path = "../jeanluc-core" }
+turbo-picard-core = { path = "../turbo-picard-core" }
 md5 = "0.8.0"
 rust-htslib = "1.0.0"
 

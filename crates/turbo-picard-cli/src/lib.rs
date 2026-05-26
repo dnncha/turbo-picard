@@ -1,7 +1,7 @@
 #![forbid(unsafe_code)]
 
-use jeanluc_core::markdup_config::MarkDuplicatesConfig;
-use jeanluc_core::picard_args::normalize_picard_args;
+use turbo_picard_core::markdup_config::MarkDuplicatesConfig;
+use turbo_picard_core::picard_args::normalize_picard_args;
 
 pub fn run_cli(program_name: &str, raw_args: impl IntoIterator<Item = String>) -> i32 {
     let mut args = raw_args.into_iter();
@@ -82,6 +82,6 @@ fn run_markduplicates(args: &[String]) -> Result<(), String> {
     let config =
         MarkDuplicatesConfig::try_from_args(&picard_args).map_err(|error| error.to_string())?;
 
-    jeanluc_markdup::run(&config).map_err(|error| error.to_string())?;
+    turbo_picard_markdup::run(&config).map_err(|error| error.to_string())?;
     Ok(())
 }

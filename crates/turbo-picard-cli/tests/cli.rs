@@ -4,7 +4,7 @@ use std::fs;
 
 #[test]
 fn unsupported_command_fails_clearly() {
-    let mut cmd = Command::cargo_bin("jeanluc").expect("binary exists");
+    let mut cmd = Command::cargo_bin("turbo-picard").expect("binary exists");
     cmd.arg("SortSam")
         .assert()
         .failure()
@@ -15,7 +15,7 @@ fn unsupported_command_fails_clearly() {
 
 #[test]
 fn markduplicates_requires_metrics_file() {
-    let mut cmd = Command::cargo_bin("jeanluc").expect("binary exists");
+    let mut cmd = Command::cargo_bin("turbo-picard").expect("binary exists");
     cmd.args(["MarkDuplicates", "I=in.bam", "O=out.bam"])
         .assert()
         .failure()
@@ -26,7 +26,7 @@ fn markduplicates_requires_metrics_file() {
 
 #[test]
 fn markduplicates_rejects_unsupported_option() {
-    let mut cmd = Command::cargo_bin("jeanluc").expect("binary exists");
+    let mut cmd = Command::cargo_bin("turbo-picard").expect("binary exists");
     cmd.args([
         "MarkDuplicates",
         "I=in.bam",
@@ -59,7 +59,7 @@ fn markduplicates_marks_duplicate_sam_records() {
     )
     .expect("input fixture is written");
 
-    let mut cmd = Command::cargo_bin("jeanluc").expect("binary exists");
+    let mut cmd = Command::cargo_bin("turbo-picard").expect("binary exists");
     cmd.args([
         "MarkDuplicates",
         &format!("I={}", input.display()),

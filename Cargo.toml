@@ -1,7 +1,7 @@
 [workspace]
 members = [
-  "crates/jeanluc-cli",
-  "crates/jeanluc-core",
-  "crates/jeanluc-markdup",
+  "crates/turbo-picard-cli",
+  "crates/turbo-picard-core",
+  "crates/turbo-picard-markdup",
 ]
 resolver = "3"

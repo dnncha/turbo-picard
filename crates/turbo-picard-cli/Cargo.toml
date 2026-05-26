@@ -1,11 +1,11 @@
 [package]
-name = "jeanluc-cli"
+name = "turbo-picard-cli"
 version = "0.1.0"
 edition = "2024"
-default-run = "jeanluc"
+default-run = "turbo-picard"
 
 [[bin]]
-name = "jeanluc"
+name = "turbo-picard"
 path = "src/main.rs"
 
 [[bin]]
@@ -13,8 +13,8 @@ name = "picard"
 path = "src/bin/picard.rs"
 
 [dependencies]
-jeanluc-core = { path = "../jeanluc-core" }
-jeanluc-markdup = { path = "../jeanluc-markdup" }
+turbo-picard-core = { path = "../turbo-picard-core" }
+turbo-picard-markdup = { path = "../turbo-picard-markdup" }
 
 [dev-dependencies]
 assert_cmd = "2.0.17"

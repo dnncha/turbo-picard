@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Semantic comparison for Picard and Jeanluc MarkDuplicates outputs."""
+"""Semantic comparison for Picard and turbo-picard MarkDuplicates outputs."""
 
 from __future__ import annotations
 
@@ -35,12 +35,12 @@ class RecordKey:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Compare Picard and Jeanluc MarkDuplicates outputs semantically.",
+        description="Compare Picard and turbo-picard MarkDuplicates outputs semantically.",
     )
     parser.add_argument("--picard-bam", required=True, type=Path)
-    parser.add_argument("--jeanluc-bam", required=True, type=Path)
+    parser.add_argument("--turbo-picard-bam", required=True, type=Path)
     parser.add_argument("--picard-metrics", required=True, type=Path)
-    parser.add_argument("--jeanluc-metrics", required=True, type=Path)
+    parser.add_argument("--turbo-picard-metrics", required=True, type=Path)
     parser.add_argument(
         "--json",
         action="store_true",
@@ -54,24 +54,24 @@ def main() -> int:
     differences: list[str] = []
 
     picard_records = sorted(read_alignment_records(args.picard_bam))
-    jeanluc_records = sorted(read_alignment_records(args.jeanluc_bam))
+    turbo_picard_records = sorted(read_alignment_records(args.turbo_picard_bam))
 
-    if picard_records != jeanluc_records:
+    if picard_records != turbo_picard_records:
         differences.append(
             "alignment semantic records differ "
-            f"(picard={len(picard_records)} jeanluc={len(jeanluc_records)})"
+            f"(picard={len(picard_records)} turbo-picard={len(turbo_picard_records)})"
         )
 
     picard_metrics = read_metrics(args.picard_metrics)
-    jeanluc_metrics = read_metrics(args.jeanluc_metrics)
-    if picard_metrics != jeanluc_metrics:
+    turbo_picard_metrics = read_metrics(args.turbo_picard_metrics)
+    if picard_metrics != turbo_picard_metrics:
         differences.append("metrics files differ after comment/header normalization")
 
     result = {
         "ok": not differences,
         "differences": differences,
         "picard_records": len(picard_records),
-        "jeanluc_records": len(jeanluc_records),
+        "turbo_picard_records": len(turbo_picard_records),
     }
 
     if args.json:

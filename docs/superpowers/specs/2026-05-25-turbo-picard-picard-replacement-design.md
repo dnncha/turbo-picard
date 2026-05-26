@@ -1,10 +1,10 @@
-# Jeanluc Picard-Compatible Replacement Design
+# turbo-picard Picard-Compatible Replacement Design
 
 Date: 2026-05-25
 
 ## Goal
 
-Build `jeanluc`, a much faster Picard-compatible command-line toolkit for genomics pipelines. The first release should not replace the `picard` executable directly. It should install a separate `jeanluc` command that can run Picard-shaped commands, starting with an accelerated native implementation of `MarkDuplicates`.
+Build `turbo-picard`, a much faster Picard-compatible command-line toolkit for genomics pipelines. The first release should not replace the `picard` executable directly. It should install a separate `turbo-picard` command that can run Picard-shaped commands, starting with an accelerated native implementation of `MarkDuplicates`.
 
 The long-term goal is a Bioconda package that users can opt into without breaking existing environments. A future package may add an optional `picard` compatibility shim after the native behavior and fallback behavior are proven.
 
@@ -12,7 +12,7 @@ The long-term goal is a Bioconda package that users can opt into without breakin
 
 The first accelerated command is:
 
-- `jeanluc MarkDuplicates`
+- `turbo-picard MarkDuplicates`
 
 This is the highest-impact starting point because duplicate marking is a common wall-time bottleneck in real WGS and WES preprocessing pipelines, and Picard's Java implementation is often used as the compatibility reference.
 
@@ -30,16 +30,16 @@ Unsupported Picard commands should fail clearly in the first implementation. The
 
 ## Command-Line Compatibility
 
-`jeanluc` should accept Picard-style command invocation:
+`turbo-picard` should accept Picard-style command invocation:
 
 ```bash
-jeanluc MarkDuplicates I=input.bam O=output.bam M=metrics.txt
+turbo-picard MarkDuplicates I=input.bam O=output.bam M=metrics.txt
 ```
 
 It should also accept common long-option forms:
 
 ```bash
-jeanluc MarkDuplicates --INPUT input.bam --OUTPUT output.bam --METRICS_FILE metrics.txt
+turbo-picard MarkDuplicates --INPUT input.bam --OUTPUT output.bam --METRICS_FILE metrics.txt
 ```
 
 The parser should normalize all supported aliases into one internal configuration:
@@ -56,11 +56,11 @@ Unsupported options must produce explicit diagnostics unless delegation is enabl
 
 The repository should be a Rust workspace with these crates:
 
-- `jeanluc-cli`: executable crate for command dispatch, Picard-style argument parsing, diagnostics, and process exit behavior.
-- `jeanluc-core`: shared domain types, configuration normalization, metrics models, and error types.
-- `jeanluc-markdup`: native duplicate-marking engine.
+- `turbo-picard-cli`: executable crate for command dispatch, Picard-style argument parsing, diagnostics, and process exit behavior.
+- `turbo-picard-core`: shared domain types, configuration normalization, metrics models, and error types.
+- `turbo-picard-markdup`: native duplicate-marking engine.
 
-The CLI layer should stay thin. It should parse arguments, normalize configuration, dispatch to the native implementation, and format errors. Duplicate marking logic belongs in `jeanluc-markdup`.
+The CLI layer should stay thin. It should parse arguments, normalize configuration, dispatch to the native implementation, and format errors. Duplicate marking logic belongs in `turbo-picard-markdup`.
 
 Use `rust-htslib` for the first implementation because mature BAM and CRAM handling are more important than a pure-Rust dependency graph at this stage. `noodles` can be evaluated later for lower-level control or pure-Rust parsing where it does not weaken compatibility.
 
@@ -69,7 +69,7 @@ Use `rust-htslib` for the first implementation because mature BAM and CRAM handl
 The native implementation should:
 
 - Read coordinate-sorted SAM/BAM input.
-- Preserve input headers and add a `@PG` program record for `jeanluc` without dropping existing header records.
+- Preserve input headers and add a `@PG` program record for `turbo-picard` without dropping existing header records.
 - Identify duplicate sets using Picard-compatible duplicate keys for paired and unpaired reads.
 - Select the representative read using the configured duplicate scoring strategy.
 - Mark duplicate reads with the SAM duplicate flag unless removal is requested.
@@ -113,7 +113,7 @@ Compatibility tests should prefer semantic comparison over byte comparison. BAM 
 
 ## Packaging
 
-The first package should be a separate Bioconda candidate named `jeanluc`. It should install the `jeanluc` executable only.
+The first package should be a separate Bioconda candidate named `turbo-picard`. It should install the `turbo-picard` executable only.
 
 The package should not declare itself as a direct replacement for Bioconda `picard` until:
 
@@ -130,7 +130,7 @@ The package should not declare itself as a direct replacement for Bioconda `pica
 4. Add Picard golden tests for small fixtures.
 5. Add metrics-file compatibility tests.
 6. Add performance benchmarks and large smoke fixtures.
-7. Package `jeanluc` for local conda build.
+7. Package `turbo-picard` for local conda build.
 8. Evaluate upstream Picard delegation and optional `picard` shim.
 
 ## Open Risks
@@ -142,9 +142,9 @@ The package should not declare itself as a direct replacement for Bioconda `pica
 
 ## Acceptance Criteria For First Working Release
 
-- `jeanluc MarkDuplicates I=in.bam O=out.bam M=metrics.txt` runs successfully on coordinate-sorted BAM input.
+- `turbo-picard MarkDuplicates I=in.bam O=out.bam M=metrics.txt` runs successfully on coordinate-sorted BAM input.
 - The output is semantically concordant with Picard on curated fixtures.
 - The metrics file is compatible with downstream Picard metrics consumers.
 - Unsupported commands and options fail clearly.
 - Benchmarks show meaningful speed or memory improvement on at least one realistic workload.
-- The package installs a `jeanluc` command without shadowing `picard`.
+- The package installs a `turbo-picard` command without shadowing `picard`.

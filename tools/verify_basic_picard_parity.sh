@@ -2,7 +2,7 @@
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-conda_prefix="${JEANLUC_CONDA_PREFIX:-$repo_root/.conda-jeanluc}"
+conda_prefix="${TURBO_PICARD_CONDA_PREFIX:-$repo_root/.conda-turbo-picard}"
 workdir="$(mktemp -d)"
 trap 'rm -rf "$workdir"' EXIT
 
@@ -43,7 +43,7 @@ for fixture in basic paired scoring softclip secondary pair-score-tie clear-dt t
   fi
   mkdir -p "$fixture_workdir"
 
-  command=(cargo run -q -p jeanluc-cli --bin picard -- \
+  command=(cargo run -q -p turbo-picard-cli --bin picard -- \
     MarkDuplicates)
   if [[ "$fixture" == "multi-input" || "$fixture" == "multi-input-libraries" ]]; then
     command+=("I=$fixture_dir/input1.bam" "I=$fixture_dir/input2.bam")
@@ -51,8 +51,8 @@ for fixture in basic paired scoring softclip secondary pair-score-tie clear-dt t
     command+=("I=$fixture_dir/input.bam")
   fi
   command+=(\
-    "O=$fixture_workdir/jeanluc.bam" \
-    "M=$fixture_workdir/jeanluc.metrics.txt" \
+    "O=$fixture_workdir/turbo-picard.bam" \
+    "M=$fixture_workdir/turbo-picard.metrics.txt" \
     ASSUME_SORTED=true \
     VALIDATION_STRINGENCY=SILENT \
     QUIET=true \
@@ -77,12 +77,12 @@ for fixture in basic paired scoring softclip secondary pair-score-tie clear-dt t
   fi
   "${command[@]}"
 
-  mamba run -p "$conda_prefix" samtools view -h "$fixture_workdir/jeanluc.bam" > "$fixture_workdir/jeanluc.sam"
+  mamba run -p "$conda_prefix" samtools view -h "$fixture_workdir/turbo-picard.bam" > "$fixture_workdir/turbo-picard.sam"
   mamba run -p "$conda_prefix" samtools view -h "$fixture_dir/picard.bam" > "$fixture_workdir/picard.sam"
 
   python3 "$repo_root/tools/compare_markduplicates.py" \
     --picard-bam "$fixture_workdir/picard.sam" \
-    --jeanluc-bam "$fixture_workdir/jeanluc.sam" \
+    --turbo-picard-bam "$fixture_workdir/turbo-picard.sam" \
     --picard-metrics "$fixture_dir/picard.metrics.txt" \
-    --jeanluc-metrics "$fixture_workdir/jeanluc.metrics.txt"
+    --turbo-picard-metrics "$fixture_workdir/turbo-picard.metrics.txt"
 done

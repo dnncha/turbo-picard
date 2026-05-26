@@ -1,4 +1,4 @@
-use jeanluc_core::picard_args::{PicardArgError, normalize_picard_args};
+use turbo_picard_core::picard_args::{PicardArgError, normalize_picard_args};
 
 #[test]
 fn normalizes_key_value_arguments() {

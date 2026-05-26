@@ -1,8 +1,8 @@
-# Jeanluc MarkDuplicates Foundation Implementation Plan
+# turbo-picard MarkDuplicates Foundation Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Build the first testable Jeanluc foundation: Rust workspace, Picard-shaped CLI parsing, explicit unsupported behavior, correctness-comparison tooling, and benchmark scaffolding for `MarkDuplicates`.
+**Goal:** Build the first testable turbo-picard foundation: Rust workspace, Picard-shaped CLI parsing, explicit unsupported behavior, correctness-comparison tooling, and benchmark scaffolding for `MarkDuplicates`.
 
 **Architecture:** The CLI crate owns process behavior and delegates normalized command configuration into focused core crates. Correctness is proven with semantic tests and fixture tools before the native duplicate-marking engine expands beyond the coordinate-sorted BAM fast path. Benchmarks live beside correctness tooling so runtime claims are reproducible.
 
@@ -13,16 +13,16 @@
 ## File Structure
 
 - `Cargo.toml`: workspace root.
-- `crates/jeanluc-cli/Cargo.toml`: binary crate manifest.
-- `crates/jeanluc-cli/src/main.rs`: process entrypoint.
-- `crates/jeanluc-cli/tests/cli.rs`: end-to-end CLI tests.
-- `crates/jeanluc-core/Cargo.toml`: shared crate manifest.
-- `crates/jeanluc-core/src/lib.rs`: core module exports.
-- `crates/jeanluc-core/src/picard_args.rs`: Picard `KEY=VALUE` and long-option normalization.
-- `crates/jeanluc-core/src/markdup_config.rs`: `MarkDuplicates` configuration validation.
-- `crates/jeanluc-core/tests/picard_args.rs`: parser tests.
-- `crates/jeanluc-core/tests/markdup_config.rs`: config tests.
-- `tools/compare_markduplicates.py`: semantic comparison harness for Picard vs Jeanluc outputs.
+- `crates/turbo-picard-cli/Cargo.toml`: binary crate manifest.
+- `crates/turbo-picard-cli/src/main.rs`: process entrypoint.
+- `crates/turbo-picard-cli/tests/cli.rs`: end-to-end CLI tests.
+- `crates/turbo-picard-core/Cargo.toml`: shared crate manifest.
+- `crates/turbo-picard-core/src/lib.rs`: core module exports.
+- `crates/turbo-picard-core/src/picard_args.rs`: Picard `KEY=VALUE` and long-option normalization.
+- `crates/turbo-picard-core/src/markdup_config.rs`: `MarkDuplicates` configuration validation.
+- `crates/turbo-picard-core/tests/picard_args.rs`: parser tests.
+- `crates/turbo-picard-core/tests/markdup_config.rs`: config tests.
+- `tools/compare_markduplicates.py`: semantic comparison harness for Picard vs turbo-picard outputs.
 - `tools/bench_markduplicates.py`: repeatable benchmark runner that captures wall time, RSS, command metadata, and output paths.
 - `fixtures/README.md`: fixture policy and commands for generating or adding tiny compatibility fixtures.
 
@@ -30,9 +30,9 @@
 
 **Files:**
 - Create: `Cargo.toml`
-- Create: `crates/jeanluc-cli/Cargo.toml`
-- Create: `crates/jeanluc-cli/src/main.rs`
-- Create: `crates/jeanluc-cli/tests/cli.rs`
+- Create: `crates/turbo-picard-cli/Cargo.toml`
+- Create: `crates/turbo-picard-cli/src/main.rs`
+- Create: `crates/turbo-picard-cli/tests/cli.rs`
 
 - [ ] **Step 1: Write the failing CLI test**
 
@@ -42,7 +42,7 @@ use predicates::prelude::*;
 
 #[test]
 fn unsupported_command_fails_clearly() {
-    let mut cmd = Command::cargo_bin("jeanluc").expect("binary exists");
+    let mut cmd = Command::cargo_bin("turbo-picard").expect("binary exists");
     cmd.arg("SortSam")
         .assert()
         .failure()
@@ -52,7 +52,7 @@ fn unsupported_command_fails_clearly() {
 
 - [ ] **Step 2: Run the test to verify it fails**
 
-Run: `cargo test -p jeanluc-cli unsupported_command_fails_clearly`
+Run: `cargo test -p turbo-picard-cli unsupported_command_fails_clearly`
 
 Expected: FAIL because the workspace or binary does not exist yet.
 
@@ -61,8 +61,8 @@ Expected: FAIL because the workspace or binary does not exist yet.
 ```toml
 [workspace]
 members = [
-  "crates/jeanluc-cli",
-  "crates/jeanluc-core",
+  "crates/turbo-picard-cli",
+  "crates/turbo-picard-core",
 ]
 resolver = "3"
 ```
@@ -80,7 +80,7 @@ fn main() {
             std::process::exit(2);
         }
         None => {
-            eprintln!("usage: jeanluc <PicardCommand> [KEY=VALUE ...]");
+            eprintln!("usage: turbo-picard <PicardCommand> [KEY=VALUE ...]");
             std::process::exit(2);
         }
     }
@@ -89,29 +89,29 @@ fn main() {
 
 - [ ] **Step 4: Run the test to verify it passes**
 
-Run: `cargo test -p jeanluc-cli unsupported_command_fails_clearly`
+Run: `cargo test -p turbo-picard-cli unsupported_command_fails_clearly`
 
 Expected: PASS.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add Cargo.toml crates/jeanluc-cli
-git commit -m "feat: scaffold jeanluc cli"
+git add Cargo.toml crates/turbo-picard-cli
+git commit -m "feat: scaffold turbo-picard cli"
 ```
 
 ## Task 2: Normalize Picard Arguments
 
 **Files:**
-- Create: `crates/jeanluc-core/Cargo.toml`
-- Create: `crates/jeanluc-core/src/lib.rs`
-- Create: `crates/jeanluc-core/src/picard_args.rs`
-- Create: `crates/jeanluc-core/tests/picard_args.rs`
+- Create: `crates/turbo-picard-core/Cargo.toml`
+- Create: `crates/turbo-picard-core/src/lib.rs`
+- Create: `crates/turbo-picard-core/src/picard_args.rs`
+- Create: `crates/turbo-picard-core/tests/picard_args.rs`
 
 - [ ] **Step 1: Write parser tests**
 
 ```rust
-use jeanluc_core::picard_args::{normalize_picard_args, PicardArgError};
+use turbo_picard_core::picard_args::{normalize_picard_args, PicardArgError};
 
 #[test]
 fn normalizes_key_value_arguments() {
@@ -147,9 +147,9 @@ fn rejects_positional_arguments() {
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `cargo test -p jeanluc-core --test picard_args`
+Run: `cargo test -p turbo-picard-core --test picard_args`
 
-Expected: FAIL because `jeanluc-core` parser modules are missing.
+Expected: FAIL because `turbo-picard-core` parser modules are missing.
 
 - [ ] **Step 3: Implement the parser**
 
@@ -157,29 +157,29 @@ Implement `normalize_picard_args(args: &[String]) -> Result<BTreeMap<String, Vec
 
 - [ ] **Step 4: Run parser tests**
 
-Run: `cargo test -p jeanluc-core --test picard_args`
+Run: `cargo test -p turbo-picard-core --test picard_args`
 
 Expected: PASS.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add crates/jeanluc-core
+git add crates/turbo-picard-core
 git commit -m "feat: normalize picard arguments"
 ```
 
 ## Task 3: Validate MarkDuplicates Configuration
 
 **Files:**
-- Create: `crates/jeanluc-core/src/markdup_config.rs`
-- Create: `crates/jeanluc-core/tests/markdup_config.rs`
-- Modify: `crates/jeanluc-core/src/lib.rs`
+- Create: `crates/turbo-picard-core/src/markdup_config.rs`
+- Create: `crates/turbo-picard-core/tests/markdup_config.rs`
+- Modify: `crates/turbo-picard-core/src/lib.rs`
 
 - [ ] **Step 1: Write config tests**
 
 ```rust
-use jeanluc_core::markdup_config::{MarkDuplicatesConfig, MarkDuplicatesConfigError};
-use jeanluc_core::picard_args::normalize_picard_args;
+use turbo_picard_core::markdup_config::{MarkDuplicatesConfig, MarkDuplicatesConfigError};
+use turbo_picard_core::picard_args::normalize_picard_args;
 
 #[test]
 fn accepts_minimal_required_picard_arguments() {
@@ -216,7 +216,7 @@ fn rejects_missing_metrics_file() {
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `cargo test -p jeanluc-core --test markdup_config`
+Run: `cargo test -p turbo-picard-core --test markdup_config`
 
 Expected: FAIL because `MarkDuplicatesConfig` does not exist.
 
@@ -226,23 +226,23 @@ Create a small config type with `input`, `output`, `metrics_file`, and `remove_d
 
 - [ ] **Step 4: Run config tests**
 
-Run: `cargo test -p jeanluc-core --test markdup_config`
+Run: `cargo test -p turbo-picard-core --test markdup_config`
 
 Expected: PASS.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add crates/jeanluc-core
+git add crates/turbo-picard-core
 git commit -m "feat: validate markduplicates config"
 ```
 
 ## Task 4: Wire CLI To Validated MarkDuplicates Config
 
 **Files:**
-- Modify: `crates/jeanluc-cli/Cargo.toml`
-- Modify: `crates/jeanluc-cli/src/main.rs`
-- Modify: `crates/jeanluc-cli/tests/cli.rs`
+- Modify: `crates/turbo-picard-cli/Cargo.toml`
+- Modify: `crates/turbo-picard-cli/src/main.rs`
+- Modify: `crates/turbo-picard-cli/tests/cli.rs`
 
 - [ ] **Step 1: Write CLI config tests**
 
@@ -252,7 +252,7 @@ use predicates::prelude::*;
 
 #[test]
 fn markduplicates_requires_metrics_file() {
-    let mut cmd = Command::cargo_bin("jeanluc").expect("binary exists");
+    let mut cmd = Command::cargo_bin("turbo-picard").expect("binary exists");
     cmd.args(["MarkDuplicates", "I=in.bam", "O=out.bam"])
         .assert()
         .failure()
@@ -262,7 +262,7 @@ fn markduplicates_requires_metrics_file() {
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `cargo test -p jeanluc-cli markduplicates_requires_metrics_file`
+Run: `cargo test -p turbo-picard-cli markduplicates_requires_metrics_file`
 
 Expected: FAIL because CLI does not yet call config validation.
 
@@ -272,14 +272,14 @@ Call `normalize_picard_args`, then `MarkDuplicatesConfig::try_from_args`, then e
 
 - [ ] **Step 4: Run CLI tests**
 
-Run: `cargo test -p jeanluc-cli`
+Run: `cargo test -p turbo-picard-cli`
 
 Expected: PASS.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add crates/jeanluc-cli
+git add crates/turbo-picard-cli
 git commit -m "feat: validate markduplicates cli"
 ```
 
@@ -297,7 +297,7 @@ Expected: FAIL because the tool does not exist.
 
 - [ ] **Step 2: Implement comparison harness**
 
-The tool accepts `--picard-bam`, `--jeanluc-bam`, `--picard-metrics`, and `--jeanluc-metrics`. It compares SAM records semantically by query name, flag duplicate bit, reference id, position, mate reference id, mate position, CIGAR, and template length. It compares metrics files while ignoring comment lines and tolerating exact numeric equality first.
+The tool accepts `--picard-bam`, `--turbo-picard-bam`, `--picard-metrics`, and `--turbo-picard-metrics`. It compares SAM records semantically by query name, flag duplicate bit, reference id, position, mate reference id, mate position, CIGAR, and template length. It compares metrics files while ignoring comment lines and tolerating exact numeric equality first.
 
 - [ ] **Step 3: Run harness help**
 
@@ -325,7 +325,7 @@ Expected: FAIL because the tool does not exist.
 
 - [ ] **Step 2: Implement benchmark runner**
 
-The runner accepts Picard command, Jeanluc command, input BAM, output directory, repeat count, and optional warmup. It captures wall-clock duration, max RSS from `/usr/bin/time -l` on macOS, exit code, stderr path, stdout path, and output artifact paths into JSONL.
+The runner accepts Picard command, turbo-picard command, input BAM, output directory, repeat count, and optional warmup. It captures wall-clock duration, max RSS from `/usr/bin/time -l` on macOS, exit code, stderr path, stdout path, and output artifact paths into JSONL.
 
 - [ ] **Step 3: Run benchmark help**
 
@@ -343,12 +343,12 @@ git commit -m "bench: add markduplicates benchmark harness"
 ## Task 7: Native MarkDuplicates Engine Milestone
 
 **Files:**
-- Create: `crates/jeanluc-markdup/Cargo.toml`
-- Create: `crates/jeanluc-markdup/src/lib.rs`
+- Create: `crates/turbo-picard-markdup/Cargo.toml`
+- Create: `crates/turbo-picard-markdup/src/lib.rs`
 - Modify: `Cargo.toml`
-- Modify: `crates/jeanluc-cli/Cargo.toml`
-- Modify: `crates/jeanluc-cli/src/main.rs`
-- Add tests under: `crates/jeanluc-markdup/tests/`
+- Modify: `crates/turbo-picard-cli/Cargo.toml`
+- Modify: `crates/turbo-picard-cli/src/main.rs`
+- Add tests under: `crates/turbo-picard-markdup/tests/`
 
 - [ ] **Step 1: Add a tiny BAM fixture or fixture-generation script**
 
@@ -356,7 +356,7 @@ Use a deterministic fixture with one duplicate pair and one unique pair. The exp
 
 - [ ] **Step 2: Run the fixture test to verify it fails**
 
-Run: `cargo test -p jeanluc-markdup`
+Run: `cargo test -p turbo-picard-markdup`
 
 Expected: FAIL because the native engine does not exist.
 
@@ -366,14 +366,14 @@ Use `rust-htslib` to read BAM, group candidate duplicates, mark duplicate flags,
 
 - [ ] **Step 4: Run correctness tests and comparison harness**
 
-Run: `cargo test -p jeanluc-markdup`
+Run: `cargo test -p turbo-picard-markdup`
 
 Expected: PASS for the tiny fixture.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add Cargo.toml crates/jeanluc-cli crates/jeanluc-markdup fixtures
+git add Cargo.toml crates/turbo-picard-cli crates/turbo-picard-markdup fixtures
 git commit -m "feat: add initial markduplicates engine"
 ```
 
@@ -381,7 +381,7 @@ git commit -m "feat: add initial markduplicates engine"
 
 **Files:**
 - Add fixtures under: `fixtures/markduplicates/`
-- Add tests under: `crates/jeanluc-markdup/tests/`
+- Add tests under: `crates/turbo-picard-markdup/tests/`
 
 - [ ] **Step 1: Add failing tests for single-end reads, paired reads, secondary/supplementary reads, duplicate scoring, and remove-duplicates mode**
 - [ ] **Step 2: Run the focused tests and confirm each fails for the expected unsupported behavior**
@@ -397,6 +397,6 @@ git commit -m "feat: add initial markduplicates engine"
 
 - [ ] **Step 1: Run benchmarks on tiny fixtures to prove the harness**
 - [ ] **Step 2: Run benchmarks on at least one realistic WGS or WES coordinate-sorted BAM**
-- [ ] **Step 3: Record machine details, commands, Picard version, Jeanluc commit, wall time, RSS, and correctness comparison result**
+- [ ] **Step 3: Record machine details, commands, Picard version, turbo-picard commit, wall time, RSS, and correctness comparison result**
 - [ ] **Step 4: Do not claim speedup unless the semantic comparison passes**
 - [ ] **Step 5: Commit benchmark documentation**

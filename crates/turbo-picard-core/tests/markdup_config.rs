@@ -1,5 +1,5 @@
-use jeanluc_core::markdup_config::{MarkDuplicatesConfig, MarkDuplicatesConfigError};
-use jeanluc_core::picard_args::normalize_picard_args;
+use turbo_picard_core::markdup_config::{MarkDuplicatesConfig, MarkDuplicatesConfigError};
+use turbo_picard_core::picard_args::normalize_picard_args;
 
 #[test]
 fn accepts_minimal_required_picard_arguments() {
