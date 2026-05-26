@@ -258,6 +258,9 @@ fn run_bam(config: &MarkDuplicatesConfig) -> Result<MarkDuplicatesSummary, MarkD
         }
 
         let representative_name = best_duplicate_representative_name(group, &records);
+        if config.tag_duplicate_set_members && !config.remove_duplicates {
+            add_duplicate_set_member_tags(group, &mut records, representative_name.as_slice())?;
+        }
 
         for index in group.iter().copied() {
             if records[index].qname() == representative_name.as_slice() {
@@ -323,6 +326,58 @@ fn add_duplicate_type_tag(record: &mut bam::Record) -> Result<(), MarkDuplicates
         record.remove_aux(b"DT")?;
     }
     record.push_aux(b"DT", Aux::String("LB"))?;
+    Ok(())
+}
+
+fn add_duplicate_set_member_tags(
+    group: &[usize],
+    records: &mut [bam::Record],
+    representative_name: &[u8],
+) -> Result<(), MarkDuplicatesError> {
+    if !group
+        .iter()
+        .any(|index| records[*index].flags() & PAIRED_FLAG != 0)
+    {
+        return Ok(());
+    }
+
+    let mut member_names = Vec::<Vec<u8>>::new();
+    for index in group.iter().copied() {
+        let name = records[index].qname().to_vec();
+        if !member_names.iter().any(|existing| existing == &name) {
+            member_names.push(name);
+        }
+    }
+    if member_names.len() < 2 {
+        return Ok(());
+    }
+
+    let duplicate_set_index = group
+        .iter()
+        .copied()
+        .filter(|index| records[*index].qname() == representative_name)
+        .min()
+        .unwrap_or(group[0]);
+    let duplicate_set_size = i32::try_from(member_names.len()).unwrap_or(i32::MAX);
+    let duplicate_set_index = i32::try_from(duplicate_set_index).unwrap_or(i32::MAX);
+
+    for index in group.iter().copied() {
+        replace_i32_aux(&mut records[index], b"DS", duplicate_set_size)?;
+        replace_i32_aux(&mut records[index], b"DI", duplicate_set_index)?;
+    }
+
+    Ok(())
+}
+
+fn replace_i32_aux(
+    record: &mut bam::Record,
+    tag: &[u8],
+    value: i32,
+) -> Result<(), MarkDuplicatesError> {
+    if record.aux(tag).is_ok() {
+        record.remove_aux(tag)?;
+    }
+    record.push_aux(tag, Aux::I32(value))?;
     Ok(())
 }
 

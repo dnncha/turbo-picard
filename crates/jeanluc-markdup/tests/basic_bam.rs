@@ -21,6 +21,7 @@ fn marks_duplicate_records_in_bam() {
         create_index: false,
         create_md5_file: false,
         add_pg_tag_to_reads: true,
+        tag_duplicate_set_members: false,
         duplicate_scoring_strategy: None,
         read_name_regex: None,
         tagging_policy: None,
@@ -53,6 +54,7 @@ fn marks_duplicate_pairs_and_reports_paired_metrics() {
         create_index: false,
         create_md5_file: false,
         add_pg_tag_to_reads: true,
+        tag_duplicate_set_members: false,
         duplicate_scoring_strategy: None,
         read_name_regex: None,
         tagging_policy: None,
@@ -88,6 +90,7 @@ fn keeps_highest_quality_duplicate_representative() {
         create_index: false,
         create_md5_file: false,
         add_pg_tag_to_reads: true,
+        tag_duplicate_set_members: false,
         duplicate_scoring_strategy: None,
         read_name_regex: None,
         tagging_policy: None,
@@ -120,6 +123,7 @@ fn groups_duplicates_by_unclipped_five_prime_position() {
         create_index: false,
         create_md5_file: false,
         add_pg_tag_to_reads: true,
+        tag_duplicate_set_members: false,
         duplicate_scoring_strategy: None,
         read_name_regex: None,
         tagging_policy: None,
@@ -152,6 +156,7 @@ fn excludes_secondary_alignments_from_duplicate_testing() {
         create_index: false,
         create_md5_file: false,
         add_pg_tag_to_reads: true,
+        tag_duplicate_set_members: false,
         duplicate_scoring_strategy: None,
         read_name_regex: None,
         tagging_policy: None,
@@ -187,6 +192,7 @@ fn chooses_duplicate_representative_per_pair_not_per_mate() {
         create_index: false,
         create_md5_file: false,
         add_pg_tag_to_reads: true,
+        tag_duplicate_set_members: false,
         duplicate_scoring_strategy: None,
         read_name_regex: None,
         tagging_policy: None,
@@ -219,6 +225,7 @@ fn creates_bam_index_when_requested() {
         create_index: true,
         create_md5_file: false,
         add_pg_tag_to_reads: true,
+        tag_duplicate_set_members: false,
         duplicate_scoring_strategy: None,
         read_name_regex: None,
         tagging_policy: None,
@@ -250,6 +257,7 @@ fn creates_md5_sidecar_when_requested() {
         create_index: false,
         create_md5_file: true,
         add_pg_tag_to_reads: true,
+        tag_duplicate_set_members: false,
         duplicate_scoring_strategy: None,
         read_name_regex: None,
         tagging_policy: None,
@@ -283,6 +291,7 @@ fn adds_picard_program_group_header_and_read_tags_by_default() {
         create_index: false,
         create_md5_file: false,
         add_pg_tag_to_reads: true,
+        tag_duplicate_set_members: false,
         duplicate_scoring_strategy: None,
         read_name_regex: None,
         tagging_policy: None,
@@ -320,6 +329,7 @@ fn tags_library_duplicates_when_tagging_policy_is_all() {
         create_index: false,
         create_md5_file: false,
         add_pg_tag_to_reads: true,
+        tag_duplicate_set_members: false,
         duplicate_scoring_strategy: None,
         read_name_regex: Some("null".to_string()),
         tagging_policy: Some("All".to_string()),
@@ -331,6 +341,48 @@ fn tags_library_duplicates_when_tagging_policy_is_all() {
 
     let duplicate_dt_tags = duplicate_dt_tags(&output);
     assert_eq!(duplicate_dt_tags, vec![Some("LB".to_string())]);
+}
+
+#[test]
+fn tags_duplicate_set_members_when_requested() {
+    let tempdir = tempfile::tempdir().expect("tempdir exists");
+    let output = tempdir.path().join("output.bam");
+    let metrics = tempdir.path().join("metrics.txt");
+    let input = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../fixtures/markduplicates/paired/input.bam");
+    let config = MarkDuplicatesConfig {
+        input: input.display().to_string(),
+        output: output.display().to_string(),
+        metrics_file: metrics.display().to_string(),
+        remove_duplicates: false,
+        assume_sorted: true,
+        assume_sort_order: None,
+        validation_stringency: Some("SILENT".to_string()),
+        quiet: true,
+        create_index: false,
+        create_md5_file: false,
+        add_pg_tag_to_reads: true,
+        tag_duplicate_set_members: true,
+        duplicate_scoring_strategy: None,
+        read_name_regex: Some("null".to_string()),
+        tagging_policy: None,
+        clear_dt: true,
+        optical_duplicate_pixel_distance: None,
+    };
+
+    jeanluc_markdup::run(&config).expect("BAM duplicate marking succeeds");
+
+    assert_eq!(
+        duplicate_set_member_tags(&output),
+        vec![
+            ("pair-a".to_string(), Some((2, 0))),
+            ("pair-b".to_string(), Some((2, 0))),
+            ("pair-c".to_string(), None),
+            ("pair-a".to_string(), Some((2, 0))),
+            ("pair-b".to_string(), Some((2, 0))),
+            ("pair-c".to_string(), None),
+        ]
+    );
 }
 
 #[test]
@@ -352,6 +404,7 @@ fn removes_duplicate_pairs_when_requested() {
         create_index: false,
         create_md5_file: false,
         add_pg_tag_to_reads: true,
+        tag_duplicate_set_members: false,
         duplicate_scoring_strategy: None,
         read_name_regex: None,
         tagging_policy: None,
@@ -384,6 +437,7 @@ fn clears_existing_duplicate_type_tags_when_requested() {
         create_index: false,
         create_md5_file: false,
         add_pg_tag_to_reads: true,
+        tag_duplicate_set_members: false,
         duplicate_scoring_strategy: None,
         read_name_regex: Some("null".to_string()),
         tagging_policy: Some("DontTag".to_string()),
@@ -415,6 +469,7 @@ fn preserves_existing_duplicate_type_tags_when_clear_dt_is_false() {
         create_index: false,
         create_md5_file: false,
         add_pg_tag_to_reads: true,
+        tag_duplicate_set_members: false,
         duplicate_scoring_strategy: None,
         read_name_regex: Some("null".to_string()),
         tagging_policy: Some("DontTag".to_string()),
@@ -463,6 +518,26 @@ fn duplicate_dt_tags(path: &std::path::Path) -> Vec<Option<String>> {
                 _ => None,
             };
             Some(tag)
+        })
+        .collect()
+}
+
+fn duplicate_set_member_tags(path: &std::path::Path) -> Vec<(String, Option<(i32, i32)>)> {
+    let mut reader = bam::Reader::from_path(path).expect("BAM opens");
+    reader
+        .records()
+        .map(|record| {
+            let record = record.expect("record decodes");
+            let name = String::from_utf8_lossy(record.qname()).into_owned();
+            let ds = match record.aux(b"DS") {
+                Ok(Aux::I32(value)) => Some(value),
+                _ => None,
+            };
+            let di = match record.aux(b"DI") {
+                Ok(Aux::I32(value)) => Some(value),
+                _ => None,
+            };
+            (name, ds.zip(di))
         })
         .collect()
 }
