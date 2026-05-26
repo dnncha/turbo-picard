@@ -6,9 +6,13 @@ conda_prefix="${JEANLUC_CONDA_PREFIX:-$repo_root/.conda-jeanluc}"
 workdir="$(mktemp -d)"
 trap 'rm -rf "$workdir"' EXIT
 
-for fixture in basic paired scoring softclip secondary pair-score-tie clear-dt; do
+for fixture in basic paired scoring softclip secondary pair-score-tie clear-dt tagging-all; do
   fixture_dir="$repo_root/fixtures/markduplicates/$fixture"
   fixture_workdir="$workdir/$fixture"
+  tagging_policy="DontTag"
+  if [[ "$fixture" == "tagging-all" ]]; then
+    tagging_policy="All"
+  fi
   mkdir -p "$fixture_workdir"
 
   cargo run -q -p jeanluc-cli --bin picard -- \
@@ -21,7 +25,7 @@ for fixture in basic paired scoring softclip secondary pair-score-tie clear-dt; 
     QUIET=true \
     CLEAR_DT=true \
     READ_NAME_REGEX=null \
-    TAGGING_POLICY=DontTag
+    "TAGGING_POLICY=$tagging_policy"
 
   mamba run -p "$conda_prefix" samtools view -h "$fixture_workdir/jeanluc.bam" > "$fixture_workdir/jeanluc.sam"
   mamba run -p "$conda_prefix" samtools view -h "$fixture_dir/picard.bam" > "$fixture_workdir/picard.sam"

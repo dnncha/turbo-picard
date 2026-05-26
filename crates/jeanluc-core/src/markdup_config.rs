@@ -263,7 +263,7 @@ fn optional_tagging_policy(
         return Ok(None);
     };
 
-    if value == "DontTag" {
+    if matches!(value.as_str(), "All" | "OpticalOnly" | "DontTag") {
         Ok(Some(value))
     } else {
         Err(MarkDuplicatesConfigError::UnsupportedOption(format!(

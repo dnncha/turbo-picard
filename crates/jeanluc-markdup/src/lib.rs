@@ -161,6 +161,9 @@ pub fn run(config: &MarkDuplicatesConfig) -> Result<MarkDuplicatesSummary, MarkD
         }
 
         if !(duplicate && config.remove_duplicates) {
+            if should_tag_library_duplicate(config, flag) {
+                add_duplicate_type_tag_to_sam_fields(&mut fields);
+            }
             if config.add_pg_tag_to_reads {
                 add_program_group_to_sam_fields(&mut fields);
             }
@@ -278,6 +281,9 @@ fn run_bam(config: &MarkDuplicatesConfig) -> Result<MarkDuplicatesSummary, MarkD
             if config.clear_dt {
                 clear_duplicate_type_tag(&mut record)?;
             }
+            if should_tag_library_duplicate(config, record.flags()) {
+                add_duplicate_type_tag(&mut record)?;
+            }
             if config.add_pg_tag_to_reads {
                 add_program_group_to_bam_record(&mut record)?;
             }
@@ -306,6 +312,23 @@ fn clear_duplicate_type_tag(record: &mut bam::Record) -> Result<(), MarkDuplicat
         record.remove_aux(b"DT")?;
     }
     Ok(())
+}
+
+fn should_tag_library_duplicate(config: &MarkDuplicatesConfig, flags: u16) -> bool {
+    config.tagging_policy.as_deref() == Some("All") && flags & DUPLICATE_FLAG != 0
+}
+
+fn add_duplicate_type_tag(record: &mut bam::Record) -> Result<(), MarkDuplicatesError> {
+    if record.aux(b"DT").is_ok() {
+        record.remove_aux(b"DT")?;
+    }
+    record.push_aux(b"DT", Aux::String("LB"))?;
+    Ok(())
+}
+
+fn add_duplicate_type_tag_to_sam_fields(fields: &mut Vec<String>) {
+    fields.retain(|field| !field.starts_with("DT:Z:"));
+    fields.push("DT:Z:LB".to_string());
 }
 
 fn add_program_group_to_bam_record(record: &mut bam::Record) -> Result<(), MarkDuplicatesError> {

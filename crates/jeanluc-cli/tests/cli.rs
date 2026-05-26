@@ -32,12 +32,12 @@ fn markduplicates_rejects_unsupported_option() {
         "I=in.bam",
         "O=out.bam",
         "M=metrics.txt",
-        "TAGGING_POLICY=All",
+        "TAGGING_POLICY=Invalid",
     ])
     .assert()
     .failure()
     .stderr(predicate::str::contains(
-        "unsupported MarkDuplicates argument: TAGGING_POLICY=All",
+        "unsupported MarkDuplicates argument: TAGGING_POLICY=Invalid",
     ));
 }
 

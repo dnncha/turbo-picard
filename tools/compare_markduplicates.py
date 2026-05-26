@@ -19,6 +19,7 @@ DUPLICATE_FLAG = 0x400
 class RecordKey:
     query_name: str
     duplicate: bool
+    duplicate_type: str | None
     reference_name: str
     position: int
     mate_reference_name: str
@@ -100,6 +101,7 @@ def read_sam_records(path: Path) -> list[RecordKey]:
                 RecordKey(
                     query_name=fields[0],
                     duplicate=bool(flag & DUPLICATE_FLAG),
+                    duplicate_type=optional_tag(fields[11:], "DT"),
                     reference_name=fields[2],
                     position=int(fields[3]),
                     mate_reference_name=fields[6],
@@ -126,6 +128,7 @@ def read_hts_records(path: Path) -> list[RecordKey]:
                 RecordKey(
                     query_name=record.query_name,
                     duplicate=record.is_duplicate,
+                    duplicate_type=record.get_tag("DT") if record.has_tag("DT") else None,
                     reference_name=handle.get_reference_name(record.reference_id)
                     if record.reference_id >= 0
                     else "*",
@@ -143,6 +146,14 @@ def read_hts_records(path: Path) -> list[RecordKey]:
                 )
             )
     return records
+
+
+def optional_tag(fields: list[str], tag: str) -> str | None:
+    prefix = f"{tag}:Z:"
+    for field in fields:
+        if field.startswith(prefix):
+            return field.removeprefix(prefix)
+    return None
 
 
 def read_metrics(path: Path) -> list[list[str]]:

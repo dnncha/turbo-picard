@@ -302,6 +302,38 @@ fn adds_picard_program_group_header_and_read_tags_by_default() {
 }
 
 #[test]
+fn tags_library_duplicates_when_tagging_policy_is_all() {
+    let tempdir = tempfile::tempdir().expect("tempdir exists");
+    let output = tempdir.path().join("output.bam");
+    let metrics = tempdir.path().join("metrics.txt");
+    let input = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../fixtures/markduplicates/basic/input.bam");
+    let config = MarkDuplicatesConfig {
+        input: input.display().to_string(),
+        output: output.display().to_string(),
+        metrics_file: metrics.display().to_string(),
+        remove_duplicates: false,
+        assume_sorted: true,
+        assume_sort_order: None,
+        validation_stringency: Some("SILENT".to_string()),
+        quiet: true,
+        create_index: false,
+        create_md5_file: false,
+        add_pg_tag_to_reads: true,
+        duplicate_scoring_strategy: None,
+        read_name_regex: Some("null".to_string()),
+        tagging_policy: Some("All".to_string()),
+        clear_dt: true,
+        optical_duplicate_pixel_distance: None,
+    };
+
+    jeanluc_markdup::run(&config).expect("BAM duplicate marking succeeds");
+
+    let duplicate_dt_tags = duplicate_dt_tags(&output);
+    assert_eq!(duplicate_dt_tags, vec![Some("LB".to_string())]);
+}
+
+#[test]
 fn removes_duplicate_pairs_when_requested() {
     let tempdir = tempfile::tempdir().expect("tempdir exists");
     let output = tempdir.path().join("output.bam");
@@ -415,4 +447,22 @@ fn read_has_dt_tags(path: &std::path::Path) -> bool {
     reader
         .records()
         .any(|record| record.expect("record decodes").aux(b"DT").is_ok())
+}
+
+fn duplicate_dt_tags(path: &std::path::Path) -> Vec<Option<String>> {
+    let mut reader = bam::Reader::from_path(path).expect("BAM opens");
+    reader
+        .records()
+        .filter_map(|record| {
+            let record = record.expect("record decodes");
+            if record.flags() & 0x400 == 0 {
+                return None;
+            }
+            let tag = match record.aux(b"DT") {
+                Ok(Aux::String(value)) => Some(value.to_string()),
+                _ => None,
+            };
+            Some(tag)
+        })
+        .collect()
 }
