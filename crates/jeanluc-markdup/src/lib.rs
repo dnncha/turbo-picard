@@ -246,9 +246,12 @@ fn run_bam(config: &MarkDuplicatesConfig) -> Result<MarkDuplicatesSummary, MarkD
     }
 
     {
-        for record in records {
+        for mut record in records {
             if config.remove_duplicates && record.flags() & DUPLICATE_FLAG != 0 {
                 continue;
+            }
+            if config.clear_dt {
+                clear_duplicate_type_tag(&mut record)?;
             }
             writer.write(&record)?;
         }
@@ -268,6 +271,13 @@ fn run_bam(config: &MarkDuplicatesConfig) -> Result<MarkDuplicatesSummary, MarkD
         )?;
     }
     Ok(summary)
+}
+
+fn clear_duplicate_type_tag(record: &mut bam::Record) -> Result<(), MarkDuplicatesError> {
+    if record.aux(b"DT").is_ok() {
+        record.remove_aux(b"DT")?;
+    }
+    Ok(())
 }
 
 fn picard_bai_path(output: &str) -> String {

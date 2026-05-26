@@ -32,12 +32,12 @@ fn markduplicates_rejects_unsupported_option() {
         "I=in.bam",
         "O=out.bam",
         "M=metrics.txt",
-        "OPTICAL_DUPLICATE_PIXEL_DISTANCE=2500",
+        "TAGGING_POLICY=All",
     ])
     .assert()
     .failure()
     .stderr(predicate::str::contains(
-        "unsupported MarkDuplicates argument: OPTICAL_DUPLICATE_PIXEL_DISTANCE",
+        "unsupported MarkDuplicates argument: TAGGING_POLICY=All",
     ));
 }
 

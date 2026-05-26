@@ -101,6 +101,27 @@ fn accepts_explicit_default_duplicate_scoring_strategy() {
 }
 
 #[test]
+fn accepts_common_duplicate_tagging_options() {
+    let args = vec![
+        "I=in.bam".to_string(),
+        "O=out.bam".to_string(),
+        "M=metrics.txt".to_string(),
+        "READ_NAME_REGEX=null".to_string(),
+        "TAGGING_POLICY=DontTag".to_string(),
+        "CLEAR_DT=true".to_string(),
+        "OPTICAL_DUPLICATE_PIXEL_DISTANCE=2500".to_string(),
+    ];
+    let parsed = normalize_picard_args(&args).expect("arguments parse");
+
+    let config = MarkDuplicatesConfig::try_from_args(&parsed).expect("config validates");
+
+    assert_eq!(config.read_name_regex.as_deref(), Some("null"));
+    assert_eq!(config.tagging_policy.as_deref(), Some("DontTag"));
+    assert!(config.clear_dt);
+    assert_eq!(config.optical_duplicate_pixel_distance, Some(2500));
+}
+
+#[test]
 fn rejects_missing_metrics_file() {
     let args = vec!["I=in.bam".to_string(), "O=out.bam".to_string()];
     let parsed = normalize_picard_args(&args).expect("arguments parse");
@@ -158,7 +179,7 @@ fn rejects_unsupported_options() {
         "I=in.bam".to_string(),
         "O=out.bam".to_string(),
         "M=metrics.txt".to_string(),
-        "OPTICAL_DUPLICATE_PIXEL_DISTANCE=2500".to_string(),
+        "TAGGING_POLICY=All".to_string(),
     ];
     let parsed = normalize_picard_args(&args).expect("arguments parse");
 
@@ -166,8 +187,6 @@ fn rejects_unsupported_options() {
 
     assert_eq!(
         err,
-        MarkDuplicatesConfigError::UnsupportedOption(
-            "OPTICAL_DUPLICATE_PIXEL_DISTANCE".to_string()
-        )
+        MarkDuplicatesConfigError::UnsupportedOption("TAGGING_POLICY=All".to_string())
     );
 }

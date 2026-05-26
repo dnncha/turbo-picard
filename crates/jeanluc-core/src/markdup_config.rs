@@ -13,6 +13,10 @@ pub struct MarkDuplicatesConfig {
     pub create_index: bool,
     pub create_md5_file: bool,
     pub duplicate_scoring_strategy: Option<String>,
+    pub read_name_regex: Option<String>,
+    pub tagging_policy: Option<String>,
+    pub clear_dt: bool,
+    pub optical_duplicate_pixel_distance: Option<u32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -64,6 +68,13 @@ impl MarkDuplicatesConfig {
             create_index: optional_bool(args, "CREATE_INDEX")?.unwrap_or(false),
             create_md5_file: optional_bool(args, "CREATE_MD5_FILE")?.unwrap_or(false),
             duplicate_scoring_strategy: optional_duplicate_scoring_strategy(args)?,
+            read_name_regex: optional_read_name_regex(args)?,
+            tagging_policy: optional_tagging_policy(args)?,
+            clear_dt: optional_bool(args, "CLEAR_DT")?.unwrap_or(true),
+            optical_duplicate_pixel_distance: optional_u32(
+                args,
+                "OPTICAL_DUPLICATE_PIXEL_DISTANCE",
+            )?,
         })
     }
 }
@@ -82,6 +93,10 @@ fn reject_unsupported(
         "CREATE_INDEX",
         "CREATE_MD5_FILE",
         "DUPLICATE_SCORING_STRATEGY",
+        "READ_NAME_REGEX",
+        "TAGGING_POLICY",
+        "CLEAR_DT",
+        "OPTICAL_DUPLICATE_PIXEL_DISTANCE",
     ]);
 
     for key in args.keys() {
@@ -148,6 +163,52 @@ fn optional_duplicate_scoring_strategy(
             "DUPLICATE_SCORING_STRATEGY={strategy}"
         )))
     }
+}
+
+fn optional_read_name_regex(
+    args: &BTreeMap<String, Vec<String>>,
+) -> Result<Option<String>, MarkDuplicatesConfigError> {
+    let Some(value) = optional_scalar(args, "READ_NAME_REGEX")? else {
+        return Ok(None);
+    };
+
+    if value == "null" {
+        Ok(Some(value))
+    } else {
+        Err(MarkDuplicatesConfigError::UnsupportedOption(format!(
+            "READ_NAME_REGEX={value}"
+        )))
+    }
+}
+
+fn optional_tagging_policy(
+    args: &BTreeMap<String, Vec<String>>,
+) -> Result<Option<String>, MarkDuplicatesConfigError> {
+    let Some(value) = optional_scalar(args, "TAGGING_POLICY")? else {
+        return Ok(None);
+    };
+
+    if value == "DontTag" {
+        Ok(Some(value))
+    } else {
+        Err(MarkDuplicatesConfigError::UnsupportedOption(format!(
+            "TAGGING_POLICY={value}"
+        )))
+    }
+}
+
+fn optional_u32(
+    args: &BTreeMap<String, Vec<String>>,
+    key: &str,
+) -> Result<Option<u32>, MarkDuplicatesConfigError> {
+    let Some(value) = optional_scalar(args, key)? else {
+        return Ok(None);
+    };
+
+    value
+        .parse::<u32>()
+        .map(Some)
+        .map_err(|_| MarkDuplicatesConfigError::UnsupportedOption(format!("{key}={value}")))
 }
 
 fn scalar_value(values: &[String], key: &str) -> Result<String, MarkDuplicatesConfigError> {
