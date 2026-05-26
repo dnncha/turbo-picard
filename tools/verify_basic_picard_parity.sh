@@ -6,7 +6,7 @@ conda_prefix="${JEANLUC_CONDA_PREFIX:-$repo_root/.conda-jeanluc}"
 workdir="$(mktemp -d)"
 trap 'rm -rf "$workdir"' EXIT
 
-for fixture in basic paired scoring softclip secondary pair-score-tie clear-dt tagging-all duplicate-set-members barcode-tag read-barcode-tags optical multi-input multi-library multi-input-libraries; do
+for fixture in basic paired scoring softclip secondary pair-score-tie clear-dt tagging-all duplicate-set-members barcode-tag read-barcode-tags optical multi-input multi-library multi-input-libraries remove-sequencing-duplicates; do
   fixture_dir="$repo_root/fixtures/markduplicates/$fixture"
   fixture_workdir="$workdir/$fixture"
   tagging_policy="DontTag"
@@ -16,6 +16,7 @@ for fixture in basic paired scoring softclip secondary pair-score-tie clear-dt t
   read_two_barcode_tag=""
   read_name_regex="null"
   optical_duplicate_pixel_distance=""
+  remove_sequencing_duplicates="false"
   if [[ "$fixture" == "tagging-all" ]]; then
     tagging_policy="All"
   fi
@@ -34,6 +35,12 @@ for fixture in basic paired scoring softclip secondary pair-score-tie clear-dt t
     read_name_regex=""
     optical_duplicate_pixel_distance="100"
   fi
+  if [[ "$fixture" == "remove-sequencing-duplicates" ]]; then
+    tagging_policy="All"
+    read_name_regex=""
+    optical_duplicate_pixel_distance="100"
+    remove_sequencing_duplicates="true"
+  fi
   mkdir -p "$fixture_workdir"
 
   command=(cargo run -q -p jeanluc-cli --bin picard -- \
@@ -50,6 +57,7 @@ for fixture in basic paired scoring softclip secondary pair-score-tie clear-dt t
     VALIDATION_STRINGENCY=SILENT \
     QUIET=true \
     CLEAR_DT=true \
+    "REMOVE_SEQUENCING_DUPLICATES=$remove_sequencing_duplicates" \
     "TAGGING_POLICY=$tagging_policy" \
     "TAG_DUPLICATE_SET_MEMBERS=$tag_duplicate_set_members")
   if [[ -n "$read_name_regex" ]]; then

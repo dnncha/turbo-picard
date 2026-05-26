@@ -15,6 +15,7 @@ fn marks_duplicate_records_in_bam() {
         output: output.display().to_string(),
         metrics_file: metrics.display().to_string(),
         remove_duplicates: false,
+        remove_sequencing_duplicates: false,
         assume_sorted: true,
         assume_sort_order: None,
         validation_stringency: Some("SILENT".to_string()),
@@ -52,6 +53,7 @@ fn marks_duplicate_pairs_and_reports_paired_metrics() {
         output: output.display().to_string(),
         metrics_file: metrics.display().to_string(),
         remove_duplicates: false,
+        remove_sequencing_duplicates: false,
         assume_sorted: true,
         assume_sort_order: None,
         validation_stringency: Some("SILENT".to_string()),
@@ -92,6 +94,7 @@ fn keeps_highest_quality_duplicate_representative() {
         output: output.display().to_string(),
         metrics_file: metrics.display().to_string(),
         remove_duplicates: false,
+        remove_sequencing_duplicates: false,
         assume_sorted: true,
         assume_sort_order: None,
         validation_stringency: Some("SILENT".to_string()),
@@ -129,6 +132,7 @@ fn groups_duplicates_by_unclipped_five_prime_position() {
         output: output.display().to_string(),
         metrics_file: metrics.display().to_string(),
         remove_duplicates: false,
+        remove_sequencing_duplicates: false,
         assume_sorted: true,
         assume_sort_order: None,
         validation_stringency: Some("SILENT".to_string()),
@@ -166,6 +170,7 @@ fn excludes_secondary_alignments_from_duplicate_testing() {
         output: output.display().to_string(),
         metrics_file: metrics.display().to_string(),
         remove_duplicates: false,
+        remove_sequencing_duplicates: false,
         assume_sorted: true,
         assume_sort_order: None,
         validation_stringency: Some("SILENT".to_string()),
@@ -206,6 +211,7 @@ fn chooses_duplicate_representative_per_pair_not_per_mate() {
         output: output.display().to_string(),
         metrics_file: metrics.display().to_string(),
         remove_duplicates: false,
+        remove_sequencing_duplicates: false,
         assume_sorted: true,
         assume_sort_order: None,
         validation_stringency: Some("SILENT".to_string()),
@@ -243,6 +249,7 @@ fn creates_bam_index_when_requested() {
         output: output.display().to_string(),
         metrics_file: metrics.display().to_string(),
         remove_duplicates: false,
+        remove_sequencing_duplicates: false,
         assume_sorted: true,
         assume_sort_order: None,
         validation_stringency: Some("SILENT".to_string()),
@@ -279,6 +286,7 @@ fn creates_md5_sidecar_when_requested() {
         output: output.display().to_string(),
         metrics_file: metrics.display().to_string(),
         remove_duplicates: false,
+        remove_sequencing_duplicates: false,
         assume_sorted: true,
         assume_sort_order: None,
         validation_stringency: Some("SILENT".to_string()),
@@ -317,6 +325,7 @@ fn adds_picard_program_group_header_and_read_tags_by_default() {
         output: output.display().to_string(),
         metrics_file: metrics.display().to_string(),
         remove_duplicates: false,
+        remove_sequencing_duplicates: false,
         assume_sorted: true,
         assume_sort_order: None,
         validation_stringency: Some("SILENT".to_string()),
@@ -359,6 +368,7 @@ fn tags_library_duplicates_when_tagging_policy_is_all() {
         output: output.display().to_string(),
         metrics_file: metrics.display().to_string(),
         remove_duplicates: false,
+        remove_sequencing_duplicates: false,
         assume_sorted: true,
         assume_sort_order: None,
         validation_stringency: Some("SILENT".to_string()),
@@ -396,6 +406,7 @@ fn tags_duplicate_set_members_when_requested() {
         output: output.display().to_string(),
         metrics_file: metrics.display().to_string(),
         remove_duplicates: false,
+        remove_sequencing_duplicates: false,
         assume_sorted: true,
         assume_sort_order: None,
         validation_stringency: Some("SILENT".to_string()),
@@ -442,6 +453,7 @@ fn separates_duplicate_groups_by_barcode_tag() {
         output: output.display().to_string(),
         metrics_file: metrics.display().to_string(),
         remove_duplicates: false,
+        remove_sequencing_duplicates: false,
         assume_sorted: true,
         assume_sort_order: None,
         validation_stringency: Some("SILENT".to_string()),
@@ -478,6 +490,7 @@ fn separates_duplicate_groups_by_read_one_and_read_two_barcode_tags() {
         output: output.display().to_string(),
         metrics_file: metrics.display().to_string(),
         remove_duplicates: false,
+        remove_sequencing_duplicates: false,
         assume_sorted: true,
         assume_sort_order: None,
         validation_stringency: Some("SILENT".to_string()),
@@ -514,6 +527,7 @@ fn tags_optical_duplicate_pairs_and_reports_metrics() {
         output: output.display().to_string(),
         metrics_file: metrics.display().to_string(),
         remove_duplicates: false,
+        remove_sequencing_duplicates: false,
         assume_sorted: true,
         assume_sort_order: None,
         validation_stringency: Some("SILENT".to_string()),
@@ -543,6 +557,49 @@ fn tags_optical_duplicate_pairs_and_reports_metrics() {
 }
 
 #[test]
+fn removes_only_optical_duplicates_when_requested() {
+    let tempdir = tempfile::tempdir().expect("tempdir exists");
+    let output = tempdir.path().join("output.bam");
+    let metrics = tempdir.path().join("metrics.txt");
+    let input = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../fixtures/markduplicates/remove-sequencing-duplicates/input.bam");
+    let config = MarkDuplicatesConfig {
+        input: input.display().to_string(),
+        inputs: vec![input.display().to_string()],
+        output: output.display().to_string(),
+        metrics_file: metrics.display().to_string(),
+        remove_duplicates: false,
+        remove_sequencing_duplicates: true,
+        assume_sorted: true,
+        assume_sort_order: None,
+        validation_stringency: Some("SILENT".to_string()),
+        quiet: true,
+        create_index: false,
+        create_md5_file: false,
+        add_pg_tag_to_reads: true,
+        tag_duplicate_set_members: false,
+        duplicate_scoring_strategy: None,
+        read_name_regex: None,
+        tagging_policy: Some("All".to_string()),
+        barcode_tag: None,
+        read_one_barcode_tag: None,
+        read_two_barcode_tag: None,
+        clear_dt: true,
+        optical_duplicate_pixel_distance: Some(100),
+    };
+
+    jeanluc_markdup::run(&config).expect("BAM duplicate marking succeeds");
+
+    assert_eq!(read_flags(&output), vec![99, 1123, 147, 1171]);
+    assert_eq!(
+        duplicate_dt_tags(&output),
+        vec![Some("LB".to_string()), Some("LB".to_string())]
+    );
+    let metrics_text = std::fs::read_to_string(&metrics).expect("metrics file exists");
+    assert!(metrics_text.contains("lib1\t0\t3\t0\t0\t0\t2\t1\t0.666667\t1\n"));
+}
+
+#[test]
 fn removes_duplicate_pairs_when_requested() {
     let tempdir = tempfile::tempdir().expect("tempdir exists");
     let output = tempdir.path().join("output.bam");
@@ -555,6 +612,7 @@ fn removes_duplicate_pairs_when_requested() {
         output: output.display().to_string(),
         metrics_file: metrics.display().to_string(),
         remove_duplicates: true,
+        remove_sequencing_duplicates: false,
         assume_sorted: true,
         assume_sort_order: None,
         validation_stringency: Some("SILENT".to_string()),
@@ -592,6 +650,7 @@ fn clears_existing_duplicate_type_tags_when_requested() {
         output: output.display().to_string(),
         metrics_file: metrics.display().to_string(),
         remove_duplicates: false,
+        remove_sequencing_duplicates: false,
         assume_sorted: true,
         assume_sort_order: None,
         validation_stringency: Some("SILENT".to_string()),
@@ -628,6 +687,7 @@ fn preserves_existing_duplicate_type_tags_when_clear_dt_is_false() {
         output: output.display().to_string(),
         metrics_file: metrics.display().to_string(),
         remove_duplicates: false,
+        remove_sequencing_duplicates: false,
         assume_sorted: true,
         assume_sort_order: None,
         validation_stringency: Some("SILENT".to_string()),
@@ -666,6 +726,7 @@ fn marks_duplicate_pairs_across_multiple_bam_inputs() {
         output: output.display().to_string(),
         metrics_file: metrics.display().to_string(),
         remove_duplicates: false,
+        remove_sequencing_duplicates: false,
         assume_sorted: true,
         assume_sort_order: None,
         validation_stringency: Some("SILENT".to_string()),
@@ -704,6 +765,7 @@ fn keeps_duplicate_positions_separate_by_library() {
         output: output.display().to_string(),
         metrics_file: metrics.display().to_string(),
         remove_duplicates: false,
+        remove_sequencing_duplicates: false,
         assume_sorted: true,
         assume_sort_order: None,
         validation_stringency: Some("SILENT".to_string()),
@@ -745,6 +807,7 @@ fn preserves_libraries_from_later_bam_inputs() {
         output: output.display().to_string(),
         metrics_file: metrics.display().to_string(),
         remove_duplicates: false,
+        remove_sequencing_duplicates: false,
         assume_sorted: true,
         assume_sort_order: None,
         validation_stringency: Some("SILENT".to_string()),

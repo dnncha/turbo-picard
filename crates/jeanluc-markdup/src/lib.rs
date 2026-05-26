@@ -316,7 +316,11 @@ fn run_bam(config: &MarkDuplicatesConfig) -> Result<MarkDuplicatesSummary, MarkD
             records.sort_by(|left, right| bam_output_order(left).cmp(&bam_output_order(right)));
         }
         for mut record in records {
-            if config.remove_duplicates && record.flags() & DUPLICATE_FLAG != 0 {
+            let is_duplicate = record.flags() & DUPLICATE_FLAG != 0;
+            let is_optical_duplicate = optical_duplicate_name_set.contains(record.qname());
+            if (config.remove_duplicates && is_duplicate)
+                || (config.remove_sequencing_duplicates && is_optical_duplicate)
+            {
                 continue;
             }
             if config.clear_dt {
@@ -971,6 +975,11 @@ fn metrics_row(summary: &MarkDuplicatesSummary) -> String {
     let estimated_library_size =
         if summary.read_pair_duplicates() > 0 && summary.read_pair_optical_duplicates == 0 {
             summary.read_pairs_examined.to_string()
+        } else if summary.read_pair_duplicates() > summary.read_pair_optical_duplicates {
+            summary
+                .read_pairs_examined
+                .saturating_sub(summary.read_pair_duplicates())
+                .to_string()
         } else {
             String::new()
         };

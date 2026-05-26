@@ -8,6 +8,7 @@ pub struct MarkDuplicatesConfig {
     pub output: String,
     pub metrics_file: String,
     pub remove_duplicates: bool,
+    pub remove_sequencing_duplicates: bool,
     pub assume_sorted: bool,
     pub assume_sort_order: Option<String>,
     pub validation_stringency: Option<String>,
@@ -72,6 +73,8 @@ impl MarkDuplicatesConfig {
             output: required_scalar(args, "OUTPUT")?,
             metrics_file: required_scalar(args, "METRICS_FILE")?,
             remove_duplicates: optional_bool(args, "REMOVE_DUPLICATES")?.unwrap_or(false),
+            remove_sequencing_duplicates: optional_bool(args, "REMOVE_SEQUENCING_DUPLICATES")?
+                .unwrap_or(false),
             assume_sorted: optional_bool(args, "ASSUME_SORTED")?.unwrap_or(false),
             assume_sort_order: optional_assume_sort_order(args)?,
             validation_stringency: optional_scalar(args, "VALIDATION_STRINGENCY")?,
@@ -150,7 +153,6 @@ fn reject_unsupported(
 fn validate_passthrough_options(
     args: &BTreeMap<String, Vec<String>>,
 ) -> Result<(), MarkDuplicatesConfigError> {
-    optional_false_bool(args, "REMOVE_SEQUENCING_DUPLICATES")?;
     optional_bool(args, "USE_JDK_INFLATER")?;
     optional_bool(args, "USE_JDK_DEFLATER")?;
     optional_u32(args, "MAX_RECORDS_IN_RAM")?;
@@ -206,20 +208,6 @@ fn optional_bool(
             key: key.to_string(),
             value,
         }),
-    }
-}
-
-fn optional_false_bool(
-    args: &BTreeMap<String, Vec<String>>,
-    key: &str,
-) -> Result<Option<bool>, MarkDuplicatesConfigError> {
-    let value = optional_bool(args, key)?;
-    if value == Some(true) {
-        Err(MarkDuplicatesConfigError::UnsupportedOption(format!(
-            "{key}=true"
-        )))
-    } else {
-        Ok(value)
     }
 }
 

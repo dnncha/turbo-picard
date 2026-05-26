@@ -35,6 +35,21 @@ fn parses_remove_duplicates_boolean() {
 }
 
 #[test]
+fn parses_remove_sequencing_duplicates_boolean() {
+    let args = vec![
+        "I=in.bam".to_string(),
+        "O=out.bam".to_string(),
+        "M=metrics.txt".to_string(),
+        "REMOVE_SEQUENCING_DUPLICATES=true".to_string(),
+    ];
+    let parsed = normalize_picard_args(&args).expect("arguments parse");
+
+    let config = MarkDuplicatesConfig::try_from_args(&parsed).expect("config validates");
+
+    assert!(config.remove_sequencing_duplicates);
+}
+
+#[test]
 fn accepts_common_picard_runtime_options() {
     let args = vec![
         "I=in.bam".to_string(),
