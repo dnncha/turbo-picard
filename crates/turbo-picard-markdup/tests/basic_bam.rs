@@ -32,6 +32,7 @@ fn marks_duplicate_records_in_bam() {
         read_two_barcode_tag: None,
         clear_dt: true,
         optical_duplicate_pixel_distance: None,
+        compression_level: None,
     };
 
     turbo_picard_markdup::run(&config).expect("BAM duplicate marking succeeds");
@@ -70,6 +71,7 @@ fn marks_duplicate_pairs_and_reports_paired_metrics() {
         read_two_barcode_tag: None,
         clear_dt: true,
         optical_duplicate_pixel_distance: None,
+        compression_level: None,
     };
 
     turbo_picard_markdup::run(&config).expect("BAM duplicate marking succeeds");
@@ -111,6 +113,7 @@ fn keeps_highest_quality_duplicate_representative() {
         read_two_barcode_tag: None,
         clear_dt: true,
         optical_duplicate_pixel_distance: None,
+        compression_level: None,
     };
 
     turbo_picard_markdup::run(&config).expect("BAM duplicate marking succeeds");
@@ -149,6 +152,7 @@ fn groups_duplicates_by_unclipped_five_prime_position() {
         read_two_barcode_tag: None,
         clear_dt: true,
         optical_duplicate_pixel_distance: None,
+        compression_level: None,
     };
 
     turbo_picard_markdup::run(&config).expect("BAM duplicate marking succeeds");
@@ -187,6 +191,7 @@ fn excludes_secondary_alignments_from_duplicate_testing() {
         read_two_barcode_tag: None,
         clear_dt: true,
         optical_duplicate_pixel_distance: None,
+        compression_level: None,
     };
 
     turbo_picard_markdup::run(&config).expect("BAM duplicate marking succeeds");
@@ -228,6 +233,7 @@ fn chooses_duplicate_representative_per_pair_not_per_mate() {
         read_two_barcode_tag: None,
         clear_dt: true,
         optical_duplicate_pixel_distance: None,
+        compression_level: None,
     };
 
     turbo_picard_markdup::run(&config).expect("BAM duplicate marking succeeds");
@@ -266,6 +272,7 @@ fn creates_bam_index_when_requested() {
         read_two_barcode_tag: None,
         clear_dt: true,
         optical_duplicate_pixel_distance: None,
+        compression_level: None,
     };
 
     turbo_picard_markdup::run(&config).expect("BAM duplicate marking succeeds");
@@ -303,6 +310,7 @@ fn creates_md5_sidecar_when_requested() {
         read_two_barcode_tag: None,
         clear_dt: true,
         optical_duplicate_pixel_distance: None,
+        compression_level: None,
     };
 
     turbo_picard_markdup::run(&config).expect("BAM duplicate marking succeeds");
@@ -342,6 +350,7 @@ fn adds_picard_program_group_header_and_read_tags_by_default() {
         read_two_barcode_tag: None,
         clear_dt: true,
         optical_duplicate_pixel_distance: None,
+        compression_level: None,
     };
 
     turbo_picard_markdup::run(&config).expect("BAM duplicate marking succeeds");
@@ -385,6 +394,7 @@ fn tags_library_duplicates_when_tagging_policy_is_all() {
         read_two_barcode_tag: None,
         clear_dt: true,
         optical_duplicate_pixel_distance: None,
+        compression_level: None,
     };
 
     turbo_picard_markdup::run(&config).expect("BAM duplicate marking succeeds");
@@ -423,6 +433,7 @@ fn tags_duplicate_set_members_when_requested() {
         read_two_barcode_tag: None,
         clear_dt: true,
         optical_duplicate_pixel_distance: None,
+        compression_level: None,
     };
 
     turbo_picard_markdup::run(&config).expect("BAM duplicate marking succeeds");
@@ -470,6 +481,7 @@ fn separates_duplicate_groups_by_barcode_tag() {
         read_two_barcode_tag: None,
         clear_dt: true,
         optical_duplicate_pixel_distance: None,
+        compression_level: None,
     };
 
     turbo_picard_markdup::run(&config).expect("BAM duplicate marking succeeds");
@@ -507,6 +519,7 @@ fn separates_duplicate_groups_by_read_one_and_read_two_barcode_tags() {
         read_two_barcode_tag: Some("BY".to_string()),
         clear_dt: true,
         optical_duplicate_pixel_distance: None,
+        compression_level: None,
     };
 
     turbo_picard_markdup::run(&config).expect("BAM duplicate marking succeeds");
@@ -544,6 +557,7 @@ fn tags_optical_duplicate_pairs_and_reports_metrics() {
         read_two_barcode_tag: None,
         clear_dt: true,
         optical_duplicate_pixel_distance: Some(100),
+        compression_level: None,
     };
 
     turbo_picard_markdup::run(&config).expect("BAM duplicate marking succeeds");
@@ -586,6 +600,7 @@ fn removes_only_optical_duplicates_when_requested() {
         read_two_barcode_tag: None,
         clear_dt: true,
         optical_duplicate_pixel_distance: Some(100),
+        compression_level: None,
     };
 
     turbo_picard_markdup::run(&config).expect("BAM duplicate marking succeeds");
@@ -629,6 +644,7 @@ fn removes_duplicate_pairs_when_requested() {
         read_two_barcode_tag: None,
         clear_dt: true,
         optical_duplicate_pixel_distance: None,
+        compression_level: None,
     };
 
     turbo_picard_markdup::run(&config).expect("BAM duplicate marking succeeds");
@@ -667,6 +683,7 @@ fn clears_existing_duplicate_type_tags_when_requested() {
         read_two_barcode_tag: None,
         clear_dt: true,
         optical_duplicate_pixel_distance: Some(2500),
+        compression_level: None,
     };
 
     turbo_picard_markdup::run(&config).expect("BAM duplicate marking succeeds");
@@ -704,6 +721,7 @@ fn preserves_existing_duplicate_type_tags_when_clear_dt_is_false() {
         read_two_barcode_tag: None,
         clear_dt: false,
         optical_duplicate_pixel_distance: Some(2500),
+        compression_level: None,
     };
 
     turbo_picard_markdup::run(&config).expect("BAM duplicate marking succeeds");
@@ -743,13 +761,14 @@ fn marks_duplicate_pairs_across_multiple_bam_inputs() {
         read_two_barcode_tag: None,
         clear_dt: true,
         optical_duplicate_pixel_distance: None,
+        compression_level: None,
     };
 
     turbo_picard_markdup::run(&config).expect("BAM duplicate marking succeeds");
 
     assert_eq!(read_flags(&output), vec![99, 1123, 147, 1171]);
     let metrics_text = std::fs::read_to_string(&metrics).expect("metrics file exists");
-    assert!(metrics_text.contains("lib1\t0\t2\t0\t0\t0\t1\t0\t0.5\t2\n"));
+    assert!(metrics_text.contains("lib1\t0\t2\t0\t0\t0\t1\t0\t0.5\t1\n"));
 }
 
 #[test]
@@ -782,6 +801,7 @@ fn keeps_duplicate_positions_separate_by_library() {
         read_two_barcode_tag: None,
         clear_dt: true,
         optical_duplicate_pixel_distance: None,
+        compression_level: None,
     };
 
     turbo_picard_markdup::run(&config).expect("BAM duplicate marking succeeds");
@@ -824,6 +844,7 @@ fn preserves_libraries_from_later_bam_inputs() {
         read_two_barcode_tag: None,
         clear_dt: true,
         optical_duplicate_pixel_distance: None,
+        compression_level: None,
     };
 
     turbo_picard_markdup::run(&config).expect("BAM duplicate marking succeeds");

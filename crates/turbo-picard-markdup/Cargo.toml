@@ -7,6 +7,7 @@ edition = "2024"
 turbo-picard-core = { path = "../turbo-picard-core" }
 md5 = "0.8.0"
 rust-htslib = "1.0.0"
+rustc-hash = "1.1.0"
 
 [dev-dependencies]
 tempfile = "3.23.0"

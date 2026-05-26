@@ -185,12 +185,12 @@ def read_metrics(path: Path) -> list[list[str]]:
     with path.open("r", encoding="utf-8") as handle:
         for raw_line in handle:
             line = raw_line.strip()
+            if line.startswith("## METRICS CLASS"):
+                in_duplication_metrics = "picard.sam.DuplicationMetrics" in line
+                continue
             if not line or line.startswith("#"):
                 if in_duplication_metrics and rows:
                     break
-                continue
-            if line.startswith("## METRICS CLASS"):
-                in_duplication_metrics = "picard.sam.DuplicationMetrics" in line
                 continue
             if line.startswith("## "):
                 if in_duplication_metrics and rows:

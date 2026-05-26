@@ -197,6 +197,7 @@ fn accepts_common_workflow_passthrough_options_when_semantically_default() {
     let config = MarkDuplicatesConfig::try_from_args(&parsed).expect("config validates");
 
     assert_eq!(config.assume_sort_order.as_deref(), Some("coordinate"));
+    assert_eq!(config.compression_level, Some(1));
 }
 
 #[test]

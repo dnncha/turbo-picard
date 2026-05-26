@@ -25,6 +25,7 @@ pub struct MarkDuplicatesConfig {
     pub read_two_barcode_tag: Option<String>,
     pub clear_dt: bool,
     pub optical_duplicate_pixel_distance: Option<u32>,
+    pub compression_level: Option<u32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -95,6 +96,7 @@ impl MarkDuplicatesConfig {
                 args,
                 "OPTICAL_DUPLICATE_PIXEL_DISTANCE",
             )?,
+            compression_level: optional_u32(args, "COMPRESSION_LEVEL")?,
         })
     }
 }
@@ -158,7 +160,6 @@ fn validate_passthrough_options(
     optional_u32(args, "MAX_RECORDS_IN_RAM")?;
     optional_u32(args, "MAX_FILE_HANDLES_FOR_READ_ENDS_MAP")?;
     optional_u32(args, "MAX_SEQUENCES_FOR_DISK_READ_ENDS_MAP")?;
-    optional_u32(args, "COMPRESSION_LEVEL")?;
     optional_f64(args, "SORTING_COLLECTION_SIZE_RATIO")?;
     optional_scalar(args, "VERBOSITY")?;
     optional_scalar(args, "PROGRAM_RECORD_ID")?;

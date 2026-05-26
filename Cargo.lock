@@ -1046,6 +1046,7 @@ version = "0.1.0"
 dependencies = [
  "md5",
  "rust-htslib",
+ "rustc-hash",
  "tempfile",
  "turbo-picard-core",
 ]
