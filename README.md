@@ -120,12 +120,12 @@ Implemented options include:
 - `TMP_DIR`
 - `MAX_RECORDS_IN_RAM`
 - `COMPRESSION_LEVEL`
+- `CREATE_INDEX`
+- `CREATE_MD5_FILE`
 
 Accepted compatibility options that are validated or ignored when they do not
 change the current native implementation:
 
-- `CREATE_INDEX`
-- `CREATE_MD5_FILE`
 - `VERBOSITY`
 
 ## Runtime Knobs

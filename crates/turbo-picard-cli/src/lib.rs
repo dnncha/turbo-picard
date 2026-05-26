@@ -1,8 +1,10 @@
 #![forbid(unsafe_code)]
 
 use rust_htslib::bam::header::HeaderRecord;
+use rust_htslib::bam::index;
 use rust_htslib::bam::{self, Read};
 use std::cmp::Ordering;
+use std::fs;
 use std::path::Path;
 use std::process::Command;
 use turbo_picard_core::markdup_config::MarkDuplicatesConfig;
@@ -141,15 +143,23 @@ fn run_sortsam(args: &[String]) -> Result<(), String> {
     let input = required_scalar(&args, "INPUT")?;
     let output = required_scalar(&args, "OUTPUT")?;
     let compression_level = optional_u32(&args, "COMPRESSION_LEVEL")?;
+    let create_index = optional_bool(&args, "CREATE_INDEX")?.unwrap_or(false);
+    let create_md5_file = optional_bool(&args, "CREATE_MD5_FILE")?.unwrap_or(false);
     let sort_order = match required_scalar(&args, "SORT_ORDER")?.as_str() {
         "coordinate" => SortOrder::Coordinate,
         "queryname" => SortOrder::QueryName,
         value => return Err(format!("unsupported SortSam SORT_ORDER: {value}")),
     };
+    if create_index && sort_order != SortOrder::Coordinate {
+        return Err("SortSam CREATE_INDEX=true requires SORT_ORDER=coordinate".to_string());
+    }
 
     let mut reader = bam::Reader::from_path(&input).map_err(|error| error.to_string())?;
     let header = sorted_header(reader.header(), sort_order);
     let format = output_format(&output)?;
+    if create_index && format != bam::Format::Bam {
+        return Err("SortSam CREATE_INDEX=true requires BAM output".to_string());
+    }
     let mut records = reader
         .records()
         .collect::<Result<Vec<_>, _>>()
@@ -169,6 +179,20 @@ fn run_sortsam(args: &[String]) -> Result<(), String> {
     }
     for record in records {
         writer.write(&record).map_err(|error| error.to_string())?;
+    }
+    drop(writer);
+
+    if create_md5_file {
+        write_md5_sidecar(&output)?;
+    }
+    if create_index {
+        index::build(
+            &output,
+            Some(&picard_bai_path(&output)),
+            index::Type::Bai,
+            1,
+        )
+        .map_err(|error| error.to_string())?;
     }
 
     Ok(())
@@ -355,6 +379,19 @@ fn compare_queryname(left: &bam::Record, right: &bam::Record) -> Ordering {
     left.qname()
         .cmp(right.qname())
         .then_with(|| compare_coordinate(left, right))
+}
+
+fn picard_bai_path(output: &str) -> String {
+    Path::new(output)
+        .with_extension("bai")
+        .display()
+        .to_string()
+}
+
+fn write_md5_sidecar(output: &str) -> Result<(), String> {
+    let bytes = fs::read(output).map_err(|error| error.to_string())?;
+    let digest = md5::compute(bytes);
+    fs::write(format!("{output}.md5"), format!("{digest:x}")).map_err(|error| error.to_string())
 }
 
 fn try_run_fallback(args: &[String]) -> Option<i32> {

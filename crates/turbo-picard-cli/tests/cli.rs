@@ -239,6 +239,39 @@ fn sortsam_sorts_sam_by_queryname() {
 }
 
 #[test]
+fn sortsam_writes_requested_bam_sidecars() {
+    let tempdir = tempfile::tempdir().expect("tempdir exists");
+    let input = tempdir.path().join("input.sam");
+    let output = tempdir.path().join("coordinate.bam");
+    fs::write(
+        &input,
+        concat!(
+            "@HD\tVN:1.6\tSO:unsorted\n",
+            "@SQ\tSN:chr1\tLN:1000\n",
+            "read-c\t0\tchr1\t90\t60\t10M\t*\t0\t0\tCCCCCCCCCC\tFFFFFFFFFF\n",
+            "read-a\t0\tchr1\t10\t60\t10M\t*\t0\t0\tAAAAAAAAAA\tFFFFFFFFFF\n",
+        ),
+    )
+    .expect("input fixture is written");
+
+    let mut cmd = Command::cargo_bin("picard").expect("binary exists");
+    cmd.args([
+        "SortSam",
+        &format!("I={}", input.display()),
+        &format!("O={}", output.display()),
+        "SORT_ORDER=coordinate",
+        "CREATE_MD5_FILE=true",
+        "CREATE_INDEX=true",
+    ])
+    .assert()
+    .success();
+
+    assert!(output.exists());
+    assert!(tempdir.path().join("coordinate.bam.md5").exists());
+    assert!(tempdir.path().join("coordinate.bai").exists());
+}
+
+#[test]
 fn picard_binary_dispatches_markduplicates() {
     let tempdir = tempfile::tempdir().expect("tempdir exists");
     let input = tempdir.path().join("input.sam");
