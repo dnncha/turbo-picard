@@ -53,6 +53,21 @@ fn accepts_common_picard_runtime_options() {
 }
 
 #[test]
+fn parses_create_index_boolean() {
+    let args = vec![
+        "I=in.bam".to_string(),
+        "O=out.bam".to_string(),
+        "M=metrics.txt".to_string(),
+        "CREATE_INDEX=true".to_string(),
+    ];
+    let parsed = normalize_picard_args(&args).expect("arguments parse");
+
+    let config = MarkDuplicatesConfig::try_from_args(&parsed).expect("config validates");
+
+    assert!(config.create_index);
+}
+
+#[test]
 fn rejects_missing_metrics_file() {
     let args = vec!["I=in.bam".to_string(), "O=out.bam".to_string()];
     let parsed = normalize_picard_args(&args).expect("arguments parse");

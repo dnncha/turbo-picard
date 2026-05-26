@@ -1,7 +1,7 @@
 #![forbid(unsafe_code)]
 
 use jeanluc_core::markdup_config::MarkDuplicatesConfig;
-use rust_htslib::bam::{self, Read};
+use rust_htslib::bam::{self, Read, index};
 use std::collections::HashMap;
 use std::fmt;
 use std::fs;
@@ -245,15 +245,33 @@ fn run_bam(config: &MarkDuplicatesConfig) -> Result<MarkDuplicatesSummary, MarkD
         }
     }
 
-    for record in records {
-        if config.remove_duplicates && record.flags() & DUPLICATE_FLAG != 0 {
-            continue;
+    {
+        for record in records {
+            if config.remove_duplicates && record.flags() & DUPLICATE_FLAG != 0 {
+                continue;
+            }
+            writer.write(&record)?;
         }
-        writer.write(&record)?;
     }
+    drop(writer);
 
     fs::write(&config.metrics_file, metrics_text(&summary))?;
+    if config.create_index {
+        index::build(
+            &config.output,
+            Some(&picard_bai_path(&config.output)),
+            index::Type::Bai,
+            1,
+        )?;
+    }
     Ok(summary)
+}
+
+fn picard_bai_path(output: &str) -> String {
+    Path::new(output)
+        .with_extension("bai")
+        .display()
+        .to_string()
 }
 
 fn duplicate_key(fields: &[String], flag: u16) -> DuplicateKey {

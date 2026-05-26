@@ -16,6 +16,7 @@ fn marks_duplicate_records_in_bam() {
         assume_sorted: true,
         validation_stringency: Some("SILENT".to_string()),
         quiet: true,
+        create_index: false,
     };
 
     jeanluc_markdup::run(&config).expect("BAM duplicate marking succeeds");
@@ -39,6 +40,7 @@ fn marks_duplicate_pairs_and_reports_paired_metrics() {
         assume_sorted: true,
         validation_stringency: Some("SILENT".to_string()),
         quiet: true,
+        create_index: false,
     };
 
     jeanluc_markdup::run(&config).expect("BAM duplicate marking succeeds");
@@ -65,6 +67,7 @@ fn keeps_highest_quality_duplicate_representative() {
         assume_sorted: true,
         validation_stringency: Some("SILENT".to_string()),
         quiet: true,
+        create_index: false,
     };
 
     jeanluc_markdup::run(&config).expect("BAM duplicate marking succeeds");
@@ -88,6 +91,7 @@ fn groups_duplicates_by_unclipped_five_prime_position() {
         assume_sorted: true,
         validation_stringency: Some("SILENT".to_string()),
         quiet: true,
+        create_index: false,
     };
 
     jeanluc_markdup::run(&config).expect("BAM duplicate marking succeeds");
@@ -111,6 +115,7 @@ fn excludes_secondary_alignments_from_duplicate_testing() {
         assume_sorted: true,
         validation_stringency: Some("SILENT".to_string()),
         quiet: true,
+        create_index: false,
     };
 
     jeanluc_markdup::run(&config).expect("BAM duplicate marking succeeds");
@@ -137,12 +142,36 @@ fn chooses_duplicate_representative_per_pair_not_per_mate() {
         assume_sorted: true,
         validation_stringency: Some("SILENT".to_string()),
         quiet: true,
+        create_index: false,
     };
 
     jeanluc_markdup::run(&config).expect("BAM duplicate marking succeeds");
 
     let flags = read_flags(&output);
     assert_eq!(flags, vec![99, 1123, 99, 147, 1171, 147]);
+}
+
+#[test]
+fn creates_bam_index_when_requested() {
+    let tempdir = tempfile::tempdir().expect("tempdir exists");
+    let output = tempdir.path().join("output.bam");
+    let metrics = tempdir.path().join("metrics.txt");
+    let input = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../fixtures/markduplicates/basic/input.bam");
+    let config = MarkDuplicatesConfig {
+        input: input.display().to_string(),
+        output: output.display().to_string(),
+        metrics_file: metrics.display().to_string(),
+        remove_duplicates: false,
+        assume_sorted: true,
+        validation_stringency: Some("SILENT".to_string()),
+        quiet: true,
+        create_index: true,
+    };
+
+    jeanluc_markdup::run(&config).expect("BAM duplicate marking succeeds");
+
+    assert!(output.with_extension("bai").exists());
 }
 
 fn read_flags(path: &std::path::Path) -> Vec<u16> {

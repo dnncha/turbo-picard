@@ -10,6 +10,7 @@ pub struct MarkDuplicatesConfig {
     pub assume_sorted: bool,
     pub validation_stringency: Option<String>,
     pub quiet: bool,
+    pub create_index: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -58,6 +59,7 @@ impl MarkDuplicatesConfig {
             assume_sorted: optional_bool(args, "ASSUME_SORTED")?.unwrap_or(false),
             validation_stringency: optional_scalar(args, "VALIDATION_STRINGENCY")?,
             quiet: optional_bool(args, "QUIET")?.unwrap_or(false),
+            create_index: optional_bool(args, "CREATE_INDEX")?.unwrap_or(false),
         })
     }
 }
@@ -73,6 +75,7 @@ fn reject_unsupported(
         "ASSUME_SORTED",
         "VALIDATION_STRINGENCY",
         "QUIET",
+        "CREATE_INDEX",
     ]);
 
     for key in args.keys() {
