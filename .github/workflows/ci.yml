@@ -1,0 +1,71 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  rust:
+    name: Rust (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-14]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Install native dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang libclang-dev make pkg-config
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      - name: Test workspace
+        run: cargo test --workspace
+
+      - name: Test Python tooling
+        run: |
+          python3 -m unittest tools/test_compare_markduplicates.py
+          python3 -m py_compile \
+            tools/compare_markduplicates.py \
+            tools/bench_markduplicates.py \
+            tools/test_compare_markduplicates.py
+
+      - name: Smoke package install
+        run: ./tools/verify_package_install.sh
+
+  picard-parity:
+    name: Picard parity
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Install native dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang libclang-dev make pkg-config
+
+      - uses: mamba-org/setup-micromamba@v3
+        with:
+          environment-name: turbo-picard-ci
+          create-args: >-
+            -c conda-forge
+            -c bioconda
+            picard
+            samtools
+
+      - name: Test workspace
+        run: cargo test --workspace
+
+      - name: Verify Picard parity
+        run: TURBO_PICARD_CONDA_PREFIX="${MAMBA_ROOT_PREFIX}/envs/turbo-picard-ci" ./tools/verify_basic_picard_parity.sh

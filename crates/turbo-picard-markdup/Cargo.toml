@@ -1,7 +1,11 @@
 [package]
 name = "turbo-picard-markdup"
-version = "0.1.0"
-edition = "2024"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+readme.workspace = true
+description = "Native accelerated MarkDuplicates engine for turbo-picard."
 
 [dependencies]
 turbo-picard-core = { path = "../turbo-picard-core" }

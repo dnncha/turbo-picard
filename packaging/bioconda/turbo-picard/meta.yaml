@@ -1,0 +1,58 @@
+{% set name = "turbo-picard" %}
+{% set version = "0.1.0" %}
+
+package:
+  name: {{ name|lower }}
+  version: {{ version }}
+
+source:
+  path: ../../..
+
+build:
+  number: 0
+  skip: true  # [win]
+  script_env:
+    - CARGO_NET_GIT_FETCH_WITH_CLI=true
+
+requirements:
+  build:
+    - {{ compiler('c') }}
+    - {{ compiler('rust') }}
+    - cargo-bundle-licenses
+    - clangdev
+    - make
+    - pkg-config
+  host:
+    - bzip2
+    - curl
+    - libzlib
+    - openssl
+    - xz
+  run:
+    - bzip2
+    - curl
+    - libzlib
+    - openssl
+    - xz
+
+test:
+  commands:
+    - turbo-picard --version
+    - picard --version
+    - turbo-picard MarkDuplicates --help
+
+about:
+  home: https://github.com/turbo-picard/turbo-picard
+  license: MIT
+  license_file:
+    - LICENSE
+    - THIRDPARTY.yml
+  summary: Fast Picard-compatible toolkit with a native MarkDuplicates engine.
+  description: |
+    turbo-picard is a Rust implementation of high-impact Picard workflows.
+    The current native engine targets MarkDuplicates-compatible BAM/SAM
+    workflows and installs both turbo-picard and picard command entrypoints.
+
+extra:
+  recipe-maintainers:
+    - replace-with-bioconda-maintainer

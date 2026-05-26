@@ -6,6 +6,15 @@ conda_prefix="${TURBO_PICARD_CONDA_PREFIX:-$repo_root/.conda-turbo-picard}"
 workdir="$(mktemp -d)"
 trap 'rm -rf "$workdir"' EXIT
 
+if command -v mamba >/dev/null 2>&1; then
+  conda_runner=(mamba)
+elif command -v micromamba >/dev/null 2>&1; then
+  conda_runner=(micromamba)
+else
+  echo "mamba or micromamba is required for Picard parity verification" >&2
+  exit 127
+fi
+
 for fixture in basic paired scoring softclip secondary pair-score-tie clear-dt tagging-all duplicate-set-members barcode-tag read-barcode-tags optical multi-input multi-library multi-input-libraries remove-sequencing-duplicates; do
   fixture_dir="$repo_root/fixtures/markduplicates/$fixture"
   fixture_workdir="$workdir/$fixture"
@@ -77,8 +86,8 @@ for fixture in basic paired scoring softclip secondary pair-score-tie clear-dt t
   fi
   "${command[@]}"
 
-  mamba run -p "$conda_prefix" samtools view -h "$fixture_workdir/turbo-picard.bam" > "$fixture_workdir/turbo-picard.sam"
-  mamba run -p "$conda_prefix" samtools view -h "$fixture_dir/picard.bam" > "$fixture_workdir/picard.sam"
+  "${conda_runner[@]}" run -p "$conda_prefix" samtools view -h "$fixture_workdir/turbo-picard.bam" > "$fixture_workdir/turbo-picard.sam"
+  "${conda_runner[@]}" run -p "$conda_prefix" samtools view -h "$fixture_dir/picard.bam" > "$fixture_workdir/picard.sam"
 
   python3 "$repo_root/tools/compare_markduplicates.py" \
     --picard-bam "$fixture_workdir/picard.sam" \
