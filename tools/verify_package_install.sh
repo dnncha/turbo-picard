@@ -53,3 +53,13 @@ SAM
 test -s "${sortsam_output}"
 grep -q $'@HD\tVN:1.6\tSO:coordinate' "${sortsam_output}"
 awk '!/^@/ { print $1 }' "${sortsam_output}" | tr '\n' ' ' | grep -q '^read-a read-b read-c $'
+
+fastq_output="${tempdir}/reads.fastq"
+"${install_root}/bin/picard" SamToFastq \
+  "I=${sortsam_input}" \
+  "FASTQ=${fastq_output}" \
+  VALIDATION_STRINGENCY=SILENT \
+  QUIET=true
+
+test -s "${fastq_output}"
+grep -q '^@read-c$' "${fastq_output}"

@@ -1,10 +1,13 @@
 #![forbid(unsafe_code)]
 
+use flate2::Compression;
+use flate2::write::GzEncoder;
 use rust_htslib::bam::header::HeaderRecord;
 use rust_htslib::bam::index;
 use rust_htslib::bam::{self, Read};
 use std::cmp::Ordering;
 use std::fs;
+use std::io::{BufWriter, Write};
 use std::path::Path;
 use std::process::Command;
 use turbo_picard_core::markdup_config::MarkDuplicatesConfig;
@@ -63,6 +66,24 @@ pub fn run_cli(program_name: &str, raw_args: impl IntoIterator<Item = String>) -
             }
             0
         }
+        Some("SamToFastq") => {
+            let command_args = args.cloned().collect::<Vec<_>>();
+            if command_args
+                .iter()
+                .any(|arg| arg == "--help" || arg == "-h")
+            {
+                print_samtofastq_help();
+                return 0;
+            }
+            if let Err(error) = run_samtofastq(&command_args) {
+                if let Some(exit_code) = try_run_fallback(&raw_args) {
+                    return exit_code;
+                }
+                eprintln!("{error}");
+                return 2;
+            }
+            0
+        }
         Some(command) => {
             if let Some(exit_code) = try_run_fallback(&raw_args) {
                 return exit_code;
@@ -84,6 +105,7 @@ Usage: {program_name} <PicardCommand> [KEY=VALUE ...]
 
 Available commands:
   MarkDuplicates    Identifies duplicate reads in SAM or BAM files
+  SamToFastq        Converts SAM or BAM records to FASTQ
   SortSam           Sorts SAM or BAM files by coordinate or query name"
     );
 }
@@ -119,6 +141,23 @@ Required arguments:
   INPUT / I             Input SAM or BAM file
   OUTPUT / O            Output SAM or BAM file
   SORT_ORDER / SO       coordinate or queryname"
+    );
+}
+
+fn print_samtofastq_help() {
+    println!(
+        "\
+Usage: picard SamToFastq I=<input.bam> FASTQ=<reads.fastq> [options]
+
+Required arguments:
+  INPUT / I             Input SAM or BAM file
+  FASTQ                 Output FASTQ file
+
+Common options:
+  SECOND_END_FASTQ      Output FASTQ for second-of-pair reads
+  UNPAIRED_FASTQ        Output FASTQ for unpaired reads
+  INTERLEAVE            Write paired reads interleaved to FASTQ
+  RE_REVERSE            Reverse-complement reverse-strand reads"
     );
 }
 
@@ -198,6 +237,161 @@ fn run_sortsam(args: &[String]) -> Result<(), String> {
     Ok(())
 }
 
+fn run_samtofastq(args: &[String]) -> Result<(), String> {
+    let args = normalize_picard_args(args).map_err(|error| error.to_string())?;
+    reject_unsupported_samtofastq_args(&args)?;
+    let input = required_scalar_for(&args, "INPUT", "SamToFastq")?;
+    let fastq = required_scalar_for(&args, "FASTQ", "SamToFastq")?;
+    let second_end_fastq = optional_scalar(&args, "SECOND_END_FASTQ")?;
+    let unpaired_fastq = optional_scalar(&args, "UNPAIRED_FASTQ")?;
+    let interleave = optional_bool(&args, "INTERLEAVE")?.unwrap_or(false);
+    let re_reverse = optional_bool(&args, "RE_REVERSE")?.unwrap_or(true);
+    let compression_level = optional_u32(&args, "COMPRESSION_LEVEL")?.unwrap_or(5);
+
+    if interleave && second_end_fastq.is_some() {
+        return Err("SamToFastq INTERLEAVE=true cannot be used with SECOND_END_FASTQ".to_string());
+    }
+
+    let mut reader = bam::Reader::from_path(input).map_err(|error| error.to_string())?;
+    let mut first_writer = fastq_writer(&fastq, compression_level)?;
+    let mut second_writer = match second_end_fastq {
+        Some(path) => Some(fastq_writer(&path, compression_level)?),
+        None => None,
+    };
+    let mut unpaired_writer = match unpaired_fastq {
+        Some(path) => Some(fastq_writer(&path, compression_level)?),
+        None => None,
+    };
+
+    for record in reader.records() {
+        let record = record.map_err(|error| error.to_string())?;
+        let is_second = record.is_paired() && record.is_last_in_template();
+        let writer = if is_second && !interleave {
+            second_writer.as_mut().unwrap_or(&mut first_writer)
+        } else if !record.is_paired() {
+            unpaired_writer.as_mut().unwrap_or(&mut first_writer)
+        } else {
+            &mut first_writer
+        };
+        write_fastq_record(writer, &record, re_reverse, fastq_name_suffix(&record))?;
+    }
+
+    Ok(())
+}
+
+fn reject_unsupported_samtofastq_args(
+    args: &std::collections::BTreeMap<String, Vec<String>>,
+) -> Result<(), String> {
+    let supported = [
+        "INPUT",
+        "FASTQ",
+        "SECOND_END_FASTQ",
+        "UNPAIRED_FASTQ",
+        "INTERLEAVE",
+        "RE_REVERSE",
+        "VALIDATION_STRINGENCY",
+        "QUIET",
+        "VERBOSITY",
+        "COMPRESSION_LEVEL",
+    ];
+
+    for key in args.keys() {
+        if !supported.contains(&key.as_str()) {
+            return Err(format!("unsupported SamToFastq argument: {key}"));
+        }
+    }
+
+    optional_scalar(args, "VALIDATION_STRINGENCY")?;
+    optional_scalar(args, "VERBOSITY")?;
+    optional_bool(args, "QUIET")?;
+    optional_bool(args, "INTERLEAVE")?;
+    optional_bool(args, "RE_REVERSE")?;
+    if let Some(level) = optional_u32(args, "COMPRESSION_LEVEL")? {
+        if level > 9 {
+            return Err(format!("unsupported SamToFastq COMPRESSION_LEVEL: {level}"));
+        }
+    }
+    Ok(())
+}
+
+fn fastq_writer(path: &str, compression_level: u32) -> Result<Box<dyn Write>, String> {
+    let file = fs::File::create(path).map_err(|error| error.to_string())?;
+    let writer = BufWriter::new(file);
+    if has_gzip_extension(path) {
+        Ok(Box::new(GzEncoder::new(
+            writer,
+            Compression::new(compression_level),
+        )))
+    } else {
+        Ok(Box::new(writer))
+    }
+}
+
+fn write_fastq_record(
+    writer: &mut dyn Write,
+    record: &bam::Record,
+    re_reverse: bool,
+    name_suffix: Option<&'static str>,
+) -> Result<(), String> {
+    let name = String::from_utf8_lossy(record.qname());
+    let mut sequence = record.seq().as_bytes();
+    let mut qualities = record
+        .qual()
+        .iter()
+        .map(|quality| quality.saturating_add(33))
+        .collect::<Vec<_>>();
+
+    if re_reverse && record.is_reverse() {
+        reverse_complement(&mut sequence);
+        qualities.reverse();
+    }
+
+    writer
+        .write_all(b"@")
+        .and_then(|_| writer.write_all(name.as_bytes()))
+        .and_then(|_| writer.write_all(name_suffix.unwrap_or_default().as_bytes()))
+        .and_then(|_| writer.write_all(b"\n"))
+        .and_then(|_| writer.write_all(&sequence))
+        .and_then(|_| writer.write_all(b"\n+\n"))
+        .and_then(|_| writer.write_all(&qualities))
+        .and_then(|_| writer.write_all(b"\n"))
+        .map_err(|error| error.to_string())
+}
+
+fn has_gzip_extension(path: &str) -> bool {
+    Path::new(path)
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .map(|extension| matches!(extension.to_ascii_lowercase().as_str(), "gz" | "gzip"))
+        .unwrap_or(false)
+}
+
+fn fastq_name_suffix(record: &bam::Record) -> Option<&'static str> {
+    if !record.is_paired() {
+        None
+    } else if record.is_first_in_template() {
+        Some("/1")
+    } else if record.is_last_in_template() {
+        Some("/2")
+    } else {
+        None
+    }
+}
+
+fn reverse_complement(sequence: &mut [u8]) {
+    sequence.reverse();
+    for base in sequence {
+        *base = match *base {
+            b'A' | b'a' => b'T',
+            b'C' | b'c' => b'G',
+            b'G' | b'g' => b'C',
+            b'T' | b't' => b'A',
+            b'N' | b'n' => b'N',
+            other => other,
+        };
+    }
+}
+
 fn reject_unsupported_sortsam_args(
     args: &std::collections::BTreeMap<String, Vec<String>>,
 ) -> Result<(), String> {
@@ -240,9 +434,17 @@ fn required_scalar(
     args: &std::collections::BTreeMap<String, Vec<String>>,
     key: &'static str,
 ) -> Result<String, String> {
+    required_scalar_for(args, key, "SortSam")
+}
+
+fn required_scalar_for(
+    args: &std::collections::BTreeMap<String, Vec<String>>,
+    key: &'static str,
+    command: &'static str,
+) -> Result<String, String> {
     let values = args
         .get(key)
-        .ok_or_else(|| format!("missing required SortSam argument: {key}"))?;
+        .ok_or_else(|| format!("missing required {command} argument: {key}"))?;
     scalar_value(values, key)
 }
 

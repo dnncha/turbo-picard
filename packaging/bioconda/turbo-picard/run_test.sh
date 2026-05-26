@@ -48,3 +48,12 @@ turbo-picard SortSam \
 test -s coordinate.sam
 grep -q $'@HD\tVN:1.6\tSO:coordinate' coordinate.sam
 awk '!/^@/ { print $1 }' coordinate.sam | tr '\n' ' ' | grep -q '^read-a read-b read-c $'
+
+turbo-picard SamToFastq \
+  I=input.sam \
+  FASTQ=reads.fastq \
+  VALIDATION_STRINGENCY=SILENT \
+  QUIET=true
+
+test -s reads.fastq
+grep -q '^@read-a$' reads.fastq

@@ -71,3 +71,4 @@ jobs:
         run: |
           TURBO_PICARD_CONDA_PREFIX="${MAMBA_ROOT_PREFIX}/envs/turbo-picard-ci" ./tools/verify_basic_picard_parity.sh
           TURBO_PICARD_CONDA_PREFIX="${MAMBA_ROOT_PREFIX}/envs/turbo-picard-ci" ./tools/verify_basic_sortsam_parity.sh
+          TURBO_PICARD_CONDA_PREFIX="${MAMBA_ROOT_PREFIX}/envs/turbo-picard-ci" ./tools/verify_basic_samtofastq_parity.sh

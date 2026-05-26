@@ -1,8 +1,8 @@
 # turbo-picard
 
 `turbo-picard` is a Picard-shaped Rust toolkit focused on high-impact, drop-in
-replacement workflows. The current native engines target `MarkDuplicates` and
-`SortSam`, and install two command-line entrypoints:
+replacement workflows. The current native engines target `MarkDuplicates`,
+`SortSam`, and `SamToFastq`, and install two command-line entrypoints:
 
 - `turbo-picard`
 - `picard`
@@ -38,6 +38,13 @@ Native `SortSam` supports coordinate and queryname sorting:
 ```bash
 picard SortSam I=input.bam O=coordinate.bam SORT_ORDER=coordinate
 picard SortSam I=input.bam O=queryname.bam SO=queryname
+```
+
+Native `SamToFastq` streams SAM/BAM records to FASTQ:
+
+```bash
+picard SamToFastq I=input.bam FASTQ=reads.fastq
+picard SamToFastq I=input.bam FASTQ=r1.fastq SECOND_END_FASTQ=r2.fastq
 ```
 
 By default, unsupported Picard commands fail clearly. For drop-in deployments
@@ -128,6 +135,33 @@ change the current native implementation:
 
 - `VERBOSITY`
 
+## Supported SamToFastq Surface
+
+Implemented input/output coverage:
+
+- BAM input
+- SAM text input
+- single-end FASTQ output
+- paired FASTQ output with `SECOND_END_FASTQ`
+- unpaired read routing with `UNPAIRED_FASTQ`
+- interleaved paired output with `INTERLEAVE=true`
+
+Implemented options include:
+
+- `FASTQ`
+- `SECOND_END_FASTQ`
+- `UNPAIRED_FASTQ`
+- `INTERLEAVE`
+- `RE_REVERSE`
+- `VALIDATION_STRINGENCY`
+- `QUIET`
+- `COMPRESSION_LEVEL`
+
+Accepted compatibility options that are validated or ignored when they do not
+change the current native implementation:
+
+- `VERBOSITY`
+
 ## Runtime Knobs
 
 - `TURBO_PICARD_THREADS`: worker threads for CPU-heavy MarkDuplicates phases.
@@ -142,6 +176,7 @@ cargo test --workspace
 python3 -m unittest tools/test_compare_markduplicates.py
 ./tools/verify_basic_picard_parity.sh
 ./tools/verify_basic_sortsam_parity.sh
+./tools/verify_basic_samtofastq_parity.sh
 ```
 
 The parity scripts compare native `turbo-picard` output against a Picard
@@ -163,7 +198,7 @@ tagged release URL and `sha256`, and replace the maintainer placeholder.
 ## Current Limits
 
 `turbo-picard` is not a full Picard suite yet. The shipped native commands are
-`MarkDuplicates` and `SortSam`, and outputs are intended to be semantically
-compatible rather than byte-for-byte identical to Picard. Set
+`MarkDuplicates`, `SortSam`, and `SamToFastq`, and outputs are intended to be
+semantically compatible rather than byte-for-byte identical to Picard. Set
 `TURBO_PICARD_FALLBACK_COMMAND` for drop-in environments that need unsupported
 Picard tools to continue working.

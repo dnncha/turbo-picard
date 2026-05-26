@@ -41,6 +41,7 @@ test:
     - picard --version
     - turbo-picard MarkDuplicates --help
     - turbo-picard SortSam --help
+    - turbo-picard SamToFastq --help
 
 about:
   home: https://github.com/turbo-picard/turbo-picard
@@ -48,11 +49,12 @@ about:
   license_file:
     - LICENSE
     - THIRDPARTY.yml
-  summary: Fast Picard-compatible toolkit with a native MarkDuplicates engine.
+  summary: Fast Picard-compatible toolkit with native high-impact Picard commands.
   description: |
     turbo-picard is a Rust implementation of high-impact Picard workflows.
-    The current native engine targets MarkDuplicates-compatible BAM/SAM
-    workflows and installs both turbo-picard and picard command entrypoints.
+    The current native engines target MarkDuplicates, SortSam, and SamToFastq
+    BAM/SAM workflows and install both turbo-picard and picard command
+    entrypoints.
 
 extra:
   recipe-maintainers:

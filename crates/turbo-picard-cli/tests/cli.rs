@@ -1,6 +1,8 @@
 use assert_cmd::Command;
+use flate2::read::GzDecoder;
 use predicates::prelude::*;
 use std::fs;
+use std::io::Read;
 use std::os::unix::fs::PermissionsExt;
 
 #[test]
@@ -269,6 +271,118 @@ fn sortsam_writes_requested_bam_sidecars() {
     assert!(output.exists());
     assert!(tempdir.path().join("coordinate.bam.md5").exists());
     assert!(tempdir.path().join("coordinate.bai").exists());
+}
+
+#[test]
+fn samtofastq_streams_unpaired_reads() {
+    let tempdir = tempfile::tempdir().expect("tempdir exists");
+    let input = tempdir.path().join("input.sam");
+    let fastq = tempdir.path().join("reads.fastq");
+    fs::write(
+        &input,
+        concat!(
+            "@HD\tVN:1.6\tSO:queryname\n",
+            "@SQ\tSN:chr1\tLN:1000\n",
+            "read-a\t4\t*\t0\t0\t*\t*\t0\t0\tACGT\tFFFF\n",
+            "read-b\t16\tchr1\t10\t60\t4M\t*\t0\t0\tAACG\tABCD\n",
+        ),
+    )
+    .expect("input fixture is written");
+
+    let mut cmd = Command::cargo_bin("picard").expect("binary exists");
+    cmd.args([
+        "SamToFastq",
+        &format!("I={}", input.display()),
+        &format!("FASTQ={}", fastq.display()),
+    ])
+    .assert()
+    .success();
+
+    let output_fastq = fs::read_to_string(&fastq).expect("FASTQ output exists");
+    assert_eq!(
+        output_fastq,
+        concat!(
+            "@read-a\n",
+            "ACGT\n",
+            "+\n",
+            "FFFF\n",
+            "@read-b\n",
+            "CGTT\n",
+            "+\n",
+            "DCBA\n",
+        )
+    );
+}
+
+#[test]
+fn samtofastq_splits_paired_reads() {
+    let tempdir = tempfile::tempdir().expect("tempdir exists");
+    let input = tempdir.path().join("input.sam");
+    let first_fastq = tempdir.path().join("r1.fastq");
+    let second_fastq = tempdir.path().join("r2.fastq");
+    fs::write(
+        &input,
+        concat!(
+            "@HD\tVN:1.6\tSO:queryname\n",
+            "@SQ\tSN:chr1\tLN:1000\n",
+            "pair-a\t77\t*\t0\t0\t*\t*\t0\t0\tAAAA\tFFFF\n",
+            "pair-a\t141\t*\t0\t0\t*\t*\t0\t0\tTTTT\tHHHH\n",
+        ),
+    )
+    .expect("input fixture is written");
+
+    let mut cmd = Command::cargo_bin("picard").expect("binary exists");
+    cmd.args([
+        "SamToFastq",
+        &format!("I={}", input.display()),
+        &format!("FASTQ={}", first_fastq.display()),
+        &format!("SECOND_END_FASTQ={}", second_fastq.display()),
+    ])
+    .assert()
+    .success();
+
+    assert_eq!(
+        fs::read_to_string(&first_fastq).expect("first FASTQ exists"),
+        "@pair-a/1\nAAAA\n+\nFFFF\n"
+    );
+    assert_eq!(
+        fs::read_to_string(&second_fastq).expect("second FASTQ exists"),
+        "@pair-a/2\nTTTT\n+\nHHHH\n"
+    );
+}
+
+#[test]
+fn samtofastq_writes_gzip_fastq_outputs() {
+    let tempdir = tempfile::tempdir().expect("tempdir exists");
+    let input = tempdir.path().join("input.sam");
+    let fastq = tempdir.path().join("reads.fastq.gz");
+    fs::write(
+        &input,
+        concat!(
+            "@HD\tVN:1.6\tSO:queryname\n",
+            "@SQ\tSN:chr1\tLN:1000\n",
+            "read-a\t4\t*\t0\t0\t*\t*\t0\t0\tACGT\tFFFF\n",
+        ),
+    )
+    .expect("input fixture is written");
+
+    let mut cmd = Command::cargo_bin("picard").expect("binary exists");
+    cmd.args([
+        "SamToFastq",
+        &format!("I={}", input.display()),
+        &format!("FASTQ={}", fastq.display()),
+        "COMPRESSION_LEVEL=1",
+    ])
+    .assert()
+    .success();
+
+    let compressed = fs::File::open(&fastq).expect("gzip FASTQ exists");
+    let mut decoder = GzDecoder::new(compressed);
+    let mut output_fastq = String::new();
+    decoder
+        .read_to_string(&mut output_fastq)
+        .expect("FASTQ is gzip-compressed");
+    assert_eq!(output_fastq, "@read-a\nACGT\n+\nFFFF\n");
 }
 
 #[test]
