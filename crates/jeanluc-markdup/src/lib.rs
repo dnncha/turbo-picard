@@ -4,7 +4,7 @@ use jeanluc_core::markdup_config::MarkDuplicatesConfig;
 use rust_htslib::bam::header::HeaderRecord;
 use rust_htslib::bam::record::{Aux, Cigar};
 use rust_htslib::bam::{self, Read, index};
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt;
 use std::fs;
 use std::path::Path;
@@ -76,6 +76,7 @@ struct DuplicateKey {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct BamDuplicateKey {
+    library: String,
     reference_id: i32,
     position: i64,
     mate_reference_id: i32,
@@ -211,7 +212,8 @@ fn is_bam_input(input: &str) -> bool {
 fn run_bam(config: &MarkDuplicatesConfig) -> Result<MarkDuplicatesSummary, MarkDuplicatesError> {
     let first_input = &config.inputs[0];
     let mut reader = bam::Reader::from_path(first_input)?;
-    let library = first_library_name(reader.header());
+    let library_lookup = library_lookup(reader.header());
+    let library = first_library_name_from_lookup(&library_lookup);
     let mut header = bam::Header::from_template(reader.header());
     if config.add_pg_tag_to_reads {
         header.push_record(
@@ -222,7 +224,9 @@ fn run_bam(config: &MarkDuplicatesConfig) -> Result<MarkDuplicatesSummary, MarkD
     }
     let mut writer = bam::Writer::from_path(&config.output, &header, bam::Format::Bam)?;
     let mut records = Vec::new();
+    let mut record_libraries = Vec::new();
     let mut eligible_indices = Vec::new();
+    let mut library_summaries = BTreeMap::<String, MarkDuplicatesSummary>::new();
     let mut summary = MarkDuplicatesSummary {
         library,
         unpaired_reads_examined: 0,
@@ -237,7 +241,10 @@ fn run_bam(config: &MarkDuplicatesConfig) -> Result<MarkDuplicatesSummary, MarkD
     read_bam_records(
         &mut reader,
         &mut records,
+        &mut record_libraries,
         &mut eligible_indices,
+        &library_lookup,
+        &mut library_summaries,
         &mut summary,
     )?;
     for input in config.inputs.iter().skip(1) {
@@ -245,12 +252,15 @@ fn run_bam(config: &MarkDuplicatesConfig) -> Result<MarkDuplicatesSummary, MarkD
         read_bam_records(
             &mut reader,
             &mut records,
+            &mut record_libraries,
             &mut eligible_indices,
+            &library_lookup,
+            &mut library_summaries,
             &mut summary,
         )?;
     }
 
-    let duplicate_groups = duplicate_groups(&records, &eligible_indices, config);
+    let duplicate_groups = duplicate_groups(&records, &record_libraries, &eligible_indices, config);
     let mut optical_duplicate_name_set = HashSet::<Vec<u8>>::new();
 
     for group in duplicate_groups.values() {
@@ -262,6 +272,12 @@ fn run_bam(config: &MarkDuplicatesConfig) -> Result<MarkDuplicatesSummary, MarkD
         let optical_names =
             optical_duplicate_names(group, &records, representative_name.as_slice(), config);
         summary.read_pair_optical_duplicates += optical_names.len() as u64;
+        if let Some(library_summary) = group
+            .first()
+            .and_then(|index| library_summaries.get_mut(&record_libraries[*index]))
+        {
+            library_summary.read_pair_optical_duplicates += optical_names.len() as u64;
+        }
         optical_duplicate_name_set.extend(optical_names);
         if config.tag_duplicate_set_members && !config.remove_duplicates {
             add_duplicate_set_member_tags(group, &mut records, representative_name.as_slice())?;
@@ -274,8 +290,16 @@ fn run_bam(config: &MarkDuplicatesConfig) -> Result<MarkDuplicatesSummary, MarkD
             let flag = records[index].flags();
             if flag & PAIRED_FLAG != 0 {
                 summary.duplicate_pair_records += 1;
+                library_summaries
+                    .get_mut(&record_libraries[index])
+                    .expect("library summary exists")
+                    .duplicate_pair_records += 1;
             } else {
                 summary.unpaired_duplicate_records += 1;
+                library_summaries
+                    .get_mut(&record_libraries[index])
+                    .expect("library summary exists")
+                    .unpaired_duplicate_records += 1;
             }
             records[index].set_flags(flag | DUPLICATE_FLAG);
         }
@@ -308,7 +332,10 @@ fn run_bam(config: &MarkDuplicatesConfig) -> Result<MarkDuplicatesSummary, MarkD
     }
     drop(writer);
 
-    fs::write(&config.metrics_file, metrics_text(&summary))?;
+    fs::write(
+        &config.metrics_file,
+        metrics_text_for_libraries(library_summaries.values()),
+    )?;
     if config.create_md5_file {
         write_md5_sidecar(&config.output)?;
     }
@@ -326,21 +353,36 @@ fn run_bam(config: &MarkDuplicatesConfig) -> Result<MarkDuplicatesSummary, MarkD
 fn read_bam_records<R: bam::Read>(
     reader: &mut R,
     records: &mut Vec<bam::Record>,
+    record_libraries: &mut Vec<String>,
     eligible_indices: &mut Vec<usize>,
+    library_lookup: &HashMap<Vec<u8>, String>,
+    library_summaries: &mut BTreeMap<String, MarkDuplicatesSummary>,
     summary: &mut MarkDuplicatesSummary,
 ) -> Result<(), MarkDuplicatesError> {
     for result in reader.records() {
         let record = result?;
         let flag = record.flags();
+        let library = record_library(&record, library_lookup);
         let record_index = records.len();
+        ensure_library_summary(library_summaries, &library);
 
         if flag & UNMAPPED_FLAG != 0 {
             summary.unmapped_records += 1;
+            library_summaries
+                .get_mut(&library)
+                .expect("library summary exists")
+                .unmapped_records += 1;
+            record_libraries.push(library);
             records.push(record);
             continue;
         }
         if flag & SECONDARY_OR_SUPPLEMENTARY_FLAGS != 0 {
             summary.secondary_or_supplementary_records += 1;
+            library_summaries
+                .get_mut(&library)
+                .expect("library summary exists")
+                .secondary_or_supplementary_records += 1;
+            record_libraries.push(library);
             records.push(record);
             continue;
         }
@@ -348,11 +390,20 @@ fn read_bam_records<R: bam::Read>(
         if flag & PAIRED_FLAG != 0 {
             if flag & FIRST_IN_PAIR_FLAG != 0 {
                 summary.read_pairs_examined += 1;
+                library_summaries
+                    .get_mut(&library)
+                    .expect("library summary exists")
+                    .read_pairs_examined += 1;
             }
         } else {
             summary.unpaired_reads_examined += 1;
+            library_summaries
+                .get_mut(&library)
+                .expect("library summary exists")
+                .unpaired_reads_examined += 1;
         }
         eligible_indices.push(record_index);
+        record_libraries.push(library);
         records.push(record);
     }
 
@@ -584,6 +635,7 @@ fn duplicate_key(fields: &[String], flag: u16, config: &MarkDuplicatesConfig) ->
 
 fn duplicate_groups(
     records: &[bam::Record],
+    record_libraries: &[String],
     eligible_indices: &[usize],
     config: &MarkDuplicatesConfig,
 ) -> HashMap<BamDuplicateKey, Vec<usize>> {
@@ -601,6 +653,7 @@ fn duplicate_groups(
             duplicate_groups
                 .entry(single_duplicate_key_bam(
                     record,
+                    &record_libraries[index],
                     &bam_barcode(record, config),
                 ))
                 .or_default()
@@ -611,9 +664,18 @@ fn duplicate_groups(
     for indices in paired_by_name.into_values() {
         let barcode = first_barcode(records, &indices, config);
         let key = if indices.len() >= 2 {
-            pair_duplicate_key_bam(&records[indices[0]], &records[indices[1]], barcode)
+            pair_duplicate_key_bam(
+                &records[indices[0]],
+                &records[indices[1]],
+                &record_libraries[indices[0]],
+                barcode,
+            )
         } else {
-            single_duplicate_key_bam(&records[indices[0]], &barcode)
+            single_duplicate_key_bam(
+                &records[indices[0]],
+                &record_libraries[indices[0]],
+                &barcode,
+            )
         };
         duplicate_groups.entry(key).or_default().extend(indices);
     }
@@ -702,10 +764,15 @@ where
     }
 }
 
-fn single_duplicate_key_bam(record: &bam::Record, barcode: &Option<Vec<u8>>) -> BamDuplicateKey {
+fn single_duplicate_key_bam(
+    record: &bam::Record,
+    library: &str,
+    barcode: &Option<Vec<u8>>,
+) -> BamDuplicateKey {
     let reverse_strand = record.flags() & 0x10 != 0;
     let position = unclipped_record_position(record);
     BamDuplicateKey {
+        library: library.to_string(),
         reference_id: record.tid(),
         position,
         mate_reference_id: record.mtid(),
@@ -719,6 +786,7 @@ fn single_duplicate_key_bam(record: &bam::Record, barcode: &Option<Vec<u8>>) -> 
 fn pair_duplicate_key_bam(
     first: &bam::Record,
     second: &bam::Record,
+    library: &str,
     barcode: Option<Vec<u8>>,
 ) -> BamDuplicateKey {
     let first_position = unclipped_record_position(first);
@@ -730,6 +798,7 @@ fn pair_duplicate_key_bam(
     };
 
     BamDuplicateKey {
+        library: library.to_string(),
         reference_id: left.tid(),
         position: unclipped_record_position(left),
         mate_reference_id: right.tid(),
@@ -865,6 +934,26 @@ fn best_duplicate_representative_name(group: &[usize], records: &[bam::Record]) 
 }
 
 fn metrics_text(summary: &MarkDuplicatesSummary) -> String {
+    metrics_text_for_libraries(std::iter::once(summary))
+}
+
+fn metrics_text_for_libraries<'a>(
+    summaries: impl IntoIterator<Item = &'a MarkDuplicatesSummary>,
+) -> String {
+    let mut output = concat!(
+        "## METRICS CLASS\tpicard.sam.DuplicationMetrics\n",
+        "LIBRARY\tUNPAIRED_READS_EXAMINED\tREAD_PAIRS_EXAMINED\tSECONDARY_OR_SUPPLEMENTARY_RDS\tUNMAPPED_READS\tUNPAIRED_READ_DUPLICATES\tREAD_PAIR_DUPLICATES\tREAD_PAIR_OPTICAL_DUPLICATES\tPERCENT_DUPLICATION\tESTIMATED_LIBRARY_SIZE\n",
+    )
+    .to_string();
+
+    for summary in summaries {
+        output.push_str(&metrics_row(summary));
+    }
+
+    output
+}
+
+fn metrics_row(summary: &MarkDuplicatesSummary) -> String {
     let duplicate_fragments =
         summary.unpaired_duplicate_records + (summary.read_pair_duplicates() * 2);
     let examined_fragments = summary.unpaired_reads_examined + (summary.read_pairs_examined * 2);
@@ -874,18 +963,14 @@ fn metrics_text(summary: &MarkDuplicatesSummary) -> String {
         duplicate_fragments as f64 / examined_fragments as f64
     };
     let estimated_library_size =
-        if summary.read_pairs_examined > 0 && summary.read_pair_optical_duplicates == 0 {
+        if summary.read_pair_duplicates() > 0 && summary.read_pair_optical_duplicates == 0 {
             summary.read_pairs_examined.to_string()
         } else {
             String::new()
         };
 
     format!(
-        concat!(
-            "## METRICS CLASS\tpicard.sam.DuplicationMetrics\n",
-            "LIBRARY\tUNPAIRED_READS_EXAMINED\tREAD_PAIRS_EXAMINED\tSECONDARY_OR_SUPPLEMENTARY_RDS\tUNMAPPED_READS\tUNPAIRED_READ_DUPLICATES\tREAD_PAIR_DUPLICATES\tREAD_PAIR_OPTICAL_DUPLICATES\tPERCENT_DUPLICATION\tESTIMATED_LIBRARY_SIZE\n",
-            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n"
-        ),
+        "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
         summary.library,
         summary.unpaired_reads_examined,
         summary.read_pairs_examined,
@@ -917,18 +1002,63 @@ impl MarkDuplicatesSummary {
     }
 }
 
-fn first_library_name(header: &bam::HeaderView) -> String {
+fn library_lookup(header: &bam::HeaderView) -> HashMap<Vec<u8>, String> {
+    let mut lookup = HashMap::<Vec<u8>, String>::new();
     let header_text = String::from_utf8_lossy(header.as_bytes());
     for line in header_text.lines() {
         if !line.starts_with("@RG\t") {
             continue;
         }
+        let mut read_group = None::<Vec<u8>>;
+        let mut library_name = None::<String>;
         for field in line.split('\t') {
-            if let Some(library) = field.strip_prefix("LB:") {
-                return library.to_string();
+            if let Some(id) = field.strip_prefix("ID:") {
+                read_group = Some(id.as_bytes().to_vec());
             }
+            if let Some(library) = field.strip_prefix("LB:") {
+                library_name = Some(library.to_string());
+            }
+        }
+        if let Some(read_group) = read_group {
+            lookup.insert(
+                read_group,
+                library_name.unwrap_or_else(|| "Unknown Library".to_string()),
+            );
         }
     }
 
-    "Unknown Library".to_string()
+    lookup
+}
+
+fn first_library_name_from_lookup(lookup: &HashMap<Vec<u8>, String>) -> String {
+    lookup
+        .values()
+        .next()
+        .cloned()
+        .unwrap_or_else(|| "Unknown Library".to_string())
+}
+
+fn record_library(record: &bam::Record, lookup: &HashMap<Vec<u8>, String>) -> String {
+    match record.aux(b"RG") {
+        Ok(Aux::String(read_group)) => lookup
+            .get(read_group.as_bytes())
+            .cloned()
+            .unwrap_or_else(|| "Unknown Library".to_string()),
+        _ => "Unknown Library".to_string(),
+    }
+}
+
+fn ensure_library_summary(summaries: &mut BTreeMap<String, MarkDuplicatesSummary>, library: &str) {
+    summaries
+        .entry(library.to_string())
+        .or_insert_with(|| MarkDuplicatesSummary {
+            library: library.to_string(),
+            unpaired_reads_examined: 0,
+            read_pairs_examined: 0,
+            secondary_or_supplementary_records: 0,
+            unpaired_duplicate_records: 0,
+            duplicate_pair_records: 0,
+            read_pair_optical_duplicates: 0,
+            unmapped_records: 0,
+        });
 }
