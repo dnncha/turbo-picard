@@ -256,6 +256,9 @@ fn run_bam(config: &MarkDuplicatesConfig) -> Result<MarkDuplicatesSummary, MarkD
     drop(writer);
 
     fs::write(&config.metrics_file, metrics_text(&summary))?;
+    if config.create_md5_file {
+        write_md5_sidecar(&config.output)?;
+    }
     if config.create_index {
         index::build(
             &config.output,
@@ -272,6 +275,13 @@ fn picard_bai_path(output: &str) -> String {
         .with_extension("bai")
         .display()
         .to_string()
+}
+
+fn write_md5_sidecar(output: &str) -> Result<(), MarkDuplicatesError> {
+    let bytes = fs::read(output)?;
+    let digest = md5::compute(bytes);
+    fs::write(format!("{output}.md5"), format!("{digest:x}"))?;
+    Ok(())
 }
 
 fn duplicate_key(fields: &[String], flag: u16) -> DuplicateKey {

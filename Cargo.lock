@@ -515,6 +515,7 @@ name = "jeanluc-markdup"
 version = "0.1.0"
 dependencies = [
  "jeanluc-core",
+ "md5",
  "rust-htslib",
  "tempfile",
 ]
@@ -610,6 +611,12 @@ dependencies = [
  "libc",
  "pkg-config",
 ]
+
+[[package]]
+name = "md5"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ae960838283323069879657ca3de837e9f7bbb4c7bf6ea7f1b290d5e9476d2e0"
 
 [[package]]
 name = "memchr"

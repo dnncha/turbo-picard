@@ -68,6 +68,21 @@ fn parses_create_index_boolean() {
 }
 
 #[test]
+fn parses_create_md5_file_boolean() {
+    let args = vec![
+        "I=in.bam".to_string(),
+        "O=out.bam".to_string(),
+        "M=metrics.txt".to_string(),
+        "CREATE_MD5_FILE=true".to_string(),
+    ];
+    let parsed = normalize_picard_args(&args).expect("arguments parse");
+
+    let config = MarkDuplicatesConfig::try_from_args(&parsed).expect("config validates");
+
+    assert!(config.create_md5_file);
+}
+
+#[test]
 fn rejects_missing_metrics_file() {
     let args = vec!["I=in.bam".to_string(), "O=out.bam".to_string()];
     let parsed = normalize_picard_args(&args).expect("arguments parse");

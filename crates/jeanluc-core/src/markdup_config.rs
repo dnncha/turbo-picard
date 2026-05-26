@@ -11,6 +11,7 @@ pub struct MarkDuplicatesConfig {
     pub validation_stringency: Option<String>,
     pub quiet: bool,
     pub create_index: bool,
+    pub create_md5_file: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -60,6 +61,7 @@ impl MarkDuplicatesConfig {
             validation_stringency: optional_scalar(args, "VALIDATION_STRINGENCY")?,
             quiet: optional_bool(args, "QUIET")?.unwrap_or(false),
             create_index: optional_bool(args, "CREATE_INDEX")?.unwrap_or(false),
+            create_md5_file: optional_bool(args, "CREATE_MD5_FILE")?.unwrap_or(false),
         })
     }
 }
@@ -76,6 +78,7 @@ fn reject_unsupported(
         "VALIDATION_STRINGENCY",
         "QUIET",
         "CREATE_INDEX",
+        "CREATE_MD5_FILE",
     ]);
 
     for key in args.keys() {
