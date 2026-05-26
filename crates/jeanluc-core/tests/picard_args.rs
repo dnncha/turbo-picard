@@ -39,6 +39,27 @@ fn normalizes_long_options() {
 }
 
 #[test]
+fn normalizes_short_picard_options() {
+    let args = vec![
+        "-I".to_string(),
+        "in.bam".to_string(),
+        "-O".to_string(),
+        "out.bam".to_string(),
+        "-M".to_string(),
+        "metrics.txt".to_string(),
+    ];
+
+    let parsed = normalize_picard_args(&args).expect("arguments parse");
+
+    assert_eq!(parsed.get("INPUT").unwrap(), &vec!["in.bam".to_string()]);
+    assert_eq!(parsed.get("OUTPUT").unwrap(), &vec!["out.bam".to_string()]);
+    assert_eq!(
+        parsed.get("METRICS_FILE").unwrap(),
+        &vec!["metrics.txt".to_string()]
+    );
+}
+
+#[test]
 fn rejects_positional_arguments() {
     let args = vec!["in.bam".to_string()];
 

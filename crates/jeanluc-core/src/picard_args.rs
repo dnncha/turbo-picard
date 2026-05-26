@@ -56,6 +56,25 @@ pub fn normalize_picard_args(args: &[String]) -> Result<PicardArgs, PicardArgErr
             continue;
         }
 
+        if let Some(short) = arg.strip_prefix('-') {
+            if short.is_empty() {
+                return Err(PicardArgError::EmptyKey(arg.clone()));
+            }
+
+            let key = canonical_key(short)?;
+            let value = args
+                .get(index + 1)
+                .ok_or_else(|| PicardArgError::MissingValue(key.clone()))?;
+
+            if value.starts_with('-') || (value.contains('=') && !value.starts_with('=')) {
+                return Err(PicardArgError::MissingValue(key));
+            }
+
+            normalized.entry(key).or_default().push(value.clone());
+            index += 2;
+            continue;
+        }
+
         if let Some((key, value)) = arg.split_once('=') {
             push_arg(&mut normalized, key, value)?;
             index += 1;
