@@ -6,12 +6,14 @@ conda_prefix="${JEANLUC_CONDA_PREFIX:-$repo_root/.conda-jeanluc}"
 workdir="$(mktemp -d)"
 trap 'rm -rf "$workdir"' EXIT
 
-for fixture in basic paired scoring softclip secondary pair-score-tie clear-dt tagging-all duplicate-set-members barcode-tag; do
+for fixture in basic paired scoring softclip secondary pair-score-tie clear-dt tagging-all duplicate-set-members barcode-tag read-barcode-tags; do
   fixture_dir="$repo_root/fixtures/markduplicates/$fixture"
   fixture_workdir="$workdir/$fixture"
   tagging_policy="DontTag"
   tag_duplicate_set_members="false"
   barcode_tag=""
+  read_one_barcode_tag=""
+  read_two_barcode_tag=""
   if [[ "$fixture" == "tagging-all" ]]; then
     tagging_policy="All"
   fi
@@ -20,6 +22,10 @@ for fixture in basic paired scoring softclip secondary pair-score-tie clear-dt t
   fi
   if [[ "$fixture" == "barcode-tag" ]]; then
     barcode_tag="RX"
+  fi
+  if [[ "$fixture" == "read-barcode-tags" ]]; then
+    read_one_barcode_tag="BX"
+    read_two_barcode_tag="BY"
   fi
   mkdir -p "$fixture_workdir"
 
@@ -37,6 +43,12 @@ for fixture in basic paired scoring softclip secondary pair-score-tie clear-dt t
     "TAG_DUPLICATE_SET_MEMBERS=$tag_duplicate_set_members")
   if [[ -n "$barcode_tag" ]]; then
     command+=("BARCODE_TAG=$barcode_tag")
+  fi
+  if [[ -n "$read_one_barcode_tag" ]]; then
+    command+=("READ_ONE_BARCODE_TAG=$read_one_barcode_tag")
+  fi
+  if [[ -n "$read_two_barcode_tag" ]]; then
+    command+=("READ_TWO_BARCODE_TAG=$read_two_barcode_tag")
   fi
   "${command[@]}"
 

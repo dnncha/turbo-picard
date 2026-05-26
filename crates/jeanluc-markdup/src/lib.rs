@@ -70,7 +70,7 @@ struct DuplicateKey {
     mate_position: i64,
     template_length: i64,
     reverse_strand: bool,
-    barcode: Option<String>,
+    barcode: Option<Vec<u8>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -477,13 +477,30 @@ fn duplicate_groups(
     duplicate_groups
 }
 
-fn sam_barcode(fields: &[String], config: &MarkDuplicatesConfig) -> Option<String> {
-    let tag = config.barcode_tag.as_deref()?;
+fn sam_barcode(fields: &[String], config: &MarkDuplicatesConfig) -> Option<Vec<u8>> {
+    if let Some(tag) = config.barcode_tag.as_deref() {
+        return sam_tag_value(fields, tag);
+    }
+
+    combined_barcode(
+        config
+            .read_one_barcode_tag
+            .as_deref()
+            .and_then(|tag| sam_tag_value(fields, tag)),
+        config
+            .read_two_barcode_tag
+            .as_deref()
+            .and_then(|tag| sam_tag_value(fields, tag)),
+    )
+}
+
+fn sam_tag_value(fields: &[String], tag: &str) -> Option<Vec<u8>> {
     let prefix = format!("{tag}:Z:");
-    fields
-        .iter()
-        .skip(11)
-        .find_map(|field| field.strip_prefix(&prefix).map(str::to_string))
+    fields.iter().skip(11).find_map(|field| {
+        field
+            .strip_prefix(&prefix)
+            .map(|value| value.as_bytes().to_vec())
+    })
 }
 
 fn first_barcode(
@@ -497,11 +514,47 @@ fn first_barcode(
 }
 
 fn bam_barcode(record: &bam::Record, config: &MarkDuplicatesConfig) -> Option<Vec<u8>> {
-    let tag = config.barcode_tag.as_deref()?;
+    if let Some(tag) = config.barcode_tag.as_deref() {
+        return bam_tag_value(record, tag);
+    }
+
+    combined_barcode(
+        config
+            .read_one_barcode_tag
+            .as_deref()
+            .and_then(|tag| bam_tag_value(record, tag)),
+        config
+            .read_two_barcode_tag
+            .as_deref()
+            .and_then(|tag| bam_tag_value(record, tag)),
+    )
+}
+
+fn bam_tag_value(record: &bam::Record, tag: &str) -> Option<Vec<u8>> {
     match record.aux(tag.as_bytes()) {
         Ok(Aux::String(value)) => Some(value.as_bytes().to_vec()),
         Ok(Aux::Char(value)) => Some(vec![value]),
         _ => None,
+    }
+}
+
+fn combined_barcode<T>(read_one: Option<T>, read_two: Option<T>) -> Option<Vec<u8>>
+where
+    T: AsRef<[u8]>,
+{
+    match (read_one, read_two) {
+        (None, None) => None,
+        (read_one, read_two) => {
+            let mut barcode = Vec::new();
+            if let Some(value) = read_one {
+                barcode.extend_from_slice(value.as_ref());
+            }
+            barcode.push(b'|');
+            if let Some(value) = read_two {
+                barcode.extend_from_slice(value.as_ref());
+            }
+            Some(barcode)
+        }
     }
 }
 

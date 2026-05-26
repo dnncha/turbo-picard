@@ -132,6 +132,8 @@ fn accepts_common_duplicate_tagging_options() {
         "TAGGING_POLICY=All".to_string(),
         "TAG_DUPLICATE_SET_MEMBERS=true".to_string(),
         "BARCODE_TAG=RX".to_string(),
+        "READ_ONE_BARCODE_TAG=BX".to_string(),
+        "READ_TWO_BARCODE_TAG=BY".to_string(),
         "CLEAR_DT=true".to_string(),
         "OPTICAL_DUPLICATE_PIXEL_DISTANCE=2500".to_string(),
     ];
@@ -143,6 +145,8 @@ fn accepts_common_duplicate_tagging_options() {
     assert_eq!(config.tagging_policy.as_deref(), Some("All"));
     assert!(config.tag_duplicate_set_members);
     assert_eq!(config.barcode_tag.as_deref(), Some("RX"));
+    assert_eq!(config.read_one_barcode_tag.as_deref(), Some("BX"));
+    assert_eq!(config.read_two_barcode_tag.as_deref(), Some("BY"));
     assert!(config.clear_dt);
     assert_eq!(config.optical_duplicate_pixel_distance, Some(2500));
 }
