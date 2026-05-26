@@ -1,4 +1,4 @@
 /target/
 /.conda-*
+/benchmarks/inputs/
 /benchmarks/runs/
-

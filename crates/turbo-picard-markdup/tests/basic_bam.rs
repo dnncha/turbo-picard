@@ -813,6 +813,50 @@ fn keeps_duplicate_positions_separate_by_library() {
 }
 
 #[test]
+fn copies_single_bam_when_no_duplicates_and_no_rewrite_options_are_requested() {
+    let tempdir = tempfile::tempdir().expect("tempdir exists");
+    let output = tempdir.path().join("output.bam");
+    let metrics = tempdir.path().join("metrics.txt");
+    let input = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../fixtures/markduplicates/multi-library/input.bam");
+    let config = MarkDuplicatesConfig {
+        input: input.display().to_string(),
+        inputs: vec![input.display().to_string()],
+        output: output.display().to_string(),
+        metrics_file: metrics.display().to_string(),
+        remove_duplicates: false,
+        remove_sequencing_duplicates: false,
+        assume_sorted: true,
+        assume_sort_order: None,
+        validation_stringency: Some("SILENT".to_string()),
+        quiet: true,
+        create_index: false,
+        create_md5_file: false,
+        add_pg_tag_to_reads: false,
+        tag_duplicate_set_members: false,
+        duplicate_scoring_strategy: None,
+        read_name_regex: Some("null".to_string()),
+        tagging_policy: Some("DontTag".to_string()),
+        barcode_tag: None,
+        read_one_barcode_tag: None,
+        read_two_barcode_tag: None,
+        clear_dt: false,
+        optical_duplicate_pixel_distance: None,
+        compression_level: None,
+    };
+
+    turbo_picard_markdup::run(&config).expect("BAM duplicate marking succeeds");
+
+    assert_eq!(
+        std::fs::read(&output).expect("output BAM exists"),
+        std::fs::read(&input).expect("input BAM exists")
+    );
+    let metrics_text = std::fs::read_to_string(&metrics).expect("metrics file exists");
+    assert!(metrics_text.contains("libA\t0\t1\t0\t0\t0\t0\t0\t0\t\n"));
+    assert!(metrics_text.contains("libB\t0\t1\t0\t0\t0\t0\t0\t0\t\n"));
+}
+
+#[test]
 fn preserves_libraries_from_later_bam_inputs() {
     let tempdir = tempfile::tempdir().expect("tempdir exists");
     let output = tempdir.path().join("output.bam");

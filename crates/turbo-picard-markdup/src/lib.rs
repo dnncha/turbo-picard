@@ -1,7 +1,7 @@
 #![forbid(unsafe_code)]
 
 use rust_htslib::bam::header::HeaderRecord;
-use rust_htslib::bam::record::{Aux, Cigar};
+use rust_htslib::bam::record::Aux;
 use rust_htslib::bam::{self, CompressionLevel, Read, index};
 use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 use std::cmp::Ordering;
@@ -76,7 +76,7 @@ struct DuplicateKey {
     barcode: Option<Vec<u8>>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 struct BamDuplicateKey {
     library_id: LibraryId,
     reference_id: i32,
@@ -212,6 +212,10 @@ fn is_bam_input(input: &str) -> bool {
 }
 
 fn run_bam(config: &MarkDuplicatesConfig) -> Result<MarkDuplicatesSummary, MarkDuplicatesError> {
+    if let Some(summary) = try_run_single_bam_no_duplicate_fast_path(config)? {
+        return Ok(summary);
+    }
+
     let first_input = &config.inputs[0];
     let mut reader = bam::Reader::from_path(first_input)?;
     let bgzf_threads = bgzf_threads();
@@ -374,6 +378,332 @@ fn run_bam(config: &MarkDuplicatesConfig) -> Result<MarkDuplicatesSummary, MarkD
     Ok(summary)
 }
 
+#[derive(Debug)]
+struct FastPairRecord {
+    library_id: LibraryId,
+    reference_id: i32,
+    position: i64,
+    mate_reference_id: i32,
+    mate_position: i64,
+    template_length: i64,
+    barcode: Option<Vec<u8>>,
+}
+
+fn try_run_single_bam_no_duplicate_fast_path(
+    config: &MarkDuplicatesConfig,
+) -> Result<Option<MarkDuplicatesSummary>, MarkDuplicatesError> {
+    if config.inputs.len() != 1 || config.tag_duplicate_set_members {
+        return Ok(None);
+    }
+
+    let mut reader = bam::Reader::from_path(&config.input)?;
+    let bgzf_threads = bgzf_threads();
+    if let Some(threads) = bgzf_threads {
+        reader.set_threads(threads)?;
+    }
+    let mut library_registry = LibraryRegistry::new();
+    let library_lookup = library_lookup(reader.header(), &mut library_registry);
+    let library = library_registry
+        .summary(library_lookup.first_library_id)
+        .library
+        .clone();
+    let mut summary = MarkDuplicatesSummary {
+        library,
+        unpaired_reads_examined: 0,
+        read_pairs_examined: 0,
+        secondary_or_supplementary_records: 0,
+        unpaired_duplicate_records: 0,
+        duplicate_pair_records: 0,
+        read_pair_optical_duplicates: 0,
+        unmapped_records: 0,
+    };
+    let mut seen_single_keys = HashMap::<BamDuplicateKey, Vec<u8>>::default();
+    let mut last_pair_key = None::<(BamDuplicateKey, Vec<u8>)>;
+    let mut adjacent_pending_pair = None::<(Vec<u8>, FastPairRecord)>;
+    let mut pending_pairs = HashMap::<Vec<u8>, FastPairRecord>::default();
+    let copy_input_on_success = can_copy_input_without_rewrite(config);
+    let temp_output = (!copy_input_on_success).then(|| temp_bam_output_path(&config.output));
+    let mut writer = if let Some(temp_output) = temp_output.as_deref() {
+        let mut header = bam::Header::from_template(reader.header());
+        if config.add_pg_tag_to_reads {
+            header.push_record(
+                HeaderRecord::new(b"PG")
+                    .push_tag(b"ID", "MarkDuplicates")
+                    .push_tag(b"PN", "MarkDuplicates"),
+            );
+        }
+        let mut writer = bam::Writer::from_path(temp_output, &header, bam::Format::Bam)?;
+        if let Some(threads) = bgzf_threads {
+            writer.set_threads(threads)?;
+        }
+        if let Some(level) = config.compression_level {
+            writer.set_compression_level(CompressionLevel::Level(level))?;
+        }
+        Some(writer)
+    } else {
+        None
+    };
+    let mut should_fallback = false;
+
+    for result in reader.records() {
+        let record = result?;
+        let flag = record.flags();
+        if flag & DUPLICATE_FLAG != 0 {
+            should_fallback = true;
+            break;
+        }
+        let library_id = record_library_id(&record, &library_lookup);
+
+        if flag & UNMAPPED_FLAG != 0 {
+            summary.unmapped_records += 1;
+            library_registry.summary_mut(library_id).unmapped_records += 1;
+            if let Some(writer) = writer.as_mut() {
+                write_bam_record(record, false, config, writer)?;
+            }
+            continue;
+        }
+        if flag & SECONDARY_OR_SUPPLEMENTARY_FLAGS != 0 {
+            summary.secondary_or_supplementary_records += 1;
+            library_registry
+                .summary_mut(library_id)
+                .secondary_or_supplementary_records += 1;
+            if let Some(writer) = writer.as_mut() {
+                write_bam_record(record, false, config, writer)?;
+            }
+            continue;
+        }
+
+        if flag & PAIRED_FLAG != 0 {
+            if flag & FIRST_IN_PAIR_FLAG != 0 {
+                summary.read_pairs_examined += 1;
+                library_registry.summary_mut(library_id).read_pairs_examined += 1;
+            }
+            let qname = record.qname();
+            let current = fast_pair_record(&record, library_id, config);
+            if let Some((pending_qname, first)) = adjacent_pending_pair.take() {
+                if pending_qname.as_slice() == qname {
+                    if fast_pair_key_requires_fallback(&mut last_pair_key, &first, &current, qname)
+                    {
+                        should_fallback = true;
+                        break;
+                    }
+                } else {
+                    pending_pairs.insert(pending_qname, first);
+                    if let Some(first) = pending_pairs.remove(qname) {
+                        if fast_pair_key_requires_fallback(
+                            &mut last_pair_key,
+                            &first,
+                            &current,
+                            qname,
+                        ) {
+                            should_fallback = true;
+                            break;
+                        }
+                    } else {
+                        adjacent_pending_pair = Some((qname.to_vec(), current));
+                    }
+                }
+            } else if let Some(first) = pending_pairs.remove(qname) {
+                if fast_pair_key_requires_fallback(&mut last_pair_key, &first, &current, qname) {
+                    should_fallback = true;
+                    break;
+                }
+            } else {
+                adjacent_pending_pair = Some((qname.to_vec(), current));
+            }
+        } else {
+            summary.unpaired_reads_examined += 1;
+            library_registry
+                .summary_mut(library_id)
+                .unpaired_reads_examined += 1;
+            let key = single_duplicate_key_bam(&record, library_id, &bam_barcode(&record, config));
+            if duplicate_key_seen_with_different_name(&mut seen_single_keys, key, record.qname())? {
+                should_fallback = true;
+                break;
+            }
+        }
+        if let Some(writer) = writer.as_mut() {
+            write_bam_record(record, false, config, writer)?;
+        }
+    }
+
+    if !should_fallback {
+        if let Some((qname, record)) = adjacent_pending_pair {
+            let key = fast_single_duplicate_key(&record);
+            if duplicate_key_seen_with_different_name(&mut seen_single_keys, key, &qname)? {
+                should_fallback = true;
+            }
+        }
+    }
+
+    if !should_fallback {
+        for (qname, record) in pending_pairs {
+            let key = fast_single_duplicate_key(&record);
+            if duplicate_key_seen_with_different_name(&mut seen_single_keys, key, &qname)? {
+                should_fallback = true;
+                break;
+            }
+        }
+    }
+
+    drop(writer);
+    if should_fallback {
+        if let Some(temp_output) = temp_output.as_deref() {
+            let _ = fs::remove_file(temp_output);
+        }
+        return Ok(None);
+    }
+    if Path::new(&config.output).exists() {
+        fs::remove_file(&config.output)?;
+    }
+    if copy_input_on_success {
+        fs::copy(&config.input, &config.output)?;
+    } else if let Some(temp_output) = temp_output.as_deref() {
+        fs::rename(temp_output, &config.output)?;
+    }
+    let mut library_summaries = library_registry.summary_refs();
+    library_summaries.sort_by(|left, right| left.library.cmp(&right.library));
+    fs::write(
+        &config.metrics_file,
+        metrics_text_for_libraries(library_summaries),
+    )?;
+    if config.create_md5_file {
+        write_md5_sidecar(&config.output)?;
+    }
+    if config.create_index {
+        index::build(
+            &config.output,
+            Some(&picard_bai_path(&config.output)),
+            index::Type::Bai,
+            1,
+        )?;
+    }
+    Ok(Some(summary))
+}
+
+fn fast_pair_key_requires_fallback(
+    last_pair_key: &mut Option<(BamDuplicateKey, Vec<u8>)>,
+    first: &FastPairRecord,
+    current: &FastPairRecord,
+    qname: &[u8],
+) -> bool {
+    let barcode = first.barcode.clone().or_else(|| current.barcode.clone());
+    let key = fast_pair_duplicate_key(first, current, barcode);
+    !matches!(
+        ordered_duplicate_key_state(last_pair_key, key, qname),
+        DuplicateKeyState::Unique
+    )
+}
+
+fn temp_bam_output_path(output: &str) -> String {
+    format!("{}.tmp.{}.bam", output, std::process::id())
+}
+
+fn can_copy_input_without_rewrite(config: &MarkDuplicatesConfig) -> bool {
+    config.inputs.len() == 1
+        && !config.add_pg_tag_to_reads
+        && !config.clear_dt
+        && config.compression_level.is_none()
+        && Path::new(&config.input) != Path::new(&config.output)
+}
+
+enum DuplicateKeyState {
+    Unique,
+    Duplicate,
+    OutOfOrder,
+}
+
+fn ordered_duplicate_key_state(
+    last_key_and_name: &mut Option<(BamDuplicateKey, Vec<u8>)>,
+    key: BamDuplicateKey,
+    qname: &[u8],
+) -> DuplicateKeyState {
+    let Some((last_key, last_qname)) = last_key_and_name else {
+        *last_key_and_name = Some((key, qname.to_vec()));
+        return DuplicateKeyState::Unique;
+    };
+
+    match key.cmp(last_key) {
+        Ordering::Greater => {
+            *last_key = key;
+            last_qname.clear();
+            last_qname.extend_from_slice(qname);
+            DuplicateKeyState::Unique
+        }
+        Ordering::Equal if last_qname.as_slice() != qname => DuplicateKeyState::Duplicate,
+        Ordering::Equal => DuplicateKeyState::OutOfOrder,
+        Ordering::Less => DuplicateKeyState::OutOfOrder,
+    }
+}
+
+fn duplicate_key_seen_with_different_name(
+    seen_keys: &mut HashMap<BamDuplicateKey, Vec<u8>>,
+    key: BamDuplicateKey,
+    qname: &[u8],
+) -> Result<bool, MarkDuplicatesError> {
+    if let Some(existing_qname) = seen_keys.get(&key) {
+        return Ok(existing_qname.as_slice() != qname);
+    }
+    seen_keys.insert(key, qname.to_vec());
+    Ok(false)
+}
+
+fn fast_pair_record(
+    record: &bam::Record,
+    library_id: LibraryId,
+    config: &MarkDuplicatesConfig,
+) -> FastPairRecord {
+    FastPairRecord {
+        library_id,
+        reference_id: record.tid(),
+        position: unclipped_record_position(record),
+        mate_reference_id: record.mtid(),
+        mate_position: record.mpos(),
+        template_length: record.insert_size(),
+        barcode: bam_barcode(record, config),
+    }
+}
+
+fn fast_pair_duplicate_key(
+    first: &FastPairRecord,
+    second: &FastPairRecord,
+    barcode: Option<Vec<u8>>,
+) -> BamDuplicateKey {
+    let (left, right) =
+        if (first.reference_id, first.position) <= (second.reference_id, second.position) {
+            (first, second)
+        } else {
+            (second, first)
+        };
+
+    BamDuplicateKey {
+        library_id: first.library_id,
+        reference_id: left.reference_id,
+        position: left.position,
+        mate_reference_id: right.reference_id,
+        mate_position: right.position,
+        template_length: first
+            .template_length
+            .abs()
+            .max(second.template_length.abs()),
+        reverse_strand: false,
+        barcode,
+    }
+}
+
+fn fast_single_duplicate_key(record: &FastPairRecord) -> BamDuplicateKey {
+    BamDuplicateKey {
+        library_id: record.library_id,
+        reference_id: record.reference_id,
+        position: record.position,
+        mate_reference_id: record.mate_reference_id,
+        mate_position: record.mate_position,
+        template_length: record.template_length,
+        reverse_strand: false,
+        barcode: record.barcode.clone(),
+    }
+}
+
 fn bgzf_threads() -> Option<usize> {
     if let Ok(value) = std::env::var("TURBO_PICARD_THREADS") {
         return value
@@ -452,26 +782,34 @@ fn write_bam_records(
     config: &MarkDuplicatesConfig,
     writer: &mut bam::Writer,
 ) -> Result<(), MarkDuplicatesError> {
-    for (mut record, is_optical_duplicate) in records {
-        let is_duplicate = record.flags() & DUPLICATE_FLAG != 0;
-        if (config.remove_duplicates && is_duplicate)
-            || (config.remove_sequencing_duplicates && is_optical_duplicate)
-        {
-            continue;
-        }
-        if config.clear_dt {
-            clear_duplicate_type_tag(&mut record)?;
-        }
-        if let Some(duplicate_type) =
-            duplicate_type_tag(config, record.flags(), is_optical_duplicate)
-        {
-            add_duplicate_type_tag(&mut record, duplicate_type)?;
-        }
-        if config.add_pg_tag_to_reads {
-            add_program_group_to_bam_record(&mut record)?;
-        }
-        writer.write(&record)?;
+    for (record, is_optical_duplicate) in records {
+        write_bam_record(record, is_optical_duplicate, config, writer)?;
     }
+    Ok(())
+}
+
+fn write_bam_record(
+    mut record: bam::Record,
+    is_optical_duplicate: bool,
+    config: &MarkDuplicatesConfig,
+    writer: &mut bam::Writer,
+) -> Result<(), MarkDuplicatesError> {
+    let is_duplicate = record.flags() & DUPLICATE_FLAG != 0;
+    if (config.remove_duplicates && is_duplicate)
+        || (config.remove_sequencing_duplicates && is_optical_duplicate)
+    {
+        return Ok(());
+    }
+    if config.clear_dt {
+        clear_duplicate_type_tag(&mut record)?;
+    }
+    if let Some(duplicate_type) = duplicate_type_tag(config, record.flags(), is_optical_duplicate) {
+        add_duplicate_type_tag(&mut record, duplicate_type)?;
+    }
+    if config.add_pg_tag_to_reads {
+        add_program_group_to_bam_record(&mut record)?;
+    }
+    writer.write(&record)?;
     Ok(())
 }
 
@@ -714,16 +1052,25 @@ fn duplicate_groups(
     eligible_indices: &[usize],
     config: &MarkDuplicatesConfig,
 ) -> HashMap<BamDuplicateKey, Vec<usize>> {
-    let mut paired_by_name = HashMap::<Vec<u8>, Vec<usize>>::default();
+    let mut paired_by_name = HashMap::<Vec<u8>, usize>::default();
     let mut duplicate_groups = HashMap::<BamDuplicateKey, Vec<usize>>::default();
 
     for index in eligible_indices.iter().copied() {
         let record = &records[index];
         if record.flags() & PAIRED_FLAG != 0 {
-            paired_by_name
-                .entry(record.qname().to_vec())
-                .or_default()
-                .push(index);
+            if let Some(first_index) = paired_by_name.remove(record.qname()) {
+                let indices = [first_index, index];
+                let barcode = first_barcode(records, &indices, config);
+                let key = pair_duplicate_key_bam(
+                    &records[first_index],
+                    record,
+                    record_libraries[first_index],
+                    barcode,
+                );
+                duplicate_groups.entry(key).or_default().extend(indices);
+            } else {
+                paired_by_name.insert(record.qname().to_vec(), index);
+            }
         } else {
             duplicate_groups
                 .entry(single_duplicate_key_bam(
@@ -736,19 +1083,10 @@ fn duplicate_groups(
         }
     }
 
-    for indices in paired_by_name.into_values() {
-        let barcode = first_barcode(records, &indices, config);
-        let key = if indices.len() >= 2 {
-            pair_duplicate_key_bam(
-                &records[indices[0]],
-                &records[indices[1]],
-                record_libraries[indices[0]],
-                barcode,
-            )
-        } else {
-            single_duplicate_key_bam(&records[indices[0]], record_libraries[indices[0]], &barcode)
-        };
-        duplicate_groups.entry(key).or_default().extend(indices);
+    for index in paired_by_name.into_values() {
+        let barcode = bam_barcode(&records[index], config);
+        let key = single_duplicate_key_bam(&records[index], record_libraries[index], &barcode);
+        duplicate_groups.entry(key).or_default().push(index);
     }
 
     duplicate_groups
@@ -882,53 +1220,44 @@ fn pair_duplicate_key_bam(
 
 fn unclipped_record_position(record: &bam::Record) -> i64 {
     let reverse_strand = record.flags() & 0x10 != 0;
-    let cigar = record.cigar();
+    let cigar = record.raw_cigar();
     if reverse_strand {
         let reference_len: i64 = cigar
             .iter()
-            .filter(|operation| consumes_reference(operation))
-            .map(cigar_len)
+            .filter(|operation| raw_cigar_consumes_reference(**operation))
+            .map(|operation| raw_cigar_len(*operation))
             .sum();
         let trailing_clip: i64 = cigar
             .iter()
             .rev()
-            .take_while(|operation| is_clip(operation))
-            .map(cigar_len)
+            .take_while(|operation| raw_cigar_is_clip(**operation))
+            .map(|operation| raw_cigar_len(*operation))
             .sum();
         record.pos() + reference_len + trailing_clip - 1
     } else {
         let leading_clip: i64 = cigar
             .iter()
-            .take_while(|operation| is_clip(operation))
-            .map(cigar_len)
+            .take_while(|operation| raw_cigar_is_clip(**operation))
+            .map(|operation| raw_cigar_len(*operation))
             .sum();
         record.pos() - leading_clip
     }
 }
 
-fn consumes_reference(operation: &Cigar) -> bool {
-    matches!(
-        operation,
-        Cigar::Match(_) | Cigar::Del(_) | Cigar::RefSkip(_) | Cigar::Equal(_) | Cigar::Diff(_)
-    )
+fn raw_cigar_len(operation: u32) -> i64 {
+    i64::from(operation >> 4)
 }
 
-fn is_clip(operation: &Cigar) -> bool {
-    matches!(operation, Cigar::SoftClip(_) | Cigar::HardClip(_))
+fn raw_cigar_op(operation: u32) -> u32 {
+    operation & 0x0f
 }
 
-fn cigar_len(operation: &Cigar) -> i64 {
-    match operation {
-        Cigar::Match(len)
-        | Cigar::Ins(len)
-        | Cigar::Del(len)
-        | Cigar::RefSkip(len)
-        | Cigar::SoftClip(len)
-        | Cigar::HardClip(len)
-        | Cigar::Pad(len)
-        | Cigar::Equal(len)
-        | Cigar::Diff(len) => i64::from(*len),
-    }
+fn raw_cigar_consumes_reference(operation: u32) -> bool {
+    matches!(raw_cigar_op(operation), 0 | 2 | 3 | 7 | 8)
+}
+
+fn raw_cigar_is_clip(operation: u32) -> bool {
+    matches!(raw_cigar_op(operation), 4 | 5)
 }
 
 fn unclipped_five_prime_position(position: i64, cigar: &str, reverse_strand: bool) -> i64 {
