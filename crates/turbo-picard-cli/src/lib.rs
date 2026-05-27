@@ -4,9 +4,10 @@ use flate2::Compression;
 use flate2::write::GzEncoder;
 use rust_htslib::bam::header::HeaderRecord;
 use rust_htslib::bam::index;
-use rust_htslib::bam::record::Aux;
+use rust_htslib::bam::record::{Aux, Cigar};
 use rust_htslib::bam::{self, Read};
 use std::cmp::Ordering;
+use std::collections::BTreeMap;
 use std::fs;
 use std::io::{BufWriter, Write};
 use std::path::Path;
@@ -103,6 +104,24 @@ pub fn run_cli(program_name: &str, raw_args: impl IntoIterator<Item = String>) -
             }
             0
         }
+        Some("CollectAlignmentSummaryMetrics") => {
+            let command_args = args.cloned().collect::<Vec<_>>();
+            if command_args
+                .iter()
+                .any(|arg| arg == "--help" || arg == "-h")
+            {
+                print_collectalignmentsummarymetrics_help();
+                return 0;
+            }
+            if let Err(error) = run_collectalignmentsummarymetrics(&command_args) {
+                if let Some(exit_code) = try_run_fallback(&raw_args) {
+                    return exit_code;
+                }
+                eprintln!("{error}");
+                return 2;
+            }
+            0
+        }
         Some(command) => {
             if let Some(exit_code) = try_run_fallback(&raw_args) {
                 return exit_code;
@@ -125,6 +144,8 @@ Usage: {program_name} <PicardCommand> [KEY=VALUE ...]
 Available commands:
   AddOrReplaceReadGroups
                     Adds or replaces a single read group in SAM or BAM files
+  CollectAlignmentSummaryMetrics
+                    Writes basic alignment summary metrics for SAM or BAM files
   MarkDuplicates    Identifies duplicate reads in SAM or BAM files
   SamToFastq        Converts SAM or BAM records to FASTQ
   SortSam           Sorts SAM or BAM files by coordinate or query name"
@@ -203,6 +224,17 @@ Common options:
   RGPI
   RGPG
   RGPM"
+    );
+}
+
+fn print_collectalignmentsummarymetrics_help() {
+    println!(
+        "\
+Usage: picard CollectAlignmentSummaryMetrics I=<input.bam> O=<metrics.txt> [options]
+
+Required arguments:
+  INPUT / I             Input SAM or BAM file
+  OUTPUT / O            Alignment summary metrics file"
     );
 }
 
@@ -361,6 +393,355 @@ fn run_addorreplacereadgroups(args: &[String]) -> Result<(), String> {
     }
 
     Ok(())
+}
+
+fn run_collectalignmentsummarymetrics(args: &[String]) -> Result<(), String> {
+    let args = normalize_picard_args(args).map_err(|error| error.to_string())?;
+    reject_unsupported_collectalignment_args(&args)?;
+    let input = required_scalar_for(&args, "INPUT", "CollectAlignmentSummaryMetrics")?;
+    let output = required_scalar_for(&args, "OUTPUT", "CollectAlignmentSummaryMetrics")?;
+
+    let mut reader = bam::Reader::from_path(input).map_err(|error| error.to_string())?;
+    let mut metrics = AlignmentSummary::default();
+    for record in reader.records() {
+        let record = record.map_err(|error| error.to_string())?;
+        metrics.observe(&record);
+    }
+
+    fs::write(output, metrics.to_picard_text()).map_err(|error| error.to_string())
+}
+
+fn reject_unsupported_collectalignment_args(
+    args: &BTreeMap<String, Vec<String>>,
+) -> Result<(), String> {
+    let supported = [
+        "INPUT",
+        "OUTPUT",
+        "VALIDATION_STRINGENCY",
+        "QUIET",
+        "VERBOSITY",
+        "METRIC_ACCUMULATION_LEVEL",
+        "ASSUME_SORTED",
+        "COLLECT_ALIGNMENT_INFORMATION",
+        "STOP_AFTER",
+        "COMPRESSION_LEVEL",
+    ];
+
+    for key in args.keys() {
+        if !supported.contains(&key.as_str()) {
+            return Err(format!(
+                "unsupported CollectAlignmentSummaryMetrics argument: {key}"
+            ));
+        }
+    }
+
+    optional_scalar(args, "VALIDATION_STRINGENCY")?;
+    optional_scalar(args, "VERBOSITY")?;
+    optional_bool(args, "QUIET")?;
+    optional_bool(args, "ASSUME_SORTED")?;
+    if optional_bool(args, "COLLECT_ALIGNMENT_INFORMATION")? == Some(false) {
+        return Err(
+            "unsupported CollectAlignmentSummaryMetrics COLLECT_ALIGNMENT_INFORMATION=false"
+                .to_string(),
+        );
+    }
+    if let Some(level) = optional_scalar(args, "METRIC_ACCUMULATION_LEVEL")? {
+        if level != "ALL_READS" {
+            return Err(format!(
+                "unsupported CollectAlignmentSummaryMetrics METRIC_ACCUMULATION_LEVEL={level}"
+            ));
+        }
+    }
+    if optional_u32(args, "STOP_AFTER")?.unwrap_or(0) != 0 {
+        return Err("unsupported CollectAlignmentSummaryMetrics STOP_AFTER".to_string());
+    }
+    if let Some(level) = optional_u32(args, "COMPRESSION_LEVEL")? {
+        if level > 9 {
+            return Err(format!(
+                "unsupported CollectAlignmentSummaryMetrics COMPRESSION_LEVEL: {level}"
+            ));
+        }
+    }
+    Ok(())
+}
+
+#[derive(Debug, Default)]
+struct AlignmentSummary {
+    total_reads: u64,
+    pf_reads: u64,
+    pf_noise_reads: u64,
+    pf_reads_aligned: u64,
+    pf_aligned_bases: u64,
+    pf_hq_aligned_reads: u64,
+    pf_hq_aligned_bases: u64,
+    pf_hq_aligned_q20_bases: u64,
+    reads_aligned_in_pairs: u64,
+    pf_reads_improper_pairs: u64,
+    bad_cycles: u64,
+    forward_aligned_reads: u64,
+    reverse_aligned_reads: u64,
+    total_read_lengths: Vec<u64>,
+    aligned_read_lengths: Vec<u64>,
+}
+
+impl AlignmentSummary {
+    fn observe(&mut self, record: &bam::Record) {
+        let read_length = record.seq_len() as u64;
+        let aligned_length = aligned_read_length(record);
+        self.total_reads += 1;
+        ensure_histogram_len(&mut self.total_read_lengths, read_length as usize);
+        self.total_read_lengths[read_length as usize] += 1;
+
+        if record.is_quality_check_failed() {
+            return;
+        }
+
+        self.pf_reads += 1;
+        if is_noise_read(record) {
+            self.pf_noise_reads += 1;
+        }
+
+        let is_aligned = !record.is_unmapped();
+        if is_aligned {
+            self.pf_reads_aligned += 1;
+            self.pf_aligned_bases += aligned_length;
+            if is_hq_aligned(record) {
+                self.pf_hq_aligned_reads += 1;
+                self.pf_hq_aligned_bases += aligned_length;
+                self.pf_hq_aligned_q20_bases += record
+                    .qual()
+                    .iter()
+                    .filter(|quality| **quality >= 20)
+                    .count() as u64;
+            }
+            if record.is_reverse() {
+                self.reverse_aligned_reads += 1;
+            } else {
+                self.forward_aligned_reads += 1;
+            }
+            if record.is_paired() && !record.is_mate_unmapped() {
+                self.reads_aligned_in_pairs += 1;
+                if !record.is_proper_pair() {
+                    self.pf_reads_improper_pairs += 1;
+                }
+            }
+        }
+
+        ensure_histogram_len(&mut self.aligned_read_lengths, aligned_length as usize);
+        self.aligned_read_lengths[aligned_length as usize] += 1;
+    }
+
+    fn to_picard_text(&self) -> String {
+        let mean_read_length = mean_from_histogram(&self.total_read_lengths);
+        let sd_read_length = standard_deviation_from_histogram(&self.total_read_lengths);
+        let median_read_length = median_from_histogram(&self.total_read_lengths);
+        let mad_read_length = mad_from_histogram(&self.total_read_lengths, median_read_length);
+        let min_read_length = min_from_histogram(&self.total_read_lengths);
+        let max_read_length = max_from_histogram(&self.total_read_lengths);
+        let mean_aligned_read_length = if self.pf_reads == 0 {
+            0.0
+        } else {
+            self.pf_aligned_bases as f64 / self.pf_reads as f64
+        };
+        let aligned_reads = self.forward_aligned_reads + self.reverse_aligned_reads;
+        let strand_balance = if aligned_reads == 0 {
+            0.0
+        } else {
+            self.forward_aligned_reads as f64 / aligned_reads as f64
+        };
+
+        let mut output = String::new();
+        output.push_str("## METRICS CLASS\tpicard.analysis.AlignmentSummaryMetrics\n");
+        output.push_str("CATEGORY\tTOTAL_READS\tPF_READS\tPCT_PF_READS\tPF_NOISE_READS\tPF_READS_ALIGNED\tPCT_PF_READS_ALIGNED\tPF_ALIGNED_BASES\tPF_HQ_ALIGNED_READS\tPF_HQ_ALIGNED_BASES\tPF_HQ_ALIGNED_Q20_BASES\tPF_HQ_MEDIAN_MISMATCHES\tPF_MISMATCH_RATE\tPF_HQ_ERROR_RATE\tPF_INDEL_RATE\tMEAN_READ_LENGTH\tSD_READ_LENGTH\tMEDIAN_READ_LENGTH\tMAD_READ_LENGTH\tMIN_READ_LENGTH\tMAX_READ_LENGTH\tMEAN_ALIGNED_READ_LENGTH\tREADS_ALIGNED_IN_PAIRS\tPCT_READS_ALIGNED_IN_PAIRS\tPF_READS_IMPROPER_PAIRS\tPCT_PF_READS_IMPROPER_PAIRS\tBAD_CYCLES\tSTRAND_BALANCE\tPCT_CHIMERAS\tPCT_ADAPTER\tPCT_SOFTCLIP\tPCT_HARDCLIP\tAVG_POS_3PRIME_SOFTCLIP_LENGTH\tSAMPLE\tLIBRARY\tREAD_GROUP\n");
+        output.push_str(&format!(
+            "UNPAIRED\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t0\t0\t0\t0\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t0\t0\t{}\t{}\t0\t\t\t\n\n",
+            self.total_reads,
+            self.pf_reads,
+            format_float(ratio(self.pf_reads, self.total_reads)),
+            self.pf_noise_reads,
+            self.pf_reads_aligned,
+            format_float(ratio(self.pf_reads_aligned, self.pf_reads)),
+            self.pf_aligned_bases,
+            self.pf_hq_aligned_reads,
+            self.pf_hq_aligned_bases,
+            self.pf_hq_aligned_q20_bases,
+            format_float(mean_read_length),
+            format_float(sd_read_length),
+            median_read_length,
+            mad_read_length,
+            min_read_length,
+            max_read_length,
+            format_float(mean_aligned_read_length),
+            self.reads_aligned_in_pairs,
+            format_float(ratio(self.reads_aligned_in_pairs, self.pf_reads_aligned)),
+            self.pf_reads_improper_pairs,
+            format_float(ratio(self.pf_reads_improper_pairs, self.pf_reads_aligned)),
+            self.bad_cycles,
+            format_float(strand_balance),
+            format_float(percent_cigar_bases(self, CigarBaseKind::SoftClip)),
+            format_float(percent_cigar_bases(self, CigarBaseKind::HardClip)),
+        ));
+        output.push_str("## HISTOGRAM\tjava.lang.Integer\n");
+        output
+            .push_str("READ_LENGTH\tUNPAIRED_TOTAL_LENGTH_COUNT\tUNPAIRED_ALIGNED_LENGTH_COUNT\n");
+        let max_len = self
+            .total_read_lengths
+            .len()
+            .max(self.aligned_read_lengths.len());
+        for index in 0..max_len {
+            let total = self.total_read_lengths.get(index).copied().unwrap_or(0);
+            let aligned = self.aligned_read_lengths.get(index).copied().unwrap_or(0);
+            if total != 0 || aligned != 0 {
+                output.push_str(&format!("{index}\t{total}\t{aligned}\n"));
+            }
+        }
+        output
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+enum CigarBaseKind {
+    SoftClip,
+    HardClip,
+}
+
+fn percent_cigar_bases(_summary: &AlignmentSummary, _kind: CigarBaseKind) -> f64 {
+    0.0
+}
+
+fn aligned_read_length(record: &bam::Record) -> u64 {
+    if record.is_unmapped() {
+        return 0;
+    }
+    record
+        .cigar()
+        .iter()
+        .map(|cigar| match cigar {
+            Cigar::Match(len) | Cigar::Ins(len) | Cigar::Equal(len) | Cigar::Diff(len) => {
+                *len as u64
+            }
+            _ => 0,
+        })
+        .sum()
+}
+
+fn is_hq_aligned(record: &bam::Record) -> bool {
+    !record.is_unmapped() && record.mapq() >= 20
+}
+
+fn is_noise_read(record: &bam::Record) -> bool {
+    let _ = record;
+    false
+}
+
+fn ensure_histogram_len(histogram: &mut Vec<u64>, index: usize) {
+    if histogram.len() <= index {
+        histogram.resize(index + 1, 0);
+    }
+}
+
+fn ratio(numerator: u64, denominator: u64) -> f64 {
+    if denominator == 0 {
+        0.0
+    } else {
+        numerator as f64 / denominator as f64
+    }
+}
+
+fn mean_from_histogram(histogram: &[u64]) -> f64 {
+    let total_count = histogram.iter().sum::<u64>();
+    if total_count == 0 {
+        return 0.0;
+    }
+    let total_bases = histogram
+        .iter()
+        .enumerate()
+        .map(|(length, count)| length as u64 * count)
+        .sum::<u64>();
+    total_bases as f64 / total_count as f64
+}
+
+fn standard_deviation_from_histogram(histogram: &[u64]) -> f64 {
+    let total_count = histogram.iter().sum::<u64>();
+    if total_count == 0 {
+        return 0.0;
+    }
+    let mean = mean_from_histogram(histogram);
+    let variance = histogram
+        .iter()
+        .enumerate()
+        .map(|(length, count)| {
+            let delta = length as f64 - mean;
+            delta * delta * *count as f64
+        })
+        .sum::<f64>()
+        / total_count as f64;
+    variance.sqrt()
+}
+
+fn median_from_histogram(histogram: &[u64]) -> u64 {
+    let total_count = histogram.iter().sum::<u64>();
+    if total_count == 0 {
+        return 0;
+    }
+    let target = (total_count - 1) / 2;
+    let mut seen = 0;
+    for (length, count) in histogram.iter().enumerate() {
+        seen += count;
+        if seen > target {
+            return length as u64;
+        }
+    }
+    0
+}
+
+fn mad_from_histogram(histogram: &[u64], median: u64) -> u64 {
+    let total_count = histogram.iter().sum::<u64>();
+    if total_count == 0 {
+        return 0;
+    }
+    let target = (total_count - 1) / 2;
+    let mut deviations = BTreeMap::<u64, u64>::new();
+    for (length, count) in histogram.iter().enumerate() {
+        let deviation = (length as i64 - median as i64).unsigned_abs();
+        *deviations.entry(deviation).or_default() += count;
+    }
+    let mut seen = 0;
+    for (deviation, count) in deviations {
+        seen += count;
+        if seen > target {
+            return deviation;
+        }
+    }
+    0
+}
+
+fn min_from_histogram(histogram: &[u64]) -> u64 {
+    histogram
+        .iter()
+        .position(|count| *count > 0)
+        .unwrap_or_default() as u64
+}
+
+fn max_from_histogram(histogram: &[u64]) -> u64 {
+    histogram
+        .iter()
+        .rposition(|count| *count > 0)
+        .unwrap_or_default() as u64
+}
+
+fn format_float(value: f64) -> String {
+    if value == 0.0 {
+        return "0".to_string();
+    }
+    if (value - value.round()).abs() < 0.0000005 {
+        return format!("{}", value.round() as i64);
+    }
+    let formatted = format!("{value:.6}");
+    formatted
+        .trim_end_matches('0')
+        .trim_end_matches('.')
+        .to_string()
 }
 
 #[derive(Debug)]

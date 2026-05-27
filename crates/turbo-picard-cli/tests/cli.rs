@@ -424,6 +424,47 @@ fn addorreplacereadgroups_rewrites_header_and_record_tags() {
 }
 
 #[test]
+fn collectalignmentsummarymetrics_writes_unpaired_metrics() {
+    let tempdir = tempfile::tempdir().expect("tempdir exists");
+    let input = tempdir.path().join("input.sam");
+    let output = tempdir.path().join("alignment_metrics.txt");
+    fs::write(
+        &input,
+        concat!(
+            "@HD\tVN:1.6\tSO:coordinate\n",
+            "@SQ\tSN:chr1\tLN:1000\n",
+            "read-a\t0\tchr1\t10\t60\t4M\t*\t0\t0\tACGT\tFFFF\n",
+            "read-b\t4\t*\t0\t0\t*\t*\t0\t0\tNNNN\t!!!!\n",
+            "read-c\t16\tchr1\t20\t30\t4M\t*\t0\t0\tAACG\tABCD\n",
+        ),
+    )
+    .expect("input fixture is written");
+
+    let mut cmd = Command::cargo_bin("picard").expect("binary exists");
+    cmd.args([
+        "CollectAlignmentSummaryMetrics",
+        &format!("I={}", input.display()),
+        &format!("O={}", output.display()),
+        "VALIDATION_STRINGENCY=SILENT",
+        "QUIET=true",
+    ])
+    .assert()
+    .success();
+
+    let metrics = fs::read_to_string(&output).expect("metrics output exists");
+    assert!(metrics.contains("## METRICS CLASS\tpicard.analysis.AlignmentSummaryMetrics\n"));
+    assert!(metrics.contains(
+        "UNPAIRED\t3\t3\t1\t0\t2\t0.666667\t8\t2\t8\t8\t0\t0\t0\t0\t4\t0\t4\t0\t4\t4\t2.666667\t0\t0\t0\t0\t0\t0.5\t0\t0\t0\t0\t0\t\t\t\n"
+    ));
+    assert!(
+        metrics
+            .contains("READ_LENGTH\tUNPAIRED_TOTAL_LENGTH_COUNT\tUNPAIRED_ALIGNED_LENGTH_COUNT\n")
+    );
+    assert!(metrics.contains("0\t0\t1\n"));
+    assert!(metrics.contains("4\t3\t2\n"));
+}
+
+#[test]
 fn picard_binary_dispatches_markduplicates() {
     let tempdir = tempfile::tempdir().expect("tempdir exists");
     let input = tempdir.path().join("input.sam");

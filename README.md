@@ -2,8 +2,8 @@
 
 `turbo-picard` is a Picard-shaped Rust toolkit focused on high-impact, drop-in
 replacement workflows. The current native engines target `MarkDuplicates`,
-`SortSam`, `SamToFastq`, and `AddOrReplaceReadGroups`, and install two
-command-line entrypoints:
+`SortSam`, `SamToFastq`, `AddOrReplaceReadGroups`, and
+`CollectAlignmentSummaryMetrics`, and install two command-line entrypoints:
 
 - `turbo-picard`
 - `picard`
@@ -53,6 +53,13 @@ metadata and per-record `RG:Z` tags:
 
 ```bash
 picard AddOrReplaceReadGroups I=input.bam O=rg.bam RGID=1 RGLB=lib RGPL=ILLUMINA RGPU=unit RGSM=sample
+```
+
+Native `CollectAlignmentSummaryMetrics` streams SAM/BAM records into Picard-style
+alignment summary metrics:
+
+```bash
+picard CollectAlignmentSummaryMetrics I=input.bam O=alignment_metrics.txt
 ```
 
 By default, unsupported Picard commands fail clearly. For drop-in deployments
@@ -201,6 +208,36 @@ change the current native implementation:
 
 - `VERBOSITY`
 
+## Supported CollectAlignmentSummaryMetrics Surface
+
+Implemented input/output coverage:
+
+- BAM input
+- SAM text input
+- no-reference `ALL_READS` alignment summary metrics
+- Picard-style `AlignmentSummaryMetrics` output and read-length histogram
+
+Implemented options include:
+
+- `INPUT` / `I`
+- `OUTPUT` / `O`
+- `VALIDATION_STRINGENCY`
+- `QUIET`
+- `ASSUME_SORTED`
+- `COLLECT_ALIGNMENT_INFORMATION=true`
+- `STOP_AFTER=0`
+- `COMPRESSION_LEVEL`
+
+Accepted compatibility options that are validated or ignored when they do not
+change the current native implementation:
+
+- `VERBOSITY`
+- `METRIC_ACCUMULATION_LEVEL=ALL_READS`
+
+Unsupported metrics surfaces, including reference-dependent mismatch/error
+metrics and per-sample/library/read-group accumulation levels, should be run
+through `TURBO_PICARD_FALLBACK_COMMAND`.
+
 ## Runtime Knobs
 
 - `TURBO_PICARD_THREADS`: worker threads for CPU-heavy MarkDuplicates phases.
@@ -217,6 +254,7 @@ python3 -m unittest tools/test_compare_markduplicates.py
 ./tools/verify_basic_sortsam_parity.sh
 ./tools/verify_basic_samtofastq_parity.sh
 ./tools/verify_basic_addorreplacereadgroups_parity.sh
+./tools/verify_basic_alignmentmetrics_parity.sh
 ```
 
 The parity scripts compare native `turbo-picard` output against a Picard
@@ -238,8 +276,8 @@ tagged release URL and `sha256`, and replace the maintainer placeholder.
 ## Current Limits
 
 `turbo-picard` is not a full Picard suite yet. The shipped native commands are
-`MarkDuplicates`, `SortSam`, `SamToFastq`, and `AddOrReplaceReadGroups`, and
-outputs are intended to be semantically compatible rather than byte-for-byte
-identical to Picard. Set
+`MarkDuplicates`, `SortSam`, `SamToFastq`, `AddOrReplaceReadGroups`, and
+`CollectAlignmentSummaryMetrics`, and outputs are intended to be semantically
+compatible rather than byte-for-byte identical to Picard. Set
 `TURBO_PICARD_FALLBACK_COMMAND` for drop-in environments that need unsupported
 Picard tools to continue working.

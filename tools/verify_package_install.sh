@@ -79,3 +79,14 @@ readgroups_output="${tempdir}/readgroups.sam"
 test -s "${readgroups_output}"
 grep -q $'@RG\tID:new\tLB:library-a\tPL:ILLUMINA\tSM:sample-a\tPU:unit-a' "${readgroups_output}"
 grep -q $'RG:Z:new' "${readgroups_output}"
+
+alignment_metrics="${tempdir}/alignment_metrics.txt"
+"${install_root}/bin/picard" CollectAlignmentSummaryMetrics \
+  "I=${sortsam_input}" \
+  "O=${alignment_metrics}" \
+  VALIDATION_STRINGENCY=SILENT \
+  QUIET=true
+
+test -s "${alignment_metrics}"
+grep -q 'picard.analysis.AlignmentSummaryMetrics' "${alignment_metrics}"
+grep -q '^UNPAIRED' "${alignment_metrics}"

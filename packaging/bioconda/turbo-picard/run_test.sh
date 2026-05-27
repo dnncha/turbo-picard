@@ -72,3 +72,13 @@ turbo-picard AddOrReplaceReadGroups \
 test -s readgroups.sam
 grep -q $'@RG\tID:new\tLB:library-a\tPL:ILLUMINA\tSM:sample-a\tPU:unit-a' readgroups.sam
 grep -q $'RG:Z:new' readgroups.sam
+
+turbo-picard CollectAlignmentSummaryMetrics \
+  I=input.sam \
+  O=alignment_metrics.txt \
+  VALIDATION_STRINGENCY=SILENT \
+  QUIET=true
+
+test -s alignment_metrics.txt
+grep -q 'picard.analysis.AlignmentSummaryMetrics' alignment_metrics.txt
+grep -q '^UNPAIRED' alignment_metrics.txt
