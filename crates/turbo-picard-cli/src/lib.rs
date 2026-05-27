@@ -122,6 +122,24 @@ pub fn run_cli(program_name: &str, raw_args: impl IntoIterator<Item = String>) -
             }
             0
         }
+        Some("CreateSequenceDictionary") => {
+            let command_args = args.cloned().collect::<Vec<_>>();
+            if command_args
+                .iter()
+                .any(|arg| arg == "--help" || arg == "-h")
+            {
+                print_createsequencedictionary_help();
+                return 0;
+            }
+            if let Err(error) = run_createsequencedictionary(&command_args) {
+                if let Some(exit_code) = try_run_fallback(&raw_args) {
+                    return exit_code;
+                }
+                eprintln!("{error}");
+                return 2;
+            }
+            0
+        }
         Some(command) => {
             if let Some(exit_code) = try_run_fallback(&raw_args) {
                 return exit_code;
@@ -146,6 +164,8 @@ Available commands:
                     Adds or replaces a single read group in SAM or BAM files
   CollectAlignmentSummaryMetrics
                     Writes basic alignment summary metrics for SAM or BAM files
+  CreateSequenceDictionary
+                    Creates a Picard sequence dictionary from a FASTA file
   MarkDuplicates    Identifies duplicate reads in SAM or BAM files
   SamToFastq        Converts SAM or BAM records to FASTQ
   SortSam           Sorts SAM or BAM files by coordinate or query name"
@@ -235,6 +255,17 @@ Usage: picard CollectAlignmentSummaryMetrics I=<input.bam> O=<metrics.txt> [opti
 Required arguments:
   INPUT / I             Input SAM or BAM file
   OUTPUT / O            Alignment summary metrics file"
+    );
+}
+
+fn print_createsequencedictionary_help() {
+    println!(
+        "\
+Usage: picard CreateSequenceDictionary R=<reference.fasta> O=<reference.dict> [options]
+
+Required arguments:
+  REFERENCE_SEQUENCE / R Reference FASTA file
+  OUTPUT / O            Output sequence dictionary"
     );
 }
 
@@ -409,6 +440,119 @@ fn run_collectalignmentsummarymetrics(args: &[String]) -> Result<(), String> {
     }
 
     fs::write(output, metrics.to_picard_text()).map_err(|error| error.to_string())
+}
+
+fn run_createsequencedictionary(args: &[String]) -> Result<(), String> {
+    let args = normalize_picard_args(args).map_err(|error| error.to_string())?;
+    reject_unsupported_createsequencedictionary_args(&args)?;
+    let reference = required_scalar_for(&args, "REFERENCE_SEQUENCE", "CreateSequenceDictionary")?;
+    let output = required_scalar_for(&args, "OUTPUT", "CreateSequenceDictionary")?;
+    let truncate_names = optional_bool(&args, "TRUNCATE_NAMES_AT_WHITESPACE")?.unwrap_or(true);
+    let uri = optional_scalar(&args, "URI")?.unwrap_or_else(|| format!("file://{reference}"));
+    let assembly = optional_scalar(&args, "GENOME_ASSEMBLY")?;
+    let species = optional_scalar(&args, "SPECIES")?;
+
+    let records = read_fasta_sequences(&reference, truncate_names)?;
+    let mut dictionary = String::from("@HD\tVN:1.6\n");
+    for record in records {
+        dictionary.push_str(&format!(
+            "@SQ\tSN:{}\tLN:{}\tM5:{:x}\tUR:{}",
+            record.name,
+            record.sequence.len(),
+            md5::compute(&record.sequence),
+            uri,
+        ));
+        if let Some(assembly) = assembly.as_deref() {
+            dictionary.push_str(&format!("\tAS:{assembly}"));
+        }
+        if let Some(species) = species.as_deref() {
+            dictionary.push_str(&format!("\tSP:{species}"));
+        }
+        dictionary.push('\n');
+    }
+
+    fs::write(output, dictionary).map_err(|error| error.to_string())
+}
+
+fn reject_unsupported_createsequencedictionary_args(
+    args: &BTreeMap<String, Vec<String>>,
+) -> Result<(), String> {
+    let supported = [
+        "REFERENCE_SEQUENCE",
+        "OUTPUT",
+        "TRUNCATE_NAMES_AT_WHITESPACE",
+        "URI",
+        "GENOME_ASSEMBLY",
+        "SPECIES",
+        "VALIDATION_STRINGENCY",
+        "QUIET",
+        "VERBOSITY",
+    ];
+
+    for key in args.keys() {
+        if !supported.contains(&key.as_str()) {
+            return Err(format!(
+                "unsupported CreateSequenceDictionary argument: {key}"
+            ));
+        }
+    }
+
+    optional_bool(args, "TRUNCATE_NAMES_AT_WHITESPACE")?;
+    optional_scalar(args, "URI")?;
+    optional_scalar(args, "GENOME_ASSEMBLY")?;
+    optional_scalar(args, "SPECIES")?;
+    optional_scalar(args, "VALIDATION_STRINGENCY")?;
+    optional_scalar(args, "VERBOSITY")?;
+    optional_bool(args, "QUIET")?;
+    Ok(())
+}
+
+#[derive(Debug)]
+struct FastaSequence {
+    name: String,
+    sequence: Vec<u8>,
+}
+
+fn read_fasta_sequences(path: &str, truncate_names: bool) -> Result<Vec<FastaSequence>, String> {
+    let text = fs::read_to_string(path).map_err(|error| error.to_string())?;
+    let mut records = Vec::new();
+    let mut current_name: Option<String> = None;
+    let mut current_sequence = Vec::new();
+
+    for line in text.lines() {
+        if let Some(header) = line.strip_prefix('>') {
+            if let Some(name) = current_name.take() {
+                records.push(FastaSequence {
+                    name,
+                    sequence: std::mem::take(&mut current_sequence),
+                });
+            }
+            let name = if truncate_names {
+                header.split_whitespace().next().unwrap_or_default()
+            } else {
+                header
+            };
+            if name.is_empty() {
+                return Err("empty FASTA sequence name".to_string());
+            }
+            current_name = Some(name.to_string());
+        } else if current_name.is_some() {
+            current_sequence.extend(line.trim().as_bytes().iter().map(u8::to_ascii_uppercase));
+        } else if !line.trim().is_empty() {
+            return Err("FASTA sequence data before first header".to_string());
+        }
+    }
+
+    if let Some(name) = current_name {
+        records.push(FastaSequence {
+            name,
+            sequence: current_sequence,
+        });
+    }
+    if records.is_empty() {
+        return Err("FASTA contains no sequences".to_string());
+    }
+    Ok(records)
 }
 
 fn reject_unsupported_collectalignment_args(

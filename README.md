@@ -3,7 +3,8 @@
 `turbo-picard` is a Picard-shaped Rust toolkit focused on high-impact, drop-in
 replacement workflows. The current native engines target `MarkDuplicates`,
 `SortSam`, `SamToFastq`, `AddOrReplaceReadGroups`, and
-`CollectAlignmentSummaryMetrics`, and install two command-line entrypoints:
+`CollectAlignmentSummaryMetrics`, and `CreateSequenceDictionary`, and install
+two command-line entrypoints:
 
 - `turbo-picard`
 - `picard`
@@ -60,6 +61,12 @@ alignment summary metrics:
 
 ```bash
 picard CollectAlignmentSummaryMetrics I=input.bam O=alignment_metrics.txt
+```
+
+Native `CreateSequenceDictionary` creates Picard-style `.dict` files from FASTA:
+
+```bash
+picard CreateSequenceDictionary R=reference.fa O=reference.dict
 ```
 
 By default, unsupported Picard commands fail clearly. For drop-in deployments
@@ -238,6 +245,31 @@ Unsupported metrics surfaces, including reference-dependent mismatch/error
 metrics and per-sample/library/read-group accumulation levels, should be run
 through `TURBO_PICARD_FALLBACK_COMMAND`.
 
+## Supported CreateSequenceDictionary Surface
+
+Implemented input/output coverage:
+
+- plain FASTA input
+- Picard-style SAM dictionary output
+- MD5 sequence digests
+- `UR:file://...` output
+
+Implemented options include:
+
+- `REFERENCE_SEQUENCE` / `R`
+- `OUTPUT` / `O`
+- `TRUNCATE_NAMES_AT_WHITESPACE`
+- `URI`
+- `GENOME_ASSEMBLY`
+- `SPECIES`
+- `VALIDATION_STRINGENCY`
+- `QUIET`
+
+Accepted compatibility options that are validated or ignored when they do not
+change the current native implementation:
+
+- `VERBOSITY`
+
 ## Runtime Knobs
 
 - `TURBO_PICARD_THREADS`: worker threads for CPU-heavy MarkDuplicates phases.
@@ -255,6 +287,7 @@ python3 -m unittest tools/test_compare_markduplicates.py
 ./tools/verify_basic_samtofastq_parity.sh
 ./tools/verify_basic_addorreplacereadgroups_parity.sh
 ./tools/verify_basic_alignmentmetrics_parity.sh
+./tools/verify_basic_createdict_parity.sh
 ```
 
 The parity scripts compare native `turbo-picard` output against a Picard
@@ -277,7 +310,8 @@ tagged release URL and `sha256`, and replace the maintainer placeholder.
 
 `turbo-picard` is not a full Picard suite yet. The shipped native commands are
 `MarkDuplicates`, `SortSam`, `SamToFastq`, `AddOrReplaceReadGroups`, and
-`CollectAlignmentSummaryMetrics`, and outputs are intended to be semantically
-compatible rather than byte-for-byte identical to Picard. Set
+`CollectAlignmentSummaryMetrics`, and `CreateSequenceDictionary`, and outputs
+are intended to be semantically compatible rather than byte-for-byte identical
+to Picard. Set
 `TURBO_PICARD_FALLBACK_COMMAND` for drop-in environments that need unsupported
 Picard tools to continue working.

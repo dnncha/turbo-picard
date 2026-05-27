@@ -82,3 +82,17 @@ turbo-picard CollectAlignmentSummaryMetrics \
 test -s alignment_metrics.txt
 grep -q 'picard.analysis.AlignmentSummaryMetrics' alignment_metrics.txt
 grep -q '^UNPAIRED' alignment_metrics.txt
+
+cat > reference.fa <<'FASTA'
+>chr1
+ACGTACGT
+FASTA
+
+turbo-picard CreateSequenceDictionary \
+  R=reference.fa \
+  O=reference.dict \
+  VALIDATION_STRINGENCY=SILENT \
+  QUIET=true
+
+test -s reference.dict
+grep -q $'@SQ\tSN:chr1\tLN:8\tM5:cc0af3a4fedb18378b4b57b98068e69f' reference.dict

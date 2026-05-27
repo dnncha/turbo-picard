@@ -465,6 +465,46 @@ fn collectalignmentsummarymetrics_writes_unpaired_metrics() {
 }
 
 #[test]
+fn createsequencedictionary_writes_picard_dict() {
+    let tempdir = tempfile::tempdir().expect("tempdir exists");
+    let reference = tempdir.path().join("ref.fa");
+    let output = tempdir.path().join("ref.dict");
+    fs::write(
+        &reference,
+        concat!(
+            ">chr1 first chromosome\n",
+            "ACGTACGT\n",
+            ">chr2\n",
+            "NNNN\n",
+        ),
+    )
+    .expect("reference fixture is written");
+
+    let mut cmd = Command::cargo_bin("picard").expect("binary exists");
+    cmd.args([
+        "CreateSequenceDictionary",
+        &format!("R={}", reference.display()),
+        &format!("O={}", output.display()),
+        "VALIDATION_STRINGENCY=SILENT",
+        "QUIET=true",
+    ])
+    .assert()
+    .success();
+
+    let dictionary = fs::read_to_string(&output).expect("dictionary output exists");
+    assert_eq!(
+        dictionary,
+        format!(
+            "@HD\tVN:1.6\n\
+             @SQ\tSN:chr1\tLN:8\tM5:cc0af3a4fedb18378b4b57b98068e69f\tUR:file://{}\n\
+             @SQ\tSN:chr2\tLN:4\tM5:ef95bc05180af51bfd945e93b2bbba8e\tUR:file://{}\n",
+            reference.display(),
+            reference.display(),
+        )
+    );
+}
+
+#[test]
 fn picard_binary_dispatches_markduplicates() {
     let tempdir = tempfile::tempdir().expect("tempdir exists");
     let input = tempdir.path().join("input.sam");

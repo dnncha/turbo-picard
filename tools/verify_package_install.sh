@@ -90,3 +90,19 @@ alignment_metrics="${tempdir}/alignment_metrics.txt"
 test -s "${alignment_metrics}"
 grep -q 'picard.analysis.AlignmentSummaryMetrics' "${alignment_metrics}"
 grep -q '^UNPAIRED' "${alignment_metrics}"
+
+reference="${tempdir}/reference.fa"
+dictionary="${tempdir}/reference.dict"
+cat > "${reference}" <<'FASTA'
+>chr1
+ACGTACGT
+FASTA
+
+"${install_root}/bin/picard" CreateSequenceDictionary \
+  "R=${reference}" \
+  "O=${dictionary}" \
+  VALIDATION_STRINGENCY=SILENT \
+  QUIET=true
+
+test -s "${dictionary}"
+grep -q $'@SQ\tSN:chr1\tLN:8\tM5:cc0af3a4fedb18378b4b57b98068e69f' "${dictionary}"
