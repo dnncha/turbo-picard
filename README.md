@@ -2,15 +2,24 @@
 
 `turbo-picard` is a Picard-shaped Rust toolkit focused on high-impact, drop-in
 replacement workflows. The current native engines target `MarkDuplicates`,
-`SortSam`, `SamToFastq`, `AddOrReplaceReadGroups`, and
-`CollectAlignmentSummaryMetrics`, and `CreateSequenceDictionary`, and install
-two command-line entrypoints:
+`SortSam`, `CleanSam`, `MergeSamFiles`, `BuildBamIndex`, `SamToFastq`, `FastqToSam`,
+`AddOrReplaceReadGroups`, `CollectAlignmentSummaryMetrics`,
+`CollectQualityYieldMetrics`, `CreateSequenceDictionary`, `NormalizeFasta`, and
+`BedToIntervalList`, plus partial native `ViewSam`, `ReplaceSamHeader`,
+`QualityScoreDistribution`, `MeanQualityByCycle`,
+`CollectBaseDistributionByCycle`, `CollectInsertSizeMetrics`,
+`CollectMultipleMetrics`, `CollectWgsMetrics`, `FixMateInformation`,
+`IntervalListTools`, `RevertSam`, `SetNmMdAndUqTags`, `ValidateSamFile`, `LiftoverVcf`,
+`UpdateVcfSequenceDictionary`, `GatherVcfs`, `SortVcf`, and `MergeVcfs`.
+
+The main package installs one non-shadowing command-line entrypoint:
 
 - `turbo-picard`
-- `picard`
 
-The `picard` binary is a compatibility shim for workflow managers and scripts
-that invoke Picard by command name.
+The optional `turbo-picard-picard-shim` package installs a `picard`
+compatibility shim for workflow managers and scripts that invoke Picard by
+command name. Use the shim deliberately because it shadows upstream Picard on
+`PATH`.
 
 ## Install From Source
 
@@ -42,11 +51,38 @@ picard SortSam I=input.bam O=coordinate.bam SORT_ORDER=coordinate
 picard SortSam I=input.bam O=queryname.bam SO=queryname
 ```
 
+Native `CleanSam` streams SAM/BAM cleanup for common cases:
+
+```bash
+picard CleanSam I=input.bam O=cleaned.bam
+```
+
+Native `MergeSamFiles` merges repeated `INPUT` values and can emit coordinate,
+queryname, or unsorted output:
+
+```bash
+picard MergeSamFiles I=lane1.bam I=lane2.bam O=merged.bam SORT_ORDER=coordinate
+picard MergeSamFiles I=lane1.bam I=lane2.bam O=merged.sam SO=unsorted CO='merged lanes'
+```
+
+Native `BuildBamIndex` creates BAI sidecars for coordinate-sorted BAM files:
+
+```bash
+picard BuildBamIndex I=coordinate.bam
+picard BuildBamIndex I=coordinate.bam O=coordinate.bai
+```
+
 Native `SamToFastq` streams SAM/BAM records to FASTQ:
 
 ```bash
 picard SamToFastq I=input.bam FASTQ=reads.fastq
 picard SamToFastq I=input.bam FASTQ=r1.fastq SECOND_END_FASTQ=r2.fastq
+```
+
+Native `FastqToSam` streams FASTQ records into unmapped SAM/BAM:
+
+```bash
+picard FastqToSam F1=r1.fastq F2=r2.fastq O=unmapped.bam SM=sample RG=rg1 QUALITY_FORMAT=Standard
 ```
 
 Native `AddOrReplaceReadGroups` streams SAM/BAM records while replacing `@RG`
@@ -63,10 +99,70 @@ alignment summary metrics:
 picard CollectAlignmentSummaryMetrics I=input.bam O=alignment_metrics.txt
 ```
 
+Native `CollectQualityYieldMetrics` streams SAM/BAM records into Picard-style
+quality yield metrics:
+
+```bash
+picard CollectQualityYieldMetrics I=input.bam O=quality_yield_metrics.txt
+```
+
+Native `CollectWgsMetrics` streams coordinate-sorted SAM/BAM records into
+Picard-style whole-genome coverage metrics for common no-interval runs:
+
+```bash
+picard CollectWgsMetrics I=input.bam O=wgs_metrics.txt R=reference.fa COUNT_UNPAIRED=true
+```
+
+Native quality histogram commands generate metrics and chart artifacts:
+
+```bash
+picard QualityScoreDistribution I=input.bam O=quality_distribution.txt CHART=quality_distribution.pdf
+picard MeanQualityByCycle I=input.bam O=mean_quality_by_cycle.txt CHART=mean_quality_by_cycle.pdf
+picard CollectBaseDistributionByCycle I=input.bam O=base_distribution.txt CHART=base_distribution.pdf
+picard CollectGcBiasMetrics I=input.bam O=gc_bias.detail.txt S=gc_bias.summary.txt CHART=gc_bias.pdf R=reference.fa
+picard CollectInsertSizeMetrics I=input.bam O=insert_size_metrics.txt H=insert_size_histogram.pdf
+picard CollectMultipleMetrics I=input.bam O=multiple PROGRAM=null PROGRAM=CollectInsertSizeMetrics PROGRAM=CollectBaseDistributionByCycle PROGRAM=CollectGcBiasMetrics R=reference.fa EXTRA_ARGUMENT=CollectGcBiasMetrics::SCAN_WINDOW_SIZE=100
+picard FixMateInformation I=queryname.bam O=fixed.bam ASSUME_SORTED=true SORT_ORDER=queryname
+picard RevertSam I=aligned.bam O=unmapped.bam
+picard SetNmMdAndUqTags I=coordinate.bam O=tagged.bam R=reference.fa
+picard ValidateSamFile I=input.bam MODE=SUMMARY
+picard IntervalListTools I=a.interval_list I=b.interval_list O=merged.interval_list ACTION=CONCAT SORT=true UNIQUE=true
+```
+
 Native `CreateSequenceDictionary` creates Picard-style `.dict` files from FASTA:
 
 ```bash
 picard CreateSequenceDictionary R=reference.fa O=reference.dict
+```
+
+Native `NormalizeFasta` and `BedToIntervalList` cover common reference prep:
+
+```bash
+picard NormalizeFasta I=reference.fa O=normalized.fa LINE_LENGTH=100
+picard BedToIntervalList I=targets.bed O=targets.interval_list SD=reference.dict
+```
+
+Native `ViewSam` and `ReplaceSamHeader` cover common SAM/BAM plumbing:
+
+```bash
+picard ViewSam I=input.bam > input.sam
+picard ReplaceSamHeader I=input.bam O=reheadered.bam H=header.sam CREATE_MD5_FILE=true
+```
+
+Native `UpdateVcfSequenceDictionary` replaces VCF contig headers from a Picard
+sequence dictionary:
+
+```bash
+picard UpdateVcfSequenceDictionary I=input.vcf O=updated.vcf SD=reference.dict
+```
+
+Native `GatherVcfs` and `SortVcf` cover common VCF shard handling:
+
+```bash
+picard GatherVcfs I=shard1.vcf I=shard2.vcf O=gathered.vcf
+picard SortVcf I=unsorted.vcf O=sorted.vcf SD=reference.dict
+picard MergeVcfs I=batch1.vcf I=batch2.vcf O=merged.vcf
+picard LiftoverVcf I=input.vcf O=lifted.vcf CHAIN=build.chain REJECT=rejected.vcf R=target.fa
 ```
 
 By default, unsupported Picard commands fail clearly. For drop-in deployments
@@ -77,11 +173,13 @@ export TURBO_PICARD_FALLBACK_COMMAND='mamba run -p /opt/conda/envs/picard picard
 picard SortSam I=input.bam O=queryname.bam SORT_ORDER=queryname
 ```
 
-When configured, `turbo-picard` runs native accelerated commands first. If a
-command is unsupported, or the requested `MarkDuplicates` surface is outside the
-native implementation, it delegates the original Picard arguments to the
-fallback command and returns the fallback exit code. The fallback value is a
-shell command prefix, so `java -jar /path/to/picard.jar` works too.
+When configured, `turbo-picard` runs native accelerated commands first. It
+delegates only unsupported commands or explicitly unsupported native surfaces to
+the fallback command and returns the fallback exit code. Native I/O failures and
+malformed native inputs are not delegated, so errors are not masked. The
+fallback value is a shell command prefix, so `java -jar /path/to/picard.jar`
+works. Prefer an absolute upstream Picard command or JAR path; a bare `picard`
+fallback can resolve back to the shim if it shadows `PATH`.
 
 ## Supported MarkDuplicates Surface
 
@@ -157,6 +255,56 @@ change the current native implementation:
 
 - `VERBOSITY`
 
+Performance behavior:
+
+- Already-sorted input is streamed with a rewritten header instead of being
+  materialized and sorted again.
+
+## Supported MergeSamFiles Surface
+
+Implemented input/output coverage:
+
+- repeated `INPUT` / `I` values
+- BAM input and output
+- SAM text input and output
+- identical sequence dictionaries across inputs
+- read-group collision rewrite for conflicting `@RG ID` values and per-record
+  `RG:Z` tags
+- Picard-style `KEY=VALUE` arguments and short aliases such as `I`, `O`, `SO`,
+  and `CO`
+
+Implemented options include:
+
+- `SORT_ORDER=coordinate|queryname|unsorted`; default is `coordinate`
+- `ASSUME_SORTED=true|false`; skips native sortedness validation when callers
+  already know each input is sorted by the requested order
+- `COMMENT`
+- `VALIDATION_STRINGENCY`
+- `QUIET`
+- `TMP_DIR`
+- `MAX_RECORDS_IN_RAM`
+- `COMPRESSION_LEVEL`
+- `CREATE_INDEX`
+- `CREATE_MD5_FILE`
+- `MERGE_SEQUENCE_DICTIONARIES=false`
+
+Accepted compatibility options that are validated or ignored when they do not
+change the current native implementation:
+
+- `VERBOSITY`
+
+Unsupported merge surfaces, including CRAM, `.list` input expansion, interval
+filtering, and dictionary merging, should be run through
+`TURBO_PICARD_FALLBACK_COMMAND`.
+
+Performance behavior:
+
+- Coordinate/queryname merges use an exact k-way heap merge when every input is
+  already sorted by the requested order. `ASSUME_SORTED=true` avoids the
+  preflight sortedness scan for trusted pipeline inputs.
+- If any input is not sorted by the requested order, the command falls back to
+  the full in-memory sort path.
+
 ## Supported SamToFastq Surface
 
 Implemented input/output coverage:
@@ -167,6 +315,9 @@ Implemented input/output coverage:
 - paired FASTQ output with `SECOND_END_FASTQ`
 - unpaired read routing with `UNPAIRED_FASTQ`
 - interleaved paired output with `INTERLEAVE=true`
+- Picard-compatible default filtering of non-PF and non-primary records
+- optional inclusion with `INCLUDE_NON_PF_READS=true` and
+  `INCLUDE_NON_PRIMARY_ALIGNMENTS=true`
 
 Implemented options include:
 
@@ -175,14 +326,40 @@ Implemented options include:
 - `UNPAIRED_FASTQ`
 - `INTERLEAVE`
 - `RE_REVERSE`
+- `INCLUDE_NON_PF_READS`
+- `INCLUDE_NON_PRIMARY_ALIGNMENTS`
 - `VALIDATION_STRINGENCY`
 - `QUIET`
 - `COMPRESSION_LEVEL`
+- `CREATE_MD5_FILE`
 
 Accepted compatibility options that are validated or ignored when they do not
 change the current native implementation:
 
 - `VERBOSITY`
+
+## Supported FastqToSam Surface
+
+Implemented input/output coverage:
+
+- single-end FASTQ input with `FASTQ` / `F1`
+- paired FASTQ input with `FASTQ2` / `F2`
+- plain or gzip-compressed FASTQ input
+- SAM/BAM unmapped output with queryname sort-order header
+- Picard-style read-group header and per-record `RG:Z` tag
+- `QUALITY_FORMAT=Standard` and `QUALITY_FORMAT=Illumina`
+
+Implemented options include `OUTPUT` / `O`, `SAMPLE_NAME` / `SM`,
+`READ_GROUP_NAME` / `RG`, `LIBRARY_NAME` / `LB`, `PLATFORM` / `PL`,
+`PLATFORM_UNIT` / `PU`, `SEQUENCING_CENTER` / `CN`, `DESCRIPTION` / `DS`,
+`RUN_DATE` / `DT`, `PREDICTED_INSERT_SIZE` / `PI`, `PROGRAM_GROUP`,
+`PLATFORM_MODEL`, `SORT_ORDER=queryname`, `SORT_ORDER=coordinate`,
+`SORT_ORDER=unsorted`, `COMMENT`, `VALIDATION_STRINGENCY`, `QUIET`,
+`COMPRESSION_LEVEL`, and `CREATE_MD5_FILE`.
+
+Unsupported input name sorting, custom non-comment header injection, and
+advanced quality detection surfaces should be run through
+`TURBO_PICARD_FALLBACK_COMMAND`.
 
 ## Supported AddOrReplaceReadGroups Surface
 
@@ -232,14 +409,16 @@ Implemented options include:
 - `QUIET`
 - `ASSUME_SORTED`
 - `COLLECT_ALIGNMENT_INFORMATION=true`
-- `STOP_AFTER=0`
+- `STOP_AFTER`
 - `COMPRESSION_LEVEL`
 
 Accepted compatibility options that are validated or ignored when they do not
 change the current native implementation:
 
 - `VERBOSITY`
-- `METRIC_ACCUMULATION_LEVEL=ALL_READS`
+- `METRIC_ACCUMULATION_LEVEL=ALL_READS` / `LEVEL=ALL_READS`
+- `TMP_DIR`
+- `MAX_RECORDS_IN_RAM`
 
 Unsupported metrics surfaces, including reference-dependent mismatch/error
 metrics and per-sample/library/read-group accumulation levels, should be run
@@ -249,19 +428,21 @@ through `TURBO_PICARD_FALLBACK_COMMAND`.
 
 Implemented input/output coverage:
 
-- plain FASTA input
+- plain or gzip-compressed FASTA input
 - Picard-style SAM dictionary output
 - MD5 sequence digests
 - `UR:file://...` output
+- derived `.dict` output path when `OUTPUT` is omitted
 
 Implemented options include:
 
-- `REFERENCE_SEQUENCE` / `R`
+- `REFERENCE` / `REFERENCE_SEQUENCE` / `R`
 - `OUTPUT` / `O`
 - `TRUNCATE_NAMES_AT_WHITESPACE`
 - `URI`
 - `GENOME_ASSEMBLY`
 - `SPECIES`
+- `NUM_SEQUENCES`
 - `VALIDATION_STRINGENCY`
 - `QUIET`
 
@@ -269,6 +450,300 @@ Accepted compatibility options that are validated or ignored when they do not
 change the current native implementation:
 
 - `VERBOSITY`
+
+## Supported BuildBamIndex Surface
+
+Implemented input/output coverage:
+
+- coordinate-sorted BAM input
+- Picard-style default `.bai` output path
+- explicit `OUTPUT` / `O`
+
+Unsupported SAM, CRAM, CSI, and non-coordinate inputs should be run through
+`TURBO_PICARD_FALLBACK_COMMAND`.
+
+## Supported CollectQualityYieldMetrics Surface
+
+Implemented input/output coverage:
+
+- BAM input
+- SAM text input
+- Picard-style `QualityYieldMetrics` output
+- primary alignments only by default
+- optional secondary and supplemental alignment inclusion
+
+Implemented options include:
+
+- `INPUT` / `I`
+- `OUTPUT` / `O`
+- `USE_ORIGINAL_QUALITIES`
+- `INCLUDE_SECONDARY_ALIGNMENTS`
+- `INCLUDE_SUPPLEMENTAL_ALIGNMENTS`
+- `STOP_AFTER`
+- `VALIDATION_STRINGENCY`
+- `QUIET`
+
+## Supported CollectBaseDistributionByCycle Surface
+
+Implemented input/output coverage:
+
+- BAM input
+- SAM text input
+- Picard-style `BaseDistributionByCycleMetrics` output
+- `CHART_OUTPUT` / `CHART` chart artifact
+- primary alignments only, with Picard-compatible reverse-strand cycle ordering
+
+Implemented options include `INPUT` / `I`, `OUTPUT` / `O`,
+`CHART_OUTPUT` / `CHART`, `ALIGNED_READS_ONLY`, `PF_READS_ONLY`,
+`ASSUME_SORTED`, `STOP_AFTER`, `VALIDATION_STRINGENCY`, `QUIET`, `TMP_DIR`,
+and `MAX_RECORDS_IN_RAM`.
+
+Unsupported accumulation levels and hidden chart customizations should be run
+through `TURBO_PICARD_FALLBACK_COMMAND`.
+
+## Supported QualityScoreDistribution and MeanQualityByCycle Surface
+
+Implemented input/output coverage:
+
+- BAM input
+- Picard-style histogram outputs
+- `CHART_OUTPUT` / `CHART` chart artifacts
+- primary alignments only, with Picard-compatible reverse-strand cycle ordering
+- `OQ` original quality histograms when present
+
+Implemented options include `INPUT` / `I`, `OUTPUT` / `O`,
+`CHART_OUTPUT` / `CHART`, `ALIGNED_READS_ONLY`, `PF_READS_ONLY`,
+`ASSUME_SORTED`, `STOP_AFTER`, `VALIDATION_STRINGENCY`, `QUIET`, `TMP_DIR`,
+and `MAX_RECORDS_IN_RAM`.
+
+Unsupported accumulation levels and hidden chart customizations should be run
+through `TURBO_PICARD_FALLBACK_COMMAND`.
+
+## Supported CollectWgsMetrics Surface
+
+Implemented input/output coverage:
+
+- BAM input
+- SAM text input
+- FASTA reference input
+- optional Picard `.interval_list` territory restriction
+- Picard-style `WgsMetrics` output and high-quality coverage histogram
+- optional base-quality histogram column with `INCLUDE_BQ_HISTOGRAM=true`
+- default high-quality depth thresholds
+- duplicate, mapping-quality, unpaired-read, base-quality, and capped-base exclusions
+
+Implemented options include `INPUT` / `I`, `OUTPUT` / `O`,
+`REFERENCE_SEQUENCE` / `R`, `MINIMUM_MAPPING_QUALITY` / `MQ`,
+`MINIMUM_BASE_QUALITY` / `Q`, `COVERAGE_CAP` / `CAP`,
+`LOCUS_ACCUMULATION_CAP`,
+`COUNT_UNPAIRED`, `INCLUDE_BQ_HISTOGRAM`, `INTERVALS`, `STOP_AFTER`,
+`SAMPLE_SIZE=0|1`, `VALIDATION_STRINGENCY`, `QUIET`, `TMP_DIR`, and
+`MAX_RECORDS_IN_RAM`.
+
+Unsupported fast algorithm mode, full theoretical sensitivity sampling, overlap
+clipping, and non-default accumulation surfaces should be run through
+`TURBO_PICARD_FALLBACK_COMMAND`.
+
+## Supported CollectGcBiasMetrics Surface
+
+Implemented input/output coverage:
+
+- SAM/BAM input
+- FASTA reference input
+- Picard-style detail and summary metric files
+- `CHART_OUTPUT` / `CHART` placeholder chart artifact
+- all-reads accumulation
+- optional duplicate-filtered `READS_USED=UNIQUE` rows with
+  `ALSO_IGNORE_DUPLICATES=true`
+- primary mapped reads, with secondary and supplementary records ignored
+
+Implemented options include `INPUT` / `I`, `OUTPUT` / `O`,
+`SUMMARY_OUTPUT` / `S`, `CHART_OUTPUT` / `CHART`,
+`REFERENCE_SEQUENCE` / `R`, `SCAN_WINDOW_SIZE`, `MINIMUM_GENOME_FRACTION`,
+`ALSO_IGNORE_DUPLICATES`, `ASSUME_SORTED`, `STOP_AFTER`,
+`VALIDATION_STRINGENCY`, and `QUIET`.
+
+Unsupported bisulfite mode, non-`ALL_READS` accumulation levels, and exact R
+chart rendering should be run through
+`TURBO_PICARD_FALLBACK_COMMAND`. Explicit
+`CollectMultipleMetrics PROGRAM=CollectGcBiasMetrics` is supported when
+`REFERENCE_SEQUENCE` / `R` is supplied.
+
+## Supported CollectInsertSizeMetrics Surface
+
+Implemented input/output coverage:
+
+- BAM input
+- SAM text input
+- Picard-style `InsertSizeMetrics` output
+- `HISTOGRAM_FILE` / `H` chart artifact
+- `METRIC_ACCUMULATION_LEVEL=ALL_READS`
+- duplicate records skipped by default, or included with `INCLUDE_DUPLICATES=true`
+- secondary, supplementary, unmapped, and mate-unmapped records skipped
+
+Implemented options include `INPUT` / `I`, `OUTPUT` / `O`,
+`HISTOGRAM_FILE` / `H`, `ASSUME_SORTED`, `DEVIATIONS`, `MINIMUM_PCT` / `M`,
+`METRIC_ACCUMULATION_LEVEL=ALL_READS` / `LEVEL=ALL_READS`,
+`INCLUDE_DUPLICATES`, `STOP_AFTER`, `VALIDATION_STRINGENCY`, `QUIET`,
+`TMP_DIR`, and `MAX_RECORDS_IN_RAM`.
+
+Unsupported accumulation levels should be run through
+`TURBO_PICARD_FALLBACK_COMMAND`.
+
+## Supported CollectMultipleMetrics Surface
+
+Native `CollectMultipleMetrics` is an orchestrator for already-native collectors.
+When `PROGRAM` is omitted, it runs Picard's default native set:
+`CollectAlignmentSummaryMetrics`, `CollectBaseDistributionByCycle`,
+`CollectInsertSizeMetrics`, `MeanQualityByCycle`, and
+`QualityScoreDistribution`.
+
+Supported programs are `CollectAlignmentSummaryMetrics`,
+`CollectBaseDistributionByCycle`, `CollectGcBiasMetrics`,
+`CollectInsertSizeMetrics`,
+`QualityScoreDistribution`, `MeanQualityByCycle`, `CollectWgsMetrics`, and
+`CollectQualityYieldMetrics`. Extra arguments and non-`ALL_READS` accumulation
+levels should be run through `TURBO_PICARD_FALLBACK_COMMAND`. `STOP_AFTER` is
+passed through to supported native child collectors. `FILE_EXTENSION` / `EXT`
+is appended to metric text outputs using Picard's filename convention, while
+chart PDFs keep their standard names. Picard-style
+`EXTRA_ARGUMENT=CollectGcBiasMetrics::SCAN_WINDOW_SIZE=...` and
+`EXTRA_ARGUMENT=CollectGcBiasMetrics::MINIMUM_GENOME_FRACTION=...` are passed
+through for explicit `CollectGcBiasMetrics` runs, as is
+`EXTRA_ARGUMENT=CollectGcBiasMetrics::ALSO_IGNORE_DUPLICATES=true`.
+`EXTRA_ARGUMENT` also passes `INCLUDE_DUPLICATES`, `DEVIATIONS`, and
+`MINIMUM_PCT` to
+`CollectInsertSizeMetrics`,
+`ALIGNED_READS_ONLY` and `PF_READS_ONLY` to `QualityScoreDistribution` and
+`MeanQualityByCycle`, plus `INCLUDE_NO_CALLS` to `QualityScoreDistribution`,
+and secondary/supplemental inclusion flags to `CollectQualityYieldMetrics`.
+
+## Supported FixMateInformation Surface
+
+Implemented input/output coverage:
+
+- one SAM/BAM input
+- explicit SAM/BAM output
+- queryname-sorted input, or `ASSUME_SORTED=true`
+- adjacent primary paired records with the same read name
+- mate reference, position, insert size, `MC`, and `MQ` repair
+- missing singleton mates passed through with default `IGNORE_MISSING_MATES=true`
+- Picard-compatible missing paired mate failure with `IGNORE_MISSING_MATES=false`
+
+Implemented options include `INPUT` / `I`, `OUTPUT` / `O`,
+`ADD_MATE_CIGAR` / `MC`, `ASSUME_SORTED`, `SORT_ORDER=queryname`,
+`IGNORE_MISSING_MATES`, `VALIDATION_STRINGENCY`, `QUIET`, `TMP_DIR`, and
+`MAX_RECORDS_IN_RAM`.
+
+Unsupported multi-input merge, in-place overwrite, coordinate resorting,
+and supplementary mate correction should be run through
+`TURBO_PICARD_FALLBACK_COMMAND`.
+
+## Supported RevertSam Surface
+
+Implemented input/output coverage:
+
+- one SAM/BAM input
+- explicit SAM/BAM output
+- default `REMOVE_ALIGNMENT_INFORMATION=true`
+- default `REMOVE_DUPLICATE_INFORMATION=true`
+- default `RESTORE_ORIGINAL_QUALITIES=true`
+- queryname-sorted reverted output
+- clearing default alignment tags `NM`, `UQ`, `PG`, `MD`, `MQ`, `SA`, `MC`, and `AS`
+- repeated `ATTRIBUTE_TO_CLEAR` for additional two-character auxiliary tags
+
+Unsupported read-group split output, sanitize mode, secondary/supplementary
+alignments, reverse attributes, hard-clip restoration with `XB`/`XQ`,
+`REMOVE_ALIGNMENT_INFORMATION=false`, and non-queryname output should be run
+through `TURBO_PICARD_FALLBACK_COMMAND`.
+
+## Supported SetNmMdAndUqTags Surface
+
+Implemented input/output coverage:
+
+- coordinate-sorted SAM/BAM input
+- SAM/BAM output
+- FASTA reference input
+- `M`, `=`, `X`, `I`, `D`, `S`, `H`, and `P` CIGAR operations
+- Picard-compatible `NM`, `MD`, and `UQ` tags for ordinary DNA alignments
+
+Implemented options include `INPUT` / `I`, `OUTPUT` / `O`,
+`REFERENCE_SEQUENCE` / `R`, `IS_BISULFITE_SEQUENCE=false`,
+`SET_ONLY_UQ`, `VALIDATION_STRINGENCY`, and `QUIET`.
+
+Unsupported bisulfite mode, reference skips, CRAM-specific behavior, and
+non-coordinate inputs should be run through `TURBO_PICARD_FALLBACK_COMMAND`.
+
+## Supported ValidateSamFile Surface
+
+Implemented input/output coverage:
+
+- SAM/BAM input
+- Picard-style `MODE=SUMMARY` output to stdout or `OUTPUT` / `O`
+- common read-group, sequence-dictionary, and missing-`NM` summary counts
+- `IGNORE` filtering for the summary error types emitted by the native path
+- unpaired records, or paired records with `SKIP_MATE_VALIDATION=true`
+
+Implemented options include `INPUT` / `I`, `OUTPUT` / `O`, `MODE` / `M`,
+`MAX_OUTPUT` / `MO`, `IGNORE`, `SKIP_MATE_VALIDATION` / `SMV`,
+`VALIDATION_STRINGENCY`, and `QUIET`.
+
+Unsupported verbose/detail mode, reference-backed validation, and paired mate
+validation should be run through `TURBO_PICARD_FALLBACK_COMMAND`.
+
+## Supported LiftoverVcf Surface
+
+Implemented input/output coverage:
+
+- VCF input/output and reject VCF output
+- target FASTA with adjacent `.dict`
+- positive-strand single-block UCSC chain mappings
+- target reference allele validation
+- Picard-style `MismatchedRefAllele` and `NoTarget` reject records
+- sorted lifted output by target sequence dictionary order
+
+Implemented options include `INPUT` / `I`, `OUTPUT` / `O`, `CHAIN` / `C`,
+`REJECT`, `REFERENCE_SEQUENCE` / `R`, `WARN_ON_MISSING_CONTIG` / `WMC`,
+`VALIDATION_STRINGENCY`, and `QUIET`.
+
+Unsupported reverse-strand chains, gapped or multi-block chains, swapped-allele
+recovery, genotype rewrites, symbolic alleles, and complex annotation
+rewriting should be run through `TURBO_PICARD_FALLBACK_COMMAND`.
+
+## Supported IntervalListTools Surface
+
+Implemented input/output coverage:
+
+- one or more `.interval_list` inputs
+- `.interval_list` output
+- `ACTION=CONCAT`
+- dictionary-order sorting with `SORT=true`
+- overlapping and abutting interval merging with `UNIQUE=true`
+- overlap-only merging with `DONT_MERGE_ABUTTING=true`
+
+Implemented options include `INPUT` / `I`, `OUTPUT` / `O`, `ACTION=CONCAT`,
+`SORT`, `UNIQUE`, `PADDING=0`, `DONT_MERGE_ABUTTING=false`,
+`VALIDATION_STRINGENCY`, and `QUIET`.
+
+Unsupported VCF inputs, `SECOND_INPUT`, subtract/intersect/symdiff/overlap
+actions, inversion, padding, scatter output, count output, and non-abutting
+merge actions should be run through `TURBO_PICARD_FALLBACK_COMMAND`.
+
+## Supported NormalizeFasta Surface
+
+Implemented options include `INPUT` / `I`, `OUTPUT` / `O`, `LINE_LENGTH`, and
+`TRUNCATE_SEQUENCE_NAMES_AT_WHITESPACE`.
+
+## Supported BedToIntervalList Surface
+
+Implemented input/output coverage:
+
+- BED3, BED4, and BED6 local inputs
+- Picard interval_list output
+- dictionary-order sorting with `SEQUENCE_DICTIONARY` / `SD`
+
+Implemented options include `SORT`, `UNIQUE`, `VALIDATION_STRINGENCY`, and
+`QUIET`.
 
 ## Runtime Knobs
 
@@ -284,14 +759,54 @@ cargo test --workspace
 python3 -m unittest tools/test_compare_markduplicates.py
 ./tools/verify_basic_picard_parity.sh
 ./tools/verify_basic_sortsam_parity.sh
+./tools/verify_basic_cleansam_parity.sh
+./tools/verify_basic_mergesamfiles_parity.sh
+./tools/verify_basic_buildbamindex_parity.sh
 ./tools/verify_basic_samtofastq_parity.sh
+./tools/verify_basic_fastqtosam_parity.sh
 ./tools/verify_basic_addorreplacereadgroups_parity.sh
 ./tools/verify_basic_alignmentmetrics_parity.sh
+./tools/verify_basic_collectbasedistributionbycycle_parity.sh
+./tools/verify_basic_collectgcbiasmetrics_parity.sh
+./tools/verify_basic_qualityyield_parity.sh
+./tools/verify_basic_collectwgsmetrics_parity.sh
 ./tools/verify_basic_createdict_parity.sh
+./tools/verify_basic_viewsam_parity.sh
+./tools/verify_basic_replacesamheader_parity.sh
+./tools/verify_basic_updatevcfsequencedictionary_parity.sh
+./tools/verify_basic_gathervcfs_parity.sh
+./tools/verify_basic_sortvcf_parity.sh
+./tools/verify_basic_mergevcfs_parity.sh
+./tools/verify_basic_qualityscoredistribution_parity.sh
+./tools/verify_basic_meanqualitybycycle_parity.sh
+./tools/verify_basic_collectinsertsizemetrics_parity.sh
+./tools/verify_basic_collectmultiplemetrics_parity.sh
+./tools/verify_basic_fixmateinformation_parity.sh
+./tools/verify_basic_intervallisttools_parity.sh
+./tools/verify_basic_revertsam_parity.sh
+./tools/verify_basic_setnmmdanduqtags_parity.sh
+./tools/verify_basic_validatesamfile_parity.sh
+./tools/verify_basic_liftovervcf_parity.sh
 ```
 
 The parity scripts compare native `turbo-picard` output against a Picard
 installation from the local conda environment when available.
+
+Performance evidence scripts include parity checks in their output:
+
+```bash
+./tools/bench_addorreplacereadgroups.py --reads 100000
+./tools/bench_alignmentmetrics.py --reads 100000
+./tools/bench_buildbamindex.py --reads 50000
+./tools/bench_cleansam.py --reads 50000
+./tools/bench_fastqtosam.py --reads 100000
+./tools/bench_insertsize.py --reads 500000
+./tools/bench_mergesamfiles.py --reads 50000 --shards 4
+./tools/bench_qualityyield.py --reads 100000
+./tools/bench_samtofastq.py --reads 50000
+./tools/bench_sortsam.py --reads 100000
+./tools/bench_suite.py --repeats 5
+```
 
 ## Packaging
 
@@ -301,17 +816,27 @@ Local package smoke test:
 ./tools/verify_package_install.sh
 ```
 
-Bioconda-oriented assets live in `packaging/bioconda/turbo-picard/`. The recipe
-currently uses the local checkout as its source so it can be tested before a
+Bioconda-oriented assets live in `packaging/bioconda/turbo-picard/` and
+`packaging/bioconda/turbo-picard-picard-shim/`. The main package is
+non-shadowing; the shim package owns the optional `picard` command. The recipes
+currently use the local checkout as their source so they can be tested before a
 release tag exists. Before submitting to Bioconda, replace `source.path` with a
 tagged release URL and `sha256`, and replace the maintainer placeholder.
 
 ## Current Limits
 
 `turbo-picard` is not a full Picard suite yet. The shipped native commands are
-`MarkDuplicates`, `SortSam`, `SamToFastq`, `AddOrReplaceReadGroups`, and
-`CollectAlignmentSummaryMetrics`, and `CreateSequenceDictionary`, and outputs
-are intended to be semantically compatible rather than byte-for-byte identical
-to Picard. Set
+`MarkDuplicates`, `SortSam`, `CleanSam`, `MergeSamFiles`, `BuildBamIndex`, `SamToFastq`, `FastqToSam`,
+`AddOrReplaceReadGroups`, `CollectAlignmentSummaryMetrics`,
+`CollectQualityYieldMetrics`, `CreateSequenceDictionary`, `NormalizeFasta`, and
+`BedToIntervalList`, with partial native `ViewSam`, `ReplaceSamHeader`, and
+`QualityScoreDistribution`, `MeanQualityByCycle`,
+`CollectBaseDistributionByCycle`, `CollectGcBiasMetrics`,
+`CollectInsertSizeMetrics`, `CollectMultipleMetrics`, `CollectWgsMetrics`, `FixMateInformation`,
+`UpdateVcfSequenceDictionary`, `IntervalListTools`, `RevertSam`,
+`SetNmMdAndUqTags`, `ValidateSamFile`, `LiftoverVcf`, `GatherVcfs`, `SortVcf`,
+and `MergeVcfs`.
+Outputs are intended to be semantically compatible rather than byte-for-byte
+identical to Picard. Set
 `TURBO_PICARD_FALLBACK_COMMAND` for drop-in environments that need unsupported
 Picard tools to continue working.

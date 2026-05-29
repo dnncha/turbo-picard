@@ -11,4 +11,4 @@ cargo install \
   --no-track \
   --root "${PREFIX}" \
   --path crates/turbo-picard-cli \
-  --bin turbo-picard
+  --bin picard

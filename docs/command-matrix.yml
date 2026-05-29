@@ -1,0 +1,98 @@
+picard_reference: "3.4.x"
+commands:
+  - name: AddOrReplaceReadGroups
+    status: native
+    parity_script: tools/verify_basic_addorreplacereadgroups_parity.sh
+  - name: BedToIntervalList
+    status: native
+    parity_script: tools/verify_basic_bedtointervallist_parity.sh
+  - name: BuildBamIndex
+    status: native
+    parity_script: tools/verify_basic_buildbamindex_parity.sh
+  - name: CleanSam
+    status: partial-native
+    parity_script: tools/verify_basic_cleansam_parity.sh
+  - name: CollectAlignmentSummaryMetrics
+    status: partial-native
+    parity_script: tools/verify_basic_alignmentmetrics_parity.sh
+  - name: CollectBaseDistributionByCycle
+    status: partial-native
+    parity_script: tools/verify_basic_collectbasedistributionbycycle_parity.sh
+  - name: CollectGcBiasMetrics
+    status: partial-native
+    parity_script: tools/verify_basic_collectgcbiasmetrics_parity.sh
+  - name: CollectQualityYieldMetrics
+    status: native
+    parity_script: tools/verify_basic_qualityyield_parity.sh
+  - name: CollectWgsMetrics
+    status: partial-native
+    parity_script: tools/verify_basic_collectwgsmetrics_parity.sh
+  - name: CreateSequenceDictionary
+    status: partial-native
+    parity_script: tools/verify_basic_createdict_parity.sh
+  - name: FastqToSam
+    status: partial-native
+    parity_script: tools/verify_basic_fastqtosam_parity.sh
+  - name: GatherVcfs
+    status: partial-native
+    parity_script: tools/verify_basic_gathervcfs_parity.sh
+  - name: MarkDuplicates
+    status: partial-native
+    parity_script: tools/verify_basic_picard_parity.sh
+  - name: MergeSamFiles
+    status: partial-native
+    parity_script: tools/verify_basic_mergesamfiles_parity.sh
+  - name: MergeVcfs
+    status: partial-native
+    parity_script: tools/verify_basic_mergevcfs_parity.sh
+  - name: MeanQualityByCycle
+    status: partial-native
+    parity_script: tools/verify_basic_meanqualitybycycle_parity.sh
+  - name: NormalizeFasta
+    status: native
+    parity_script: tools/verify_basic_normalizefasta_parity.sh
+  - name: QualityScoreDistribution
+    status: partial-native
+    parity_script: tools/verify_basic_qualityscoredistribution_parity.sh
+  - name: ReplaceSamHeader
+    status: partial-native
+    parity_script: tools/verify_basic_replacesamheader_parity.sh
+  - name: SamToFastq
+    status: partial-native
+    parity_script: tools/verify_basic_samtofastq_parity.sh
+  - name: SortSam
+    status: partial-native
+    parity_script: tools/verify_basic_sortsam_parity.sh
+  - name: SortVcf
+    status: partial-native
+    parity_script: tools/verify_basic_sortvcf_parity.sh
+  - name: UpdateVcfSequenceDictionary
+    status: partial-native
+    parity_script: tools/verify_basic_updatevcfsequencedictionary_parity.sh
+  - name: ViewSam
+    status: partial-native
+    parity_script: tools/verify_basic_viewsam_parity.sh
+  - name: CollectInsertSizeMetrics
+    status: partial-native
+    parity_script: tools/verify_basic_collectinsertsizemetrics_parity.sh
+  - name: CollectMultipleMetrics
+    status: partial-native
+    parity_script: tools/verify_basic_collectmultiplemetrics_parity.sh
+  - name: FixMateInformation
+    status: partial-native
+    parity_script: tools/verify_basic_fixmateinformation_parity.sh
+  - name: IntervalListTools
+    status: partial-native
+    parity_script: tools/verify_basic_intervallisttools_parity.sh
+  - name: LiftoverVcf
+    status: partial-native
+    parity_script: tools/verify_basic_liftovervcf_parity.sh
+  - name: RevertSam
+    status: partial-native
+    parity_script: tools/verify_basic_revertsam_parity.sh
+  - name: SetNmMdAndUqTags
+    status: partial-native
+    parity_script: tools/verify_basic_setnmmdanduqtags_parity.sh
+  - name: ValidateSamFile
+    status: partial-native
+    parity_script: tools/verify_basic_validatesamfile_parity.sh

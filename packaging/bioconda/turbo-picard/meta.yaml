@@ -38,13 +38,34 @@ requirements:
 test:
   commands:
     - turbo-picard --version
-    - picard --version
     - turbo-picard MarkDuplicates --help
     - turbo-picard SortSam --help
+    - turbo-picard CleanSam --help
+    - turbo-picard MergeSamFiles --help
+    - turbo-picard BuildBamIndex --help
     - turbo-picard SamToFastq --help
     - turbo-picard AddOrReplaceReadGroups --help
     - turbo-picard CollectAlignmentSummaryMetrics --help
+    - turbo-picard CollectQualityYieldMetrics --help
+    - turbo-picard QualityScoreDistribution --help
+    - turbo-picard MeanQualityByCycle --help
+    - turbo-picard CollectInsertSizeMetrics --help
+    - turbo-picard CollectMultipleMetrics --help
+    - turbo-picard FixMateInformation --help
+    - turbo-picard IntervalListTools --help
+    - turbo-picard RevertSam --help
+    - turbo-picard SetNmMdAndUqTags --help
+    - turbo-picard ValidateSamFile --help
+    - turbo-picard LiftoverVcf --help
     - turbo-picard CreateSequenceDictionary --help
+    - turbo-picard NormalizeFasta --help
+    - turbo-picard BedToIntervalList --help
+    - turbo-picard ViewSam --help
+    - turbo-picard ReplaceSamHeader --help
+    - turbo-picard UpdateVcfSequenceDictionary --help
+    - turbo-picard GatherVcfs --help
+    - turbo-picard SortVcf --help
+    - turbo-picard MergeVcfs --help
 
 about:
   home: https://github.com/turbo-picard/turbo-picard
@@ -55,10 +76,10 @@ about:
   summary: Fast Picard-compatible toolkit with native high-impact Picard commands.
   description: |
     turbo-picard is a Rust implementation of high-impact Picard workflows.
-    The current native engines target MarkDuplicates, SortSam, SamToFastq,
-    AddOrReplaceReadGroups, CollectAlignmentSummaryMetrics, and
-    CreateSequenceDictionary workflows and install both turbo-picard and picard
-    command entrypoints.
+    The current native engines target high-impact SAM/BAM, metrics, FASTA, and
+    interval workflows. This package installs the non-shadowing turbo-picard
+    command entrypoint only; install turbo-picard-picard-shim to opt into a
+    picard compatibility shim.
 
 extra:
   recipe-maintainers:
