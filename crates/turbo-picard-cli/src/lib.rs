@@ -852,7 +852,12 @@ Usage: picard CollectAlignmentSummaryMetrics I=<input.bam> O=<metrics.txt> [opti
 
 Required arguments:
   INPUT / I             Input SAM or BAM file
-  OUTPUT / O            Alignment summary metrics file"
+  OUTPUT / O            Alignment summary metrics file
+
+Supported options:
+  METRIC_ACCUMULATION_LEVEL=ALL_READS|SAMPLE|LIBRARY|READ_GROUP
+  VALIDATION_STRINGENCY
+  QUIET"
     );
 }
 
@@ -984,8 +989,12 @@ Required arguments:
 Supported options:
   ADD_MATE_CIGAR / MC
   ASSUME_SORTED
-  SORT_ORDER=queryname
+  SORT_ORDER=queryname|coordinate|unsorted
   IGNORE_MISSING_MATES=true
+  CREATE_INDEX
+  CREATE_MD5_FILE
+  TMP_DIR
+  MAX_RECORDS_IN_RAM
   VALIDATION_STRINGENCY
   QUIET"
     );
@@ -1025,7 +1034,12 @@ Supported options:
   REMOVE_DUPLICATE_INFORMATION=true
   RESTORE_ORIGINAL_QUALITIES=true
   RESTORE_HARDCLIPS=false
-  SORT_ORDER=queryname
+  SORT_ORDER=queryname|coordinate|unsorted
+  CREATE_INDEX
+  CREATE_MD5_FILE
+  TMP_DIR
+  MAX_RECORDS_IN_RAM
+  ATTRIBUTE_TO_CLEAR
   VALIDATION_STRINGENCY
   QUIET"
     );
@@ -2197,17 +2211,21 @@ fn run_collectalignmentsummarymetrics(args: &[String]) -> Result<(), String> {
     let input = required_scalar_for(&args, "INPUT", "CollectAlignmentSummaryMetrics")?;
     let output = required_scalar_for(&args, "OUTPUT", "CollectAlignmentSummaryMetrics")?;
     let stop_after = optional_u32(&args, "STOP_AFTER")?.unwrap_or(0);
+    let accumulation = alignment_accumulation_level(&args)?;
 
     if has_sam_extension(&input) {
-        let metrics = collect_alignment_sam_text(&input, stop_after)?;
+        let metrics = collect_alignment_sam_text(&input, stop_after, accumulation)?;
         return fs::write(output, metrics.to_picard_text()).map_err(|error| error.to_string());
     }
 
     let mut reader = bam::Reader::from_path(input).map_err(|error| error.to_string())?;
-    let mut metrics = AlignmentSummarySet::default();
+    let read_groups =
+        insert_size_read_groups_from_header(&String::from_utf8_lossy(reader.header().as_bytes()));
+    let mut metrics = AlignmentSummaryCollection::new(accumulation);
     for record in limited_records(&mut reader, stop_after) {
         let record = record.map_err(|error| error.to_string())?;
-        metrics.observe(&record);
+        let read_group = insert_size_read_group_for_bam_record(&record, &read_groups);
+        metrics.observe(&record, read_group.as_ref());
     }
 
     fs::write(output, metrics.to_picard_text()).map_err(|error| error.to_string())
@@ -2259,18 +2277,23 @@ fn run_collectinsertsizemetrics(args: &[String]) -> Result<(), String> {
     let histogram = required_scalar_for(&args, "HISTOGRAM_FILE", "CollectInsertSizeMetrics")?;
     let include_duplicates = optional_bool(&args, "INCLUDE_DUPLICATES")?.unwrap_or(false);
     let stop_after = optional_u32(&args, "STOP_AFTER")?.unwrap_or(0);
+    let accumulation = insert_size_accumulation_level(&args)?;
 
     if has_sam_extension(&input) {
-        let metrics = collect_insert_size_sam_text(&input, include_duplicates, stop_after)?;
+        let metrics =
+            collect_insert_size_sam_text(&input, include_duplicates, stop_after, accumulation)?;
         fs::write(output, metrics.to_picard_text()).map_err(|error| error.to_string())?;
         return write_placeholder_pdf(&histogram);
     }
 
     let mut reader = bam::Reader::from_path(input).map_err(|error| error.to_string())?;
-    let mut metrics = InsertSizeSummary::default();
+    let read_groups =
+        insert_size_read_groups_from_header(&String::from_utf8_lossy(reader.header().as_bytes()));
+    let mut metrics = InsertSizeCollection::new(accumulation);
     for record in limited_records(&mut reader, stop_after) {
         let record = record.map_err(|error| error.to_string())?;
-        metrics.observe(&record, include_duplicates);
+        let read_group = insert_size_read_group_for_bam_record(&record, &read_groups);
+        metrics.observe(&record, include_duplicates, read_group.as_ref());
     }
 
     fs::write(output, metrics.to_picard_text()).map_err(|error| error.to_string())?;
@@ -2353,6 +2376,10 @@ fn run_collectmultiplemetrics(args: &[String]) -> Result<(), String> {
         .map(|value| format!("STOP_AFTER={value}"))
         .into_iter()
         .collect::<Vec<_>>();
+    let accumulation_arg = optional_scalar(&args, "METRIC_ACCUMULATION_LEVEL")?
+        .map(|value| format!("METRIC_ACCUMULATION_LEVEL={value}"))
+        .into_iter()
+        .collect::<Vec<_>>();
 
     for program in programs {
         match program.as_str() {
@@ -2370,6 +2397,7 @@ fn run_collectmultiplemetrics(args: &[String]) -> Result<(), String> {
                     "VALIDATION_STRINGENCY=SILENT".to_string(),
                     "QUIET=true".to_string(),
                 ];
+                child_args.extend(accumulation_arg.clone());
                 child_args.extend(stop_after_arg.clone());
                 run_collectalignmentsummarymetrics(&child_args)?;
                 write_placeholder_pdf(&format!("{output}.read_length_histogram.pdf"))?;
@@ -2395,6 +2423,7 @@ fn run_collectmultiplemetrics(args: &[String]) -> Result<(), String> {
                     &["INCLUDE_DUPLICATES", "DEVIATIONS", "MINIMUM_PCT"],
                     &mut child_args,
                 );
+                child_args.extend(accumulation_arg.clone());
                 child_args.extend(stop_after_arg.clone());
                 run_collectinsertsizemetrics(&child_args)?;
             }
@@ -2645,16 +2674,36 @@ fn run_fixmateinformation(args: &[String]) -> Result<(), String> {
     let add_mate_cigar = optional_bool(&args, "ADD_MATE_CIGAR")?.unwrap_or(true);
     let ignore_missing_mates = optional_bool(&args, "IGNORE_MISSING_MATES")?.unwrap_or(true);
     let assume_sorted = optional_bool(&args, "ASSUME_SORTED")?.unwrap_or(false);
+    let create_md5_file = optional_bool(&args, "CREATE_MD5_FILE")?.unwrap_or(false);
+    let create_index = optional_bool(&args, "CREATE_INDEX")?.unwrap_or(false);
+    let sort_order = match optional_scalar(&args, "SORT_ORDER")?
+        .unwrap_or_else(|| "queryname".to_string())
+        .as_str()
+    {
+        "queryname" => SortOrder::QueryName,
+        "coordinate" => SortOrder::Coordinate,
+        "unsorted" => SortOrder::Unsorted,
+        value => return Err(format!("unsupported FixMateInformation SORT_ORDER={value}")),
+    };
     let output_format = output_format_for(&output, "FixMateInformation")?;
+    if create_index && sort_order != SortOrder::Coordinate {
+        return Err(
+            "FixMateInformation CREATE_INDEX=true requires SORT_ORDER=coordinate".to_string(),
+        );
+    }
+    if create_index && output_format != bam::Format::Bam {
+        return Err("FixMateInformation CREATE_INDEX=true requires BAM output".to_string());
+    }
 
     let mut reader = bam::Reader::from_path(&input).map_err(|error| error.to_string())?;
     if !assume_sorted && header_sort_order(reader.header()).as_deref() != Some("queryname") {
         return Err("unsupported FixMateInformation input must be queryname sorted".to_string());
     }
-    let header = sorted_header(reader.header(), SortOrder::QueryName);
+    let header = sorted_header(reader.header(), sort_order);
     let compression_level = optional_u32(&args, "COMPRESSION_LEVEL")?;
     let mut writer = bam_writer_for_path(&output, &header, output_format, compression_level)?;
     let mut pending = Vec::<bam::Record>::new();
+    let mut fixed_records = Vec::<bam::Record>::new();
 
     for record in reader.records() {
         let record = record.map_err(|error| error.to_string())?;
@@ -2662,21 +2711,44 @@ fn run_fixmateinformation(args: &[String]) -> Result<(), String> {
             .first()
             .is_some_and(|first| first.qname() != record.qname())
         {
-            write_fixed_mate_group(
-                &mut writer,
-                &mut pending,
-                add_mate_cigar,
-                ignore_missing_mates,
-            )?;
+            if sort_order == SortOrder::Coordinate {
+                fixed_records.extend(drain_fixed_mate_group(
+                    &mut pending,
+                    add_mate_cigar,
+                    ignore_missing_mates,
+                )?);
+            } else {
+                write_fixed_mate_group(
+                    &mut writer,
+                    &mut pending,
+                    add_mate_cigar,
+                    ignore_missing_mates,
+                )?;
+            }
         }
         pending.push(record);
     }
-    write_fixed_mate_group(
-        &mut writer,
-        &mut pending,
-        add_mate_cigar,
-        ignore_missing_mates,
-    )
+    if sort_order == SortOrder::Coordinate {
+        fixed_records.extend(drain_fixed_mate_group(
+            &mut pending,
+            add_mate_cigar,
+            ignore_missing_mates,
+        )?);
+        fixed_records.sort_by(compare_coordinate);
+        for record in fixed_records {
+            writer.write(&record).map_err(|error| error.to_string())?;
+        }
+    } else {
+        write_fixed_mate_group(
+            &mut writer,
+            &mut pending,
+            add_mate_cigar,
+            ignore_missing_mates,
+        )?;
+    }
+    drop(writer);
+
+    write_requested_sidecars(&output, create_md5_file, create_index)
 }
 
 fn run_qualityscoredistribution(args: &[String]) -> Result<(), String> {
@@ -2929,32 +3001,63 @@ fn run_revertsam(args: &[String]) -> Result<(), String> {
     let remove_duplicate_information =
         optional_bool(&args, "REMOVE_DUPLICATE_INFORMATION")?.unwrap_or(true);
     let restore_hardclips = optional_bool(&args, "RESTORE_HARDCLIPS")?.unwrap_or(true);
+    let create_md5_file = optional_bool(&args, "CREATE_MD5_FILE")?.unwrap_or(false);
+    let create_index = optional_bool(&args, "CREATE_INDEX")?.unwrap_or(false);
+    let attributes_to_reverse = attributes_for_revertsam(&args, "ATTRIBUTE_TO_REVERSE")?;
+    let attributes_to_reverse_complement =
+        attributes_for_revertsam(&args, "ATTRIBUTE_TO_REVERSE_COMPLEMENT")?;
+    let sort_order = match optional_scalar(&args, "SORT_ORDER")?
+        .unwrap_or_else(|| "queryname".to_string())
+        .as_str()
+    {
+        "queryname" => SortOrder::QueryName,
+        "coordinate" => SortOrder::Coordinate,
+        "unsorted" => SortOrder::Unsorted,
+        value => return Err(format!("unsupported RevertSam SORT_ORDER={value}")),
+    };
+    if create_index
+        && sort_order == SortOrder::Coordinate
+        && !matches!(output_format, bam::Format::Bam)
+    {
+        return Err("RevertSam CREATE_INDEX=true requires BAM output".to_string());
+    }
     let attributes_to_clear = attributes_to_clear_for_revertsam(&args)?;
 
     let mut reader = bam::Reader::from_path(&input).map_err(|error| error.to_string())?;
-    let header = reverted_header(reader.header(), remove_alignment_information);
-    let mut records = reader
-        .records()
-        .map(|record| {
-            let mut record = record.map_err(|error| error.to_string())?;
-            revert_record(
-                &mut record,
-                restore_original_qualities,
-                remove_alignment_information,
-                remove_duplicate_information,
-                restore_hardclips,
-                &attributes_to_clear,
-            )?;
-            Ok(record)
-        })
-        .collect::<Result<Vec<_>, String>>()?;
-    records.sort_by(compare_queryname);
+    let header = reverted_header(reader.header(), remove_alignment_information, sort_order);
+    let mut records = Vec::new();
+    for record in reader.records() {
+        let mut record = record.map_err(|error| error.to_string())?;
+        if record.is_secondary() || record.is_supplementary() {
+            continue;
+        }
+        revert_record(
+            &mut record,
+            restore_original_qualities,
+            remove_alignment_information,
+            remove_duplicate_information,
+            restore_hardclips,
+            &attributes_to_clear,
+            &attributes_to_reverse,
+            &attributes_to_reverse_complement,
+        )?;
+        records.push(record);
+    }
+    if sort_order == SortOrder::QueryName && !queryname_records_are_monotonic(&records) {
+        records.sort_by(compare_queryname);
+    }
 
     let mut writer = bam_writer_for_path(&output, &header, output_format, compression_level)?;
     for record in records {
         writer.write(&record).map_err(|error| error.to_string())?;
     }
-    Ok(())
+    drop(writer);
+
+    write_requested_sidecars(
+        &output,
+        create_md5_file,
+        create_index && sort_order == SortOrder::Coordinate,
+    )
 }
 
 fn run_setnmmdanduqtags(args: &[String]) -> Result<(), String> {
@@ -2980,11 +3083,15 @@ fn run_setnmmdanduqtags(args: &[String]) -> Result<(), String> {
         .iter()
         .map(|name| String::from_utf8_lossy(name).to_string())
         .collect::<Vec<_>>();
+    let references_by_tid = target_names
+        .iter()
+        .map(|name| reference.get(name).map(Vec::as_slice))
+        .collect::<Vec<_>>();
     let mut writer = bam_writer_for_path(&output, &header, output_format, compression_level)?;
 
     for record in reader.records() {
         let mut record = record.map_err(|error| error.to_string())?;
-        set_nm_md_uq_tags(&mut record, &target_names, &reference, set_only_uq)?;
+        set_nm_md_uq_tags(&mut record, &references_by_tid, set_only_uq)?;
         writer.write(&record).map_err(|error| error.to_string())?;
     }
     Ok(())
@@ -2998,13 +3105,21 @@ fn run_validatesamfile(args: &[String]) -> Result<(), String> {
     let output = optional_scalar(&args, "OUTPUT")?;
     let skip_mate_validation = optional_bool(&args, "SKIP_MATE_VALIDATION")?.unwrap_or(false);
     let ignored = validate_sam_ignored_summary_keys(&args)?;
+    let mode = validate_sam_mode(&args)?;
+    let max_output = optional_u32(&args, "MAX_OUTPUT")?;
 
     let mut reader = bam::Reader::from_path(&input).map_err(|error| error.to_string())?;
     let mut report = validate_sam_summary(&mut reader, skip_mate_validation)?;
     for key in ignored {
         report.counts.remove(&key);
+        report.details.retain(|detail| detail.key != key);
     }
-    write_validate_sam_summary(output.as_deref(), &report.counts)?;
+    match mode {
+        ValidateSamMode::Summary => write_validate_sam_summary(output.as_deref(), &report.counts)?,
+        ValidateSamMode::Verbose => {
+            write_validate_sam_verbose(output.as_deref(), &report.details, max_output)?
+        }
+    }
 
     if report.counts.is_empty() {
         Ok(())
@@ -4306,31 +4421,49 @@ fn reject_unsupported_revertsam_args(args: &BTreeMap<String, Vec<String>>) -> Re
         "RESTORE_HARDCLIPS",
         "SORT_ORDER",
         "ATTRIBUTE_TO_CLEAR",
+        "ATTRIBUTE_TO_REVERSE",
+        "ATTRIBUTE_TO_REVERSE_COMPLEMENT",
         "VALIDATION_STRINGENCY",
         "QUIET",
         "VERBOSITY",
         "COMPRESSION_LEVEL",
+        "CREATE_MD5_FILE",
+        "CREATE_INDEX",
+        "TMP_DIR",
+        "MAX_RECORDS_IN_RAM",
     ];
     for key in args.keys() {
         if !supported.contains(&key.as_str()) {
             return Err(format!("unsupported RevertSam argument: {key}"));
         }
     }
-    if optional_bool(args, "REMOVE_ALIGNMENT_INFORMATION")? == Some(false) {
-        return Err("unsupported RevertSam REMOVE_ALIGNMENT_INFORMATION=false".to_string());
+    let remove_alignment_information =
+        optional_bool(args, "REMOVE_ALIGNMENT_INFORMATION")?.unwrap_or(true);
+    let restore_hardclips = optional_bool(args, "RESTORE_HARDCLIPS")?.unwrap_or(true);
+    if !remove_alignment_information && restore_hardclips {
+        return Err(
+            "Cannot revert sam file when RESTORE_HARDCLIPS is true and REMOVE_ALIGNMENT_INFORMATION is false."
+                .to_string(),
+        );
     }
     optional_bool(args, "REMOVE_DUPLICATE_INFORMATION")?;
     optional_bool(args, "RESTORE_ORIGINAL_QUALITIES")?;
-    optional_bool(args, "RESTORE_HARDCLIPS")?;
-    if let Some(sort_order) = optional_scalar(args, "SORT_ORDER")? {
-        if sort_order != "queryname" {
+    let explicit_sort_order = optional_scalar(args, "SORT_ORDER")?;
+    optional_bool(args, "CREATE_INDEX")?;
+    if let Some(sort_order) = explicit_sort_order {
+        if sort_order != "queryname" && sort_order != "coordinate" && sort_order != "unsorted" {
             return Err(format!("unsupported RevertSam SORT_ORDER={sort_order}"));
         }
     }
     let _ = attributes_to_clear_for_revertsam(args)?;
+    let _ = attributes_for_revertsam(args, "ATTRIBUTE_TO_REVERSE")?;
+    let _ = attributes_for_revertsam(args, "ATTRIBUTE_TO_REVERSE_COMPLEMENT")?;
     optional_scalar(args, "VALIDATION_STRINGENCY")?;
     optional_scalar(args, "VERBOSITY")?;
     optional_bool(args, "QUIET")?;
+    optional_bool(args, "CREATE_MD5_FILE")?;
+    let _ = args.get("TMP_DIR");
+    optional_u32(args, "MAX_RECORDS_IN_RAM")?;
     if let Some(level) = optional_u32(args, "COMPRESSION_LEVEL")? {
         if level > 9 {
             return Err(format!("unsupported RevertSam COMPRESSION_LEVEL: {level}"));
@@ -4342,13 +4475,18 @@ fn reject_unsupported_revertsam_args(args: &BTreeMap<String, Vec<String>>) -> Re
 fn attributes_to_clear_for_revertsam(
     args: &BTreeMap<String, Vec<String>>,
 ) -> Result<Vec<[u8; 2]>, String> {
+    attributes_for_revertsam(args, "ATTRIBUTE_TO_CLEAR")
+}
+
+fn attributes_for_revertsam(
+    args: &BTreeMap<String, Vec<String>>,
+    key: &str,
+) -> Result<Vec<[u8; 2]>, String> {
     let mut attributes = Vec::new();
-    for attribute in args.get("ATTRIBUTE_TO_CLEAR").into_iter().flatten() {
+    for attribute in args.get(key).into_iter().flatten() {
         let bytes = attribute.as_bytes();
         if bytes.len() != 2 || !bytes.iter().all(|byte| byte.is_ascii_alphanumeric()) {
-            return Err(format!(
-                "unsupported RevertSam ATTRIBUTE_TO_CLEAR={attribute}"
-            ));
+            return Err(format!("unsupported RevertSam {key}={attribute}"));
         }
         attributes.push([bytes[0], bytes[1]]);
     }
@@ -4410,11 +4548,7 @@ fn reject_unsupported_validatesamfile_args(
             return Err(format!("unsupported ValidateSamFile argument: {key}"));
         }
     }
-    if let Some(mode) = optional_scalar(args, "MODE")? {
-        if mode.to_ascii_uppercase() != "SUMMARY" {
-            return Err(format!("unsupported ValidateSamFile MODE={mode}"));
-        }
-    }
+    validate_sam_mode(args)?;
     optional_u32(args, "MAX_OUTPUT")?;
     optional_bool(args, "SKIP_MATE_VALIDATION")?;
     optional_scalar(args, "VALIDATION_STRINGENCY")?;
@@ -4482,6 +4616,19 @@ fn reference_sequences_by_name(path: &str) -> Result<BTreeMap<String, Vec<u8>>, 
 #[derive(Debug, Default)]
 struct ValidateSamReport {
     counts: BTreeMap<String, u64>,
+    details: Vec<ValidateSamDetail>,
+}
+
+#[derive(Debug)]
+struct ValidateSamDetail {
+    key: String,
+    line: String,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ValidateSamMode {
+    Summary,
+    Verbose,
 }
 
 fn validate_sam_summary(
@@ -4492,57 +4639,164 @@ fn validate_sam_summary(
     let read_groups = read_group_platforms(&header_text);
     let target_count = reader.header().target_count();
     let mut report = ValidateSamReport::default();
+    let mut pending_mates = BTreeMap::<Vec<u8>, ValidateSamMate>::new();
 
     if target_count == 0 {
-        add_validate_count(&mut report, "ERROR:MISSING_SEQUENCE_DICTIONARY");
+        add_validate_issue(
+            &mut report,
+            "ERROR:MISSING_SEQUENCE_DICTIONARY",
+            "ERROR::MISSING_SEQUENCE_DICTIONARY:Sequence dictionary is empty".to_string(),
+        );
     }
     if read_groups.is_empty() {
-        add_validate_count(&mut report, "ERROR:MISSING_READ_GROUP");
+        add_validate_issue(
+            &mut report,
+            "ERROR:MISSING_READ_GROUP",
+            "ERROR::MISSING_READ_GROUP:Read groups is empty".to_string(),
+        );
     } else {
         for has_platform in read_groups.values() {
             if !has_platform {
-                add_validate_count(&mut report, "ERROR:MISSING_PLATFORM_VALUE");
+                add_validate_issue(
+                    &mut report,
+                    "ERROR:MISSING_PLATFORM_VALUE",
+                    "ERROR::MISSING_PLATFORM_VALUE:A platform value is missing".to_string(),
+                );
             }
         }
     }
 
+    let mut record_number = 0_u64;
     for record in reader.records() {
         let record = record.map_err(|error| error.to_string())?;
+        record_number += 1;
         if record.is_paired() && !skip_mate_validation {
-            return Err(
-                "unsupported ValidateSamFile paired input requires SKIP_MATE_VALIDATION=true"
-                    .to_string(),
-            );
+            validate_sam_mate_summary(&record, &mut pending_mates, &mut report);
         }
-        validate_sam_record_summary(&record, target_count, &read_groups, &mut report)?;
+        validate_sam_record_summary(
+            &record,
+            record_number,
+            target_count,
+            &read_groups,
+            &mut report,
+        )?;
+    }
+    for _ in pending_mates.values() {
+        add_validate_issue(
+            &mut report,
+            "ERROR:MATE_NOT_FOUND",
+            "ERROR::MATE_NOT_FOUND:Mate not found for paired read".to_string(),
+        );
     }
 
     Ok(report)
 }
 
+#[derive(Clone)]
+struct ValidateSamMate {
+    tid: i32,
+    pos: i64,
+    mtid: i32,
+    mpos: i64,
+}
+
+impl ValidateSamMate {
+    fn from_record(record: &bam::Record) -> Self {
+        Self {
+            tid: record.tid(),
+            pos: record.pos(),
+            mtid: record.mtid(),
+            mpos: record.mpos(),
+        }
+    }
+
+    fn is_reciprocal_with(&self, mate: &Self) -> bool {
+        self.mtid == mate.tid
+            && self.mpos == mate.pos
+            && mate.mtid == self.tid
+            && mate.mpos == self.pos
+    }
+}
+
+fn validate_sam_mate_summary(
+    record: &bam::Record,
+    pending_mates: &mut BTreeMap<Vec<u8>, ValidateSamMate>,
+    report: &mut ValidateSamReport,
+) {
+    if record.is_secondary() || record.is_supplementary() {
+        return;
+    }
+    let qname = record.qname().to_vec();
+    let mate = ValidateSamMate::from_record(record);
+    if let Some(pending) = pending_mates.remove(&qname) {
+        if !pending.is_reciprocal_with(&mate) {
+            add_validate_issue(
+                report,
+                "ERROR:MATE_NOT_FOUND",
+                format!(
+                    "ERROR::MATE_NOT_FOUND:Read name {}, Mate not found for paired read",
+                    validate_qname(record)
+                ),
+            );
+        }
+    } else {
+        pending_mates.insert(qname, mate);
+    }
+}
+
 fn validate_sam_record_summary(
     record: &bam::Record,
+    record_number: u64,
     target_count: u32,
     read_groups: &BTreeMap<String, bool>,
     report: &mut ValidateSamReport,
 ) -> Result<(), String> {
-    if !record.is_unmapped() {
-        if record.tid() < 0 || record.tid() as u32 >= target_count {
-            add_validate_count(report, "ERROR:MISSING_SEQUENCE_DICTIONARY");
-        }
-        if record.aux(b"NM").is_err() {
-            add_validate_count(report, "WARNING:MISSING_TAG_NM");
-        }
-    }
-
+    let read_name = validate_qname(record);
     match record.aux(b"RG") {
         Ok(Aux::String(read_group)) => {
             if !read_groups.contains_key(read_group) {
-                add_validate_count(report, "ERROR:READ_GROUP_NOT_FOUND");
+                add_validate_issue(
+                    report,
+                    "ERROR:READ_GROUP_NOT_FOUND",
+                    format!(
+                        "ERROR::READ_GROUP_NOT_FOUND:Read name {read_name}, RG ID on record not found in header"
+                    ),
+                );
             }
         }
-        Ok(_) => add_validate_count(report, "ERROR:INVALID_TAG_TYPE"),
-        Err(_) => add_validate_count(report, "WARNING:RECORD_MISSING_READ_GROUP"),
+        Ok(_) => add_validate_issue(
+            report,
+            "ERROR:INVALID_TAG_TYPE",
+            format!("ERROR::INVALID_TAG_TYPE:Read name {read_name}, RG tag has invalid type"),
+        ),
+        Err(_) => add_validate_issue(
+            report,
+            "WARNING:RECORD_MISSING_READ_GROUP",
+            format!(
+                "WARNING::RECORD_MISSING_READ_GROUP:Read name {read_name}, A record is missing a read group"
+            ),
+        ),
+    }
+
+    if !record.is_unmapped() {
+        if record.tid() < 0 || record.tid() as u32 >= target_count {
+            add_validate_issue(
+                report,
+                "ERROR:MISSING_SEQUENCE_DICTIONARY",
+                format!(
+                    "ERROR::MISSING_SEQUENCE_DICTIONARY:Read name {read_name}, Reference sequence is missing from the sequence dictionary"
+                ),
+            );
+        }
+        if record.aux(b"NM").is_err() {
+            add_validate_issue(
+                report,
+                "WARNING:MISSING_TAG_NM",
+                format!(
+                    "WARNING::MISSING_TAG_NM:Record {record_number}, Read name {read_name}, NM tag (nucleotide differences) is missing"
+                ),
+            );
+        }
     }
     Ok(())
 }
@@ -4560,11 +4814,24 @@ fn validate_sam_ignored_summary_keys(
             "READ_GROUP_NOT_FOUND" => "ERROR:READ_GROUP_NOT_FOUND",
             "INVALID_TAG_TYPE" => "ERROR:INVALID_TAG_TYPE",
             "RECORD_MISSING_READ_GROUP" => "WARNING:RECORD_MISSING_READ_GROUP",
+            "MATE_NOT_FOUND" => "ERROR:MATE_NOT_FOUND",
             _ => return Err(format!("unsupported ValidateSamFile IGNORE={value}")),
         };
         ignored.insert(key.to_string());
     }
     Ok(ignored)
+}
+
+fn validate_sam_mode(args: &BTreeMap<String, Vec<String>>) -> Result<ValidateSamMode, String> {
+    match optional_scalar(args, "MODE")?
+        .unwrap_or_else(|| "SUMMARY".to_string())
+        .to_ascii_uppercase()
+        .as_str()
+    {
+        "SUMMARY" => Ok(ValidateSamMode::Summary),
+        "VERBOSE" => Ok(ValidateSamMode::Verbose),
+        mode => Err(format!("unsupported ValidateSamFile MODE={mode}")),
+    }
 }
 
 fn read_group_platforms(header_text: &str) -> BTreeMap<String, bool> {
@@ -4580,6 +4847,60 @@ fn read_group_platforms(header_text: &str) -> BTreeMap<String, bool> {
         }
     }
     read_groups
+}
+
+fn insert_size_read_groups_from_header(header_text: &str) -> BTreeMap<String, InsertSizeReadGroup> {
+    let mut read_groups = BTreeMap::new();
+    for line in header_text.lines().filter(|line| line.starts_with("@RG\t")) {
+        let mut id = None;
+        let mut sample = None;
+        let mut library = None;
+        let mut platform_unit = None;
+        for field in line.split('\t').skip(1) {
+            if let Some(value) = field.strip_prefix("ID:") {
+                id = Some(value.to_string());
+            } else if let Some(value) = field.strip_prefix("SM:") {
+                sample = Some(value.to_string());
+            } else if let Some(value) = field.strip_prefix("LB:") {
+                library = Some(value.to_string());
+            } else if let Some(value) = field.strip_prefix("PU:") {
+                platform_unit = Some(value.to_string());
+            }
+        }
+        if let (Some(id), Some(sample)) = (id, sample) {
+            read_groups.insert(
+                id,
+                InsertSizeReadGroup {
+                    sample,
+                    library: library.unwrap_or_default(),
+                    platform_unit: platform_unit.unwrap_or_else(|| "unknown".to_string()),
+                },
+            );
+        }
+    }
+    read_groups
+}
+
+fn insert_size_read_group_for_bam_record(
+    record: &bam::Record,
+    read_groups: &BTreeMap<String, InsertSizeReadGroup>,
+) -> Option<InsertSizeReadGroup> {
+    let Ok(Aux::String(read_group)) = record.aux(b"RG") else {
+        return None;
+    };
+    read_groups.get(read_group).cloned()
+}
+
+fn validate_qname(record: &bam::Record) -> String {
+    String::from_utf8_lossy(record.qname()).into_owned()
+}
+
+fn add_validate_issue(report: &mut ValidateSamReport, key: &str, detail: String) {
+    add_validate_count(report, key);
+    report.details.push(ValidateSamDetail {
+        key: key.to_string(),
+        line: detail,
+    });
 }
 
 fn add_validate_count(report: &mut ValidateSamReport, key: &str) {
@@ -4598,6 +4919,35 @@ fn write_validate_sam_summary(
             text.push_str(&format!("{key}\t{count}\n"));
         }
         text.push('\n');
+        text
+    };
+    match output {
+        Some(output) => fs::write(output, text).map_err(|error| error.to_string()),
+        None => std::io::stdout()
+            .write_all(text.as_bytes())
+            .map_err(|error| error.to_string()),
+    }
+}
+
+fn write_validate_sam_verbose(
+    output: Option<&str>,
+    details: &[ValidateSamDetail],
+    max_output: Option<u32>,
+) -> Result<(), String> {
+    let text = if details.is_empty() {
+        "No errors found\n".to_string()
+    } else {
+        let mut text = String::new();
+        let max_output = max_output.map(|value| value as usize).unwrap_or(100);
+        for detail in details.iter().take(max_output) {
+            text.push_str(&detail.line);
+            text.push('\n');
+        }
+        if details.len() > max_output {
+            text.push_str(&format!(
+                "Maximum output of [{max_output}] errors reached.\n"
+            ));
+        }
         text
     };
     match output {
@@ -4972,7 +5322,8 @@ fn reject_unsupported_collectalignment_args(
         );
     }
     if let Some(level) = optional_scalar(args, "METRIC_ACCUMULATION_LEVEL")? {
-        if level != "ALL_READS" {
+        if level != "ALL_READS" && level != "SAMPLE" && level != "LIBRARY" && level != "READ_GROUP"
+        {
             return Err(format!(
                 "unsupported CollectAlignmentSummaryMetrics METRIC_ACCUMULATION_LEVEL={level}"
             ));
@@ -5065,7 +5416,8 @@ fn reject_unsupported_collectinsertsize_args(
     }
     optional_scalar(args, "HISTOGRAM_FILE")?;
     if let Some(level) = optional_scalar(args, "METRIC_ACCUMULATION_LEVEL")? {
-        if level != "ALL_READS" {
+        if level != "ALL_READS" && level != "SAMPLE" && level != "LIBRARY" && level != "READ_GROUP"
+        {
             return Err(format!(
                 "unsupported CollectInsertSizeMetrics METRIC_ACCUMULATION_LEVEL={level}"
             ));
@@ -5165,10 +5517,23 @@ fn reject_unsupported_collectmultiplemetrics_args(
     optional_scalar(args, "VALIDATION_STRINGENCY")?;
     optional_scalar(args, "VERBOSITY")?;
     optional_bool(args, "QUIET")?;
+    let programs = collectmultiplemetrics_programs(args)?;
     if let Some(level) = optional_scalar(args, "METRIC_ACCUMULATION_LEVEL")? {
-        if level != "ALL_READS" {
+        if !matches!(
+            level.as_str(),
+            "ALL_READS" | "SAMPLE" | "LIBRARY" | "READ_GROUP"
+        ) {
             return Err(format!(
                 "unsupported CollectMultipleMetrics METRIC_ACCUMULATION_LEVEL={level}"
+            ));
+        }
+        if level != "ALL_READS"
+            && programs.iter().any(|program| {
+                program != "CollectInsertSizeMetrics" && program != "CollectAlignmentSummaryMetrics"
+            })
+        {
+            return Err(format!(
+                "unsupported CollectMultipleMetrics METRIC_ACCUMULATION_LEVEL={level} for selected PROGRAM values"
             ));
         }
     }
@@ -5180,7 +5545,6 @@ fn reject_unsupported_collectmultiplemetrics_args(
             ));
         }
     }
-    collectmultiplemetrics_programs(args)?;
     Ok(())
 }
 
@@ -5447,6 +5811,8 @@ fn reject_unsupported_fixmateinformation_args(
         "REFERENCE_SEQUENCE",
         "TMP_DIR",
         "MAX_RECORDS_IN_RAM",
+        "CREATE_MD5_FILE",
+        "CREATE_INDEX",
     ];
     for key in args.keys() {
         if !supported.contains(&key.as_str()) {
@@ -5457,7 +5823,7 @@ fn reject_unsupported_fixmateinformation_args(
         return Err("unsupported FixMateInformation multiple INPUT values".to_string());
     }
     if let Some(sort_order) = optional_scalar(args, "SORT_ORDER")? {
-        if sort_order != "queryname" {
+        if sort_order != "queryname" && sort_order != "coordinate" && sort_order != "unsorted" {
             return Err(format!(
                 "unsupported FixMateInformation SORT_ORDER={sort_order}"
             ));
@@ -5470,6 +5836,8 @@ fn reject_unsupported_fixmateinformation_args(
     optional_scalar(args, "VERBOSITY")?;
     optional_scalar(args, "REFERENCE_SEQUENCE")?;
     optional_bool(args, "QUIET")?;
+    optional_bool(args, "CREATE_MD5_FILE")?;
+    optional_bool(args, "CREATE_INDEX")?;
     let _ = args.get("TMP_DIR");
     optional_u32(args, "MAX_RECORDS_IN_RAM")?;
     if let Some(level) = optional_u32(args, "COMPRESSION_LEVEL")? {
@@ -5583,6 +5951,170 @@ struct AlignmentSummarySet {
     saw_paired: bool,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum AlignmentAccumulation {
+    AllReads,
+    Sample,
+    Library,
+    ReadGroup,
+}
+
+fn alignment_accumulation_level(
+    args: &BTreeMap<String, Vec<String>>,
+) -> Result<AlignmentAccumulation, String> {
+    match optional_scalar(args, "METRIC_ACCUMULATION_LEVEL")?
+        .unwrap_or_else(|| "ALL_READS".to_string())
+        .as_str()
+    {
+        "ALL_READS" => Ok(AlignmentAccumulation::AllReads),
+        "SAMPLE" => Ok(AlignmentAccumulation::Sample),
+        "LIBRARY" => Ok(AlignmentAccumulation::Library),
+        "READ_GROUP" => Ok(AlignmentAccumulation::ReadGroup),
+        value => Err(format!(
+            "unsupported CollectAlignmentSummaryMetrics METRIC_ACCUMULATION_LEVEL={value}"
+        )),
+    }
+}
+
+#[derive(Debug)]
+struct AlignmentSummaryCollection {
+    accumulation: AlignmentAccumulation,
+    all_reads: AlignmentSummarySet,
+    samples: BTreeMap<String, AlignmentSummarySet>,
+    libraries: BTreeMap<String, AlignmentSummaryLibrary>,
+    read_groups: BTreeMap<String, AlignmentSummaryReadGroup>,
+}
+
+#[derive(Debug)]
+struct AlignmentSummaryLibrary {
+    sample: String,
+    summary: AlignmentSummarySet,
+}
+
+#[derive(Debug)]
+struct AlignmentSummaryReadGroup {
+    sample: String,
+    library: String,
+    summary: AlignmentSummarySet,
+}
+
+impl AlignmentSummaryCollection {
+    fn new(accumulation: AlignmentAccumulation) -> Self {
+        Self {
+            accumulation,
+            all_reads: AlignmentSummarySet::default(),
+            samples: BTreeMap::new(),
+            libraries: BTreeMap::new(),
+            read_groups: BTreeMap::new(),
+        }
+    }
+
+    fn observe(&mut self, record: &bam::Record, read_group: Option<&InsertSizeReadGroup>) {
+        self.all_reads.observe(record);
+        if self.accumulation == AlignmentAccumulation::Sample {
+            if let Some(read_group) = read_group {
+                self.samples
+                    .entry(read_group.sample.clone())
+                    .or_default()
+                    .observe(record);
+            }
+        } else if self.accumulation == AlignmentAccumulation::Library {
+            if let Some(read_group) = read_group {
+                self.libraries
+                    .entry(read_group.library.clone())
+                    .or_insert_with(|| AlignmentSummaryLibrary {
+                        sample: read_group.sample.clone(),
+                        summary: AlignmentSummarySet::default(),
+                    })
+                    .summary
+                    .observe(record);
+            }
+        } else if self.accumulation == AlignmentAccumulation::ReadGroup {
+            if let Some(read_group) = read_group {
+                self.read_groups
+                    .entry(read_group.platform_unit.clone())
+                    .or_insert_with(|| AlignmentSummaryReadGroup {
+                        sample: read_group.sample.clone(),
+                        library: read_group.library.clone(),
+                        summary: AlignmentSummarySet::default(),
+                    })
+                    .summary
+                    .observe(record);
+            }
+        }
+    }
+
+    fn observe_sam_parts(
+        &mut self,
+        flags: u16,
+        read_length: u64,
+        aligned_length: u64,
+        mapq: u8,
+        qualities: &[u8],
+        read_group: Option<&InsertSizeReadGroup>,
+    ) {
+        self.all_reads
+            .observe_sam_parts(flags, read_length, aligned_length, mapq, qualities);
+        if self.accumulation == AlignmentAccumulation::Sample {
+            if let Some(read_group) = read_group {
+                self.samples
+                    .entry(read_group.sample.clone())
+                    .or_default()
+                    .observe_sam_parts(flags, read_length, aligned_length, mapq, qualities);
+            }
+        } else if self.accumulation == AlignmentAccumulation::Library {
+            if let Some(read_group) = read_group {
+                self.libraries
+                    .entry(read_group.library.clone())
+                    .or_insert_with(|| AlignmentSummaryLibrary {
+                        sample: read_group.sample.clone(),
+                        summary: AlignmentSummarySet::default(),
+                    })
+                    .summary
+                    .observe_sam_parts(flags, read_length, aligned_length, mapq, qualities);
+            }
+        } else if self.accumulation == AlignmentAccumulation::ReadGroup {
+            if let Some(read_group) = read_group {
+                self.read_groups
+                    .entry(read_group.platform_unit.clone())
+                    .or_insert_with(|| AlignmentSummaryReadGroup {
+                        sample: read_group.sample.clone(),
+                        library: read_group.library.clone(),
+                        summary: AlignmentSummarySet::default(),
+                    })
+                    .summary
+                    .observe_sam_parts(flags, read_length, aligned_length, mapq, qualities);
+            }
+        }
+    }
+
+    fn to_picard_text(&self) -> String {
+        let mut rows = self.all_reads.picard_rows(None, None, None);
+        if self.accumulation == AlignmentAccumulation::Sample {
+            for (sample, summary) in &self.samples {
+                rows.extend(summary.picard_rows(Some(sample), None, None));
+            }
+        } else if self.accumulation == AlignmentAccumulation::Library {
+            for (library, summary) in &self.libraries {
+                rows.extend(summary.summary.picard_rows(
+                    Some(&summary.sample),
+                    Some(library),
+                    None,
+                ));
+            }
+        } else if self.accumulation == AlignmentAccumulation::ReadGroup {
+            for (read_group, summary) in &self.read_groups {
+                rows.extend(summary.summary.picard_rows(
+                    Some(&summary.sample),
+                    Some(&summary.library),
+                    Some(read_group),
+                ));
+            }
+        }
+        AlignmentSummary::to_picard_text_for_rows(&rows, &self.all_reads.histogram_summary())
+    }
+}
+
 impl AlignmentSummarySet {
     fn observe(&mut self, record: &bam::Record) {
         if record.is_paired() {
@@ -5623,17 +6155,62 @@ impl AlignmentSummarySet {
         }
     }
 
-    fn to_picard_text(&self) -> String {
+    fn picard_rows<'a>(
+        &'a self,
+        sample: Option<&'a str>,
+        library: Option<&'a str>,
+        read_group: Option<&'a str>,
+    ) -> Vec<AlignmentSummaryRow<'a>> {
         if self.saw_paired {
-            AlignmentSummary::to_picard_text_for_rows(&[
-                ("FIRST_OF_PAIR", &self.first),
-                ("SECOND_OF_PAIR", &self.second),
-                ("PAIR", &self.pair),
-            ])
+            vec![
+                AlignmentSummaryRow {
+                    category: "FIRST_OF_PAIR",
+                    summary: &self.first,
+                    sample,
+                    library,
+                    read_group,
+                },
+                AlignmentSummaryRow {
+                    category: "SECOND_OF_PAIR",
+                    summary: &self.second,
+                    sample,
+                    library,
+                    read_group,
+                },
+                AlignmentSummaryRow {
+                    category: "PAIR",
+                    summary: &self.pair,
+                    sample,
+                    library,
+                    read_group,
+                },
+            ]
         } else {
-            AlignmentSummary::to_picard_text_for_rows(&[("UNPAIRED", &self.unpaired)])
+            vec![AlignmentSummaryRow {
+                category: "UNPAIRED",
+                summary: &self.unpaired,
+                sample,
+                library,
+                read_group,
+            }]
         }
     }
+
+    fn histogram_summary(&self) -> &AlignmentSummary {
+        if self.saw_paired {
+            &self.pair
+        } else {
+            &self.unpaired
+        }
+    }
+}
+
+struct AlignmentSummaryRow<'a> {
+    category: &'static str,
+    summary: &'a AlignmentSummary,
+    sample: Option<&'a str>,
+    library: Option<&'a str>,
+    read_group: Option<&'a str>,
 }
 
 #[derive(Debug, Default)]
@@ -5746,7 +6323,13 @@ impl AlignmentSummary {
         self.aligned_read_lengths[aligned_length as usize] += 1;
     }
 
-    fn to_picard_row(&self, category: &str) -> String {
+    fn to_picard_row(
+        &self,
+        category: &str,
+        sample: Option<&str>,
+        library: Option<&str>,
+        read_group: Option<&str>,
+    ) -> String {
         let mean_read_length = mean_from_histogram(&self.total_read_lengths);
         let sd_read_length = standard_deviation_from_histogram(&self.total_read_lengths);
         let median_read_length = median_from_histogram(&self.total_read_lengths);
@@ -5766,7 +6349,7 @@ impl AlignmentSummary {
         };
 
         format!(
-            "{category}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t0\t0\t0\t0\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t0\t0\t{}\t{}\t0\t\t\t\n",
+            "{category}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t0\t0\t0\t0\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t0\t0\t{}\t{}\t0\t{}\t{}\t{}\n",
             self.total_reads,
             self.pf_reads,
             format_float(ratio(self.pf_reads, self.total_reads)),
@@ -5792,39 +6375,48 @@ impl AlignmentSummary {
             format_float(strand_balance),
             format_float(percent_cigar_bases(self, CigarBaseKind::SoftClip)),
             format_float(percent_cigar_bases(self, CigarBaseKind::HardClip)),
+            sample.unwrap_or_default(),
+            library.unwrap_or_default(),
+            read_group.unwrap_or_default(),
         )
     }
 
-    fn to_picard_text_for_rows(rows: &[(&str, &AlignmentSummary)]) -> String {
+    fn to_picard_text_for_rows(
+        rows: &[AlignmentSummaryRow<'_>],
+        histogram_summary: &AlignmentSummary,
+    ) -> String {
         let mut output = String::new();
         output.push_str("## METRICS CLASS\tpicard.analysis.AlignmentSummaryMetrics\n");
         output.push_str("CATEGORY\tTOTAL_READS\tPF_READS\tPCT_PF_READS\tPF_NOISE_READS\tPF_READS_ALIGNED\tPCT_PF_READS_ALIGNED\tPF_ALIGNED_BASES\tPF_HQ_ALIGNED_READS\tPF_HQ_ALIGNED_BASES\tPF_HQ_ALIGNED_Q20_BASES\tPF_HQ_MEDIAN_MISMATCHES\tPF_MISMATCH_RATE\tPF_HQ_ERROR_RATE\tPF_INDEL_RATE\tMEAN_READ_LENGTH\tSD_READ_LENGTH\tMEDIAN_READ_LENGTH\tMAD_READ_LENGTH\tMIN_READ_LENGTH\tMAX_READ_LENGTH\tMEAN_ALIGNED_READ_LENGTH\tREADS_ALIGNED_IN_PAIRS\tPCT_READS_ALIGNED_IN_PAIRS\tPF_READS_IMPROPER_PAIRS\tPCT_PF_READS_IMPROPER_PAIRS\tBAD_CYCLES\tSTRAND_BALANCE\tPCT_CHIMERAS\tPCT_ADAPTER\tPCT_SOFTCLIP\tPCT_HARDCLIP\tAVG_POS_3PRIME_SOFTCLIP_LENGTH\tSAMPLE\tLIBRARY\tREAD_GROUP\n");
-        for (category, summary) in rows {
-            output.push_str(&summary.to_picard_row(category));
+        for row in rows {
+            output.push_str(&row.summary.to_picard_row(
+                row.category,
+                row.sample,
+                row.library,
+                row.read_group,
+            ));
         }
         output.push('\n');
         output.push_str("## HISTOGRAM\tjava.lang.Integer\n");
         output
             .push_str("READ_LENGTH\tUNPAIRED_TOTAL_LENGTH_COUNT\tUNPAIRED_ALIGNED_LENGTH_COUNT\n");
-        if let Some((_, histogram_summary)) = rows.last() {
-            let max_len = histogram_summary
+        let max_len = histogram_summary
+            .total_read_lengths
+            .len()
+            .max(histogram_summary.aligned_read_lengths.len());
+        for index in 0..max_len {
+            let total = histogram_summary
                 .total_read_lengths
-                .len()
-                .max(histogram_summary.aligned_read_lengths.len());
-            for index in 0..max_len {
-                let total = histogram_summary
-                    .total_read_lengths
-                    .get(index)
-                    .copied()
-                    .unwrap_or(0);
-                let aligned = histogram_summary
-                    .aligned_read_lengths
-                    .get(index)
-                    .copied()
-                    .unwrap_or(0);
-                if total != 0 || aligned != 0 {
-                    output.push_str(&format!("{index}\t{total}\t{aligned}\n"));
-                }
+                .get(index)
+                .copied()
+                .unwrap_or(0);
+            let aligned = histogram_summary
+                .aligned_read_lengths
+                .get(index)
+                .copied()
+                .unwrap_or(0);
+            if total != 0 || aligned != 0 {
+                output.push_str(&format!("{index}\t{total}\t{aligned}\n"));
             }
         }
         output
@@ -5866,11 +6458,16 @@ fn is_noise_read(record: &bam::Record) -> bool {
     false
 }
 
-fn collect_alignment_sam_text(input: &str, stop_after: u32) -> Result<AlignmentSummarySet, String> {
+fn collect_alignment_sam_text(
+    input: &str,
+    stop_after: u32,
+    accumulation: AlignmentAccumulation,
+) -> Result<AlignmentSummaryCollection, String> {
     let file = fs::File::open(input).map_err(|error| error.to_string())?;
     let mut reader = BufReader::with_capacity(1024 * 1024, file);
     let mut line = Vec::new();
-    let mut metrics = AlignmentSummarySet::default();
+    let mut metrics = AlignmentSummaryCollection::new(accumulation);
+    let mut read_groups = BTreeMap::new();
     let mut observed = 0_u32;
     loop {
         line.clear();
@@ -5881,10 +6478,14 @@ fn collect_alignment_sam_text(input: &str, stop_after: u32) -> Result<AlignmentS
         {
             break;
         }
+        if line.starts_with(b"@RG\t") {
+            observe_sam_insert_size_read_group(&mut read_groups, &line);
+            continue;
+        }
         if line.starts_with(b"@") || line.iter().all(|byte| byte.is_ascii_whitespace()) {
             continue;
         }
-        observe_alignment_sam_line(&mut metrics, &line)?;
+        observe_alignment_sam_line(&mut metrics, &line, &read_groups)?;
         observed = observed.saturating_add(1);
         if stop_after > 0 && observed >= stop_after {
             break;
@@ -5894,8 +6495,9 @@ fn collect_alignment_sam_text(input: &str, stop_after: u32) -> Result<AlignmentS
 }
 
 fn observe_alignment_sam_line(
-    metrics: &mut AlignmentSummarySet,
+    metrics: &mut AlignmentSummaryCollection,
     line: &[u8],
+    read_groups: &BTreeMap<String, InsertSizeReadGroup>,
 ) -> Result<(), String> {
     let mut line = line;
     while line.ends_with(b"\n") || line.ends_with(b"\r") {
@@ -5950,7 +6552,15 @@ fn observe_alignment_sam_line(
     } else {
         qualities
     };
-    metrics.observe_sam_parts(flags, read_length, aligned_length, mapq, qualities);
+    let read_group = insert_size_read_group_for_sam_tags(fields, read_groups);
+    metrics.observe_sam_parts(
+        flags,
+        read_length,
+        aligned_length,
+        mapq,
+        qualities,
+        read_group.as_ref(),
+    );
     Ok(())
 }
 
@@ -6216,9 +6826,16 @@ fn observe_quality_yield_sam_line(
             .next()
             .ok_or_else(|| "malformed CollectQualityYieldMetrics SAM record".to_string())?;
     }
-    let qualities = fields
+    let quality_field = fields
         .next()
         .ok_or_else(|| "malformed CollectQualityYieldMetrics SAM record".to_string())?;
+    let mut qualities = quality_field;
+    for field in fields {
+        if let Some(original_qualities) = field.strip_prefix(b"OQ:Z:") {
+            qualities = original_qualities;
+            break;
+        }
+    }
     let is_pf = flags & 0x200 == 0;
     metrics.total_reads += 1;
     metrics.total_bases += qualities.len() as u64;
@@ -6252,11 +6869,13 @@ fn collect_insert_size_sam_text(
     input: &str,
     include_duplicates: bool,
     stop_after: u32,
-) -> Result<InsertSizeSummary, String> {
+    accumulation: InsertSizeAccumulation,
+) -> Result<InsertSizeCollection, String> {
     let file = fs::File::open(input).map_err(|error| error.to_string())?;
     let mut reader = BufReader::with_capacity(1024 * 1024, file);
     let mut line = Vec::new();
-    let mut metrics = InsertSizeSummary::default();
+    let mut metrics = InsertSizeCollection::new(accumulation);
+    let mut read_groups = BTreeMap::new();
     let mut observed = 0_u32;
     loop {
         line.clear();
@@ -6267,10 +6886,14 @@ fn collect_insert_size_sam_text(
         {
             break;
         }
+        if line.starts_with(b"@RG\t") {
+            observe_sam_insert_size_read_group(&mut read_groups, &line);
+            continue;
+        }
         if line.starts_with(b"@") || line.iter().all(|byte| byte.is_ascii_whitespace()) {
             continue;
         }
-        observe_insert_size_sam_line(&mut metrics, &line, include_duplicates)?;
+        observe_insert_size_sam_line(&mut metrics, &line, include_duplicates, &read_groups)?;
         observed = observed.saturating_add(1);
         if stop_after > 0 && observed >= stop_after {
             break;
@@ -6280,9 +6903,10 @@ fn collect_insert_size_sam_text(
 }
 
 fn observe_insert_size_sam_line(
-    metrics: &mut InsertSizeSummary,
+    metrics: &mut InsertSizeCollection,
     line: &[u8],
     include_duplicates: bool,
+    read_groups: &BTreeMap<String, InsertSizeReadGroup>,
 ) -> Result<(), String> {
     let mut line = line;
     while line.ends_with(b"\n") || line.ends_with(b"\r") {
@@ -6307,8 +6931,67 @@ fn observe_insert_size_sam_line(
             .next()
             .ok_or_else(|| "malformed CollectInsertSizeMetrics SAM record".to_string())?,
     )?;
-    metrics.observe_sam_parts(flags, insert_size, include_duplicates);
+    for _ in 0..2 {
+        fields
+            .next()
+            .ok_or_else(|| "malformed CollectInsertSizeMetrics SAM record".to_string())?;
+    }
+    let read_group = insert_size_read_group_for_sam_tags(fields, read_groups);
+    metrics.observe_sam_parts(flags, insert_size, include_duplicates, read_group.as_ref());
     Ok(())
+}
+
+fn observe_sam_insert_size_read_group(
+    read_groups: &mut BTreeMap<String, InsertSizeReadGroup>,
+    line: &[u8],
+) {
+    let line = trim_ascii_line_end(line);
+    let mut id = None;
+    let mut sample = None;
+    let mut library = None;
+    let mut platform_unit = None;
+    for field in line.split(|byte| *byte == b'\t').skip(1) {
+        if let Some(value) = field.strip_prefix(b"ID:") {
+            id = Some(String::from_utf8_lossy(value).to_string());
+        } else if let Some(value) = field.strip_prefix(b"SM:") {
+            sample = Some(String::from_utf8_lossy(value).to_string());
+        } else if let Some(value) = field.strip_prefix(b"LB:") {
+            library = Some(String::from_utf8_lossy(value).to_string());
+        } else if let Some(value) = field.strip_prefix(b"PU:") {
+            platform_unit = Some(String::from_utf8_lossy(value).to_string());
+        }
+    }
+    if let (Some(id), Some(sample)) = (id, sample) {
+        read_groups.insert(
+            id,
+            InsertSizeReadGroup {
+                sample,
+                library: library.unwrap_or_default(),
+                platform_unit: platform_unit.unwrap_or_else(|| "unknown".to_string()),
+            },
+        );
+    }
+}
+
+fn insert_size_read_group_for_sam_tags<'a>(
+    tags: impl Iterator<Item = &'a [u8]>,
+    read_groups: &BTreeMap<String, InsertSizeReadGroup>,
+) -> Option<InsertSizeReadGroup> {
+    for tag in tags {
+        if let Some(read_group) = tag.strip_prefix(b"RG:Z:") {
+            return read_groups
+                .get(String::from_utf8_lossy(read_group).as_ref())
+                .cloned();
+        }
+    }
+    None
+}
+
+fn trim_ascii_line_end(mut line: &[u8]) -> &[u8] {
+    while line.ends_with(b"\n") || line.ends_with(b"\r") {
+        line = &line[..line.len() - 1];
+    }
+    line
 }
 
 fn parse_u16_bytes(value: &[u8]) -> Result<u16, String> {
@@ -7369,13 +8052,269 @@ fn format_cycle_quality(cycle: CycleQuality) -> String {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum InsertSizeAccumulation {
+    AllReads,
+    Sample,
+    Library,
+    ReadGroup,
+}
+
+fn insert_size_accumulation_level(
+    args: &BTreeMap<String, Vec<String>>,
+) -> Result<InsertSizeAccumulation, String> {
+    match optional_scalar(args, "METRIC_ACCUMULATION_LEVEL")?
+        .unwrap_or_else(|| "ALL_READS".to_string())
+        .as_str()
+    {
+        "ALL_READS" => Ok(InsertSizeAccumulation::AllReads),
+        "SAMPLE" => Ok(InsertSizeAccumulation::Sample),
+        "LIBRARY" => Ok(InsertSizeAccumulation::Library),
+        "READ_GROUP" => Ok(InsertSizeAccumulation::ReadGroup),
+        value => Err(format!(
+            "unsupported CollectInsertSizeMetrics METRIC_ACCUMULATION_LEVEL={value}"
+        )),
+    }
+}
+
+#[derive(Debug)]
+struct InsertSizeLibrarySummary {
+    sample: String,
+    summary: InsertSizeSummary,
+}
+
+#[derive(Debug)]
+struct InsertSizeReadGroupSummary {
+    sample: String,
+    library: String,
+    summary: InsertSizeSummary,
+}
+
+#[derive(Clone, Debug)]
+struct InsertSizeReadGroup {
+    sample: String,
+    library: String,
+    platform_unit: String,
+}
+
+#[derive(Debug)]
+struct InsertSizeCollection {
+    accumulation: InsertSizeAccumulation,
+    all_reads: InsertSizeSummary,
+    samples: BTreeMap<String, InsertSizeSummary>,
+    libraries: BTreeMap<String, InsertSizeLibrarySummary>,
+    read_groups: BTreeMap<String, InsertSizeReadGroupSummary>,
+}
+
+impl InsertSizeCollection {
+    fn new(accumulation: InsertSizeAccumulation) -> Self {
+        Self {
+            accumulation,
+            all_reads: InsertSizeSummary::default(),
+            samples: BTreeMap::new(),
+            libraries: BTreeMap::new(),
+            read_groups: BTreeMap::new(),
+        }
+    }
+
+    fn observe(
+        &mut self,
+        record: &bam::Record,
+        include_duplicates: bool,
+        read_group: Option<&InsertSizeReadGroup>,
+    ) {
+        if self.all_reads.observe(record, include_duplicates) {
+            match (self.accumulation, read_group) {
+                (InsertSizeAccumulation::Sample, Some(read_group)) => {
+                    self.samples
+                        .entry(read_group.sample.clone())
+                        .or_default()
+                        .observe(record, include_duplicates);
+                }
+                (InsertSizeAccumulation::Library, Some(read_group)) => {
+                    self.libraries
+                        .entry(read_group.library.clone())
+                        .or_insert_with(|| InsertSizeLibrarySummary {
+                            sample: read_group.sample.clone(),
+                            summary: InsertSizeSummary::default(),
+                        })
+                        .summary
+                        .observe(record, include_duplicates);
+                }
+                (InsertSizeAccumulation::ReadGroup, Some(read_group)) => {
+                    self.read_groups
+                        .entry(read_group.platform_unit.clone())
+                        .or_insert_with(|| InsertSizeReadGroupSummary {
+                            sample: read_group.sample.clone(),
+                            library: read_group.library.clone(),
+                            summary: InsertSizeSummary::default(),
+                        })
+                        .summary
+                        .observe(record, include_duplicates);
+                }
+                _ => {}
+            }
+        }
+    }
+
+    fn observe_sam_parts(
+        &mut self,
+        flags: u16,
+        insert_size: i64,
+        include_duplicates: bool,
+        read_group: Option<&InsertSizeReadGroup>,
+    ) {
+        if self
+            .all_reads
+            .observe_sam_parts(flags, insert_size, include_duplicates)
+        {
+            match (self.accumulation, read_group) {
+                (InsertSizeAccumulation::Sample, Some(read_group)) => {
+                    self.samples
+                        .entry(read_group.sample.clone())
+                        .or_default()
+                        .observe_sam_parts(flags, insert_size, include_duplicates);
+                }
+                (InsertSizeAccumulation::Library, Some(read_group)) => {
+                    self.libraries
+                        .entry(read_group.library.clone())
+                        .or_insert_with(|| InsertSizeLibrarySummary {
+                            sample: read_group.sample.clone(),
+                            summary: InsertSizeSummary::default(),
+                        })
+                        .summary
+                        .observe_sam_parts(flags, insert_size, include_duplicates);
+                }
+                (InsertSizeAccumulation::ReadGroup, Some(read_group)) => {
+                    self.read_groups
+                        .entry(read_group.platform_unit.clone())
+                        .or_insert_with(|| InsertSizeReadGroupSummary {
+                            sample: read_group.sample.clone(),
+                            library: read_group.library.clone(),
+                            summary: InsertSizeSummary::default(),
+                        })
+                        .summary
+                        .observe_sam_parts(flags, insert_size, include_duplicates);
+                }
+                _ => {}
+            }
+        }
+    }
+
+    fn to_picard_text(&self) -> String {
+        let mut output = String::new();
+        output.push_str("## METRICS CLASS\tpicard.analysis.InsertSizeMetrics\n");
+        output.push_str("MEDIAN_INSERT_SIZE\tMODE_INSERT_SIZE\tMEDIAN_ABSOLUTE_DEVIATION\tMIN_INSERT_SIZE\tMAX_INSERT_SIZE\tMEAN_INSERT_SIZE\tSTANDARD_DEVIATION\tREAD_PAIRS\tPAIR_ORIENTATION\tWIDTH_OF_10_PERCENT\tWIDTH_OF_20_PERCENT\tWIDTH_OF_30_PERCENT\tWIDTH_OF_40_PERCENT\tWIDTH_OF_50_PERCENT\tWIDTH_OF_60_PERCENT\tWIDTH_OF_70_PERCENT\tWIDTH_OF_80_PERCENT\tWIDTH_OF_90_PERCENT\tWIDTH_OF_95_PERCENT\tWIDTH_OF_99_PERCENT\tSAMPLE\tLIBRARY\tREAD_GROUP\n");
+        output.push_str(&self.all_reads.picard_metric_row(None, None, None));
+        if self.accumulation == InsertSizeAccumulation::Sample {
+            for (sample, summary) in &self.samples {
+                output.push_str(&summary.picard_metric_row(Some(sample), None, None));
+            }
+        } else if self.accumulation == InsertSizeAccumulation::Library {
+            for (library, summary) in &self.libraries {
+                output.push_str(&summary.summary.picard_metric_row(
+                    Some(&summary.sample),
+                    Some(library),
+                    None,
+                ));
+            }
+        } else if self.accumulation == InsertSizeAccumulation::ReadGroup {
+            for (read_group, summary) in &self.read_groups {
+                output.push_str(&summary.summary.picard_metric_row(
+                    Some(&summary.sample),
+                    Some(&summary.library),
+                    Some(read_group),
+                ));
+            }
+        }
+        output.push('\n');
+        output.push_str("## HISTOGRAM\tjava.lang.Integer\n");
+        output.push_str("insert_size\tAll_Reads.fr_count");
+        if self.accumulation == InsertSizeAccumulation::Sample {
+            for sample in self.samples.keys() {
+                output.push_str(&format!("\t{sample}.fr_count"));
+            }
+        } else if self.accumulation == InsertSizeAccumulation::Library {
+            for library in self.libraries.keys() {
+                output.push_str(&format!("\t{library}.fr_count"));
+            }
+        } else if self.accumulation == InsertSizeAccumulation::ReadGroup {
+            for read_group in self.read_groups.keys() {
+                output.push_str(&format!("\t{read_group}.fr_count"));
+            }
+        }
+        output.push('\n');
+
+        let mut insert_sizes = self
+            .all_reads
+            .histogram
+            .keys()
+            .copied()
+            .collect::<BTreeSet<_>>();
+        for summary in self.samples.values() {
+            insert_sizes.extend(summary.histogram.keys().copied());
+        }
+        for summary in self.libraries.values() {
+            insert_sizes.extend(summary.summary.histogram.keys().copied());
+        }
+        for summary in self.read_groups.values() {
+            insert_sizes.extend(summary.summary.histogram.keys().copied());
+        }
+        for insert_size in insert_sizes {
+            output.push_str(&format!(
+                "{}\t{}",
+                insert_size,
+                self.all_reads
+                    .histogram
+                    .get(&insert_size)
+                    .copied()
+                    .unwrap_or(0)
+            ));
+            if self.accumulation == InsertSizeAccumulation::Sample {
+                for summary in self.samples.values() {
+                    output.push_str(&format!(
+                        "\t{}",
+                        summary.histogram.get(&insert_size).copied().unwrap_or(0)
+                    ));
+                }
+            } else if self.accumulation == InsertSizeAccumulation::Library {
+                for summary in self.libraries.values() {
+                    output.push_str(&format!(
+                        "\t{}",
+                        summary
+                            .summary
+                            .histogram
+                            .get(&insert_size)
+                            .copied()
+                            .unwrap_or(0)
+                    ));
+                }
+            } else if self.accumulation == InsertSizeAccumulation::ReadGroup {
+                for summary in self.read_groups.values() {
+                    output.push_str(&format!(
+                        "\t{}",
+                        summary
+                            .summary
+                            .histogram
+                            .get(&insert_size)
+                            .copied()
+                            .unwrap_or(0)
+                    ));
+                }
+            }
+            output.push('\n');
+        }
+        output
+    }
+}
+
 #[derive(Debug, Default)]
 struct InsertSizeSummary {
     histogram: BTreeMap<u64, u64>,
 }
 
 impl InsertSizeSummary {
-    fn observe(&mut self, record: &bam::Record, include_duplicates: bool) {
+    fn observe(&mut self, record: &bam::Record, include_duplicates: bool) -> bool {
         if !record.is_paired()
             || record.is_unmapped()
             || record.is_mate_unmapped()
@@ -7385,15 +8324,21 @@ impl InsertSizeSummary {
             || record.insert_size() == 0
             || !record.is_first_in_template()
         {
-            return;
+            return false;
         }
         *self
             .histogram
             .entry(record.insert_size().unsigned_abs())
             .or_default() += 1;
+        true
     }
 
-    fn observe_sam_parts(&mut self, flags: u16, insert_size: i64, include_duplicates: bool) {
+    fn observe_sam_parts(
+        &mut self,
+        flags: u16,
+        insert_size: i64,
+        include_duplicates: bool,
+    ) -> bool {
         if flags & 0x1 == 0
             || flags & 0x4 != 0
             || flags & 0x8 != 0
@@ -7403,15 +8348,21 @@ impl InsertSizeSummary {
             || flags & 0x40 == 0
             || insert_size == 0
         {
-            return;
+            return false;
         }
         *self
             .histogram
             .entry(insert_size.unsigned_abs())
             .or_default() += 1;
+        true
     }
 
-    fn to_picard_text(&self) -> String {
+    fn picard_metric_row(
+        &self,
+        sample: Option<&str>,
+        library: Option<&str>,
+        read_group: Option<&str>,
+    ) -> String {
         let read_pairs = histogram_total_count(&self.histogram);
         let median = histogram_median_f64(&self.histogram);
         let mad = histogram_median_absolute_deviation(&self.histogram, median);
@@ -7422,11 +8373,8 @@ impl InsertSizeSummary {
         let mode = mode_from_histogram(&self.histogram);
         let widths = insert_size_widths(&self.histogram);
 
-        let mut output = String::new();
-        output.push_str("## METRICS CLASS\tpicard.analysis.InsertSizeMetrics\n");
-        output.push_str("MEDIAN_INSERT_SIZE\tMODE_INSERT_SIZE\tMEDIAN_ABSOLUTE_DEVIATION\tMIN_INSERT_SIZE\tMAX_INSERT_SIZE\tMEAN_INSERT_SIZE\tSTANDARD_DEVIATION\tREAD_PAIRS\tPAIR_ORIENTATION\tWIDTH_OF_10_PERCENT\tWIDTH_OF_20_PERCENT\tWIDTH_OF_30_PERCENT\tWIDTH_OF_40_PERCENT\tWIDTH_OF_50_PERCENT\tWIDTH_OF_60_PERCENT\tWIDTH_OF_70_PERCENT\tWIDTH_OF_80_PERCENT\tWIDTH_OF_90_PERCENT\tWIDTH_OF_95_PERCENT\tWIDTH_OF_99_PERCENT\tSAMPLE\tLIBRARY\tREAD_GROUP\n");
-        output.push_str(&format!(
-            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\tFR\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t\t\t\n\n",
+        format!(
+            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\tFR\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
             format_float(median),
             mode,
             format_float(mad),
@@ -7446,13 +8394,10 @@ impl InsertSizeSummary {
             widths[8],
             widths[9],
             widths[10],
-        ));
-        output.push_str("## HISTOGRAM\tjava.lang.Integer\n");
-        output.push_str("insert_size\tAll_Reads.fr_count\n");
-        for (insert_size, count) in &self.histogram {
-            output.push_str(&format!("{insert_size}\t{count}\n"));
-        }
-        output
+            sample.unwrap_or_default(),
+            library.unwrap_or_default(),
+            read_group.unwrap_or_default(),
+        )
     }
 }
 
@@ -8955,6 +9900,9 @@ fn bam_writer_for_path(
 ) -> Result<bam::Writer, String> {
     let mut writer =
         bam::Writer::from_path(output, header, format).map_err(|error| error.to_string())?;
+    if format == bam::Format::Bam {
+        writer.set_threads(2).map_err(|error| error.to_string())?;
+    }
     if let Some(level) = compression_level {
         writer
             .set_compression_level(bam::CompressionLevel::Level(level))
@@ -8970,17 +9918,23 @@ fn revert_record(
     remove_duplicate_information: bool,
     restore_hardclips: bool,
     attributes_to_clear: &[[u8; 2]],
+    attributes_to_reverse: &[[u8; 2]],
+    attributes_to_reverse_complement: &[[u8; 2]],
 ) -> Result<(), String> {
-    if !remove_alignment_information {
-        return Err("unsupported RevertSam REMOVE_ALIGNMENT_INFORMATION=false".to_string());
-    }
-    if record.is_secondary() || record.is_supplementary() {
-        return Err("unsupported RevertSam secondary or supplementary alignment".to_string());
-    }
-    if restore_hardclips && (record.aux(b"XB").is_ok() || record.aux(b"XQ").is_ok()) {
-        return Err("unsupported RevertSam RESTORE_HARDCLIPS with XB/XQ tags".to_string());
+    if restore_original_qualities
+        && remove_alignment_information
+        && attributes_to_clear.is_empty()
+        && attributes_to_reverse.is_empty()
+        && attributes_to_reverse_complement.is_empty()
+    {
+        return revert_record_default_unmapped_fast(
+            record,
+            remove_duplicate_information,
+            restore_hardclips,
+        );
     }
 
+    let mut restored_qualities = None;
     if restore_original_qualities {
         if let Ok(Aux::String(qualities)) = record.aux(b"OQ") {
             let restored = qualities
@@ -8992,15 +9946,37 @@ fn revert_record(
             }
             let qname = record.qname().to_vec();
             let sequence = record.seq().as_bytes();
-            record.set(&qname, None, &sequence, &restored);
+            if remove_alignment_information {
+                restored_qualities = Some(restored);
+            } else {
+                let cigar = CigarString(record.cigar().iter().copied().collect());
+                record.set(&qname, Some(&cigar), &sequence, &restored);
+            }
         }
         remove_aux_if_present(record, b"OQ")?;
     }
 
     if remove_alignment_information {
         let qname = record.qname().to_vec();
-        let sequence = record.seq().as_bytes();
-        let qualities = record.qual().to_vec();
+        let mut sequence = record.seq().as_bytes();
+        let mut qualities = restored_qualities.unwrap_or_else(|| record.qual().to_vec());
+        let hardclips = if restore_hardclips {
+            hardclip_restoration_for_revertsam(record)?
+        } else {
+            None
+        };
+        if record.is_reverse() {
+            reverse_complement(&mut sequence);
+            qualities.reverse();
+            reverse_aux_strings(record, attributes_to_reverse, false)?;
+            reverse_aux_strings(record, attributes_to_reverse_complement, true)?;
+        }
+        if let Some((hardclip_bases, hardclip_qualities)) = hardclips {
+            sequence.extend(hardclip_bases);
+            qualities.extend(hardclip_qualities);
+            remove_aux_if_present(record, b"XB")?;
+            remove_aux_if_present(record, b"XQ")?;
+        }
         record.set(&qname, None, &sequence, &qualities);
         record.set_tid(-1);
         record.set_pos(-1);
@@ -9025,11 +10001,283 @@ fn revert_record(
         }
     } else if remove_duplicate_information {
         record.set_flags(record.flags() & !0x400);
+        sort_aux_tags_for_kept_alignment(record)?;
     }
-    for tag in attributes_to_clear {
-        remove_aux_if_present(record, tag)?;
+    if remove_alignment_information {
+        for tag in attributes_to_clear {
+            remove_aux_if_present(record, tag)?;
+        }
+        sort_aux_tags_lexicographically(record)?;
     }
     Ok(())
+}
+
+fn revert_record_default_unmapped_fast(
+    record: &mut bam::Record,
+    remove_duplicate_information: bool,
+    restore_hardclips: bool,
+) -> Result<(), String> {
+    let mut restored_qualities = None;
+    let mut hardclip_bases = None;
+    let mut hardclip_qualities = None;
+    let mut kept_aux = Vec::<(Vec<u8>, OwnedAux)>::new();
+
+    for entry in record.aux_iter() {
+        let (tag, value) = entry.map_err(|error| error.to_string())?;
+        if tag == b"OQ" {
+            let Aux::String(qualities) = value else {
+                continue;
+            };
+            let restored = qualities
+                .bytes()
+                .map(|quality| quality.saturating_sub(33))
+                .collect::<Vec<_>>();
+            if restored.len() != record.seq_len() {
+                return Err("malformed RevertSam OQ length does not match read length".to_string());
+            }
+            restored_qualities = Some(restored);
+        } else if restore_hardclips && tag == b"XB" {
+            if let Aux::String(bases) = value {
+                hardclip_bases = Some(bases.as_bytes().to_vec());
+            } else {
+                kept_aux.push((tag.to_vec(), owned_aux(value)));
+            }
+        } else if restore_hardclips && tag == b"XQ" {
+            if let Aux::String(qualities) = value {
+                hardclip_qualities = Some(
+                    qualities
+                        .bytes()
+                        .map(|quality| quality.saturating_sub(33))
+                        .collect::<Vec<_>>(),
+                );
+            } else {
+                kept_aux.push((tag.to_vec(), owned_aux(value)));
+            }
+        } else if !revertsam_default_removed_alignment_tag(tag) {
+            kept_aux.push((tag.to_vec(), owned_aux(value)));
+        }
+    }
+
+    let qname = record.qname().to_vec();
+    let mut sequence = record.seq().as_bytes();
+    let mut qualities = restored_qualities.unwrap_or_else(|| record.qual().to_vec());
+    if record.is_reverse() {
+        reverse_complement(&mut sequence);
+        qualities.reverse();
+    }
+    if let (Some(hardclip_bases), Some(hardclip_qualities)) = (hardclip_bases, hardclip_qualities) {
+        if hardclip_bases.len() != hardclip_qualities.len() {
+            return Err("malformed RevertSam XB/XQ lengths differ".to_string());
+        }
+        sequence.extend(hardclip_bases);
+        qualities.extend(hardclip_qualities);
+        kept_aux.retain(|(tag, _)| tag.as_slice() != b"XB" && tag.as_slice() != b"XQ");
+    }
+
+    let mut flags = record.flags();
+    flags |= 0x4;
+    if flags & 0x1 != 0 {
+        flags |= 0x8;
+    } else {
+        flags &= !0x8;
+    }
+    flags &= !(0x2 | 0x10 | 0x20 | 0x100 | 0x800);
+    if remove_duplicate_information {
+        flags &= !0x400;
+    }
+
+    kept_aux.sort_by(|left, right| left.0.cmp(&right.0));
+
+    let mut reverted = bam::Record::new();
+    reverted.set(&qname, None, &sequence, &qualities);
+    reverted.set_tid(-1);
+    reverted.set_pos(-1);
+    reverted.set_mapq(0);
+    reverted.set_mtid(-1);
+    reverted.set_mpos(-1);
+    reverted.set_insert_size(0);
+    reverted.set_flags(flags);
+    for (tag, value) in &kept_aux {
+        push_owned_aux(&mut reverted, tag, value)?;
+    }
+    *record = reverted;
+    Ok(())
+}
+
+fn revertsam_default_removed_alignment_tag(tag: &[u8]) -> bool {
+    matches!(
+        tag,
+        b"NM" | b"UQ" | b"PG" | b"MD" | b"MQ" | b"SA" | b"MC" | b"AS"
+    )
+}
+
+fn hardclip_restoration_for_revertsam(
+    record: &bam::Record,
+) -> Result<Option<(Vec<u8>, Vec<u8>)>, String> {
+    let Ok(Aux::String(bases)) = record.aux(b"XB") else {
+        return Ok(None);
+    };
+    let Ok(Aux::String(qualities)) = record.aux(b"XQ") else {
+        return Ok(None);
+    };
+    let bases = bases.as_bytes().to_vec();
+    let qualities = qualities
+        .bytes()
+        .map(|quality| quality.saturating_sub(33))
+        .collect::<Vec<_>>();
+    if bases.len() != qualities.len() {
+        return Err("malformed RevertSam XB/XQ lengths differ".to_string());
+    }
+    Ok(Some((bases, qualities)))
+}
+
+enum OwnedAux {
+    Char(u8),
+    I8(i8),
+    U8(u8),
+    I16(i16),
+    U16(u16),
+    I32(i32),
+    U32(u32),
+    Float(f32),
+    Double(f64),
+    String(String),
+    HexByteArray(String),
+    ArrayI8(Vec<i8>),
+    ArrayU8(Vec<u8>),
+    ArrayI16(Vec<i16>),
+    ArrayU16(Vec<u16>),
+    ArrayI32(Vec<i32>),
+    ArrayU32(Vec<u32>),
+    ArrayFloat(Vec<f32>),
+}
+
+fn sort_aux_tags_lexicographically(record: &mut bam::Record) -> Result<(), String> {
+    sort_aux_tags_by_rank(record, |_| 0)
+}
+
+fn sort_aux_tags_for_kept_alignment(record: &mut bam::Record) -> Result<(), String> {
+    sort_aux_tags_by_rank(record, revertsam_kept_alignment_aux_rank)
+}
+
+fn sort_aux_tags_by_rank(record: &mut bam::Record, rank: fn(&[u8]) -> usize) -> Result<(), String> {
+    let mut aux_values = {
+        let mut aux_iter = record.aux_iter();
+        let Some(first) = aux_iter.next() else {
+            return Ok(());
+        };
+        let (first_tag, first_value) = first.map_err(|error| error.to_string())?;
+        let Some(second) = aux_iter.next() else {
+            return Ok(());
+        };
+        let (second_tag, second_value) = second.map_err(|error| error.to_string())?;
+        let mut aux_values = vec![
+            (first_tag.to_vec(), owned_aux(first_value)),
+            (second_tag.to_vec(), owned_aux(second_value)),
+        ];
+        for entry in aux_iter {
+            let (tag, value) = entry.map_err(|error| error.to_string())?;
+            aux_values.push((tag.to_vec(), owned_aux(value)));
+        }
+        aux_values
+    };
+    aux_values.sort_by(|left, right| {
+        rank(&left.0)
+            .cmp(&rank(&right.0))
+            .then_with(|| left.0.cmp(&right.0))
+    });
+
+    for (tag, _) in &aux_values {
+        remove_aux_if_present(record, tag)?;
+    }
+    for (tag, value) in &aux_values {
+        push_owned_aux(record, tag, value)?;
+    }
+    Ok(())
+}
+
+fn revertsam_kept_alignment_aux_rank(tag: &[u8]) -> usize {
+    match tag {
+        b"MC" => 0,
+        b"MD" => 1,
+        b"NM" => 2,
+        b"MQ" => 3,
+        _ => 4,
+    }
+}
+
+fn reverse_aux_strings(
+    record: &mut bam::Record,
+    tags: &[[u8; 2]],
+    complement: bool,
+) -> Result<(), String> {
+    for tag in tags {
+        let tag = tag.as_slice();
+        let Ok(Aux::String(value)) = record.aux(tag) else {
+            continue;
+        };
+        let mut value = value.as_bytes().to_vec();
+        if complement {
+            reverse_complement(&mut value);
+        } else {
+            value.reverse();
+        }
+        let value = String::from_utf8(value).map_err(|error| error.to_string())?;
+        record.remove_aux(tag).map_err(|error| error.to_string())?;
+        record
+            .push_aux(tag, Aux::String(&value))
+            .map_err(|error| error.to_string())?;
+    }
+    Ok(())
+}
+
+fn owned_aux(value: Aux<'_>) -> OwnedAux {
+    match value {
+        Aux::Char(value) => OwnedAux::Char(value),
+        Aux::I8(value) => OwnedAux::I8(value),
+        Aux::U8(value) => OwnedAux::U8(value),
+        Aux::I16(value) => OwnedAux::I16(value),
+        Aux::U16(value) => OwnedAux::U16(value),
+        Aux::I32(value) => OwnedAux::I32(value),
+        Aux::U32(value) => OwnedAux::U32(value),
+        Aux::Float(value) => OwnedAux::Float(value),
+        Aux::Double(value) => OwnedAux::Double(value),
+        Aux::String(value) => OwnedAux::String(value.to_string()),
+        Aux::HexByteArray(value) => OwnedAux::HexByteArray(value.to_string()),
+        Aux::ArrayI8(value) => OwnedAux::ArrayI8(value.iter().collect()),
+        Aux::ArrayU8(value) => OwnedAux::ArrayU8(value.iter().collect()),
+        Aux::ArrayI16(value) => OwnedAux::ArrayI16(value.iter().collect()),
+        Aux::ArrayU16(value) => OwnedAux::ArrayU16(value.iter().collect()),
+        Aux::ArrayI32(value) => OwnedAux::ArrayI32(value.iter().collect()),
+        Aux::ArrayU32(value) => OwnedAux::ArrayU32(value.iter().collect()),
+        Aux::ArrayFloat(value) => OwnedAux::ArrayFloat(value.iter().collect()),
+    }
+}
+
+fn push_owned_aux(record: &mut bam::Record, tag: &[u8], value: &OwnedAux) -> Result<(), String> {
+    let value = match value {
+        OwnedAux::Char(value) => Aux::Char(*value),
+        OwnedAux::I8(value) => Aux::I8(*value),
+        OwnedAux::U8(value) => Aux::U8(*value),
+        OwnedAux::I16(value) => Aux::I16(*value),
+        OwnedAux::U16(value) => Aux::U16(*value),
+        OwnedAux::I32(value) => Aux::I32(*value),
+        OwnedAux::U32(value) => Aux::U32(*value),
+        OwnedAux::Float(value) => Aux::Float(*value),
+        OwnedAux::Double(value) => Aux::Double(*value),
+        OwnedAux::String(value) => Aux::String(value),
+        OwnedAux::HexByteArray(value) => Aux::HexByteArray(value),
+        OwnedAux::ArrayI8(value) => Aux::ArrayI8(value.into()),
+        OwnedAux::ArrayU8(value) => Aux::ArrayU8(value.into()),
+        OwnedAux::ArrayI16(value) => Aux::ArrayI16(value.into()),
+        OwnedAux::ArrayU16(value) => Aux::ArrayU16(value.into()),
+        OwnedAux::ArrayI32(value) => Aux::ArrayI32(value.into()),
+        OwnedAux::ArrayU32(value) => Aux::ArrayU32(value.into()),
+        OwnedAux::ArrayFloat(value) => Aux::ArrayFloat(value.into()),
+    };
+    record
+        .push_aux(tag, value)
+        .map_err(|error| error.to_string())
 }
 
 fn remove_aux_if_present(record: &mut bam::Record, tag: &[u8]) -> Result<(), String> {
@@ -9041,8 +10289,7 @@ fn remove_aux_if_present(record: &mut bam::Record, tag: &[u8]) -> Result<(), Str
 
 fn set_nm_md_uq_tags(
     record: &mut bam::Record,
-    target_names: &[String],
-    reference: &BTreeMap<String, Vec<u8>>,
+    references_by_tid: &[Option<&[u8]>],
     set_only_uq: bool,
 ) -> Result<(), String> {
     if record.is_unmapped() || record.is_secondary() || record.is_supplementary() {
@@ -9051,35 +10298,36 @@ fn set_nm_md_uq_tags(
     if record.tid() < 0 || record.pos() < 0 {
         return Ok(());
     }
-    let contig = target_names
+    let reference = references_by_tid
         .get(record.tid() as usize)
-        .ok_or_else(|| "SetNmMdAndUqTags record target missing from header".to_string())?;
-    let reference = reference
-        .get(contig)
-        .ok_or_else(|| format!("SetNmMdAndUqTags reference missing contig {contig}"))?;
-    let read_bases = record.seq().as_bytes();
-    let qualities = record.qual().to_vec();
+        .copied()
+        .flatten()
+        .ok_or_else(|| format!("SetNmMdAndUqTags reference missing target {}", record.tid()))?;
+    let read_bases = record.seq();
+    let qualities = record.qual();
     let mut read_offset = 0usize;
     let mut ref_offset = record.pos() as usize;
     let mut nm = 0i32;
     let mut uq = 0i32;
-    let mut md = String::new();
+    let mut md = String::with_capacity(read_bases.len());
     let mut matches = 0usize;
+    let has_aux = record.aux_iter().next().is_some();
 
     for cigar in &record.cigar() {
         match *cigar {
             Cigar::Match(length) | Cigar::Equal(length) | Cigar::Diff(length) => {
                 for _ in 0..length {
-                    let read_base = *read_bases.get(read_offset).ok_or_else(|| {
-                        "SetNmMdAndUqTags read sequence shorter than CIGAR".to_string()
-                    })?;
+                    if read_offset >= read_bases.len() {
+                        return Err("SetNmMdAndUqTags read sequence shorter than CIGAR".to_string());
+                    }
+                    let read_base = read_bases[read_offset];
                     let ref_base = *reference.get(ref_offset).ok_or_else(|| {
                         "SetNmMdAndUqTags alignment extends beyond reference".to_string()
                     })?;
                     if read_base.eq_ignore_ascii_case(&ref_base) {
                         matches += 1;
                     } else {
-                        md.push_str(&matches.to_string());
+                        push_usize_decimal(&mut md, matches);
                         md.push(ref_base as char);
                         matches = 0;
                         nm += 1;
@@ -9094,7 +10342,7 @@ fn set_nm_md_uq_tags(
                 nm += length as i32;
             }
             Cigar::Del(length) => {
-                md.push_str(&matches.to_string());
+                push_usize_decimal(&mut md, matches);
                 md.push('^');
                 matches = 0;
                 for _ in 0..length {
@@ -9115,14 +10363,46 @@ fn set_nm_md_uq_tags(
             }
         }
     }
-    md.push_str(&matches.to_string());
+    push_usize_decimal(&mut md, matches);
 
     if !set_only_uq {
-        replace_aux_string(record, b"MD", &md)?;
-        replace_aux_i32(record, b"NM", nm)?;
+        if has_aux {
+            replace_aux_string(record, b"MD", &md)?;
+            replace_aux_i32(record, b"NM", nm)?;
+        } else {
+            record
+                .push_aux_unchecked(b"MD", Aux::String(&md))
+                .map_err(|error| error.to_string())?;
+            record
+                .push_aux_unchecked(b"NM", Aux::I32(nm))
+                .map_err(|error| error.to_string())?;
+        }
     }
-    replace_aux_i32(record, b"UQ", uq)?;
+    if has_aux {
+        replace_aux_i32(record, b"UQ", uq)?;
+    } else {
+        record
+            .push_aux_unchecked(b"UQ", Aux::I32(uq))
+            .map_err(|error| error.to_string())?;
+    }
     Ok(())
+}
+
+fn push_usize_decimal(output: &mut String, value: usize) {
+    if value < 10 {
+        output.push((b'0' + value as u8) as char);
+        return;
+    }
+
+    let mut buffer = [0u8; 20];
+    let mut cursor = buffer.len();
+    let mut remaining = value;
+    while remaining > 0 {
+        cursor -= 1;
+        buffer[cursor] = b'0' + (remaining % 10) as u8;
+        remaining /= 10;
+    }
+    output.push_str(std::str::from_utf8(&buffer[cursor..]).expect("decimal digits are UTF-8"));
 }
 
 fn write_fixed_mate_group(
@@ -9131,49 +10411,95 @@ fn write_fixed_mate_group(
     add_mate_cigar: bool,
     ignore_missing_mates: bool,
 ) -> Result<(), String> {
-    match records.len() {
-        0 => return Ok(()),
-        1 => {
-            if !ignore_missing_mates && records[0].is_paired() {
-                let name = String::from_utf8_lossy(records[0].qname());
-                return Err(format!("Missing second read of pair: {name}"));
-            }
-            writer
-                .write(&records[0])
-                .map_err(|error| error.to_string())?;
-            records.clear();
-            return Ok(());
+    for record in drain_fixed_mate_group(records, add_mate_cigar, ignore_missing_mates)? {
+        writer.write(&record).map_err(|error| error.to_string())?;
+    }
+    Ok(())
+}
+
+fn drain_fixed_mate_group(
+    records: &mut Vec<bam::Record>,
+    add_mate_cigar: bool,
+    ignore_missing_mates: bool,
+) -> Result<Vec<bam::Record>, String> {
+    if records.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    if records.len() == 1 {
+        if !ignore_missing_mates && records[0].is_paired() {
+            let name = String::from_utf8_lossy(records[0].qname());
+            return Err(format!("Missing second read of pair: {name}"));
         }
-        2 => {}
-        _ => {
+        return Ok(records.drain(..).collect());
+    }
+
+    if records.iter().any(|record| record.is_secondary()) {
+        return Ok(records.drain(..).collect());
+    }
+
+    let primary_indices = records
+        .iter()
+        .enumerate()
+        .filter_map(|(index, record)| (!record.is_supplementary()).then_some(index))
+        .collect::<Vec<_>>();
+    if primary_indices.len() != 2 {
+        return Err(
+            "unsupported FixMateInformation read group without exactly two primary records"
+                .to_string(),
+        );
+    }
+    if records
+        .iter()
+        .any(|record| !record.is_paired() && !record.is_supplementary())
+    {
+        return Ok(records.drain(..).collect());
+    }
+
+    let mut fixed = records.drain(..).collect::<Vec<_>>();
+    let first_index = primary_indices[0];
+    let second_index = primary_indices[1];
+    fix_mate_pair_by_index(&mut fixed, first_index, second_index, add_mate_cigar)?;
+    let first_primary = fixed[first_index].clone();
+    let second_primary = fixed[second_index].clone();
+    let first_template_length = first_primary.insert_size();
+    let second_template_length = second_primary.insert_size();
+
+    for record in &mut fixed {
+        if !record.is_supplementary() {
+            continue;
+        }
+        if record.is_first_in_template() {
+            set_mate_fields(record, &second_primary, add_mate_cigar)?;
+            record.set_insert_size(first_template_length);
+        } else if record.is_last_in_template() {
+            set_mate_fields(record, &first_primary, add_mate_cigar)?;
+            record.set_insert_size(second_template_length);
+        } else {
             return Err(
-                "unsupported FixMateInformation read group with more than two records".to_string(),
+                "unsupported FixMateInformation supplementary alignment without pair side"
+                    .to_string(),
             );
         }
     }
 
-    if records.iter().any(|record| record.is_secondary()) {
-        for record in records.drain(..) {
-            writer.write(&record).map_err(|error| error.to_string())?;
-        }
-        return Ok(());
-    }
-    if records.iter().any(|record| record.is_supplementary()) {
-        return Err("unsupported FixMateInformation supplementary alignments".to_string());
-    }
-    if !records[0].is_paired() || !records[1].is_paired() {
-        for record in records.drain(..) {
-            writer.write(&record).map_err(|error| error.to_string())?;
-        }
-        return Ok(());
-    }
+    Ok(fixed)
+}
 
-    let mut first = records.remove(0);
-    let mut second = records.remove(0);
-    fix_mate_pair(&mut first, &mut second, add_mate_cigar)?;
-    writer.write(&first).map_err(|error| error.to_string())?;
-    writer.write(&second).map_err(|error| error.to_string())?;
-    Ok(())
+fn fix_mate_pair_by_index(
+    records: &mut [bam::Record],
+    first_index: usize,
+    second_index: usize,
+    add_mate_cigar: bool,
+) -> Result<(), String> {
+    debug_assert_ne!(first_index, second_index);
+    if first_index < second_index {
+        let (left, right) = records.split_at_mut(second_index);
+        fix_mate_pair(&mut left[first_index], &mut right[0], add_mate_cigar)
+    } else {
+        let (left, right) = records.split_at_mut(first_index);
+        fix_mate_pair(&mut right[0], &mut left[second_index], add_mate_cigar)
+    }
 }
 
 fn fix_mate_pair(
@@ -9226,7 +10552,7 @@ fn replace_aux_i32(record: &mut bam::Record, tag: &[u8], value: i32) -> Result<(
         record.remove_aux(tag).map_err(|error| error.to_string())?;
     }
     record
-        .push_aux(tag, Aux::I32(value))
+        .push_aux_unchecked(tag, Aux::I32(value))
         .map_err(|error| error.to_string())
 }
 
@@ -9235,7 +10561,7 @@ fn replace_aux_string(record: &mut bam::Record, tag: &[u8], value: &str) -> Resu
         record.remove_aux(tag).map_err(|error| error.to_string())?;
     }
     record
-        .push_aux(tag, Aux::String(value))
+        .push_aux_unchecked(tag, Aux::String(value))
         .map_err(|error| error.to_string())
 }
 
@@ -9327,13 +10653,22 @@ fn sorted_header(source: &bam::HeaderView, sort_order: SortOrder) -> bam::Header
     header
 }
 
-fn reverted_header(source: &bam::HeaderView, remove_alignment_information: bool) -> bam::Header {
+fn reverted_header(
+    source: &bam::HeaderView,
+    remove_alignment_information: bool,
+    sort_order: SortOrder,
+) -> bam::Header {
+    let sort_order = match sort_order {
+        SortOrder::Coordinate => "coordinate",
+        SortOrder::QueryName => "queryname",
+        SortOrder::Unsorted => "unsorted",
+    };
     let header_text = String::from_utf8_lossy(source.as_bytes());
     let mut header = bam::Header::new();
     let mut saw_hd = false;
 
     for line in header_text.lines() {
-        if line.is_empty() || line.starts_with("@PG\t") {
+        if line.is_empty() || (remove_alignment_information && line.starts_with("@PG\t")) {
             continue;
         }
         if remove_alignment_information && line.starts_with("@SQ\t") {
@@ -9355,14 +10690,14 @@ fn reverted_header(source: &bam::HeaderView, remove_alignment_information: bool)
                 continue;
             };
             if is_hd && tag == "SO" {
-                record.push_tag(b"SO", "queryname");
+                record.push_tag(b"SO", sort_order);
                 saw_so = true;
             } else {
                 record.push_tag(tag.as_bytes(), value);
             }
         }
         if is_hd && !saw_so {
-            record.push_tag(b"SO", "queryname");
+            record.push_tag(b"SO", sort_order);
         }
         header.push_record(&record);
     }
@@ -9370,7 +10705,7 @@ fn reverted_header(source: &bam::HeaderView, remove_alignment_information: bool)
         header.push_record(
             HeaderRecord::new(b"HD")
                 .push_tag(b"VN", "1.6")
-                .push_tag(b"SO", "queryname"),
+                .push_tag(b"SO", sort_order),
         );
     }
     header
@@ -9769,6 +11104,12 @@ fn compare_queryname(left: &bam::Record, right: &bam::Record) -> Ordering {
         .then_with(|| compare_coordinate(left, right))
 }
 
+fn queryname_records_are_monotonic(records: &[bam::Record]) -> bool {
+    records
+        .windows(2)
+        .all(|window| compare_queryname(&window[0], &window[1]) != Ordering::Greater)
+}
+
 fn picard_bai_path(output: &str) -> String {
     Path::new(output)
         .with_extension("bai")
@@ -9789,6 +11130,38 @@ fn write_requested_sidecars(
             .map_err(|error| error.to_string())?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn record_with_qname(qname: &[u8]) -> bam::Record {
+        let mut record = bam::Record::new();
+        record.set(qname, None, b"ACGT", b"FFFF");
+        record
+    }
+
+    #[test]
+    fn queryname_records_are_monotonic_for_sorted_input() {
+        let records = vec![
+            record_with_qname(b"read0001"),
+            record_with_qname(b"read0001"),
+            record_with_qname(b"read0002"),
+        ];
+
+        assert!(queryname_records_are_monotonic(&records));
+    }
+
+    #[test]
+    fn queryname_records_are_not_monotonic_for_unsorted_input() {
+        let records = vec![
+            record_with_qname(b"read0002"),
+            record_with_qname(b"read0001"),
+        ];
+
+        assert!(!queryname_records_are_monotonic(&records));
+    }
 }
 
 fn write_md5_sidecar(output: &str) -> Result<(), String> {

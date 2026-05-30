@@ -5,6 +5,8 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 readme.workspace = true
+repository.workspace = true
+homepage.workspace = true
 description = "Picard-compatible command-line entrypoint for turbo-picard."
 default-run = "turbo-picard"
 
@@ -20,8 +22,8 @@ path = "src/bin/picard.rs"
 rust-htslib = "1.0.0"
 md5 = "0.7.0"
 flate2 = "1.1.5"
-turbo-picard-core = { path = "../turbo-picard-core" }
-turbo-picard-markdup = { path = "../turbo-picard-markdup" }
+turbo-picard-core = { path = "../turbo-picard-core", version = "0.1.0" }
+turbo-picard-markdup = { path = "../turbo-picard-markdup", version = "0.1.0" }
 
 [dev-dependencies]
 assert_cmd = "2.0.17"

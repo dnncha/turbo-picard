@@ -175,6 +175,54 @@ for suffix, header in checks:
 print("CollectMultipleMetrics default program tables match Picard")
 PY
 
+cat > "$workdir/alignment-read-group-input.sam" <<'SAM'
+@HD	VN:1.6	SO:coordinate
+@SQ	SN:chr1	LN:1000
+@RG	ID:rg1	SM:sampleA	LB:lib1	PL:ILLUMINA	PU:unit1
+read-a	0	chr1	10	60	4M	*	0	0	ACGT	FFFF	RG:Z:rg1
+read-b	4	*	0	0	*	*	0	0	NNNN	!!!!	RG:Z:rg1
+SAM
+
+cargo run -q -p turbo-picard-cli --bin picard -- \
+  CollectMultipleMetrics \
+  "I=$workdir/alignment-read-group-input.sam" \
+  "O=$workdir/turbo-alignment-read-group" \
+  PROGRAM=null \
+  PROGRAM=CollectAlignmentSummaryMetrics \
+  METRIC_ACCUMULATION_LEVEL=READ_GROUP \
+  VALIDATION_STRINGENCY=SILENT \
+  QUIET=true
+
+"${conda_runner[@]}" run -p "$conda_prefix" picard CollectMultipleMetrics \
+  "I=$workdir/alignment-read-group-input.sam" \
+  "O=$workdir/picard-alignment-read-group" \
+  PROGRAM=null \
+  PROGRAM=CollectAlignmentSummaryMetrics \
+  METRIC_ACCUMULATION_LEVEL=READ_GROUP \
+  VALIDATION_STRINGENCY=SILENT \
+  QUIET=true
+
+python3 - "$workdir/turbo-alignment-read-group.alignment_summary_metrics" "$workdir/picard-alignment-read-group.alignment_summary_metrics" <<'PY'
+import sys
+
+turbo_path, picard_path = sys.argv[1:]
+header = "CATEGORY\tTOTAL_READS\tPF_READS\tPCT_PF_READS\tPF_NOISE_READS\tPF_READS_ALIGNED\tPCT_PF_READS_ALIGNED\tPF_ALIGNED_BASES\tPF_HQ_ALIGNED_READS\tPF_HQ_ALIGNED_BASES\tPF_HQ_ALIGNED_Q20_BASES\tPF_HQ_MEDIAN_MISMATCHES\tPF_MISMATCH_RATE\tPF_HQ_ERROR_RATE\tPF_INDEL_RATE\tMEAN_READ_LENGTH\tSD_READ_LENGTH\tMEDIAN_READ_LENGTH\tMAD_READ_LENGTH\tMIN_READ_LENGTH\tMAX_READ_LENGTH\tMEAN_ALIGNED_READ_LENGTH\tREADS_ALIGNED_IN_PAIRS\tPCT_READS_ALIGNED_IN_PAIRS\tPF_READS_IMPROPER_PAIRS\tPCT_PF_READS_IMPROPER_PAIRS\tBAD_CYCLES\tSTRAND_BALANCE\tPCT_CHIMERAS\tPCT_ADAPTER\tPCT_SOFTCLIP\tPCT_HARDCLIP\tAVG_POS_3PRIME_SOFTCLIP_LENGTH\tSAMPLE\tLIBRARY\tREAD_GROUP"
+
+def table(path):
+    lines = [line.rstrip("\n") for line in open(path, encoding="utf-8")]
+    index = lines.index(header)
+    rows = []
+    cursor = index
+    while cursor < len(lines) and lines[cursor]:
+        rows.append(lines[cursor])
+        cursor += 1
+    return rows
+
+if table(turbo_path) != table(picard_path):
+    raise SystemExit("CollectMultipleMetrics alignment READ_GROUP output differs from Picard")
+print("CollectMultipleMetrics alignment READ_GROUP output matches Picard")
+PY
+
 cat > "$workdir/gc-ref.fa" <<'FA'
 >low
 AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
@@ -525,4 +573,64 @@ for header in headers:
     if turbo != picard:
         raise SystemExit(f"CollectMultipleMetrics CollectInsertSizeMetrics EXTRA_ARGUMENT differs for {header!r}:\nturbo={turbo}\npicard={picard}")
 print("CollectMultipleMetrics CollectInsertSizeMetrics EXTRA_ARGUMENT output matches Picard")
+PY
+
+cat > "$workdir/insert-read-group-input.sam" <<'SAM'
+@HD	VN:1.6	SO:coordinate
+@SQ	SN:chr1	LN:1000
+@RG	ID:rg1	SM:sampleA	LB:lib1	PL:ILLUMINA	PU:unit1
+pair1	99	chr1	10	60	4M	=	30	24	ACGT	FFFF	RG:Z:rg1
+pair1	147	chr1	30	60	4M	=	10	-24	TGCA	FFFF	RG:Z:rg1
+pair2	99	chr1	100	60	4M	=	130	34	AAAA	FFFF	RG:Z:rg1
+pair2	147	chr1	130	60	4M	=	100	-34	TTTT	FFFF	RG:Z:rg1
+SAM
+
+insert_read_group_programs=(
+  PROGRAM=null
+  PROGRAM=CollectInsertSizeMetrics
+  METRIC_ACCUMULATION_LEVEL=READ_GROUP
+)
+
+cargo run -q -p turbo-picard-cli --bin picard -- \
+  CollectMultipleMetrics \
+  "I=$workdir/insert-read-group-input.sam" \
+  "O=$workdir/turbo-insert-read-group" \
+  "${insert_read_group_programs[@]}" \
+  VALIDATION_STRINGENCY=SILENT \
+  QUIET=true
+
+"${conda_runner[@]}" run -p "$conda_prefix" picard CollectMultipleMetrics \
+  "I=$workdir/insert-read-group-input.sam" \
+  "O=$workdir/picard-insert-read-group" \
+  "${insert_read_group_programs[@]}" \
+  VALIDATION_STRINGENCY=SILENT \
+  QUIET=true
+
+python3 - "$workdir/turbo-insert-read-group.insert_size_metrics" "$workdir/picard-insert-read-group.insert_size_metrics" <<'PY'
+import sys
+
+turbo_path, picard_path = sys.argv[1:]
+headers = [
+    "MEDIAN_INSERT_SIZE\tMODE_INSERT_SIZE\tMEDIAN_ABSOLUTE_DEVIATION\tMIN_INSERT_SIZE\tMAX_INSERT_SIZE\tMEAN_INSERT_SIZE\tSTANDARD_DEVIATION\tREAD_PAIRS\tPAIR_ORIENTATION\tWIDTH_OF_10_PERCENT\tWIDTH_OF_20_PERCENT\tWIDTH_OF_30_PERCENT\tWIDTH_OF_40_PERCENT\tWIDTH_OF_50_PERCENT\tWIDTH_OF_60_PERCENT\tWIDTH_OF_70_PERCENT\tWIDTH_OF_80_PERCENT\tWIDTH_OF_90_PERCENT\tWIDTH_OF_95_PERCENT\tWIDTH_OF_99_PERCENT\tSAMPLE\tLIBRARY\tREAD_GROUP",
+    "insert_size\tAll_Reads.fr_count\tunit1.fr_count",
+]
+
+def table(path, header):
+    lines = [line.rstrip("\n") for line in open(path, encoding="utf-8")]
+    for index, line in enumerate(lines):
+        if line == header:
+            rows = []
+            cursor = index
+            while cursor < len(lines) and lines[cursor]:
+                rows.append(lines[cursor])
+                cursor += 1
+            return rows
+    raise SystemExit(f"missing table {header!r} in {path}")
+
+for header in headers:
+    turbo = table(turbo_path, header)
+    picard = table(picard_path, header)
+    if turbo != picard:
+        raise SystemExit(f"CollectMultipleMetrics CollectInsertSizeMetrics READ_GROUP differs for {header!r}:\nturbo={turbo}\npicard={picard}")
+print("CollectMultipleMetrics CollectInsertSizeMetrics READ_GROUP output matches Picard")
 PY

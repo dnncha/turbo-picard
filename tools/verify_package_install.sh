@@ -610,15 +610,23 @@ test -s "${updated_vcf}"
 grep -q '##contig=<ID=chr1,length=8' "${updated_vcf}"
 grep -q $'chr1\t2\t.\tA\tC\t.\tPASS\t.' "${updated_vcf}"
 
+shard2_raw_vcf="${tempdir}/shard2-raw.vcf"
 shard2_vcf="${tempdir}/shard2.vcf"
 gathered_vcf="${tempdir}/gathered.vcf"
 sorted_vcf="${tempdir}/sorted.vcf"
-cat > "${shard2_vcf}" <<'VCF'
+cat > "${shard2_raw_vcf}" <<'VCF'
 ##fileformat=VCFv4.2
-##contig=<ID=chr1,length=8>
+##contig=<ID=old,length=10>
 #CHROM	POS	ID	REF	ALT	QUAL	FILTER	INFO
 chr1	7	.	G	T	.	PASS	.
 VCF
+
+"${install_root}/bin/turbo-picard" UpdateVcfSequenceDictionary \
+  "I=${shard2_raw_vcf}" \
+  "O=${shard2_vcf}" \
+  "SD=${dictionary}" \
+  VALIDATION_STRINGENCY=SILENT \
+  QUIET=true
 
 "${install_root}/bin/turbo-picard" GatherVcfs \
   "I=${updated_vcf}" \

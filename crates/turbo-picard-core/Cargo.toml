@@ -5,4 +5,6 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 readme.workspace = true
+repository.workspace = true
+homepage.workspace = true
 description = "Shared Picard argument and MarkDuplicates configuration types for turbo-picard."

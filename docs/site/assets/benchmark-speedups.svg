@@ -1,0 +1,142 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="1246" viewBox="0 0 1280 1246" role="img" aria-labelledby="title desc">
+  <title id="title">turbo-picard benchmark speedups versus Picard</title>
+  <desc id="desc">Bar chart showing 28 Picard-compatible commands with parity passing and speedups from 6.69x to 104.68x.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" x2="1" y1="0" y2="1">
+      <stop offset="0" stop-color="#071013"/>
+      <stop offset="0.55" stop-color="#10212a"/>
+      <stop offset="1" stop-color="#0b1117"/>
+    </linearGradient>
+    <filter id="softGlow" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="8" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+  <style>
+    .title { font: 700 34px ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #f4fbfb; }
+    .sub { font: 500 16px ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #b7c9cf; }
+    .label { font: 600 14px ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #d9e7ea; }
+    .value { font: 700 14px ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #f8fbfb; }
+    .tick { font: 600 12px ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #8ba4ad; }
+    .track { fill: rgba(255,255,255,0.075); }
+    .grid { stroke: rgba(255,255,255,0.11); stroke-width: 1; }
+  </style>
+  <rect width="1280" height="1246" rx="28" fill="url(#bg)"/>
+  <path d="M1035 62 C1125 94 1165 154 1200 252" fill="none" stroke="#36d7c9" stroke-width="2" opacity="0.34" filter="url(#softGlow)"/>
+  <text x="56" y="54" class="title">28/28 parity passing. Native Rust speed across Picard-shaped workflows.</text>
+  <text x="56" y="82" class="sub">Measured with python3 tools/bench_suite.py --repeats 1 --skip-build on 2026-05-30.</text>
+  <line x1="462.4" y1="92" x2="462.4" y2="1198" class="grid"/><text x="462.4" y="1224" text-anchor="middle" class="tick">20x</text><line x1="614.8" y1="92" x2="614.8" y2="1198" class="grid"/><text x="614.8" y="1224" text-anchor="middle" class="tick">40x</text><line x1="767.1" y1="92" x2="767.1" y2="1198" class="grid"/><text x="767.1" y="1224" text-anchor="middle" class="tick">60x</text><line x1="919.5" y1="92" x2="919.5" y2="1198" class="grid"/><text x="919.5" y="1224" text-anchor="middle" class="tick">80x</text><line x1="1071.9" y1="92" x2="1071.9" y2="1198" class="grid"/><text x="1071.9" y="1224" text-anchor="middle" class="tick">100x</text>
+  
+  <text x="292" y="132" text-anchor="end" class="label">UpdateVcfSequenceDictionary</text>
+  <rect x="310" y="110" width="800" height="24" rx="6" class="track"/>
+  <rect x="310" y="110" width="797.6" height="24" rx="6" fill="#36d7c9"/>
+  <text x="1119.6" y="128" class="value">104.68x</text>
+  <text x="292" y="170" text-anchor="end" class="label">CollectInsertSizeMetrics</text>
+  <rect x="310" y="148" width="800" height="24" rx="6" class="track"/>
+  <rect x="310" y="148" width="647.3" height="24" rx="6" fill="#36d7c9"/>
+  <text x="969.3" y="166" class="value">84.96x</text>
+  <text x="292" y="208" text-anchor="end" class="label">NormalizeFasta</text>
+  <rect x="310" y="186" width="800" height="24" rx="6" class="track"/>
+  <rect x="310" y="186" width="636.1" height="24" rx="6" fill="#36d7c9"/>
+  <text x="958.1" y="204" class="value">83.49x</text>
+  <text x="292" y="246" text-anchor="end" class="label">BuildBamIndex</text>
+  <rect x="310" y="224" width="800" height="24" rx="6" class="track"/>
+  <rect x="310" y="224" width="458.3" height="24" rx="6" fill="#36d7c9"/>
+  <text x="780.3" y="242" class="value">60.15x</text>
+  <text x="292" y="284" text-anchor="end" class="label">GatherVcfs</text>
+  <rect x="310" y="262" width="800" height="24" rx="6" class="track"/>
+  <rect x="310" y="262" width="440.7" height="24" rx="6" fill="#36d7c9"/>
+  <text x="762.7" y="280" class="value">57.84x</text>
+  <text x="292" y="322" text-anchor="end" class="label">CreateSequenceDictionary</text>
+  <rect x="310" y="300" width="800" height="24" rx="6" class="track"/>
+  <rect x="310" y="300" width="407.6" height="24" rx="6" fill="#36d7c9"/>
+  <text x="729.6" y="318" class="value">53.50x</text>
+  <text x="292" y="360" text-anchor="end" class="label">MergeVcfs</text>
+  <rect x="310" y="338" width="800" height="24" rx="6" class="track"/>
+  <rect x="310" y="338" width="378.4" height="24" rx="6" fill="#36d7c9"/>
+  <text x="700.4" y="356" class="value">49.67x</text>
+  <text x="292" y="398" text-anchor="end" class="label">SamToFastq</text>
+  <rect x="310" y="376" width="800" height="24" rx="6" class="track"/>
+  <rect x="310" y="376" width="368.3" height="24" rx="6" fill="#36d7c9"/>
+  <text x="690.3" y="394" class="value">48.34x</text>
+  <text x="292" y="436" text-anchor="end" class="label">MeanQualityByCycle</text>
+  <rect x="310" y="414" width="800" height="24" rx="6" class="track"/>
+  <rect x="310" y="414" width="295.0" height="24" rx="6" fill="#36d7c9"/>
+  <text x="617.0" y="432" class="value">38.72x</text>
+  <text x="292" y="474" text-anchor="end" class="label">CollectAlignmentSummaryMetrics</text>
+  <rect x="310" y="452" width="800" height="24" rx="6" class="track"/>
+  <rect x="310" y="452" width="292.6" height="24" rx="6" fill="#36d7c9"/>
+  <text x="614.6" y="470" class="value">38.41x</text>
+  <text x="292" y="512" text-anchor="end" class="label">AddOrReplaceReadGroups</text>
+  <rect x="310" y="490" width="800" height="24" rx="6" class="track"/>
+  <rect x="310" y="490" width="233.8" height="24" rx="6" fill="#36d7c9"/>
+  <text x="555.8" y="508" class="value">30.68x</text>
+  <text x="292" y="550" text-anchor="end" class="label">CleanSam</text>
+  <rect x="310" y="528" width="800" height="24" rx="6" class="track"/>
+  <rect x="310" y="528" width="229.7" height="24" rx="6" fill="#36d7c9"/>
+  <text x="551.7" y="546" class="value">30.15x</text>
+  <text x="292" y="588" text-anchor="end" class="label">FastqToSam</text>
+  <rect x="310" y="566" width="800" height="24" rx="6" class="track"/>
+  <rect x="310" y="566" width="202.0" height="24" rx="6" fill="#36d7c9"/>
+  <text x="524.0" y="584" class="value">26.51x</text>
+  <text x="292" y="626" text-anchor="end" class="label">SortVcf</text>
+  <rect x="310" y="604" width="800" height="24" rx="6" class="track"/>
+  <rect x="310" y="604" width="199.9" height="24" rx="6" fill="#36d7c9"/>
+  <text x="521.9" y="622" class="value">26.24x</text>
+  <text x="292" y="664" text-anchor="end" class="label">CollectBaseDistributionByCycle</text>
+  <rect x="310" y="642" width="800" height="24" rx="6" class="track"/>
+  <rect x="310" y="642" width="181.7" height="24" rx="6" fill="#36d7c9"/>
+  <text x="503.7" y="660" class="value">23.85x</text>
+  <text x="292" y="702" text-anchor="end" class="label">ViewSam</text>
+  <rect x="310" y="680" width="800" height="24" rx="6" class="track"/>
+  <rect x="310" y="680" width="170.7" height="24" rx="6" fill="#36d7c9"/>
+  <text x="492.7" y="698" class="value">22.40x</text>
+  <text x="292" y="740" text-anchor="end" class="label">MergeSamFiles</text>
+  <rect x="310" y="718" width="800" height="24" rx="6" class="track"/>
+  <rect x="310" y="718" width="169.7" height="24" rx="6" fill="#36d7c9"/>
+  <text x="491.7" y="736" class="value">22.27x</text>
+  <text x="292" y="778" text-anchor="end" class="label">SortSam</text>
+  <rect x="310" y="756" width="800" height="24" rx="6" class="track"/>
+  <rect x="310" y="756" width="164.6" height="24" rx="6" fill="#36d7c9"/>
+  <text x="486.6" y="774" class="value">21.60x</text>
+  <text x="292" y="816" text-anchor="end" class="label">ValidateSamFile</text>
+  <rect x="310" y="794" width="800" height="24" rx="6" class="track"/>
+  <rect x="310" y="794" width="155.4" height="24" rx="6" fill="#36d7c9"/>
+  <text x="477.4" y="812" class="value">20.39x</text>
+  <text x="292" y="854" text-anchor="end" class="label">CollectQualityYieldMetrics</text>
+  <rect x="310" y="832" width="800" height="24" rx="6" class="track"/>
+  <rect x="310" y="832" width="153.7" height="24" rx="6" fill="#36d7c9"/>
+  <text x="475.7" y="850" class="value">20.17x</text>
+  <text x="292" y="892" text-anchor="end" class="label">BedToIntervalList</text>
+  <rect x="310" y="870" width="800" height="24" rx="6" class="track"/>
+  <rect x="310" y="870" width="150.8" height="24" rx="6" fill="#f4b860"/>
+  <text x="472.8" y="888" class="value">19.79x</text>
+  <text x="292" y="930" text-anchor="end" class="label">CollectWgsMetrics</text>
+  <rect x="310" y="908" width="800" height="24" rx="6" class="track"/>
+  <rect x="310" y="908" width="150.3" height="24" rx="6" fill="#f4b860"/>
+  <text x="472.3" y="926" class="value">19.73x</text>
+  <text x="292" y="968" text-anchor="end" class="label">MarkDuplicates</text>
+  <rect x="310" y="946" width="800" height="24" rx="6" class="track"/>
+  <rect x="310" y="946" width="147.0" height="24" rx="6" fill="#f4b860"/>
+  <text x="469.0" y="964" class="value">19.30x</text>
+  <text x="292" y="1006" text-anchor="end" class="label">ReplaceSamHeader</text>
+  <rect x="310" y="984" width="800" height="24" rx="6" class="track"/>
+  <rect x="310" y="984" width="142.6" height="24" rx="6" fill="#f4b860"/>
+  <text x="464.6" y="1002" class="value">18.71x</text>
+  <text x="292" y="1044" text-anchor="end" class="label">QualityScoreDistribution</text>
+  <rect x="310" y="1022" width="800" height="24" rx="6" class="track"/>
+  <rect x="310" y="1022" width="134.2" height="24" rx="6" fill="#f4b860"/>
+  <text x="456.2" y="1040" class="value">17.62x</text>
+  <text x="292" y="1082" text-anchor="end" class="label">FixMateInformation</text>
+  <rect x="310" y="1060" width="800" height="24" rx="6" class="track"/>
+  <rect x="310" y="1060" width="76.4" height="24" rx="6" fill="#f4b860"/>
+  <text x="398.4" y="1078" class="value">10.03x</text>
+  <text x="292" y="1120" text-anchor="end" class="label">SetNmMdAndUqTags</text>
+  <rect x="310" y="1098" width="800" height="24" rx="6" class="track"/>
+  <rect x="310" y="1098" width="67.7" height="24" rx="6" fill="#ff7a7a"/>
+  <text x="389.7" y="1116" class="value">8.88x</text>
+  <text x="292" y="1158" text-anchor="end" class="label">RevertSam</text>
+  <rect x="310" y="1136" width="800" height="24" rx="6" class="track"/>
+  <rect x="310" y="1136" width="51.0" height="24" rx="6" fill="#ff7a7a"/>
+  <text x="373.0" y="1154" class="value">6.69x</text>
+</svg>

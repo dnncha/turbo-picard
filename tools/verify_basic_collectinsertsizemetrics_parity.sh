@@ -252,3 +252,160 @@ if turbo != picard:
     raise SystemExit(f"CollectInsertSizeMetrics temp-option output differs:\nturbo={turbo}\npicard={picard}")
 print("CollectInsertSizeMetrics temp-option output matches Picard")
 PY
+
+cat > "$workdir/sample-input.sam" <<'SAM'
+@HD	VN:1.6	SO:coordinate
+@SQ	SN:chr1	LN:1000
+@RG	ID:rg1	SM:sampleA	LB:lib1	PL:ILLUMINA	PU:unit1
+pair1	99	chr1	10	60	4M	=	30	24	ACGT	FFFF	RG:Z:rg1
+pair1	147	chr1	30	60	4M	=	10	-24	TGCA	FFFF	RG:Z:rg1
+pair2	99	chr1	100	60	4M	=	130	34	AAAA	FFFF	RG:Z:rg1
+pair2	147	chr1	130	60	4M	=	100	-34	TTTT	FFFF	RG:Z:rg1
+SAM
+
+cargo run -q -p turbo-picard-cli --bin picard -- \
+  CollectInsertSizeMetrics \
+  "I=$workdir/sample-input.sam" \
+  "O=$workdir/turbo-sample-level.txt" \
+  "H=$workdir/turbo-sample-level.pdf" \
+  METRIC_ACCUMULATION_LEVEL=SAMPLE \
+  VALIDATION_STRINGENCY=SILENT \
+  QUIET=true
+
+"${conda_runner[@]}" run -p "$conda_prefix" picard CollectInsertSizeMetrics \
+  "I=$workdir/sample-input.sam" \
+  "O=$workdir/picard-sample-level.txt" \
+  "H=$workdir/picard-sample-level.pdf" \
+  METRIC_ACCUMULATION_LEVEL=SAMPLE \
+  VALIDATION_STRINGENCY=SILENT \
+  QUIET=true
+
+python3 - "$workdir/turbo-sample-level.txt" "$workdir/picard-sample-level.txt" <<'PY'
+import sys
+
+turbo_path, picard_path = sys.argv[1:]
+
+def stable_sections(path):
+    lines = [line.rstrip("\n") for line in open(path, encoding="utf-8")]
+    metric_rows = []
+    histogram = []
+    for index, line in enumerate(lines):
+        if line.startswith("MEDIAN_INSERT_SIZE\t"):
+            cursor = index + 1
+            while cursor < len(lines) and lines[cursor]:
+                metric_rows.append(lines[cursor])
+                cursor += 1
+        if line.startswith("insert_size\t"):
+            histogram.append(line)
+            cursor = index + 1
+            while cursor < len(lines) and lines[cursor]:
+                histogram.append(lines[cursor])
+                cursor += 1
+    if not metric_rows:
+        raise SystemExit(f"no insert-size metrics table in {path}")
+    return metric_rows, histogram
+
+turbo = stable_sections(turbo_path)
+picard = stable_sections(picard_path)
+if turbo != picard:
+    raise SystemExit(f"CollectInsertSizeMetrics SAMPLE accumulation output differs:\nturbo={turbo}\npicard={picard}")
+print("CollectInsertSizeMetrics SAMPLE accumulation output matches Picard")
+PY
+
+cargo run -q -p turbo-picard-cli --bin picard -- \
+  CollectInsertSizeMetrics \
+  "I=$workdir/sample-input.sam" \
+  "O=$workdir/turbo-library-level.txt" \
+  "H=$workdir/turbo-library-level.pdf" \
+  METRIC_ACCUMULATION_LEVEL=LIBRARY \
+  VALIDATION_STRINGENCY=SILENT \
+  QUIET=true
+
+"${conda_runner[@]}" run -p "$conda_prefix" picard CollectInsertSizeMetrics \
+  "I=$workdir/sample-input.sam" \
+  "O=$workdir/picard-library-level.txt" \
+  "H=$workdir/picard-library-level.pdf" \
+  METRIC_ACCUMULATION_LEVEL=LIBRARY \
+  VALIDATION_STRINGENCY=SILENT \
+  QUIET=true
+
+python3 - "$workdir/turbo-library-level.txt" "$workdir/picard-library-level.txt" <<'PY'
+import sys
+
+turbo_path, picard_path = sys.argv[1:]
+
+def stable_sections(path):
+    lines = [line.rstrip("\n") for line in open(path, encoding="utf-8")]
+    metric_rows = []
+    histogram = []
+    for index, line in enumerate(lines):
+        if line.startswith("MEDIAN_INSERT_SIZE\t"):
+            cursor = index + 1
+            while cursor < len(lines) and lines[cursor]:
+                metric_rows.append(lines[cursor])
+                cursor += 1
+        if line.startswith("insert_size\t"):
+            histogram.append(line)
+            cursor = index + 1
+            while cursor < len(lines) and lines[cursor]:
+                histogram.append(lines[cursor])
+                cursor += 1
+    if not metric_rows:
+        raise SystemExit(f"no insert-size metrics table in {path}")
+    return metric_rows, histogram
+
+turbo = stable_sections(turbo_path)
+picard = stable_sections(picard_path)
+if turbo != picard:
+    raise SystemExit(f"CollectInsertSizeMetrics LIBRARY accumulation output differs:\nturbo={turbo}\npicard={picard}")
+print("CollectInsertSizeMetrics LIBRARY accumulation output matches Picard")
+PY
+
+cargo run -q -p turbo-picard-cli --bin picard -- \
+  CollectInsertSizeMetrics \
+  "I=$workdir/sample-input.sam" \
+  "O=$workdir/turbo-read-group-level.txt" \
+  "H=$workdir/turbo-read-group-level.pdf" \
+  METRIC_ACCUMULATION_LEVEL=READ_GROUP \
+  VALIDATION_STRINGENCY=SILENT \
+  QUIET=true
+
+"${conda_runner[@]}" run -p "$conda_prefix" picard CollectInsertSizeMetrics \
+  "I=$workdir/sample-input.sam" \
+  "O=$workdir/picard-read-group-level.txt" \
+  "H=$workdir/picard-read-group-level.pdf" \
+  METRIC_ACCUMULATION_LEVEL=READ_GROUP \
+  VALIDATION_STRINGENCY=SILENT \
+  QUIET=true
+
+python3 - "$workdir/turbo-read-group-level.txt" "$workdir/picard-read-group-level.txt" <<'PY'
+import sys
+
+turbo_path, picard_path = sys.argv[1:]
+
+def stable_sections(path):
+    lines = [line.rstrip("\n") for line in open(path, encoding="utf-8")]
+    metric_rows = []
+    histogram = []
+    for index, line in enumerate(lines):
+        if line.startswith("MEDIAN_INSERT_SIZE\t"):
+            cursor = index + 1
+            while cursor < len(lines) and lines[cursor]:
+                metric_rows.append(lines[cursor])
+                cursor += 1
+        if line.startswith("insert_size\t"):
+            histogram.append(line)
+            cursor = index + 1
+            while cursor < len(lines) and lines[cursor]:
+                histogram.append(lines[cursor])
+                cursor += 1
+    if not metric_rows:
+        raise SystemExit(f"no insert-size metrics table in {path}")
+    return metric_rows, histogram
+
+turbo = stable_sections(turbo_path)
+picard = stable_sections(picard_path)
+if turbo != picard:
+    raise SystemExit(f"CollectInsertSizeMetrics READ_GROUP accumulation output differs:\nturbo={turbo}\npicard={picard}")
+print("CollectInsertSizeMetrics READ_GROUP accumulation output matches Picard")
+PY

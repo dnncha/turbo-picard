@@ -44,7 +44,7 @@ test:
     - picard MarkDuplicates --help
 
 about:
-  home: https://github.com/turbo-picard/turbo-picard
+  home: https://github.com/dnncha/turbo-picard
   license: MIT
   license_file:
     - LICENSE

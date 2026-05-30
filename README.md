@@ -12,6 +12,31 @@ replacement workflows. The current native engines target `MarkDuplicates`,
 `IntervalListTools`, `RevertSam`, `SetNmMdAndUqTags`, `ValidateSamFile`, `LiftoverVcf`,
 `UpdateVcfSequenceDictionary`, `GatherVcfs`, `SortVcf`, and `MergeVcfs`.
 
+## Why It Exists
+
+Picard is embedded in bioinformatics pipelines everywhere, but a lot of routine
+pipeline time is spent in command shapes that can be made dramatically faster
+without asking workflow owners to rewrite their WDL, Nextflow, Snakemake, or
+shell glue. `turbo-picard` keeps the Picard command model and accelerates the
+hot native paths in Rust, while preserving a fallback route for surfaces that
+still belong to upstream Picard.
+
+Fresh local benchmark evidence from `python3 tools/bench_suite.py --repeats 1
+--skip-build`:
+
+- `28/28` benchmark parity checks passing.
+- `104.68x` top measured speedup.
+- `6.69x` current lowest suite speedup after the RevertSam fast path.
+- `28.41x` geometric mean speedup across the 28-command suite.
+- Native commands cover BAM/FASTQ transforms, common metrics collectors, VCF
+  plumbing, interval/reference prep, and high-impact repair/tagging commands.
+
+![turbo-picard benchmark speedups](docs/site/assets/benchmark-speedups.svg)
+
+The static marketing page is available at
+[`docs/site/index.html`](docs/site/index.html). It packages the current evidence
+for pipeline owners evaluating a cautious Picard replacement path.
+
 The main package installs one non-shadowing command-line entrypoint:
 
 - `turbo-picard`
@@ -180,6 +205,44 @@ malformed native inputs are not delegated, so errors are not masked. The
 fallback value is a shell command prefix, so `java -jar /path/to/picard.jar`
 works. Prefer an absolute upstream Picard command or JAR path; a bare `picard`
 fallback can resolve back to the shim if it shadows `PATH`.
+
+## Adoption Playbook
+
+The safest rollout is evidence-first and reversible:
+
+1. **Shadow** representative pipeline shards with the non-shadowing
+   `turbo-picard` binary. Keep upstream Picard as the production path while you
+   compare command outputs, sidecars, metrics, and exit behavior.
+2. **Prove** each native command with the parity scripts and benchmark suite:
+
+   ```bash
+   python3 tools/verify_command_matrix.py
+   ./tools/verify_basic_revertsam_parity.sh
+   ./tools/verify_basic_setnmmdanduqtags_parity.sh
+   printf 'benchmark_date=%s source=python3 tools/bench_suite.py --repeats 1 --skip-build\n' "$(date +%F)" > docs/site/assets/bench-suite-output.txt
+   python3 tools/bench_suite.py --repeats 1 --skip-build | tee -a docs/site/assets/bench-suite-output.txt
+   python3 tools/render_benchmark_assets.py --suite-output docs/site/assets/bench-suite-output.txt
+   python3 tools/verify_benchmark_log_evidence.py
+   ```
+
+3. **Switch** only the covered workflow surfaces to the `picard` shim. Set
+   `TURBO_PICARD_FALLBACK_COMMAND` to an absolute upstream Picard command so
+   unsupported surfaces continue to run without a workflow rewrite.
+4. **Gate** upgrades in CI. Keep the command matrix, targeted parity scripts,
+   and benchmark summary as release evidence. The rendered static site consumes
+   `docs/site/assets/benchmark-data.json`, which records rank, parity status,
+   command count, top speedup, floor speedup, median speedup, geometric mean,
+   and the raw `docs/site/assets/bench-suite-output.txt` source artifact.
+
+Recommended CI gates for Picard-heavy pipelines:
+
+| Gate | Command | Purpose |
+| --- | --- | --- |
+| Command matrix | `python3 tools/verify_command_matrix.py` | Verifies supported, partial, and fallback command routing remains explicit. |
+| Targeted parity | `./tools/verify_basic_<command>_parity.sh` | Compares stable output for the commands used by your workflow. |
+| Full local suite | `printf 'benchmark_date=%s source=python3 tools/bench_suite.py --repeats 1 --skip-build\n' "$(date +%F)" > docs/site/assets/bench-suite-output.txt && python3 tools/bench_suite.py --repeats 1 --skip-build \| tee -a docs/site/assets/bench-suite-output.txt` | Regenerates parity-plus-speed evidence across the benchmarked native commands and preserves a dated raw log. |
+| Website assets | `python3 tools/render_benchmark_assets.py --suite-output docs/site/assets/bench-suite-output.txt` | Rebuilds the graph and JSON behind the static adoption page from the saved suite output. |
+| Evidence freshness | `python3 tools/verify_benchmark_log_evidence.py` | Fails if the rendered JSON drifts from the dated raw benchmark log. |
 
 ## Supported MarkDuplicates Surface
 
@@ -398,7 +461,8 @@ Implemented input/output coverage:
 
 - BAM input
 - SAM text input
-- no-reference `ALL_READS` alignment summary metrics
+- no-reference `ALL_READS`, `SAMPLE`, `LIBRARY`, and `READ_GROUP` alignment
+  summary metrics
 - Picard-style `AlignmentSummaryMetrics` output and read-length histogram
 
 Implemented options include:
@@ -411,18 +475,18 @@ Implemented options include:
 - `COLLECT_ALIGNMENT_INFORMATION=true`
 - `STOP_AFTER`
 - `COMPRESSION_LEVEL`
+- `METRIC_ACCUMULATION_LEVEL=ALL_READS|SAMPLE|LIBRARY|READ_GROUP` /
+  `LEVEL=ALL_READS|SAMPLE|LIBRARY|READ_GROUP`
 
 Accepted compatibility options that are validated or ignored when they do not
 change the current native implementation:
 
 - `VERBOSITY`
-- `METRIC_ACCUMULATION_LEVEL=ALL_READS` / `LEVEL=ALL_READS`
 - `TMP_DIR`
 - `MAX_RECORDS_IN_RAM`
 
 Unsupported metrics surfaces, including reference-dependent mismatch/error
-metrics and per-sample/library/read-group accumulation levels, should be run
-through `TURBO_PICARD_FALLBACK_COMMAND`.
+metrics, should be run through `TURBO_PICARD_FALLBACK_COMMAND`.
 
 ## Supported CreateSequenceDictionary Surface
 
@@ -471,6 +535,8 @@ Implemented input/output coverage:
 - Picard-style `QualityYieldMetrics` output
 - primary alignments only by default
 - optional secondary and supplemental alignment inclusion
+- original `OQ:Z` qualities by default, or current `QUAL` values with
+  `USE_ORIGINAL_QUALITIES=false`
 
 Implemented options include:
 
@@ -580,10 +646,14 @@ Implemented input/output coverage:
 - `METRIC_ACCUMULATION_LEVEL=ALL_READS`
 - duplicate records skipped by default, or included with `INCLUDE_DUPLICATES=true`
 - secondary, supplementary, unmapped, and mate-unmapped records skipped
+- sample, library, and read-group accumulation with
+  `METRIC_ACCUMULATION_LEVEL=SAMPLE|LIBRARY|READ_GROUP` when `@RG` sample,
+  library, platform-unit metadata and record `RG` tags are present
 
 Implemented options include `INPUT` / `I`, `OUTPUT` / `O`,
 `HISTOGRAM_FILE` / `H`, `ASSUME_SORTED`, `DEVIATIONS`, `MINIMUM_PCT` / `M`,
-`METRIC_ACCUMULATION_LEVEL=ALL_READS` / `LEVEL=ALL_READS`,
+`METRIC_ACCUMULATION_LEVEL=ALL_READS|SAMPLE|LIBRARY|READ_GROUP` /
+`LEVEL=ALL_READS|SAMPLE|LIBRARY|READ_GROUP`,
 `INCLUDE_DUPLICATES`, `STOP_AFTER`, `VALIDATION_STRINGENCY`, `QUIET`,
 `TMP_DIR`, and `MAX_RECORDS_IN_RAM`.
 
@@ -602,8 +672,11 @@ Supported programs are `CollectAlignmentSummaryMetrics`,
 `CollectBaseDistributionByCycle`, `CollectGcBiasMetrics`,
 `CollectInsertSizeMetrics`,
 `QualityScoreDistribution`, `MeanQualityByCycle`, `CollectWgsMetrics`, and
-`CollectQualityYieldMetrics`. Extra arguments and non-`ALL_READS` accumulation
-levels should be run through `TURBO_PICARD_FALLBACK_COMMAND`. `STOP_AFTER` is
+`CollectQualityYieldMetrics`. Non-`ALL_READS` accumulation levels are supported
+for explicit `PROGRAM=null PROGRAM=CollectAlignmentSummaryMetrics` and
+`PROGRAM=null PROGRAM=CollectInsertSizeMetrics` runs and should be run through
+`TURBO_PICARD_FALLBACK_COMMAND` for other program selections.
+`STOP_AFTER` is
 passed through to supported native child collectors. `FILE_EXTENSION` / `EXT`
 is appended to metric text outputs using Picard's filename convention, while
 chart PDFs keep their standard names. Picard-style
@@ -626,17 +699,18 @@ Implemented input/output coverage:
 - explicit SAM/BAM output
 - queryname-sorted input, or `ASSUME_SORTED=true`
 - adjacent primary paired records with the same read name
+- supplementary records in a primary-pair read group corrected to the primary mate
+- optional coordinate-sorted output and BAI creation for BAM output
 - mate reference, position, insert size, `MC`, and `MQ` repair
 - missing singleton mates passed through with default `IGNORE_MISSING_MATES=true`
 - Picard-compatible missing paired mate failure with `IGNORE_MISSING_MATES=false`
 
 Implemented options include `INPUT` / `I`, `OUTPUT` / `O`,
-`ADD_MATE_CIGAR` / `MC`, `ASSUME_SORTED`, `SORT_ORDER=queryname`,
-`IGNORE_MISSING_MATES`, `VALIDATION_STRINGENCY`, `QUIET`, `TMP_DIR`, and
-`MAX_RECORDS_IN_RAM`.
+`ADD_MATE_CIGAR` / `MC`, `ASSUME_SORTED`, `SORT_ORDER=queryname|coordinate|unsorted`,
+`IGNORE_MISSING_MATES`, `VALIDATION_STRINGENCY`, `QUIET`, `TMP_DIR`,
+`MAX_RECORDS_IN_RAM`, `CREATE_MD5_FILE`, and `CREATE_INDEX`.
 
-Unsupported multi-input merge, in-place overwrite, coordinate resorting,
-and supplementary mate correction should be run through
+Unsupported multi-input merge and in-place overwrite should be run through
 `TURBO_PICARD_FALLBACK_COMMAND`.
 
 ## Supported RevertSam Surface
@@ -648,14 +722,33 @@ Implemented input/output coverage:
 - default `REMOVE_ALIGNMENT_INFORMATION=true`
 - default `REMOVE_DUPLICATE_INFORMATION=true`
 - default `RESTORE_ORIGINAL_QUALITIES=true`
-- queryname-sorted reverted output
+- retained alignment information with `REMOVE_ALIGNMENT_INFORMATION=false`
+  and `RESTORE_HARDCLIPS=false`
+- queryname-sorted, coordinate-header, or unsorted reverted output
+- secondary and supplementary input records filtered from reverted output
+- negative-strand reads restored to original orientation, including
+  `ATTRIBUTE_TO_REVERSE` and `ATTRIBUTE_TO_REVERSE_COMPLEMENT`
+- hard-clipped bases and qualities restored from `XB`/`XQ` tags when
+  `RESTORE_HARDCLIPS=true`
+- Picard-style `.md5` sidecar with `CREATE_MD5_FILE=true`
+- Picard-compatible `CREATE_INDEX=true` acceptance without BAI creation for
+  reverted queryname output
+- Picard-compatible `CREATE_INDEX=true` BAI creation for coordinate BAM output
 - clearing default alignment tags `NM`, `UQ`, `PG`, `MD`, `MQ`, `SA`, `MC`, and `AS`
 - repeated `ATTRIBUTE_TO_CLEAR` for additional two-character auxiliary tags
 
-Unsupported read-group split output, sanitize mode, secondary/supplementary
-alignments, reverse attributes, hard-clip restoration with `XB`/`XQ`,
-`REMOVE_ALIGNMENT_INFORMATION=false`, and non-queryname output should be run
-through `TURBO_PICARD_FALLBACK_COMMAND`.
+Implemented options include `INPUT` / `I`, `OUTPUT` / `O`,
+`REMOVE_ALIGNMENT_INFORMATION`, `REMOVE_DUPLICATE_INFORMATION`,
+`RESTORE_ORIGINAL_QUALITIES`, `RESTORE_HARDCLIPS`,
+`SORT_ORDER=queryname|coordinate|unsorted`,
+`ATTRIBUTE_TO_CLEAR`, `ATTRIBUTE_TO_REVERSE`,
+`ATTRIBUTE_TO_REVERSE_COMPLEMENT`, `VALIDATION_STRINGENCY`, `QUIET`,
+`COMPRESSION_LEVEL`, `CREATE_MD5_FILE`, `CREATE_INDEX`, `TMP_DIR`, and
+`MAX_RECORDS_IN_RAM`.
+
+Unsupported read-group split output, sanitize mode, and keep-alignment
+hard-clip restoration should be run through
+`TURBO_PICARD_FALLBACK_COMMAND`.
 
 ## Supported SetNmMdAndUqTags Surface
 
@@ -680,16 +773,20 @@ Implemented input/output coverage:
 
 - SAM/BAM input
 - Picard-style `MODE=SUMMARY` output to stdout or `OUTPUT` / `O`
+- Picard-style `MODE=VERBOSE` detail output for the native validation issue
+  types
+- Picard-compatible `MAX_OUTPUT` truncation for verbose detail output
 - common read-group, sequence-dictionary, and missing-`NM` summary counts
-- `IGNORE` filtering for the summary error types emitted by the native path
-- unpaired records, or paired records with `SKIP_MATE_VALIDATION=true`
+- `IGNORE` filtering for the error types emitted by the native path
+- unpaired records, paired records with `SKIP_MATE_VALIDATION=true`, and
+  valid adjacent paired records with reciprocal mate coordinates
 
 Implemented options include `INPUT` / `I`, `OUTPUT` / `O`, `MODE` / `M`,
 `MAX_OUTPUT` / `MO`, `IGNORE`, `SKIP_MATE_VALIDATION` / `SMV`,
 `VALIDATION_STRINGENCY`, and `QUIET`.
 
-Unsupported verbose/detail mode, reference-backed validation, and paired mate
-validation should be run through `TURBO_PICARD_FALLBACK_COMMAND`.
+Unsupported reference-backed validation and advanced paired mate validation
+should be run through `TURBO_PICARD_FALLBACK_COMMAND`.
 
 ## Supported LiftoverVcf Surface
 
@@ -797,15 +894,80 @@ Performance evidence scripts include parity checks in their output:
 ```bash
 ./tools/bench_addorreplacereadgroups.py --reads 100000
 ./tools/bench_alignmentmetrics.py --reads 100000
+./tools/bench_bedtointervallist.py --reads 100000
 ./tools/bench_buildbamindex.py --reads 50000
 ./tools/bench_cleansam.py --reads 50000
+./tools/bench_collectbasedistributionbycycle.py --reads 100000
+./tools/bench_collectwgsmetrics.py --reads 100000
+./tools/bench_createdict.py --reads 10000
 ./tools/bench_fastqtosam.py --reads 100000
+./tools/bench_fixmateinformation.py --reads 100000
+./tools/bench_gathervcfs.py --reads 100000
 ./tools/bench_insertsize.py --reads 500000
+./tools/bench_markduplicates_synthetic.py --reads 50000
+./tools/bench_meanqualitybycycle.py --reads 100000
+./tools/bench_mergevcfs.py --reads 100000
 ./tools/bench_mergesamfiles.py --reads 50000 --shards 4
+./tools/bench_normalizefasta.py --reads 10000
+./tools/bench_qualityscoredistribution.py --reads 100000
 ./tools/bench_qualityyield.py --reads 100000
+./tools/bench_replacesamheader.py --reads 50000
+./tools/bench_revertsam.py --reads 100000
 ./tools/bench_samtofastq.py --reads 50000
+./tools/bench_setnmmdanduqtags.py --reads 100000
+./tools/bench_sortvcf.py --reads 100000
 ./tools/bench_sortsam.py --reads 100000
+./tools/bench_updatevcfsequencedictionary.py --reads 100000
+./tools/bench_validatesamfile.py --reads 100000
+./tools/bench_viewsam.py --reads 50000
 ./tools/bench_suite.py --repeats 5
+```
+
+Latest local suite snapshot, used by the README graph and marketing page:
+
+- `28/28` benchmarked commands passed parity checks.
+- `104.68x` top speedup: `UpdateVcfSequenceDictionary`.
+- `6.69x` floor speedup: `RevertSam`.
+- `26.24x` median speedup.
+- `28.41x` geometric mean speedup.
+
+| Command | Speedup vs Picard | Parity |
+| --- | ---: | --- |
+| UpdateVcfSequenceDictionary | 104.68x | PASS |
+| CollectInsertSizeMetrics | 84.96x | PASS |
+| NormalizeFasta | 83.49x | PASS |
+| BuildBamIndex | 60.15x | PASS |
+| GatherVcfs | 57.84x | PASS |
+| CreateSequenceDictionary | 53.50x | PASS |
+| MergeVcfs | 49.67x | PASS |
+| SamToFastq | 48.34x | PASS |
+| MeanQualityByCycle | 38.72x | PASS |
+| CollectAlignmentSummaryMetrics | 38.41x | PASS |
+| AddOrReplaceReadGroups | 30.68x | PASS |
+| CleanSam | 30.15x | PASS |
+| FastqToSam | 26.51x | PASS |
+| SortVcf | 26.24x | PASS |
+| CollectBaseDistributionByCycle | 23.85x | PASS |
+| ViewSam | 22.40x | PASS |
+| MergeSamFiles | 22.27x | PASS |
+| SortSam | 21.60x | PASS |
+| ValidateSamFile | 20.39x | PASS |
+| CollectQualityYieldMetrics | 20.17x | PASS |
+| BedToIntervalList | 19.79x | PASS |
+| CollectWgsMetrics | 19.73x | PASS |
+| MarkDuplicates | 19.30x | PASS |
+| ReplaceSamHeader | 18.71x | PASS |
+| QualityScoreDistribution | 17.62x | PASS |
+| FixMateInformation | 10.03x | PASS |
+| SetNmMdAndUqTags | 8.88x | PASS |
+| RevertSam | 6.69x | PASS |
+
+Regenerate the graph and website data after a fresh suite run with:
+
+```bash
+printf 'benchmark_date=%s source=python3 tools/bench_suite.py --repeats 1 --skip-build\n' "$(date +%F)" > docs/site/assets/bench-suite-output.txt
+python3 tools/bench_suite.py --repeats 1 --skip-build | tee -a docs/site/assets/bench-suite-output.txt
+python3 tools/render_benchmark_assets.py --suite-output docs/site/assets/bench-suite-output.txt
 ```
 
 ## Packaging

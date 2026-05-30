@@ -71,14 +71,32 @@ def main():
     parser.add_argument("--repeats", type=int, default=5)
     parser.add_argument("--samtofastq-reads", type=int, default=50_000)
     parser.add_argument("--fastqtosam-reads", type=int, default=100_000)
+    parser.add_argument("--fixmateinformation-reads", type=int, default=100_000)
     parser.add_argument("--sortsam-reads", type=int, default=100_000)
     parser.add_argument("--buildbamindex-reads", type=int, default=50_000)
     parser.add_argument("--insertsize-reads", type=int, default=100_000)
+    parser.add_argument("--markduplicates-reads", type=int, default=50_000)
+    parser.add_argument("--meanqualitybycycle-reads", type=int, default=100_000)
     parser.add_argument("--mergesamfiles-reads", type=int, default=50_000)
     parser.add_argument("--addorreplacereadgroups-reads", type=int, default=100_000)
     parser.add_argument("--alignmentmetrics-reads", type=int, default=100_000)
     parser.add_argument("--cleansam-reads", type=int, default=50_000)
+    parser.add_argument("--basedistributionbycycle-reads", type=int, default=100_000)
+    parser.add_argument("--collectwgsmetrics-reads", type=int, default=100_000)
+    parser.add_argument("--qualityscoredistribution-reads", type=int, default=100_000)
     parser.add_argument("--qualityyield-reads", type=int, default=100_000)
+    parser.add_argument("--revertsam-reads", type=int, default=100_000)
+    parser.add_argument("--setnmmdanduqtags-reads", type=int, default=100_000)
+    parser.add_argument("--validatesamfile-reads", type=int, default=100_000)
+    parser.add_argument("--createdict-reads", type=int, default=10_000)
+    parser.add_argument("--normalizefasta-reads", type=int, default=10_000)
+    parser.add_argument("--bedtointervallist-reads", type=int, default=100_000)
+    parser.add_argument("--gathervcfs-reads", type=int, default=100_000)
+    parser.add_argument("--sortvcf-reads", type=int, default=100_000)
+    parser.add_argument("--mergevcfs-reads", type=int, default=100_000)
+    parser.add_argument("--viewsam-reads", type=int, default=50_000)
+    parser.add_argument("--replacesamheader-reads", type=int, default=50_000)
+    parser.add_argument("--updatevcfdict-reads", type=int, default=100_000)
     parser.add_argument("--skip-build", action="store_true")
     args = parser.parse_args()
 
@@ -90,6 +108,12 @@ def main():
     results = [
         run_benchmark("samtofastq", "bench_samtofastq.py", args.samtofastq_reads, args.repeats),
         run_benchmark("fastqtosam", "bench_fastqtosam.py", args.fastqtosam_reads, args.repeats),
+        run_benchmark(
+            "fixmateinformation",
+            "bench_fixmateinformation.py",
+            args.fixmateinformation_reads,
+            args.repeats,
+        ),
         run_benchmark("sortsam", "bench_sortsam.py", args.sortsam_reads, args.repeats),
         run_benchmark(
             "buildbamindex",
@@ -101,6 +125,18 @@ def main():
             "insertsize",
             "bench_insertsize.py",
             args.insertsize_reads,
+            args.repeats,
+        ),
+        run_benchmark(
+            "markduplicates",
+            "bench_markduplicates_synthetic.py",
+            args.markduplicates_reads,
+            args.repeats,
+        ),
+        run_benchmark(
+            "meanqualitybycycle",
+            "bench_meanqualitybycycle.py",
+            args.meanqualitybycycle_reads,
             args.repeats,
         ),
         run_benchmark(
@@ -122,7 +158,67 @@ def main():
             args.repeats,
         ),
         run_benchmark("cleansam", "bench_cleansam.py", args.cleansam_reads, args.repeats),
+        run_benchmark(
+            "basedistributionbycycle",
+            "bench_collectbasedistributionbycycle.py",
+            args.basedistributionbycycle_reads,
+            args.repeats,
+        ),
+        run_benchmark(
+            "collectwgsmetrics",
+            "bench_collectwgsmetrics.py",
+            args.collectwgsmetrics_reads,
+            args.repeats,
+        ),
+        run_benchmark(
+            "qualityscoredistribution",
+            "bench_qualityscoredistribution.py",
+            args.qualityscoredistribution_reads,
+            args.repeats,
+        ),
         run_benchmark("qualityyield", "bench_qualityyield.py", args.qualityyield_reads, args.repeats),
+        run_benchmark("revertsam", "bench_revertsam.py", args.revertsam_reads, args.repeats),
+        run_benchmark(
+            "setnmmdanduqtags",
+            "bench_setnmmdanduqtags.py",
+            args.setnmmdanduqtags_reads,
+            args.repeats,
+        ),
+        run_benchmark(
+            "validatesamfile",
+            "bench_validatesamfile.py",
+            args.validatesamfile_reads,
+            args.repeats,
+        ),
+        run_benchmark("createdict", "bench_createdict.py", args.createdict_reads, args.repeats),
+        run_benchmark(
+            "normalizefasta",
+            "bench_normalizefasta.py",
+            args.normalizefasta_reads,
+            args.repeats,
+        ),
+        run_benchmark(
+            "bedtointervallist",
+            "bench_bedtointervallist.py",
+            args.bedtointervallist_reads,
+            args.repeats,
+        ),
+        run_benchmark("gathervcfs", "bench_gathervcfs.py", args.gathervcfs_reads, args.repeats),
+        run_benchmark("sortvcf", "bench_sortvcf.py", args.sortvcf_reads, args.repeats),
+        run_benchmark("mergevcfs", "bench_mergevcfs.py", args.mergevcfs_reads, args.repeats),
+        run_benchmark("viewsam", "bench_viewsam.py", args.viewsam_reads, args.repeats),
+        run_benchmark(
+            "replacesamheader",
+            "bench_replacesamheader.py",
+            args.replacesamheader_reads,
+            args.repeats,
+        ),
+        run_benchmark(
+            "updatevcfdict",
+            "bench_updatevcfsequencedictionary.py",
+            args.updatevcfdict_reads,
+            args.repeats,
+        ),
     ]
 
     for rows in results:

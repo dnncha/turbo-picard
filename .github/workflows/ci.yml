@@ -33,22 +33,71 @@ jobs:
       - name: Test Python tooling
         run: |
           python3 -m unittest tools/test_compare_markduplicates.py
+          python3 -m unittest tools/test_render_benchmark_assets.py
+          python3 -m unittest tools/test_verify_benchmark_log_evidence.py
+          python3 -m unittest tools/test_verify_benchmark_suite_coverage.py
+          python3 -m unittest tools/test_verify_benchmark_thresholds.py
+          python3 -m unittest tools/test_verify_readme_benchmark_evidence.py
+          python3 -m unittest tools/test_verify_site_benchmark_evidence.py
           python3 -m py_compile \
             tools/compare_markduplicates.py \
             tools/bench_addorreplacereadgroups.py \
+            tools/bench_bedtointervallist.py \
             tools/bench_markduplicates.py \
+            tools/bench_markduplicates_synthetic.py \
             tools/bench_buildbamindex.py \
             tools/bench_cleansam.py \
+            tools/bench_collectbasedistributionbycycle.py \
+            tools/bench_collectwgsmetrics.py \
+            tools/bench_createdict.py \
             tools/bench_fastqtosam.py \
+            tools/bench_fixmateinformation.py \
+            tools/bench_gathervcfs.py \
             tools/bench_insertsize.py \
+            tools/bench_meanqualitybycycle.py \
             tools/bench_mergesamfiles.py \
+            tools/bench_mergevcfs.py \
+            tools/bench_normalizefasta.py \
+            tools/bench_qualityscoredistribution.py \
             tools/bench_qualityyield.py \
+            tools/bench_replacesamheader.py \
+            tools/bench_revertsam.py \
             tools/bench_samtofastq.py \
+            tools/bench_setnmmdanduqtags.py \
+            tools/bench_sortvcf.py \
             tools/bench_sortsam.py \
+            tools/bench_updatevcfsequencedictionary.py \
             tools/bench_suite.py \
+            tools/bench_validatesamfile.py \
+            tools/bench_viewsam.py \
+            tools/render_benchmark_assets.py \
+            tools/verify_benchmark_log_evidence.py \
+            tools/verify_benchmark_suite_coverage.py \
+            tools/verify_benchmark_thresholds.py \
             tools/verify_command_matrix.py \
-            tools/test_compare_markduplicates.py
+            tools/verify_readme_benchmark_evidence.py \
+            tools/verify_site_benchmark_evidence.py \
+            tools/test_compare_markduplicates.py \
+            tools/test_render_benchmark_assets.py \
+            tools/test_verify_benchmark_log_evidence.py \
+            tools/test_verify_benchmark_suite_coverage.py \
+            tools/test_verify_benchmark_thresholds.py \
+            tools/test_verify_readme_benchmark_evidence.py \
+            tools/test_verify_site_benchmark_evidence.py
           python3 tools/verify_command_matrix.py
+          python3 tools/verify_benchmark_log_evidence.py
+          python3 tools/verify_benchmark_suite_coverage.py
+          python3 tools/verify_benchmark_thresholds.py
+          python3 tools/verify_readme_benchmark_evidence.py
+          python3 tools/verify_site_benchmark_evidence.py
+
+      - name: Verify benchmark evidence assets are current
+        run: |
+          python3 tools/render_benchmark_assets.py
+          git diff --exit-code -- \
+            docs/site/assets/benchmark-data.json \
+            docs/site/assets/benchmark-speedups.svg \
+            docs/site/assets/hero-pipeline.svg
 
       - name: Smoke package install
         run: ./tools/verify_package_install.sh
