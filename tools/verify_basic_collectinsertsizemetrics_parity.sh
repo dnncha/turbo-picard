@@ -6,6 +6,12 @@ conda_prefix="${TURBO_PICARD_CONDA_PREFIX:-$repo_root/.conda-turbo-picard}"
 workdir="$(mktemp -d)"
 trap 'rm -rf "$workdir"' EXIT
 
+cat > "$workdir/Rscript" <<'SH'
+#!/usr/bin/env bash
+exit 0
+SH
+chmod +x "$workdir/Rscript"
+
 if command -v mamba >/dev/null 2>&1; then
   conda_runner=(mamba)
 elif command -v micromamba >/dev/null 2>&1; then
@@ -14,6 +20,10 @@ else
   echo "mamba or micromamba is required for Picard parity verification" >&2
   exit 127
 fi
+
+run_picard() {
+  "${conda_runner[@]}" run -p "$conda_prefix" env "PATH=$workdir:$conda_prefix/bin:$PATH" picard "$@"
+}
 
 cat > "$workdir/input.sam" <<'SAM'
 @HD	VN:1.6	SO:coordinate
@@ -34,7 +44,7 @@ cargo run -q -p turbo-picard-cli --bin picard -- \
   VALIDATION_STRINGENCY=SILENT \
   QUIET=true
 
-"${conda_runner[@]}" run -p "$conda_prefix" picard CollectInsertSizeMetrics \
+run_picard CollectInsertSizeMetrics \
   "I=$workdir/input.sam" \
   "O=$workdir/picard.txt" \
   "H=$workdir/picard.pdf" \
@@ -80,7 +90,7 @@ cargo run -q -p turbo-picard-cli --bin picard -- \
   VALIDATION_STRINGENCY=SILENT \
   QUIET=true
 
-"${conda_runner[@]}" run -p "$conda_prefix" picard CollectInsertSizeMetrics \
+run_picard CollectInsertSizeMetrics \
   "I=$workdir/input.sam" \
   "O=$workdir/picard-include-duplicates.txt" \
   "H=$workdir/picard-include-duplicates.pdf" \
@@ -125,7 +135,7 @@ cargo run -q -p turbo-picard-cli --bin picard -- \
   VALIDATION_STRINGENCY=SILENT \
   QUIET=true
 
-"${conda_runner[@]}" run -p "$conda_prefix" picard CollectInsertSizeMetrics \
+run_picard CollectInsertSizeMetrics \
   "I=$workdir/input.sam" \
   "O=$workdir/picard-minimum-pct-alias.txt" \
   "H=$workdir/picard-minimum-pct-alias.pdf" \
@@ -170,7 +180,7 @@ cargo run -q -p turbo-picard-cli --bin picard -- \
   VALIDATION_STRINGENCY=SILENT \
   QUIET=true
 
-"${conda_runner[@]}" run -p "$conda_prefix" picard CollectInsertSizeMetrics \
+run_picard CollectInsertSizeMetrics \
   "I=$workdir/input.sam" \
   "O=$workdir/picard-level.txt" \
   "H=$workdir/picard-level.pdf" \
@@ -216,7 +226,7 @@ cargo run -q -p turbo-picard-cli --bin picard -- \
   VALIDATION_STRINGENCY=SILENT \
   QUIET=true
 
-"${conda_runner[@]}" run -p "$conda_prefix" picard CollectInsertSizeMetrics \
+run_picard CollectInsertSizeMetrics \
   "I=$workdir/input.sam" \
   "O=$workdir/picard-temp-options.txt" \
   "H=$workdir/picard-temp-options.pdf" \
@@ -253,6 +263,58 @@ if turbo != picard:
 print("CollectInsertSizeMetrics temp-option output matches Picard")
 PY
 
+cargo run -q -p turbo-picard-cli --bin picard -- \
+  CollectInsertSizeMetrics \
+  "I=$workdir/input.sam" \
+  "O=$workdir/turbo-stop-after.txt" \
+  "H=$workdir/turbo-stop-after.pdf" \
+  STOP_AFTER=2 \
+  AS=true \
+  DEVIATIONS=5 \
+  VALIDATION_STRINGENCY=SILENT \
+  QUIET=true
+
+run_picard CollectInsertSizeMetrics \
+  "I=$workdir/input.sam" \
+  "O=$workdir/picard-stop-after.txt" \
+  "H=$workdir/picard-stop-after.pdf" \
+  STOP_AFTER=2 \
+  AS=true \
+  DEVIATIONS=5 \
+  VALIDATION_STRINGENCY=SILENT \
+  QUIET=true
+
+python3 - "$workdir/turbo-stop-after.txt" "$workdir/picard-stop-after.txt" <<'PY'
+import sys
+
+turbo_path, picard_path = sys.argv[1:]
+
+def stable_sections(path):
+    lines = [line.rstrip("\n") for line in open(path, encoding="utf-8")]
+    metrics = None
+    histogram = []
+    for index, line in enumerate(lines):
+        if line.startswith("MEDIAN_INSERT_SIZE\t"):
+            metrics = (line, lines[index + 1])
+        if line == "insert_size\tAll_Reads.fr_count":
+            cursor = index + 1
+            while cursor < len(lines) and lines[cursor]:
+                histogram.append(lines[cursor])
+                cursor += 1
+    if metrics is None:
+        raise SystemExit(f"no insert-size metrics table in {path}")
+    return metrics, histogram
+
+turbo = stable_sections(turbo_path)
+picard = stable_sections(picard_path)
+if turbo != picard:
+    raise SystemExit(
+        f"CollectInsertSizeMetrics STOP_AFTER/AS/DEVIATIONS output differs:\n"
+        f"turbo={turbo}\npicard={picard}"
+    )
+print("CollectInsertSizeMetrics STOP_AFTER, AS alias, and DEVIATIONS output matches Picard")
+PY
+
 cat > "$workdir/sample-input.sam" <<'SAM'
 @HD	VN:1.6	SO:coordinate
 @SQ	SN:chr1	LN:1000
@@ -272,7 +334,7 @@ cargo run -q -p turbo-picard-cli --bin picard -- \
   VALIDATION_STRINGENCY=SILENT \
   QUIET=true
 
-"${conda_runner[@]}" run -p "$conda_prefix" picard CollectInsertSizeMetrics \
+run_picard CollectInsertSizeMetrics \
   "I=$workdir/sample-input.sam" \
   "O=$workdir/picard-sample-level.txt" \
   "H=$workdir/picard-sample-level.pdf" \
@@ -321,7 +383,7 @@ cargo run -q -p turbo-picard-cli --bin picard -- \
   VALIDATION_STRINGENCY=SILENT \
   QUIET=true
 
-"${conda_runner[@]}" run -p "$conda_prefix" picard CollectInsertSizeMetrics \
+run_picard CollectInsertSizeMetrics \
   "I=$workdir/sample-input.sam" \
   "O=$workdir/picard-library-level.txt" \
   "H=$workdir/picard-library-level.pdf" \
@@ -370,7 +432,7 @@ cargo run -q -p turbo-picard-cli --bin picard -- \
   VALIDATION_STRINGENCY=SILENT \
   QUIET=true
 
-"${conda_runner[@]}" run -p "$conda_prefix" picard CollectInsertSizeMetrics \
+run_picard CollectInsertSizeMetrics \
   "I=$workdir/sample-input.sam" \
   "O=$workdir/picard-read-group-level.txt" \
   "H=$workdir/picard-read-group-level.pdf" \

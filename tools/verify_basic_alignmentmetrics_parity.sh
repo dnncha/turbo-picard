@@ -152,6 +152,51 @@ if turbo != picard:
 print("CollectAlignmentSummaryMetrics temp-option output matches Picard")
 PY
 
+cargo run -q -p turbo-picard-cli --bin picard -- \
+  CollectAlignmentSummaryMetrics \
+  "I=$workdir/input.sam" \
+  "O=$workdir/turbo-stop-after.txt" \
+  STOP_AFTER=1 \
+  AS=true \
+  VALIDATION_STRINGENCY=SILENT \
+  QUIET=true
+
+"${conda_runner[@]}" run -p "$conda_prefix" picard CollectAlignmentSummaryMetrics \
+  "I=$workdir/input.sam" \
+  "O=$workdir/picard-stop-after.txt" \
+  STOP_AFTER=1 \
+  AS=true \
+  VALIDATION_STRINGENCY=SILENT \
+  QUIET=true
+
+python3 - "$workdir/turbo-stop-after.txt" "$workdir/picard-stop-after.txt" <<'PY'
+import sys
+
+turbo_path, picard_path = sys.argv[1:]
+
+def stable_metrics(path):
+    lines = []
+    with open(path, encoding="utf-8") as handle:
+        keep = False
+        for raw in handle:
+            line = raw.rstrip("\n")
+            if line.startswith("## METRICS CLASS") or line.startswith("CATEGORY\t"):
+                keep = True
+            if keep and line:
+                lines.append(line)
+    return lines
+
+turbo = stable_metrics(turbo_path)
+picard = stable_metrics(picard_path)
+if turbo != picard:
+    print("turbo STOP_AFTER stable metrics:", file=sys.stderr)
+    print("\n".join(turbo), file=sys.stderr)
+    print("picard STOP_AFTER stable metrics:", file=sys.stderr)
+    print("\n".join(picard), file=sys.stderr)
+    raise SystemExit("CollectAlignmentSummaryMetrics STOP_AFTER/AS output differs from Picard")
+print("CollectAlignmentSummaryMetrics STOP_AFTER and AS alias output matches Picard")
+PY
+
 cat > "$workdir/sample-input.sam" <<'SAM'
 @HD	VN:1.6	SO:coordinate
 @SQ	SN:chr1	LN:1000

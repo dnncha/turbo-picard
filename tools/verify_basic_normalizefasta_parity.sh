@@ -42,3 +42,29 @@ cargo run -q -p turbo-picard-cli --bin picard -- \
 
 diff -u "$workdir/picard.fa" "$workdir/turbo.fa"
 echo "NormalizeFasta output matches Picard"
+
+cargo run -q -p turbo-picard-cli --bin picard -- \
+  NormalizeFasta \
+  "I=$workdir/input.fa" \
+  "O=$workdir/turbo-common.fa" \
+  LINE_LENGTH=5 \
+  CREATE_MD5_FILE=true \
+  CREATE_INDEX=true \
+  VALIDATION_STRINGENCY=SILENT \
+  QUIET=true
+
+"${conda_runner[@]}" run -p "$conda_prefix" picard NormalizeFasta \
+  "I=$workdir/input.fa" \
+  "O=$workdir/picard-common.fa" \
+  LINE_LENGTH=5 \
+  CREATE_MD5_FILE=true \
+  CREATE_INDEX=true \
+  VALIDATION_STRINGENCY=SILENT \
+  QUIET=true
+
+diff -u "$workdir/picard-common.fa" "$workdir/turbo-common.fa"
+test ! -e "$workdir/turbo-common.fa.md5"
+test ! -e "$workdir/picard-common.fa.md5"
+test ! -e "$workdir/turbo-common.fa.fai"
+test ! -e "$workdir/picard-common.fa.fai"
+echo "NormalizeFasta common no-op sidecar options match Picard"

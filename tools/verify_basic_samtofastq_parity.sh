@@ -52,6 +52,52 @@ cmp "$workdir/picard-r1.fastq.md5" "$workdir/turbo-r1.fastq.md5"
 cmp "$workdir/picard-r2.fastq.md5" "$workdir/turbo-r2.fastq.md5"
 cmp "$workdir/picard-unpaired.fastq.md5" "$workdir/turbo-unpaired.fastq.md5"
 
+cat > "$workdir/runtime-input.sam" <<'SAM'
+@HD	VN:1.6	SO:queryname
+@SQ	SN:chr1	LN:1000
+read-a	4	*	0	0	*	*	0	0	ACGT	FFFF
+SAM
+
+cat > "$workdir/ref.fa" <<'FA'
+>chr1
+ACGTACGTACGT
+FA
+
+cargo run -q -p turbo-picard-cli --bin picard -- \
+  SamToFastq \
+  "I=$workdir/runtime-input.sam" \
+  "FASTQ=$workdir/turbo-runtime.fastq" \
+  CREATE_MD5_FILE=true \
+  CREATE_INDEX=true \
+  MAX_RECORDS_IN_RAM=1000 \
+  "TMP_DIR=$workdir" \
+  "R=$workdir/ref.fa" \
+  USE_JDK_DEFLATER=true \
+  USE_JDK_INFLATER=true \
+  VALIDATION_STRINGENCY=SILENT \
+  QUIET=true
+
+"${conda_runner[@]}" run -p "$conda_prefix" picard SamToFastq \
+  "I=$workdir/runtime-input.sam" \
+  "FASTQ=$workdir/picard-runtime.fastq" \
+  CREATE_MD5_FILE=true \
+  CREATE_INDEX=true \
+  MAX_RECORDS_IN_RAM=1000 \
+  "TMP_DIR=$workdir" \
+  "R=$workdir/ref.fa" \
+  USE_JDK_DEFLATER=true \
+  USE_JDK_INFLATER=true \
+  VALIDATION_STRINGENCY=SILENT \
+  QUIET=true
+
+diff -u "$workdir/picard-runtime.fastq" "$workdir/turbo-runtime.fastq"
+cmp "$workdir/picard-runtime.fastq.md5" "$workdir/turbo-runtime.fastq.md5"
+test ! -e "$workdir/turbo-runtime.fastq.bai"
+test ! -e "$workdir/turbo-runtime.bai"
+test ! -e "$workdir/picard-runtime.fastq.bai"
+test ! -e "$workdir/picard-runtime.bai"
+echo "SamToFastq runtime sidecar compatibility matches Picard"
+
 cat > "$workdir/filter-input.sam" <<'SAM'
 @HD	VN:1.6	SO:queryname
 @SQ	SN:chr1	LN:1000

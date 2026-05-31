@@ -81,6 +81,7 @@ fn marks_duplicate_pairs_and_reports_paired_metrics() {
 
     let metrics_text = std::fs::read_to_string(&metrics).expect("metrics file exists");
     assert!(metrics_text.contains("lib1\t0\t3\t0\t0\t0\t1\t0\t0.333333\t3\n"));
+    assert!(metrics_text.contains("set_size\tall_sets\tnon_optical_sets\n1.0\t1\t1\n2.0\t1\t1\n"));
 }
 
 #[test]
@@ -568,6 +569,7 @@ fn tags_optical_duplicate_pairs_and_reports_metrics() {
     );
     let metrics_text = std::fs::read_to_string(&metrics).expect("metrics file exists");
     assert!(metrics_text.contains("lib1\t0\t2\t0\t0\t0\t1\t1\t0.5\t\n"));
+    assert!(metrics_text.contains("set_size\tall_sets\tnon_optical_sets\n1.0\t0\t1\n2.0\t1\t0\n"));
 }
 
 #[test]

@@ -114,16 +114,22 @@ fn normalizes_conflicting_aliases_by_command() {
     assert_eq!(markdup["METRICS_FILE"], vec!["metrics.txt"]);
     assert_eq!(markdup["ASSUME_SORTED"], vec!["true"]);
 
+    let merge_args = vec!["AS=true".to_string()];
+    let merge = normalize_picard_args_for_command("MergeSamFiles", &merge_args)
+        .expect("MergeSamFiles arguments parse");
+    assert_eq!(merge["ASSUME_SORTED"], vec!["true"]);
+
     let alignment_args = vec!["LEVEL=ALL_READS".to_string()];
     let alignment =
         normalize_picard_args_for_command("CollectAlignmentSummaryMetrics", &alignment_args)
             .expect("CollectAlignmentSummaryMetrics arguments parse");
     assert_eq!(alignment["METRIC_ACCUMULATION_LEVEL"], vec!["ALL_READS"]);
 
-    let validate_args = vec!["M=SUMMARY".to_string()];
+    let validate_args = vec!["M=SUMMARY".to_string(), "R=ref.fa".to_string()];
     let validate = normalize_picard_args_for_command("ValidateSamFile", &validate_args)
         .expect("ValidateSamFile arguments parse");
     assert_eq!(validate["MODE"], vec!["SUMMARY"]);
+    assert_eq!(validate["REFERENCE_SEQUENCE"], vec!["ref.fa"]);
 
     let dict_args = vec!["AS=GRCh38".to_string(), "REFERENCE=ref.fa".to_string()];
     let dict = normalize_picard_args_for_command("CreateSequenceDictionary", &dict_args)
@@ -169,6 +175,11 @@ fn normalizes_conflicting_aliases_by_command() {
         .expect("CollectMultipleMetrics arguments parse");
     assert_eq!(multiple["REFERENCE_SEQUENCE"], vec!["ref.fa"]);
     assert_eq!(multiple["METRIC_ACCUMULATION_LEVEL"], vec!["ALL_READS"]);
+
+    let sam_to_fastq_args = vec!["R=ref.fa".to_string()];
+    let sam_to_fastq = normalize_picard_args_for_command("SamToFastq", &sam_to_fastq_args)
+        .expect("SamToFastq arguments parse");
+    assert_eq!(sam_to_fastq["REFERENCE_SEQUENCE"], vec!["ref.fa"]);
 
     let fixmate_args = vec!["AS=true".to_string(), "MC=false".to_string()];
     let fixmate = normalize_picard_args_for_command("FixMateInformation", &fixmate_args)
@@ -237,6 +248,7 @@ fn normalizes_conflicting_aliases_by_command() {
         "F1=r1.fastq".to_string(),
         "F2=r2.fastq".to_string(),
         "O=unmapped.sam".to_string(),
+        "R=ref.fa".to_string(),
         "RG=rg1".to_string(),
         "SM=sample".to_string(),
         "LB=lib".to_string(),
@@ -248,11 +260,18 @@ fn normalizes_conflicting_aliases_by_command() {
     assert_eq!(fastq_to_sam["FASTQ"], vec!["r1.fastq"]);
     assert_eq!(fastq_to_sam["FASTQ2"], vec!["r2.fastq"]);
     assert_eq!(fastq_to_sam["OUTPUT"], vec!["unmapped.sam"]);
+    assert_eq!(fastq_to_sam["REFERENCE_SEQUENCE"], vec!["ref.fa"]);
     assert_eq!(fastq_to_sam["READ_GROUP_NAME"], vec!["rg1"]);
     assert_eq!(fastq_to_sam["SAMPLE_NAME"], vec!["sample"]);
     assert_eq!(fastq_to_sam["LIBRARY_NAME"], vec!["lib"]);
     assert_eq!(fastq_to_sam["PLATFORM"], vec!["ILLUMINA"]);
     assert_eq!(fastq_to_sam["PLATFORM_UNIT"], vec!["unit"]);
+
+    let read_groups_args = vec!["R=ref.fa".to_string()];
+    let read_groups =
+        normalize_picard_args_for_command("AddOrReplaceReadGroups", &read_groups_args)
+            .expect("AddOrReplaceReadGroups args parse");
+    assert_eq!(read_groups["REFERENCE_SEQUENCE"], vec!["ref.fa"]);
 }
 
 #[test]

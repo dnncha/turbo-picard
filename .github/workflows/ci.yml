@@ -33,14 +33,23 @@ jobs:
       - name: Test Python tooling
         run: |
           python3 -m unittest tools/test_compare_markduplicates.py
+          python3 -m unittest tools/test_compare_real_data.py
           python3 -m unittest tools/test_render_benchmark_assets.py
+          python3 -m unittest tools/test_update_real_data_manifest.py
           python3 -m unittest tools/test_verify_benchmark_log_evidence.py
           python3 -m unittest tools/test_verify_benchmark_suite_coverage.py
           python3 -m unittest tools/test_verify_benchmark_thresholds.py
+          python3 -m unittest tools/test_verify_bioconda_recipes.py
+          python3 -m unittest tools/test_verify_chart_disclosures.py
+          python3 -m unittest tools/test_verify_command_matrix.py
           python3 -m unittest tools/test_verify_readme_benchmark_evidence.py
+          python3 -m unittest tools/test_verify_real_data_ci_coverage.py
+          python3 -m unittest tools/test_verify_real_data_evidence.py
+          python3 -m unittest tools/test_verify_site_disclosures.py
           python3 -m unittest tools/test_verify_site_benchmark_evidence.py
           python3 -m py_compile \
             tools/compare_markduplicates.py \
+            tools/compare_real_data.py \
             tools/bench_addorreplacereadgroups.py \
             tools/bench_bedtointervallist.py \
             tools/bench_markduplicates.py \
@@ -71,24 +80,43 @@ jobs:
             tools/bench_validatesamfile.py \
             tools/bench_viewsam.py \
             tools/render_benchmark_assets.py \
+            tools/update_real_data_manifest.py \
+            tools/verify_bioconda_recipes.py \
             tools/verify_benchmark_log_evidence.py \
             tools/verify_benchmark_suite_coverage.py \
             tools/verify_benchmark_thresholds.py \
+            tools/verify_chart_disclosures.py \
             tools/verify_command_matrix.py \
             tools/verify_readme_benchmark_evidence.py \
+            tools/verify_real_data_ci_coverage.py \
+            tools/verify_real_data_evidence.py \
+            tools/verify_site_disclosures.py \
             tools/verify_site_benchmark_evidence.py \
             tools/test_compare_markduplicates.py \
+            tools/test_compare_real_data.py \
             tools/test_render_benchmark_assets.py \
+            tools/test_update_real_data_manifest.py \
             tools/test_verify_benchmark_log_evidence.py \
             tools/test_verify_benchmark_suite_coverage.py \
             tools/test_verify_benchmark_thresholds.py \
+            tools/test_verify_bioconda_recipes.py \
+            tools/test_verify_chart_disclosures.py \
+            tools/test_verify_command_matrix.py \
             tools/test_verify_readme_benchmark_evidence.py \
+            tools/test_verify_real_data_ci_coverage.py \
+            tools/test_verify_real_data_evidence.py \
+            tools/test_verify_site_disclosures.py \
             tools/test_verify_site_benchmark_evidence.py
           python3 tools/verify_command_matrix.py
+          python3 tools/verify_bioconda_recipes.py
+          python3 tools/verify_chart_disclosures.py
           python3 tools/verify_benchmark_log_evidence.py
           python3 tools/verify_benchmark_suite_coverage.py
           python3 tools/verify_benchmark_thresholds.py
           python3 tools/verify_readme_benchmark_evidence.py
+          python3 tools/verify_real_data_ci_coverage.py
+          python3 tools/verify_real_data_evidence.py
+          python3 tools/verify_site_disclosures.py
           python3 tools/verify_site_benchmark_evidence.py
 
       - name: Verify benchmark evidence assets are current

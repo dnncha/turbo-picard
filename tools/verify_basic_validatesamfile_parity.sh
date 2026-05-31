@@ -50,6 +50,11 @@ pair1	99	chr1	1	60	4M	=	11	14	ACGT	FFFF	RG:Z:rg1	NM:i:0
 pair1	147	chr1	11	60	4M	=	1	-14	TGCA	FFFF	RG:Z:rg1	NM:i:0
 SAM
 
+cat > "$workdir/ref.fa" <<'FASTA'
+>chr1
+ACGTACGTACGT
+FASTA
+
 cargo run -q -p turbo-picard-cli --bin picard -- \
   ValidateSamFile \
   "I=$workdir/valid.sam" \
@@ -77,6 +82,37 @@ cargo run -q -p turbo-picard-cli --bin picard -- \
   "I=$workdir/paired.sam" \
   "O=$workdir/picard-paired.txt" \
   MODE=SUMMARY \
+  VALIDATION_STRINGENCY=SILENT \
+  QUIET=true
+
+cargo run -q -p turbo-picard-cli --bin picard -- \
+  ValidateSamFile \
+  "I=$workdir/valid.sam" \
+  "O=$workdir/turbo-runtime.txt" \
+  MODE=SUMMARY \
+  "R=$workdir/ref.fa" \
+  CREATE_INDEX=true \
+  CREATE_MD5_FILE=true \
+  "TMP_DIR=$workdir" \
+  MAX_RECORDS_IN_RAM=500 \
+  COMPRESSION_LEVEL=5 \
+  USE_JDK_DEFLATER=true \
+  USE_JDK_INFLATER=true \
+  VALIDATION_STRINGENCY=SILENT \
+  QUIET=true
+
+"${conda_runner[@]}" run -p "$conda_prefix" picard ValidateSamFile \
+  "I=$workdir/valid.sam" \
+  "O=$workdir/picard-runtime.txt" \
+  MODE=SUMMARY \
+  "R=$workdir/ref.fa" \
+  CREATE_INDEX=true \
+  CREATE_MD5_FILE=true \
+  "TMP_DIR=$workdir" \
+  MAX_RECORDS_IN_RAM=500 \
+  COMPRESSION_LEVEL=5 \
+  USE_JDK_DEFLATER=true \
+  USE_JDK_INFLATER=true \
   VALIDATION_STRINGENCY=SILENT \
   QUIET=true
 
@@ -208,8 +244,12 @@ python3 - \
   "$workdir/turbo-verbose-warning.txt" \
   "$workdir/picard-verbose-warning.txt" \
   "$workdir/turbo-verbose-max-output.txt" \
-  "$workdir/picard-verbose-max-output.txt" <<'PY'
+  "$workdir/picard-verbose-max-output.txt" \
+  "$workdir/turbo-runtime.txt" \
+  "$workdir/picard-runtime.txt" \
+  "$workdir" <<'PY'
 import sys
+from pathlib import Path
 
 (
     turbo_valid,
@@ -226,7 +266,11 @@ import sys
     picard_verbose_warning,
     turbo_verbose_max_output,
     picard_verbose_max_output,
+    turbo_runtime,
+    picard_runtime,
+    workdir,
 ) = sys.argv[1:]
+workdir = Path(workdir)
 
 def read(path):
     with open(path, encoding="utf-8") as handle:
@@ -246,5 +290,16 @@ if read(turbo_verbose_warning) != read(picard_verbose_warning):
     raise SystemExit("ValidateSamFile verbose warning output differs from Picard")
 if read(turbo_verbose_max_output) != read(picard_verbose_max_output):
     raise SystemExit("ValidateSamFile verbose MAX_OUTPUT differs from Picard")
-print("ValidateSamFile basic SUMMARY, VERBOSE, and MAX_OUTPUT output matches Picard")
+if read(turbo_runtime) != read(picard_runtime):
+    raise SystemExit("ValidateSamFile runtime summary differs from Picard")
+unexpected = [
+    "turbo-runtime.txt.md5",
+    "picard-runtime.txt.md5",
+    "turbo-runtime.txt.idx",
+    "picard-runtime.txt.idx",
+]
+present = [name for name in unexpected if (workdir / name).exists()]
+if present:
+    raise SystemExit(f"unexpected ValidateSamFile runtime sidecars: {present}")
+print("ValidateSamFile basic SUMMARY, VERBOSE, MAX_OUTPUT, and runtime output matches Picard")
 PY

@@ -354,6 +354,43 @@ fn cleansam_soft_clips_simple_trailing_reference_overhang() {
 }
 
 #[test]
+fn cleansam_writes_requested_bam_sidecars() {
+    let tempdir = tempfile::tempdir().expect("tempdir exists");
+    let input = tempdir.path().join("input.sam");
+    let output = tempdir.path().join("cleaned.bam");
+    fs::write(
+        &input,
+        concat!(
+            "@HD\tVN:1.6\tSO:coordinate\n",
+            "@SQ\tSN:chr1\tLN:10\n",
+            "mapped\t0\tchr1\t2\t60\t4M\t*\t0\t0\tACGT\tFFFF\n",
+            "overhang\t0\tchr1\t8\t60\t5M\t*\t0\t0\tACGTA\tFFFFF\n",
+            "unmapped\t4\t*\t0\t60\t*\t*\t0\t0\tNNNN\t!!!!\n",
+        ),
+    )
+    .expect("input SAM is written");
+
+    let mut cmd = Command::cargo_bin("picard").expect("binary exists");
+    cmd.args([
+        "CleanSam",
+        &format!("I={}", input.display()),
+        &format!("O={}", output.display()),
+        "CREATE_MD5_FILE=true",
+        "CREATE_INDEX=true",
+        "COMPRESSION_LEVEL=5",
+        "MAX_RECORDS_IN_RAM=500",
+        &format!("TMP_DIR={}", tempdir.path().display()),
+        "VERBOSITY=WARNING",
+    ])
+    .assert()
+    .success();
+
+    assert!(output.exists());
+    assert!(tempdir.path().join("cleaned.bam.md5").exists());
+    assert!(tempdir.path().join("cleaned.bai").exists());
+}
+
+#[test]
 fn sortsam_writes_requested_bam_sidecars() {
     let tempdir = tempfile::tempdir().expect("tempdir exists");
     let input = tempdir.path().join("input.sam");
@@ -377,6 +414,10 @@ fn sortsam_writes_requested_bam_sidecars() {
         "SORT_ORDER=coordinate",
         "CREATE_MD5_FILE=true",
         "CREATE_INDEX=true",
+        "COMPRESSION_LEVEL=5",
+        "MAX_RECORDS_IN_RAM=500",
+        &format!("TMP_DIR={}", tempdir.path().display()),
+        "VERBOSITY=WARNING",
     ])
     .assert()
     .success();
@@ -437,7 +478,6 @@ fn buildbamindex_writes_default_and_explicit_bai_outputs() {
         ),
     )
     .expect("input fixture is written");
-
     Command::cargo_bin("picard")
         .expect("binary exists")
         .args([
@@ -467,6 +507,49 @@ fn buildbamindex_writes_default_and_explicit_bai_outputs() {
         .assert()
         .success();
     assert!(explicit_bai.exists());
+}
+
+#[test]
+fn buildbamindex_accepts_create_md5_file_without_index_sidecar() {
+    let tempdir = tempfile::tempdir().expect("tempdir exists");
+    let input_sam = tempdir.path().join("input.sam");
+    let input_bam = tempdir.path().join("input.bam");
+    let explicit_bai = tempdir.path().join("explicit.bai");
+    fs::write(
+        &input_sam,
+        concat!(
+            "@HD\tVN:1.6\tSO:coordinate\n",
+            "@SQ\tSN:chr1\tLN:1000\n",
+            "read-a\t0\tchr1\t10\t60\t10M\t*\t0\t0\tAAAAAAAAAA\tFFFFFFFFFF\n",
+            "read-b\t0\tchr1\t50\t60\t10M\t*\t0\t0\tBBBBBBBBBB\tFFFFFFFFFF\n",
+        ),
+    )
+    .expect("input fixture is written");
+
+    Command::cargo_bin("picard")
+        .expect("binary exists")
+        .args([
+            "SortSam",
+            &format!("I={}", input_sam.display()),
+            &format!("O={}", input_bam.display()),
+            "SORT_ORDER=coordinate",
+        ])
+        .assert()
+        .success();
+
+    Command::cargo_bin("picard")
+        .expect("binary exists")
+        .args([
+            "BuildBamIndex",
+            &format!("I={}", input_bam.display()),
+            &format!("O={}", explicit_bai.display()),
+            "CREATE_MD5_FILE=true",
+        ])
+        .assert()
+        .success();
+
+    assert!(explicit_bai.exists());
+    assert!(!tempdir.path().join("explicit.bai.md5").exists());
 }
 
 #[test]
@@ -623,7 +706,7 @@ fn mergesamfiles_assume_sorted_uses_streaming_merge() {
         &format!("I={}", input_b.display()),
         &format!("O={}", output.display()),
         "SORT_ORDER=coordinate",
-        "ASSUME_SORTED=true",
+        "AS=true",
     ])
     .assert()
     .success();
@@ -753,6 +836,10 @@ fn mergesamfiles_writes_requested_bam_sidecars() {
         &format!("O={}", output.display()),
         "CREATE_MD5_FILE=true",
         "CREATE_INDEX=true",
+        "COMPRESSION_LEVEL=5",
+        "MAX_RECORDS_IN_RAM=500",
+        &format!("TMP_DIR={}", tempdir.path().display()),
+        "VERBOSITY=WARNING",
     ])
     .assert()
     .success();
@@ -965,6 +1052,50 @@ fn samtofastq_writes_md5_sidecar_when_requested() {
 }
 
 #[test]
+fn samtofastq_accepts_common_runtime_sidecar_options() {
+    let tempdir = tempfile::tempdir().expect("tempdir exists");
+    let input = tempdir.path().join("input.sam");
+    let fastq = tempdir.path().join("reads.fastq");
+    let reference = tempdir.path().join("ref.fa");
+    fs::write(
+        &input,
+        concat!(
+            "@HD\tVN:1.6\tSO:queryname\n",
+            "read-a\t4\t*\t0\t0\t*\t*\t0\t0\tACGT\tFFFF\n",
+        ),
+    )
+    .expect("input SAM is written");
+    fs::write(&reference, ">chr1\nACGTACGTACGT\n").expect("reference fixture is written");
+
+    Command::cargo_bin("picard")
+        .expect("binary exists")
+        .args([
+            "SamToFastq",
+            &format!("I={}", input.display()),
+            &format!("FASTQ={}", fastq.display()),
+            "CREATE_MD5_FILE=true",
+            "CREATE_INDEX=true",
+            "MAX_RECORDS_IN_RAM=1000",
+            &format!("TMP_DIR={}", tempdir.path().display()),
+            &format!("R={}", reference.display()),
+            "USE_JDK_DEFLATER=true",
+            "USE_JDK_INFLATER=true",
+            "VALIDATION_STRINGENCY=SILENT",
+            "QUIET=true",
+        ])
+        .assert()
+        .success();
+
+    assert_eq!(
+        fs::read_to_string(&fastq).expect("FASTQ output exists"),
+        "@read-a\nACGT\n+\nFFFF\n"
+    );
+    assert!(tempdir.path().join("reads.fastq.md5").exists());
+    assert!(!tempdir.path().join("reads.fastq.bai").exists());
+    assert!(!tempdir.path().join("reads.bai").exists());
+}
+
+#[test]
 fn samtofastq_rejects_paired_reads_without_second_output() {
     let tempdir = tempfile::tempdir().expect("tempdir exists");
     let input = tempdir.path().join("input.sam");
@@ -1107,6 +1238,41 @@ fn fastqtosam_writes_md5_sidecar_when_requested() {
 }
 
 #[test]
+fn fastqtosam_accepts_common_runtime_sidecar_options_for_sam_output() {
+    let tempdir = tempfile::tempdir().expect("tempdir exists");
+    let fastq = tempdir.path().join("reads.fastq");
+    let output = tempdir.path().join("unmapped.sam");
+    let reference = tempdir.path().join("ref.fa");
+    fs::write(&fastq, "@read1\nACGT\n+\nFFFF\n").expect("FASTQ fixture is written");
+    fs::write(&reference, ">chr1\nACGTACGTACGT\n").expect("reference fixture is written");
+
+    Command::cargo_bin("picard")
+        .expect("binary exists")
+        .args([
+            "FastqToSam",
+            &format!("FASTQ={}", fastq.display()),
+            &format!("OUTPUT={}", output.display()),
+            "SAMPLE_NAME=sample",
+            "READ_GROUP_NAME=rg1",
+            "CREATE_MD5_FILE=true",
+            "CREATE_INDEX=true",
+            "MAX_RECORDS_IN_RAM=1000",
+            &format!("TMP_DIR={}", tempdir.path().display()),
+            &format!("R={}", reference.display()),
+            "USE_JDK_DEFLATER=true",
+            "USE_JDK_INFLATER=true",
+            "VALIDATION_STRINGENCY=SILENT",
+            "QUIET=true",
+        ])
+        .assert()
+        .success();
+
+    assert!(tempdir.path().join("unmapped.sam.md5").exists());
+    assert!(!tempdir.path().join("unmapped.sam.bai").exists());
+    assert!(!tempdir.path().join("unmapped.bai").exists());
+}
+
+#[test]
 fn fastqtosam_writes_unsorted_header_when_requested() {
     let tempdir = tempfile::tempdir().expect("tempdir exists");
     let fastq = tempdir.path().join("reads.fastq");
@@ -1227,6 +1393,94 @@ fn addorreplacereadgroups_rewrites_header_and_record_tags() {
 }
 
 #[test]
+fn addorreplacereadgroups_writes_flow_order_and_key_sequence() {
+    let tempdir = tempfile::tempdir().expect("tempdir exists");
+    let input = tempdir.path().join("input.sam");
+    let output = tempdir.path().join("output.sam");
+    fs::write(
+        &input,
+        concat!(
+            "@HD\tVN:1.6\tSO:coordinate\n",
+            "@SQ\tSN:chr1\tLN:1000\n",
+            "read-a\t0\tchr1\t10\t60\t4M\t*\t0\t0\tACGT\tFFFF\n",
+        ),
+    )
+    .expect("input fixture is written");
+
+    let mut cmd = Command::cargo_bin("picard").expect("binary exists");
+    cmd.args([
+        "AddOrReplaceReadGroups",
+        &format!("I={}", input.display()),
+        &format!("O={}", output.display()),
+        "RGID=new",
+        "RGLB=library-a",
+        "RGPL=ILLUMINA",
+        "RGPU=unit-a",
+        "RGSM=sample-a",
+        "RGKS=ACGT",
+        "RGFO=TACG",
+    ])
+    .assert()
+    .success();
+
+    let output_sam = fs::read_to_string(&output).expect("output SAM exists");
+    assert!(output_sam.contains(
+        "@RG\tID:new\tLB:library-a\tPL:ILLUMINA\tSM:sample-a\tPU:unit-a\tKS:ACGT\tFO:TACG\n"
+    ));
+    assert!(output_sam.contains("read-a\t0\tchr1\t10\t60\t4M\t*\t0\t0\tACGT\tFFFF\tRG:Z:new"));
+}
+
+#[test]
+fn addorreplacereadgroups_writes_md5_sidecar_but_no_index_for_sam_output() {
+    let tempdir = tempfile::tempdir().expect("tempdir exists");
+    let input = tempdir.path().join("input.sam");
+    let output = tempdir.path().join("output.sam");
+    let reference = tempdir.path().join("ref.fa");
+    fs::write(
+        &input,
+        concat!(
+            "@HD\tVN:1.6\tSO:coordinate\n",
+            "@SQ\tSN:chr1\tLN:1000\n",
+            "read-a\t0\tchr1\t10\t60\t4M\t*\t0\t0\tACGT\tFFFF\n",
+        ),
+    )
+    .expect("input fixture is written");
+    fs::write(&reference, ">chr1\nACGTACGTACGT\n").expect("reference fixture is written");
+
+    Command::cargo_bin("picard")
+        .expect("binary exists")
+        .args([
+            "AddOrReplaceReadGroups",
+            &format!("I={}", input.display()),
+            &format!("O={}", output.display()),
+            "RGID=new",
+            "RGLB=library-a",
+            "RGPL=ILLUMINA",
+            "RGPU=unit-a",
+            "RGSM=sample-a",
+            "CREATE_MD5_FILE=true",
+            "CREATE_INDEX=true",
+            "MAX_RECORDS_IN_RAM=1000",
+            &format!("TMP_DIR={}", tempdir.path().display()),
+            &format!("R={}", reference.display()),
+            "USE_JDK_DEFLATER=true",
+            "USE_JDK_INFLATER=true",
+            "VALIDATION_STRINGENCY=SILENT",
+            "QUIET=true",
+        ])
+        .assert()
+        .success();
+
+    assert!(output.exists());
+    let md5 =
+        fs::read_to_string(format!("{}.md5", output.display())).expect("SAM md5 sidecar exists");
+    assert_eq!(md5.len(), 32);
+    assert!(md5.chars().all(|char| char.is_ascii_hexdigit()));
+    assert!(!tempdir.path().join("output.sam.bai").exists());
+    assert!(!tempdir.path().join("output.bai").exists());
+}
+
+#[test]
 fn collectalignmentsummarymetrics_writes_unpaired_metrics() {
     let tempdir = tempfile::tempdir().expect("tempdir exists");
     let input = tempdir.path().join("input.sam");
@@ -1265,6 +1519,112 @@ fn collectalignmentsummarymetrics_writes_unpaired_metrics() {
     );
     assert!(metrics.contains("0\t0\t1\n"));
     assert!(metrics.contains("4\t3\t2\n"));
+}
+
+#[test]
+fn collectalignmentsummarymetrics_reports_cigar_and_chimera_metrics() {
+    let tempdir = tempfile::tempdir().expect("tempdir exists");
+    let input = tempdir.path().join("input.sam");
+    let output = tempdir.path().join("alignment_metrics.txt");
+    fs::write(
+        &input,
+        concat!(
+            "@HD\tVN:1.6\tSO:coordinate\n",
+            "@SQ\tSN:chr1\tLN:1000000\n",
+            "chimera\t97\tchr1\t1\t60\t4M\t=\t200000\t200000\tACGT\tFFFF\n",
+            "softclip\t99\tchr1\t20\t60\t3M1S\t=\t100\t100\tACGT\tFFFF\n",
+            "chimera\t145\tchr1\t200000\t60\t3M1D1M\t=\t1\t-200000\tACGT\tFFFF\n",
+            "softclip\t147\tchr1\t100\t60\t4M\t=\t20\t-100\tACGT\tFFFF\n",
+        ),
+    )
+    .expect("input fixture is written");
+
+    Command::cargo_bin("picard")
+        .expect("binary exists")
+        .args([
+            "CollectAlignmentSummaryMetrics",
+            &format!("I={}", input.display()),
+            &format!("O={}", output.display()),
+            "VALIDATION_STRINGENCY=SILENT",
+            "QUIET=true",
+        ])
+        .assert()
+        .success();
+
+    let metrics = fs::read_to_string(&output).expect("metrics output exists");
+    let first = metrics
+        .lines()
+        .find(|line| line.starts_with("FIRST_OF_PAIR\t"))
+        .expect("first-of-pair row exists")
+        .split('\t')
+        .collect::<Vec<_>>();
+    let second = metrics
+        .lines()
+        .find(|line| line.starts_with("SECOND_OF_PAIR\t"))
+        .expect("second-of-pair row exists")
+        .split('\t')
+        .collect::<Vec<_>>();
+    let pair = metrics
+        .lines()
+        .find(|line| line.starts_with("PAIR\t"))
+        .expect("pair row exists")
+        .split('\t')
+        .collect::<Vec<_>>();
+
+    assert_eq!(first[28], "0.5");
+    assert_eq!(first[30], "0.125");
+    assert_eq!(first[32], "1");
+    assert_eq!(second[14], "0.125");
+    assert_eq!(second[28], "0.5");
+    assert_eq!(pair[14], "0.066667");
+    assert_eq!(pair[28], "0.5");
+    assert_eq!(pair[30], "0.0625");
+    assert!(
+        metrics.contains("READ_LENGTH\tPAIRED_TOTAL_LENGTH_COUNT\tPAIRED_ALIGNED_LENGTH_COUNT\n")
+    );
+}
+
+#[test]
+fn collectalignmentsummarymetrics_ignores_secondary_and_supplementary_records() {
+    let tempdir = tempfile::tempdir().expect("tempdir exists");
+    let input = tempdir.path().join("input.sam");
+    let output = tempdir.path().join("alignment_metrics.txt");
+    fs::write(
+        &input,
+        concat!(
+            "@HD\tVN:1.6\tSO:coordinate\n",
+            "@SQ\tSN:chr1\tLN:1000\n",
+            "primary\t99\tchr1\t1\t60\t4M\t=\t20\t20\tACGT\tFFFF\n",
+            "primary\t147\tchr1\t20\t60\t4M\t=\t1\t-20\tTGCA\tFFFF\n",
+            "secondary\t355\tchr1\t30\t60\t4M\t=\t50\t20\tAAAA\tFFFF\n",
+            "supplementary\t2147\tchr1\t50\t60\t4M\t=\t30\t-20\tCCCC\tFFFF\n",
+        ),
+    )
+    .expect("input fixture is written");
+
+    Command::cargo_bin("picard")
+        .expect("binary exists")
+        .args([
+            "CollectAlignmentSummaryMetrics",
+            &format!("I={}", input.display()),
+            &format!("O={}", output.display()),
+            "VALIDATION_STRINGENCY=SILENT",
+            "QUIET=true",
+        ])
+        .assert()
+        .success();
+
+    let metrics = fs::read_to_string(&output).expect("metrics output exists");
+    let pair = metrics
+        .lines()
+        .find(|line| line.starts_with("PAIR\t"))
+        .expect("pair row exists")
+        .split('\t')
+        .collect::<Vec<_>>();
+
+    assert_eq!(pair[1], "2");
+    assert_eq!(pair[2], "2");
+    assert!(metrics.contains("4\t2\t2\n"));
 }
 
 #[test]
@@ -1331,6 +1691,45 @@ fn collectalignmentsummarymetrics_accepts_common_temp_options() {
 
     let metrics = fs::read_to_string(&output).expect("metrics output exists");
     assert!(metrics.contains("CATEGORY\tTOTAL_READS"));
+}
+
+#[test]
+fn collectalignmentsummarymetrics_honors_stop_after_and_assume_sorted_alias() {
+    let tempdir = tempfile::tempdir().expect("tempdir exists");
+    let input = tempdir.path().join("input.sam");
+    let output = tempdir.path().join("alignment_metrics.txt");
+    fs::write(
+        &input,
+        concat!(
+            "@HD\tVN:1.6\tSO:coordinate\n",
+            "@SQ\tSN:chr1\tLN:1000\n",
+            "read-a\t0\tchr1\t10\t60\t4M\t*\t0\t0\tACGT\tFFFF\n",
+            "read-b\t4\t*\t0\t0\t*\t*\t0\t0\tNNNN\t!!!!\n",
+        ),
+    )
+    .expect("input fixture is written");
+
+    Command::cargo_bin("picard")
+        .expect("binary exists")
+        .args([
+            "CollectAlignmentSummaryMetrics",
+            &format!("I={}", input.display()),
+            &format!("O={}", output.display()),
+            "STOP_AFTER=1",
+            "AS=true",
+            "VALIDATION_STRINGENCY=SILENT",
+            "QUIET=true",
+        ])
+        .assert()
+        .success();
+
+    let metrics = fs::read_to_string(&output).expect("metrics output exists");
+    assert!(metrics.contains("UNPAIRED\t1\t1\t1\t0\t1\t1"));
+    assert!(metrics.contains("\t4\t?\t4\t0\t4\t4\t4\t0\t0"));
+    assert!(metrics.contains(
+        "READ_LENGTH\tUNPAIRED_TOTAL_LENGTH_COUNT\tUNPAIRED_ALIGNED_LENGTH_COUNT\n4\t1\t1\n"
+    ));
+    assert!(!metrics.contains("\n0\t0\t1\n"));
 }
 
 #[test]
@@ -1656,6 +2055,45 @@ fn collectbasedistributionbycycle_accepts_common_temp_options() {
 }
 
 #[test]
+fn collectbasedistributionbycycle_honors_stop_after_and_assume_sorted_alias() {
+    let tempdir = tempfile::tempdir().expect("tempdir exists");
+    let input = tempdir.path().join("input.sam");
+    let output = tempdir.path().join("base_distribution.txt");
+    let chart = tempdir.path().join("base_distribution.pdf");
+    fs::write(
+        &input,
+        concat!(
+            "@HD\tVN:1.6\tSO:coordinate\n",
+            "@SQ\tSN:chr1\tLN:100\n",
+            "read-a\t0\tchr1\t1\t60\t4M\t*\t0\t0\tACGT\tFFFF\n",
+            "read-b\t0\tchr1\t2\t60\t4M\t*\t0\t0\tAAAA\tFFFF\n",
+        ),
+    )
+    .expect("input fixture is written");
+
+    Command::cargo_bin("picard")
+        .expect("binary exists")
+        .args([
+            "CollectBaseDistributionByCycle",
+            &format!("I={}", input.display()),
+            &format!("O={}", output.display()),
+            &format!("CHART={}", chart.display()),
+            "STOP_AFTER=1",
+            "AS=true",
+            "VALIDATION_STRINGENCY=SILENT",
+            "QUIET=true",
+        ])
+        .assert()
+        .success();
+
+    let metrics = fs::read_to_string(&output).expect("metrics output exists");
+    assert!(metrics.contains("1\t1\t100\t0\t0\t0\t0\n"));
+    assert!(metrics.contains("1\t2\t0\t100\t0\t0\t0\n"));
+    assert!(!metrics.contains("50.000000"));
+    assert!(chart.exists());
+}
+
+#[test]
 fn collectgcbiasmetrics_writes_detail_summary_and_chart() {
     let tempdir = tempfile::tempdir().expect("tempdir exists");
     let input = tempdir.path().join("input.sam");
@@ -1713,6 +2151,63 @@ fn collectgcbiasmetrics_writes_detail_summary_and_chart() {
 }
 
 #[test]
+fn collectgcbiasmetrics_honors_stop_after_and_assume_sorted_alias() {
+    let tempdir = tempfile::tempdir().expect("tempdir exists");
+    let input = tempdir.path().join("input.sam");
+    let reference = tempdir.path().join("ref.fa");
+    let detail = tempdir.path().join("gc_bias.detail.txt");
+    let summary = tempdir.path().join("gc_bias.summary.txt");
+    let chart = tempdir.path().join("gc_bias.pdf");
+    fs::write(
+        &reference,
+        concat!(
+            ">low\n",
+            "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\n",
+            ">high\n",
+            "CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC\n",
+        ),
+    )
+    .expect("reference is written");
+    fs::write(
+        &input,
+        concat!(
+            "@HD\tVN:1.6\tSO:coordinate\n",
+            "@SQ\tSN:low\tLN:40\n",
+            "@SQ\tSN:high\tLN:40\n",
+            "low1\t0\tlow\t1\t60\t20M\t*\t0\t0\tAAAAAAAAAAAAAAAAAAAA\tFFFFFFFFFFFFFFFFFFFF\n",
+            "high1\t0\thigh\t1\t60\t20M\t*\t0\t0\tCCCCCCCCCCCCCCCCCCCC\tFFFFFFFFFFFFFFFFFFFF\n",
+        ),
+    )
+    .expect("input fixture is written");
+
+    Command::cargo_bin("picard")
+        .expect("binary exists")
+        .args([
+            "CollectGcBiasMetrics",
+            &format!("I={}", input.display()),
+            &format!("O={}", detail.display()),
+            &format!("S={}", summary.display()),
+            &format!("CHART={}", chart.display()),
+            &format!("R={}", reference.display()),
+            "SCAN_WINDOW_SIZE=20",
+            "MINIMUM_GENOME_FRACTION=0",
+            "STOP_AFTER=1",
+            "AS=true",
+            "VALIDATION_STRINGENCY=SILENT",
+            "QUIET=true",
+        ])
+        .assert()
+        .success();
+
+    let detail_text = fs::read_to_string(&detail).expect("detail metrics exist");
+    assert!(detail_text.contains("All Reads\tALL\t0\t19\t1\t0\t2\t2\t\t\t\n"));
+    assert!(detail_text.contains("All Reads\tALL\t100\t19\t0\t0\t0\t0\t\t\t\n"));
+    let summary_text = fs::read_to_string(&summary).expect("summary metrics exist");
+    assert!(summary_text.contains("All Reads\tALL\t20\t1\t1\t0\t50\t2\t0\t0\t0\t0\t\t\t\n"));
+    assert!(chart.metadata().expect("chart exists").len() > 0);
+}
+
+#[test]
 fn collectwgsmetrics_writes_coverage_metrics() {
     let tempdir = tempfile::tempdir().expect("tempdir exists");
     let input = tempdir.path().join("input.sam");
@@ -1749,7 +2244,7 @@ fn collectwgsmetrics_writes_coverage_metrics() {
     let metrics = fs::read_to_string(&output).expect("metrics output exists");
     assert!(metrics.contains("## METRICS CLASS\tpicard.analysis.WgsMetrics\n"));
     assert!(metrics.contains(
-        "12\t1\t0.603023\t1\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0.833333\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\t1\t?\t?\t0.416667\t3\n"
+        "12\t1\t0.603023\t1\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0.833333\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\t1\t?\t?\t0.458333\t3\n"
     ));
     assert!(metrics.contains("coverage\thigh_quality_coverage_count\n"));
     assert!(metrics.contains("0\t2\n"));
@@ -1799,6 +2294,48 @@ fn collectwgsmetrics_accepts_common_temp_options() {
 }
 
 #[test]
+fn collectwgsmetrics_honors_stop_after() {
+    let tempdir = tempfile::tempdir().expect("tempdir exists");
+    let input = tempdir.path().join("input.sam");
+    let reference = tempdir.path().join("ref.fa");
+    let output = tempdir.path().join("wgs_metrics.txt");
+    fs::write(&reference, ">chr1\nACGTACGTACGT\n").expect("reference is written");
+    fs::write(
+        &input,
+        concat!(
+            "@HD\tVN:1.6\tSO:coordinate\n",
+            "@SQ\tSN:chr1\tLN:12\n",
+            "read-a\t0\tchr1\t1\t60\t4M\t*\t0\t0\tACGT\tFFFF\n",
+            "read-b\t0\tchr1\t3\t60\t4M\t*\t0\t0\tGTAC\tFFFF\n",
+            "read-c\t0\tchr1\t9\t60\t4M\t*\t0\t0\tACGT\tFFFF\n",
+        ),
+    )
+    .expect("input fixture is written");
+
+    Command::cargo_bin("picard")
+        .expect("binary exists")
+        .args([
+            "CollectWgsMetrics",
+            &format!("I={}", input.display()),
+            &format!("O={}", output.display()),
+            &format!("R={}", reference.display()),
+            "COUNT_UNPAIRED=true",
+            "SAMPLE_SIZE=1",
+            "STOP_AFTER=1",
+            "VALIDATION_STRINGENCY=SILENT",
+            "QUIET=true",
+        ])
+        .assert()
+        .success();
+
+    let metrics = fs::read_to_string(&output).expect("metrics output exists");
+    assert!(metrics.contains("1\t1\t?\t0\t0"));
+    assert!(metrics.contains("coverage\thigh_quality_coverage_count\n"));
+    assert!(metrics.contains("0\t0\n"));
+    assert!(metrics.contains("1\t1\n"));
+}
+
+#[test]
 fn collectwgsmetrics_honors_interval_list_territory() {
     let tempdir = tempfile::tempdir().expect("tempdir exists");
     let input = tempdir.path().join("input.sam");
@@ -1845,10 +2382,64 @@ fn collectwgsmetrics_honors_interval_list_territory() {
 
     let metrics = fs::read_to_string(&output).expect("metrics output exists");
     assert!(metrics.contains(
-        "4\t1.5\t0.57735\t1.5\t0.5\t0\t0\t0\t0\t0\t0\t0\t0\t1\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\t1.5\t1.5\t1.5\t0.5\t3\n"
+        "4\t1.5\t0.57735\t1.5\t0.5\t0\t0\t0\t0\t0\t0\t0\t0\t1\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\t1.5\t1.5\t1.5\t0.625\t4\n"
     ));
     assert!(metrics.contains("0\t0\n"));
     assert!(metrics.contains("1\t2\n"));
+    assert!(metrics.contains("2\t2\n"));
+}
+
+#[test]
+fn collectwgsmetrics_applies_stop_after_to_interval_territory() {
+    let tempdir = tempfile::tempdir().expect("tempdir exists");
+    let input = tempdir.path().join("input.sam");
+    let reference = tempdir.path().join("ref.fa");
+    let intervals = tempdir.path().join("targets.interval_list");
+    let output = tempdir.path().join("wgs_metrics.txt");
+    fs::write(&reference, ">chr1\nACGTACGTACGT\n").expect("reference is written");
+    fs::write(
+        &input,
+        concat!(
+            "@HD\tVN:1.6\tSO:coordinate\n",
+            "@SQ\tSN:chr1\tLN:12\n",
+            "read-a\t0\tchr1\t1\t60\t4M\t*\t0\t0\tACGT\tFFFF\n",
+            "read-b\t0\tchr1\t3\t60\t4M\t*\t0\t0\tGTAC\tFFFF\n",
+            "read-c\t0\tchr1\t9\t60\t4M\t*\t0\t0\tACGT\tFFFF\n",
+        ),
+    )
+    .expect("input fixture is written");
+    fs::write(
+        &intervals,
+        concat!(
+            "@HD\tVN:1.6\tSO:coordinate\n",
+            "@SQ\tSN:chr1\tLN:12\n",
+            "chr1\t3\t6\t+\ttarget\n",
+        ),
+    )
+    .expect("interval fixture is written");
+
+    Command::cargo_bin("picard")
+        .expect("binary exists")
+        .args([
+            "CollectWgsMetrics",
+            &format!("I={}", input.display()),
+            &format!("O={}", output.display()),
+            &format!("R={}", reference.display()),
+            &format!("INTERVALS={}", intervals.display()),
+            "COUNT_UNPAIRED=true",
+            "SAMPLE_SIZE=1",
+            "STOP_AFTER=2",
+            "VALIDATION_STRINGENCY=SILENT",
+            "QUIET=true",
+        ])
+        .assert()
+        .success();
+
+    let metrics = fs::read_to_string(&output).expect("metrics output exists");
+    assert!(metrics.contains("2\t2\t0\t2\t0"));
+    assert!(metrics.contains("coverage\thigh_quality_coverage_count\n"));
+    assert!(metrics.contains("0\t0\n"));
+    assert!(metrics.contains("1\t0\n"));
     assert!(metrics.contains("2\t2\n"));
 }
 
@@ -2048,6 +2639,48 @@ fn collectinsertsizemetrics_accepts_common_temp_options() {
 
     let metrics = fs::read_to_string(&output).expect("metrics output exists");
     assert!(metrics.contains("insert_size\tAll_Reads.fr_count\n24\t1\n34\t1\n"));
+}
+
+#[test]
+fn collectinsertsizemetrics_honors_stop_after_with_documented_runtime_options() {
+    let tempdir = tempfile::tempdir().expect("tempdir exists");
+    let input = tempdir.path().join("input.sam");
+    let output = tempdir.path().join("insert_size_metrics.txt");
+    let histogram = tempdir.path().join("insert_size_histogram.pdf");
+    fs::write(
+        &input,
+        concat!(
+            "@HD\tVN:1.6\tSO:coordinate\n",
+            "@SQ\tSN:chr1\tLN:1000\n",
+            "pair1\t99\tchr1\t10\t60\t4M\t=\t30\t24\tACGT\tFFFF\n",
+            "pair1\t147\tchr1\t30\t60\t4M\t=\t10\t-24\tTGCA\tFFFF\n",
+            "pair2\t99\tchr1\t100\t60\t4M\t=\t130\t34\tAAAA\tFFFF\n",
+            "pair2\t147\tchr1\t130\t60\t4M\t=\t100\t-34\tTTTT\tFFFF\n",
+        ),
+    )
+    .expect("input fixture is written");
+
+    Command::cargo_bin("picard")
+        .expect("binary exists")
+        .args([
+            "CollectInsertSizeMetrics",
+            &format!("I={}", input.display()),
+            &format!("O={}", output.display()),
+            &format!("H={}", histogram.display()),
+            "STOP_AFTER=2",
+            "AS=true",
+            "DEVIATIONS=5",
+            "VALIDATION_STRINGENCY=SILENT",
+            "QUIET=true",
+        ])
+        .assert()
+        .success();
+
+    let metrics = fs::read_to_string(&output).expect("metrics output exists");
+    assert!(metrics.contains("24\t24\t0\t24\t24\t24\t?\t1\tFR"));
+    assert!(metrics.contains("insert_size\tAll_Reads.fr_count\n24\t1\n"));
+    assert!(!metrics.contains("34\t1\n"));
+    assert!(histogram.metadata().expect("histogram exists").len() > 0);
 }
 
 #[test]
@@ -2324,6 +2957,47 @@ fn collectmultiplemetrics_appends_file_extension_to_metric_outputs() {
 
     assert!(output.with_extension("quality_yield_metrics.txt").exists());
     assert!(!output.with_extension("quality_yield_metrics").exists());
+}
+
+#[test]
+fn collectmultiplemetrics_accepts_common_runtime_sidecar_options() {
+    let tempdir = tempfile::tempdir().expect("tempdir exists");
+    let input = tempdir.path().join("input.sam");
+    let output = tempdir.path().join("multiple_runtime");
+    fs::write(
+        &input,
+        concat!(
+            "@HD\tVN:1.6\tSO:coordinate\n",
+            "@SQ\tSN:chr1\tLN:1000\n",
+            "read-a\t0\tchr1\t10\t60\t4M\t*\t0\t0\tACGT\tFFFF\n",
+        ),
+    )
+    .expect("input fixture is written");
+
+    Command::cargo_bin("picard")
+        .expect("binary exists")
+        .args([
+            "CollectMultipleMetrics",
+            &format!("I={}", input.display()),
+            &format!("O={}", output.display()),
+            "PROGRAM=null",
+            "PROGRAM=CollectQualityYieldMetrics",
+            "CREATE_INDEX=true",
+            "CREATE_MD5_FILE=true",
+            &format!("TMP_DIR={}", tempdir.path().display()),
+            "MAX_RECORDS_IN_RAM=500",
+            "COMPRESSION_LEVEL=5",
+            "USE_JDK_DEFLATER=true",
+            "USE_JDK_INFLATER=true",
+            "VALIDATION_STRINGENCY=SILENT",
+            "QUIET=true",
+        ])
+        .assert()
+        .success();
+
+    assert!(output.with_extension("quality_yield_metrics").exists());
+    assert!(!output.with_extension("quality_yield_metrics.md5").exists());
+    assert!(!output.with_extension("quality_yield_metrics.idx").exists());
 }
 
 #[test]
@@ -2758,6 +3432,43 @@ fn fixmateinformation_updates_pair_fields_and_tags() {
 }
 
 #[test]
+fn fixmateinformation_honors_mate_cigar_short_alias() {
+    let tempdir = tempfile::tempdir().expect("tempdir exists");
+    let input = tempdir.path().join("input.sam");
+    let output = tempdir.path().join("fixed.sam");
+    fs::write(
+        &input,
+        concat!(
+            "@HD\tVN:1.6\tSO:queryname\n",
+            "@SQ\tSN:chr1\tLN:1000\n",
+            "pair1\t99\tchr1\t10\t60\t4M\t*\t0\t0\tACGT\tFFFF\tMC:Z:stale\n",
+            "pair1\t147\tchr1\t30\t60\t4M\t*\t0\t0\tTGCA\tFFFF\tMC:Z:stale\n",
+        ),
+    )
+    .expect("input fixture is written");
+
+    Command::cargo_bin("picard")
+        .expect("binary exists")
+        .args([
+            "FixMateInformation",
+            &format!("I={}", input.display()),
+            &format!("O={}", output.display()),
+            "AS=true",
+            "SORT_ORDER=queryname",
+            "MC=false",
+            "VALIDATION_STRINGENCY=SILENT",
+            "QUIET=true",
+        ])
+        .assert()
+        .success();
+
+    let fixed = fs::read_to_string(&output).expect("fixed SAM exists");
+    assert!(fixed.contains("pair1\t99\tchr1\t10\t60\t4M\t=\t30\t24\tACGT\tFFFF\tMQ:i:60\n"));
+    assert!(fixed.contains("pair1\t147\tchr1\t30\t60\t4M\t=\t10\t-24\tTGCA\tFFFF\tMQ:i:60\n"));
+    assert!(!fixed.contains("MC:Z:"));
+}
+
+#[test]
 fn fixmateinformation_accepts_common_temp_options() {
     let tempdir = tempfile::tempdir().expect("tempdir exists");
     let input = tempdir.path().join("input.sam");
@@ -3097,6 +3808,49 @@ fn intervallisttools_can_keep_abutting_intervals_separate() {
 }
 
 #[test]
+fn intervallisttools_applies_positive_padding_and_clamps_to_dictionary() {
+    let tempdir = tempfile::tempdir().expect("tempdir exists");
+    let input = tempdir.path().join("input.interval_list");
+    let output = tempdir.path().join("padded.interval_list");
+    fs::write(
+        &input,
+        concat!(
+            "@HD\tVN:1.6\tSO:coordinate\n",
+            "@SQ\tSN:chr1\tLN:100\n",
+            "chr1\t3\t5\t+\tnear-start\n",
+            "chr1\t95\t98\t+\tnear-end\n",
+        ),
+    )
+    .expect("interval list is written");
+
+    Command::cargo_bin("picard")
+        .expect("binary exists")
+        .args([
+            "IntervalListTools",
+            &format!("I={}", input.display()),
+            &format!("O={}", output.display()),
+            "ACTION=CONCAT",
+            "SORT=true",
+            "UNIQUE=false",
+            "PADDING=10",
+            "VALIDATION_STRINGENCY=SILENT",
+            "QUIET=true",
+        ])
+        .assert()
+        .success();
+
+    assert_eq!(
+        fs::read_to_string(output).expect("interval output exists"),
+        concat!(
+            "@HD\tVN:1.6\tSO:coordinate\n",
+            "@SQ\tSN:chr1\tLN:100\n",
+            "chr1\t1\t15\t+\tnear-start\n",
+            "chr1\t85\t100\t+\tnear-end\n",
+        )
+    );
+}
+
+#[test]
 fn revertsam_restores_original_qualities_and_unmaps_records() {
     let tempdir = tempfile::tempdir().expect("tempdir exists");
     let input = tempdir.path().join("input.sam");
@@ -3275,6 +4029,11 @@ fn revertsam_writes_md5_sidecar_when_requested() {
             &format!("I={}", input.display()),
             &format!("O={}", output.display()),
             "CREATE_MD5_FILE=true",
+            "COMPRESSION_LEVEL=5",
+            &format!("TMP_DIR={}", tempdir.path().display()),
+            "MAX_RECORDS_IN_RAM=500",
+            "USE_JDK_DEFLATER=true",
+            "USE_JDK_INFLATER=true",
             "VALIDATION_STRINGENCY=SILENT",
             "QUIET=true",
         ])
@@ -3590,6 +4349,48 @@ fn setnmmdanduqtags_set_only_uq_preserves_existing_nm_md() {
 }
 
 #[test]
+fn setnmmdanduqtags_writes_md5_sidecar_but_no_index_for_sam_output() {
+    let tempdir = tempfile::tempdir().expect("tempdir exists");
+    let reference = tempdir.path().join("ref.fa");
+    let input = tempdir.path().join("input.sam");
+    let output = tempdir.path().join("tagged.sam");
+    fs::write(&reference, ">chr1\nACGTACGTACGT\n").expect("reference is written");
+    fs::write(
+        &input,
+        concat!(
+            "@HD\tVN:1.6\tSO:coordinate\n",
+            "@SQ\tSN:chr1\tLN:12\n",
+            "read1\t0\tchr1\t1\t60\t4M\t*\t0\t0\tACGA\tFFFF\n",
+        ),
+    )
+    .expect("input fixture is written");
+
+    Command::cargo_bin("picard")
+        .expect("binary exists")
+        .args([
+            "SetNmMdAndUqTags",
+            &format!("I={}", input.display()),
+            &format!("O={}", output.display()),
+            &format!("R={}", reference.display()),
+            "CREATE_MD5_FILE=true",
+            "CREATE_INDEX=true",
+            &format!("TMP_DIR={}", tempdir.path().display()),
+            "MAX_RECORDS_IN_RAM=500",
+            "USE_JDK_DEFLATER=true",
+            "USE_JDK_INFLATER=true",
+            "VALIDATION_STRINGENCY=SILENT",
+            "QUIET=true",
+        ])
+        .assert()
+        .success();
+
+    assert!(output.exists());
+    assert!(tempdir.path().join("tagged.sam.md5").exists());
+    assert!(!tempdir.path().join("tagged.sam.bai").exists());
+    assert!(!tempdir.path().join("tagged.sam.idx").exists());
+}
+
+#[test]
 fn validatesamfile_writes_summary_for_valid_and_warning_inputs() {
     let tempdir = tempfile::tempdir().expect("tempdir exists");
     let valid = tempdir.path().join("valid.sam");
@@ -3712,6 +4513,53 @@ fn validatesamfile_accepts_valid_adjacent_paired_records() {
         .assert()
         .success()
         .stdout("No errors found\n");
+}
+
+#[test]
+fn validatesamfile_accepts_common_runtime_sidecar_options_without_sidecars() {
+    let tempdir = tempfile::tempdir().expect("tempdir exists");
+    let valid = tempdir.path().join("valid.sam");
+    let reference = tempdir.path().join("ref.fa");
+    let output = tempdir.path().join("summary.txt");
+    fs::write(&reference, ">chr1\nACGTACGTACGT\n").expect("reference is written");
+    fs::write(
+        &valid,
+        concat!(
+            "@HD\tVN:1.6\tSO:coordinate\n",
+            "@SQ\tSN:chr1\tLN:100\n",
+            "@RG\tID:rg1\tSM:sample\tPL:ILLUMINA\n",
+            "read1\t0\tchr1\t1\t60\t4M\t*\t0\t0\tACGT\tFFFF\tRG:Z:rg1\tNM:i:0\n",
+        ),
+    )
+    .expect("valid fixture is written");
+
+    Command::cargo_bin("picard")
+        .expect("binary exists")
+        .args([
+            "ValidateSamFile",
+            &format!("I={}", valid.display()),
+            &format!("O={}", output.display()),
+            "MODE=SUMMARY",
+            &format!("R={}", reference.display()),
+            "CREATE_INDEX=true",
+            "CREATE_MD5_FILE=true",
+            &format!("TMP_DIR={}", tempdir.path().display()),
+            "MAX_RECORDS_IN_RAM=500",
+            "COMPRESSION_LEVEL=5",
+            "USE_JDK_DEFLATER=true",
+            "USE_JDK_INFLATER=true",
+            "VALIDATION_STRINGENCY=SILENT",
+            "QUIET=true",
+        ])
+        .assert()
+        .success();
+
+    assert_eq!(
+        fs::read_to_string(&output).expect("summary exists"),
+        "No errors found\n"
+    );
+    assert!(!tempdir.path().join("summary.txt.md5").exists());
+    assert!(!tempdir.path().join("summary.txt.idx").exists());
 }
 
 #[test]
@@ -3845,6 +4693,65 @@ fn liftovervcf_lifts_positive_single_block_chain_and_writes_rejects() {
     assert!(rejected.contains(
         "chr1\t11\t.\tG\tT\t.\tMismatchedRefAllele\tAttemptedAlleles=G*->T;AttemptedLocus=chr1:11-11\n"
     ));
+}
+
+#[test]
+fn liftovervcf_writes_index_for_lifted_vcf_when_requested() {
+    let tempdir = tempfile::tempdir().expect("tempdir exists");
+    let input = tempdir.path().join("input.vcf");
+    let output = tempdir.path().join("lifted.vcf");
+    let reject = tempdir.path().join("reject.vcf");
+    let reference = tempdir.path().join("ref.fa");
+    let dictionary = tempdir.path().join("ref.dict");
+    let chain = tempdir.path().join("identity.chain");
+    fs::write(
+        &input,
+        concat!(
+            "##fileformat=VCFv4.2\n",
+            "##contig=<ID=chr1,length=100>\n",
+            "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\n",
+            "chr1\t10\t.\tA\tC\t.\tPASS\t.\n",
+            "chr1\t11\t.\tG\tT\t.\tPASS\t.\n",
+        ),
+    )
+    .expect("input VCF is written");
+    fs::write(
+        &reference,
+        ">chr1\nAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\n",
+    )
+    .expect("reference is written");
+    fs::write(&dictionary, "@HD\tVN:1.6\n@SQ\tSN:chr1\tLN:100\n").expect("dict is written");
+    fs::write(
+        &chain,
+        "chain 100 chr1 100 + 0 100 chr1 100 + 0 100 1\n100\n",
+    )
+    .expect("chain is written");
+
+    Command::cargo_bin("picard")
+        .expect("binary exists")
+        .args([
+            "LiftoverVcf",
+            &format!("I={}", input.display()),
+            &format!("O={}", output.display()),
+            &format!("CHAIN={}", chain.display()),
+            &format!("REJECT={}", reject.display()),
+            &format!("R={}", reference.display()),
+            "VALIDATION_STRINGENCY=SILENT",
+            "QUIET=true",
+            "CREATE_INDEX=true",
+            "CREATE_MD5_FILE=true",
+            "MAX_RECORDS_IN_RAM=500",
+            &format!("TMP_DIR={}", tempdir.path().display()),
+            "USE_JDK_DEFLATER=true",
+            "USE_JDK_INFLATER=true",
+        ])
+        .assert()
+        .success();
+
+    assert!(output.with_extension("vcf.idx").exists());
+    assert!(!reject.with_extension("vcf.idx").exists());
+    assert!(!output.with_extension("vcf.md5").exists());
+    assert!(!reject.with_extension("vcf.md5").exists());
 }
 
 #[test]
@@ -3990,6 +4897,44 @@ fn qualityscoredistribution_accepts_common_temp_options() {
 }
 
 #[test]
+fn qualityscoredistribution_honors_stop_after_and_assume_sorted_alias() {
+    let tempdir = tempfile::tempdir().expect("tempdir exists");
+    let input = tempdir.path().join("input.sam");
+    let output = tempdir.path().join("quality_score_distribution.txt");
+    let chart = tempdir.path().join("quality_score_distribution.pdf");
+    fs::write(
+        &input,
+        concat!(
+            "@HD\tVN:1.6\tSO:coordinate\n",
+            "@SQ\tSN:chr1\tLN:1000\n",
+            "read-a\t0\tchr1\t10\t60\t4M\t*\t0\t0\tACGT\tFFFF\n",
+            "read-b\t0\tchr1\t20\t60\t4M\t*\t0\t0\tACGT\t!!!!\n",
+        ),
+    )
+    .expect("input fixture is written");
+
+    Command::cargo_bin("picard")
+        .expect("binary exists")
+        .args([
+            "QualityScoreDistribution",
+            &format!("I={}", input.display()),
+            &format!("O={}", output.display()),
+            &format!("CHART={}", chart.display()),
+            "STOP_AFTER=1",
+            "AS=true",
+            "VALIDATION_STRINGENCY=SILENT",
+            "QUIET=true",
+        ])
+        .assert()
+        .success();
+
+    let metrics = fs::read_to_string(&output).expect("metrics output exists");
+    assert!(metrics.contains("QUALITY\tCOUNT_OF_Q\n37\t4\n"));
+    assert!(!metrics.contains("\n0\t4\n"));
+    assert!(chart.metadata().expect("chart exists").len() > 0);
+}
+
+#[test]
 fn meanqualitybycycle_writes_histogram_and_chart() {
     let tempdir = tempfile::tempdir().expect("tempdir exists");
     let input = tempdir.path().join("input.sam");
@@ -4060,6 +5005,44 @@ fn meanqualitybycycle_accepts_common_temp_options() {
 
     let metrics = fs::read_to_string(&output).expect("metrics output exists");
     assert!(metrics.contains("CYCLE\tMEAN_QUALITY\n"));
+}
+
+#[test]
+fn meanqualitybycycle_honors_stop_after_and_assume_sorted_alias() {
+    let tempdir = tempfile::tempdir().expect("tempdir exists");
+    let input = tempdir.path().join("input.sam");
+    let output = tempdir.path().join("mean_quality_by_cycle.txt");
+    let chart = tempdir.path().join("mean_quality_by_cycle.pdf");
+    fs::write(
+        &input,
+        concat!(
+            "@HD\tVN:1.6\tSO:coordinate\n",
+            "@SQ\tSN:chr1\tLN:1000\n",
+            "read-a\t0\tchr1\t10\t60\t4M\t*\t0\t0\tACGT\tFFFF\n",
+            "read-b\t0\tchr1\t20\t60\t4M\t*\t0\t0\tACGT\t!!!!\n",
+        ),
+    )
+    .expect("input fixture is written");
+
+    Command::cargo_bin("picard")
+        .expect("binary exists")
+        .args([
+            "MeanQualityByCycle",
+            &format!("I={}", input.display()),
+            &format!("O={}", output.display()),
+            &format!("CHART={}", chart.display()),
+            "STOP_AFTER=1",
+            "AS=true",
+            "VALIDATION_STRINGENCY=SILENT",
+            "QUIET=true",
+        ])
+        .assert()
+        .success();
+
+    let metrics = fs::read_to_string(&output).expect("metrics output exists");
+    assert!(metrics.contains("CYCLE\tMEAN_QUALITY\n1\t37\n2\t37\n3\t37\n4\t37\n"));
+    assert!(!metrics.contains("18.5"));
+    assert!(chart.metadata().expect("chart exists").len() > 0);
 }
 
 #[test]
@@ -4204,6 +5187,82 @@ fn createsequencedictionary_derives_output_and_reads_gzip() {
 }
 
 #[test]
+fn createsequencedictionary_writes_alternate_names() {
+    let tempdir = tempfile::tempdir().expect("tempdir exists");
+    let reference = tempdir.path().join("ref.fa");
+    let alt_names = tempdir.path().join("alt.tsv");
+    let output = tempdir.path().join("ref.dict");
+    fs::write(
+        &reference,
+        concat!(
+            ">chr1 first chromosome\n",
+            "ACGTACGT\n",
+            ">chr2\n",
+            "NNNN\n",
+        ),
+    )
+    .expect("reference fixture is written");
+    fs::write(
+        &alt_names,
+        concat!("chr1\t1\n", "chr1\tCM000663.2\n", "chr2\t2\n"),
+    )
+    .expect("alt names fixture is written");
+
+    let mut cmd = Command::cargo_bin("picard").expect("binary exists");
+    cmd.args([
+        "CreateSequenceDictionary",
+        &format!("R={}", reference.display()),
+        &format!("O={}", output.display()),
+        &format!("ALT_NAMES={}", alt_names.display()),
+        "VALIDATION_STRINGENCY=SILENT",
+        "QUIET=true",
+    ])
+    .assert()
+    .success();
+
+    let dictionary = fs::read_to_string(&output).expect("dictionary output exists");
+    assert!(dictionary.contains("\tSN:chr1\t"));
+    assert!(dictionary.contains("\tAN:1,CM000663.2\n"));
+    assert!(dictionary.contains("\tSN:chr2\t"));
+    assert!(dictionary.contains("\tAN:2\n"));
+}
+
+#[test]
+fn createsequencedictionary_writes_md5_sidecar_but_no_index_when_requested() {
+    let tempdir = tempfile::tempdir().expect("tempdir exists");
+    let reference = tempdir.path().join("ref.fa");
+    let output = tempdir.path().join("ref.dict");
+    fs::write(&reference, ">chr1 first chromosome\nACGTACGT\n")
+        .expect("reference fixture is written");
+
+    let mut cmd = Command::cargo_bin("picard").expect("binary exists");
+    cmd.args([
+        "CreateSequenceDictionary",
+        &format!("R={}", reference.display()),
+        &format!("O={}", output.display()),
+        "CREATE_MD5_FILE=true",
+        "CREATE_INDEX=true",
+        "MAX_RECORDS_IN_RAM=1000",
+        "TMP_DIR=/tmp",
+        "USE_JDK_DEFLATER=true",
+        "USE_JDK_INFLATER=true",
+        "COMPRESSION_LEVEL=1",
+        "VALIDATION_STRINGENCY=SILENT",
+        "QUIET=true",
+    ])
+    .assert()
+    .success();
+
+    assert!(output.exists());
+    let md5 = fs::read_to_string(format!("{}.md5", output.display()))
+        .expect("dictionary md5 sidecar exists");
+    assert_eq!(md5.len(), 32);
+    assert!(md5.chars().all(|char| char.is_ascii_hexdigit()));
+    assert!(!tempdir.path().join("ref.dict.bai").exists());
+    assert!(!tempdir.path().join("ref.dict.idx").exists());
+}
+
+#[test]
 fn normalizefasta_wraps_sequence_lines() {
     let tempdir = tempfile::tempdir().expect("tempdir exists");
     let input = tempdir.path().join("input.fa");
@@ -4235,6 +5294,35 @@ fn normalizefasta_wraps_sequence_lines() {
         fs::read_to_string(output).expect("normalized FASTA exists"),
         concat!(">chr1\n", "ACGT\n", "ACGT\n", ">chr2\n", "NNNN\n", "N\n")
     );
+}
+
+#[test]
+fn normalizefasta_accepts_common_noop_sidecar_options() {
+    let tempdir = tempfile::tempdir().expect("tempdir exists");
+    let input = tempdir.path().join("input.fa");
+    let output = tempdir.path().join("normalized.fa");
+    fs::write(&input, ">chr1 first chromosome\nACGTACGT\n").expect("input FASTA is written");
+
+    let mut cmd = Command::cargo_bin("picard").expect("binary exists");
+    cmd.args([
+        "NormalizeFasta",
+        &format!("I={}", input.display()),
+        &format!("O={}", output.display()),
+        "LINE_LENGTH=4",
+        "CREATE_MD5_FILE=true",
+        "CREATE_INDEX=true",
+        "VALIDATION_STRINGENCY=SILENT",
+        "QUIET=true",
+    ])
+    .assert()
+    .success();
+
+    assert_eq!(
+        fs::read_to_string(&output).expect("normalized FASTA exists"),
+        concat!(">chr1 first chromosome\n", "ACGT\n", "ACGT\n")
+    );
+    assert!(!tempdir.path().join("normalized.fa.md5").exists());
+    assert!(!tempdir.path().join("normalized.fa.fai").exists());
 }
 
 #[test]
@@ -4283,6 +5371,200 @@ fn bedtointervallist_converts_and_sorts_by_dictionary_order() {
             "chr2\t6\t10\t-\tsecond\n",
         )
     );
+}
+
+#[test]
+fn bedtointervallist_sort_false_preserves_input_order_with_picard_header() {
+    let tempdir = tempfile::tempdir().expect("tempdir exists");
+    let dictionary = tempdir.path().join("ref.dict");
+    let bed = tempdir.path().join("targets.bed");
+    let output = tempdir.path().join("targets.interval_list");
+    fs::write(
+        &dictionary,
+        concat!(
+            "@HD\tVN:1.6\n",
+            "@SQ\tSN:chr1\tLN:1000\n",
+            "@SQ\tSN:chr2\tLN:1000\n",
+        ),
+    )
+    .expect("dictionary fixture is written");
+    fs::write(
+        &bed,
+        concat!("chr2\t5\t10\tsecond\t0\t-\n", "chr1\t0\t4\tfirst\t0\t+\n",),
+    )
+    .expect("BED fixture is written");
+
+    let mut cmd = Command::cargo_bin("picard").expect("binary exists");
+    cmd.args([
+        "BedToIntervalList",
+        &format!("I={}", bed.display()),
+        &format!("O={}", output.display()),
+        &format!("SD={}", dictionary.display()),
+        "SORT=false",
+        "UNIQUE=false",
+    ])
+    .assert()
+    .success();
+
+    assert_eq!(
+        fs::read_to_string(output).expect("interval_list exists"),
+        concat!(
+            "@HD\tVN:1.6\tSO:coordinate\n",
+            "@SQ\tSN:chr1\tLN:1000\n",
+            "@SQ\tSN:chr2\tLN:1000\n",
+            "chr2\t6\t10\t-\tsecond\n",
+            "chr1\t1\t4\t+\tfirst\n",
+        )
+    );
+}
+
+#[test]
+fn bedtointervallist_can_drop_missing_contigs() {
+    let tempdir = tempfile::tempdir().expect("tempdir exists");
+    let dictionary = tempdir.path().join("ref.dict");
+    let bed = tempdir.path().join("targets.bed");
+    let output = tempdir.path().join("targets.interval_list");
+    fs::write(
+        &dictionary,
+        concat!("@HD\tVN:1.6\n", "@SQ\tSN:chr1\tLN:1000\n",),
+    )
+    .expect("dictionary fixture is written");
+    fs::write(
+        &bed,
+        concat!(
+            "chr_missing\t0\t3\tmissing\t0\t+\n",
+            "chr1\t4\t8\tkept\t0\t+\n",
+        ),
+    )
+    .expect("BED fixture is written");
+
+    let mut cmd = Command::cargo_bin("picard").expect("binary exists");
+    cmd.args([
+        "BedToIntervalList",
+        &format!("I={}", bed.display()),
+        &format!("O={}", output.display()),
+        &format!("SD={}", dictionary.display()),
+        "DROP_MISSING_CONTIGS=true",
+        "VALIDATION_STRINGENCY=SILENT",
+    ])
+    .assert()
+    .success();
+
+    assert_eq!(
+        fs::read_to_string(output).expect("interval_list exists"),
+        concat!(
+            "@HD\tVN:1.6\tSO:coordinate\n",
+            "@SQ\tSN:chr1\tLN:1000\n",
+            "chr1\t5\t8\t+\tkept\n",
+        )
+    );
+}
+
+#[test]
+fn bedtointervallist_skips_or_keeps_zero_length_intervals_like_picard() {
+    let tempdir = tempfile::tempdir().expect("tempdir exists");
+    let dictionary = tempdir.path().join("ref.dict");
+    let bed = tempdir.path().join("targets.bed");
+    let skipped_output = tempdir.path().join("skipped.interval_list");
+    let kept_output = tempdir.path().join("kept.interval_list");
+    fs::write(
+        &dictionary,
+        concat!("@HD\tVN:1.6\n", "@SQ\tSN:chr1\tLN:1000\n",),
+    )
+    .expect("dictionary fixture is written");
+    fs::write(
+        &bed,
+        concat!("chr1\t5\t5\tzero\t0\t+\n", "chr1\t5\t8\tkept\t0\t+\n",),
+    )
+    .expect("BED fixture is written");
+
+    Command::cargo_bin("picard")
+        .expect("binary exists")
+        .args([
+            "BedToIntervalList",
+            &format!("I={}", bed.display()),
+            &format!("O={}", skipped_output.display()),
+            &format!("SD={}", dictionary.display()),
+            "VALIDATION_STRINGENCY=SILENT",
+        ])
+        .assert()
+        .success();
+    assert_eq!(
+        fs::read_to_string(&skipped_output).expect("interval_list exists"),
+        concat!(
+            "@HD\tVN:1.6\tSO:coordinate\n",
+            "@SQ\tSN:chr1\tLN:1000\n",
+            "chr1\t6\t8\t+\tkept\n",
+        )
+    );
+
+    Command::cargo_bin("picard")
+        .expect("binary exists")
+        .args([
+            "BedToIntervalList",
+            &format!("I={}", bed.display()),
+            &format!("O={}", kept_output.display()),
+            &format!("SD={}", dictionary.display()),
+            "KEEP_LENGTH_ZERO_INTERVALS=true",
+            "VALIDATION_STRINGENCY=SILENT",
+        ])
+        .assert()
+        .success();
+    assert_eq!(
+        fs::read_to_string(&kept_output).expect("interval_list exists"),
+        concat!(
+            "@HD\tVN:1.6\tSO:coordinate\n",
+            "@SQ\tSN:chr1\tLN:1000\n",
+            "chr1\t6\t5\t+\tzero\n",
+            "chr1\t6\t8\t+\tkept\n",
+        )
+    );
+}
+
+#[test]
+fn bedtointervallist_accepts_common_noop_sidecar_options() {
+    let tempdir = tempfile::tempdir().expect("tempdir exists");
+    let dictionary = tempdir.path().join("ref.dict");
+    let bed = tempdir.path().join("targets.bed");
+    let output = tempdir.path().join("targets.interval_list");
+    fs::write(
+        &dictionary,
+        concat!("@HD\tVN:1.6\n", "@SQ\tSN:chr1\tLN:1000\n",),
+    )
+    .expect("dictionary fixture is written");
+    fs::write(&bed, "chr1\t5\t8\tkept\t0\t+\n").expect("BED fixture is written");
+
+    Command::cargo_bin("picard")
+        .expect("binary exists")
+        .args([
+            "BedToIntervalList",
+            &format!("I={}", bed.display()),
+            &format!("O={}", output.display()),
+            &format!("SD={}", dictionary.display()),
+            "CREATE_MD5_FILE=true",
+            "CREATE_INDEX=true",
+            "COMPRESSION_LEVEL=1",
+            "MAX_RECORDS_IN_RAM=1000",
+            &format!("TMP_DIR={}", tempdir.path().display()),
+            "USE_JDK_DEFLATER=true",
+            "USE_JDK_INFLATER=true",
+            "VALIDATION_STRINGENCY=SILENT",
+            "QUIET=true",
+        ])
+        .assert()
+        .success();
+
+    assert_eq!(
+        fs::read_to_string(&output).expect("interval_list exists"),
+        concat!(
+            "@HD\tVN:1.6\tSO:coordinate\n",
+            "@SQ\tSN:chr1\tLN:1000\n",
+            "chr1\t6\t8\t+\tkept\n",
+        )
+    );
+    assert!(!tempdir.path().join("targets.interval_list.md5").exists());
+    assert!(!tempdir.path().join("targets.interval_list.bai").exists());
+    assert!(!tempdir.path().join("targets.interval_list.idx").exists());
 }
 
 #[test]
@@ -4374,6 +5656,153 @@ fn viewsam_records_only_omits_sam_header() {
 }
 
 #[test]
+fn viewsam_header_only_omits_sam_records() {
+    let tempdir = tempfile::tempdir().expect("tempdir exists");
+    let input_sam = tempdir.path().join("input.sam");
+    let input_bam = tempdir.path().join("input.bam");
+    let output_sam = tempdir.path().join("header.sam");
+    fs::write(
+        &input_sam,
+        concat!(
+            "@HD\tVN:1.6\tSO:coordinate\n",
+            "@SQ\tSN:chr1\tLN:1000\n",
+            "read-a\t0\tchr1\t10\t60\t4M\t*\t0\t0\tACGT\tFFFF\n",
+            "read-b\t512\tchr1\t20\t60\t4M\t*\t0\t0\tTGCA\tFFFF\n",
+        ),
+    )
+    .expect("input SAM is written");
+
+    Command::cargo_bin("picard")
+        .expect("binary exists")
+        .args([
+            "SortSam",
+            &format!("I={}", input_sam.display()),
+            &format!("O={}", input_bam.display()),
+            "SO=coordinate",
+        ])
+        .assert()
+        .success();
+
+    Command::cargo_bin("picard")
+        .expect("binary exists")
+        .args([
+            "ViewSam",
+            &format!("I={}", input_bam.display()),
+            &format!("O={}", output_sam.display()),
+            "HEADER_ONLY=true",
+        ])
+        .assert()
+        .success();
+
+    let output = fs::read_to_string(output_sam).expect("ViewSam header-only output exists");
+    assert!(output.contains("@SQ\tSN:chr1\tLN:1000"));
+    assert!(record_names(&output).is_empty());
+}
+
+#[test]
+fn viewsam_filters_records_by_interval_list() {
+    let tempdir = tempfile::tempdir().expect("tempdir exists");
+    let input_sam = tempdir.path().join("input.sam");
+    let input_bam = tempdir.path().join("input.bam");
+    let intervals = tempdir.path().join("targets.interval_list");
+    let output_sam = tempdir.path().join("view.sam");
+    fs::write(
+        &input_sam,
+        concat!(
+            "@HD\tVN:1.6\tSO:coordinate\n",
+            "@SQ\tSN:chr1\tLN:1000\n",
+            "@SQ\tSN:chr2\tLN:1000\n",
+            "read-a\t0\tchr1\t10\t60\t4M\t*\t0\t0\tACGT\tFFFF\n",
+            "read-b\t0\tchr1\t20\t60\t4M\t*\t0\t0\tTGCA\tFFFF\n",
+            "read-c\t0\tchr2\t12\t60\t4M\t*\t0\t0\tGATC\tFFFF\n",
+        ),
+    )
+    .expect("input SAM is written");
+    fs::write(
+        &intervals,
+        concat!(
+            "@HD\tVN:1.6\tSO:coordinate\n",
+            "@SQ\tSN:chr1\tLN:1000\n",
+            "@SQ\tSN:chr2\tLN:1000\n",
+            "chr1\t12\t22\t+\ttarget\n",
+        ),
+    )
+    .expect("interval list is written");
+
+    Command::cargo_bin("picard")
+        .expect("binary exists")
+        .args([
+            "SortSam",
+            &format!("I={}", input_sam.display()),
+            &format!("O={}", input_bam.display()),
+            "SO=coordinate",
+        ])
+        .assert()
+        .success();
+
+    Command::cargo_bin("picard")
+        .expect("binary exists")
+        .args([
+            "ViewSam",
+            &format!("I={}", input_bam.display()),
+            &format!("O={}", output_sam.display()),
+            &format!("INTERVAL_LIST={}", intervals.display()),
+            "VALIDATION_STRINGENCY=SILENT",
+            "QUIET=true",
+        ])
+        .assert()
+        .success();
+
+    let output = fs::read_to_string(output_sam).expect("ViewSam interval output exists");
+    assert_eq!(record_names(&output), vec!["read-a", "read-b"]);
+}
+
+#[test]
+fn viewsam_filters_records_by_alignment_status() {
+    let tempdir = tempfile::tempdir().expect("tempdir exists");
+    let input_sam = tempdir.path().join("input.sam");
+    let input_bam = tempdir.path().join("input.bam");
+    let output_sam = tempdir.path().join("aligned.sam");
+    fs::write(
+        &input_sam,
+        concat!(
+            "@HD\tVN:1.6\tSO:coordinate\n",
+            "@SQ\tSN:chr1\tLN:1000\n",
+            "read-a\t0\tchr1\t10\t60\t4M\t*\t0\t0\tACGT\tFFFF\n",
+            "read-b\t4\t*\t0\t0\t*\t*\t0\t0\tNNNN\t!!!!\n",
+        ),
+    )
+    .expect("input SAM is written");
+
+    Command::cargo_bin("picard")
+        .expect("binary exists")
+        .args([
+            "SortSam",
+            &format!("I={}", input_sam.display()),
+            &format!("O={}", input_bam.display()),
+            "SO=coordinate",
+        ])
+        .assert()
+        .success();
+
+    Command::cargo_bin("picard")
+        .expect("binary exists")
+        .args([
+            "ViewSam",
+            &format!("I={}", input_bam.display()),
+            &format!("O={}", output_sam.display()),
+            "ALIGNMENT_STATUS=Aligned",
+            "VALIDATION_STRINGENCY=SILENT",
+            "QUIET=true",
+        ])
+        .assert()
+        .success();
+
+    let output = fs::read_to_string(output_sam).expect("ViewSam aligned output exists");
+    assert_eq!(record_names(&output), vec!["read-a"]);
+}
+
+#[test]
 fn replacesamheader_streams_records_with_replacement_header() {
     let tempdir = tempfile::tempdir().expect("tempdir exists");
     let input = tempdir.path().join("input.sam");
@@ -4453,6 +5882,54 @@ fn replacesamheader_writes_md5_sidecar_when_requested() {
     let md5 = fs::read_to_string(tempdir.path().join("output.sam.md5"))
         .expect("ReplaceSamHeader MD5 sidecar exists");
     assert_eq!(md5.trim().len(), 32);
+}
+
+#[test]
+fn replacesamheader_accepts_common_runtime_sidecar_options_for_sam_output() {
+    let tempdir = tempfile::tempdir().expect("tempdir exists");
+    let input = tempdir.path().join("input.sam");
+    let header = tempdir.path().join("header.sam");
+    let output = tempdir.path().join("output.sam");
+    let reference = tempdir.path().join("ref.fa");
+    fs::write(
+        &input,
+        concat!(
+            "@HD\tVN:1.6\tSO:coordinate\n",
+            "@SQ\tSN:chr1\tLN:1000\n",
+            "read-a\t0\tchr1\t10\t60\t4M\t*\t0\t0\tACGT\tFFFF\n",
+        ),
+    )
+    .expect("input SAM is written");
+    fs::write(
+        &header,
+        concat!("@HD\tVN:1.6\tSO:coordinate\n", "@SQ\tSN:chr1\tLN:2000\n",),
+    )
+    .expect("header SAM is written");
+    fs::write(&reference, ">chr1\nACGTACGTACGT\n").expect("reference fixture is written");
+
+    Command::cargo_bin("picard")
+        .expect("binary exists")
+        .args([
+            "ReplaceSamHeader",
+            &format!("I={}", input.display()),
+            &format!("O={}", output.display()),
+            &format!("HEADER={}", header.display()),
+            "CREATE_MD5_FILE=true",
+            "CREATE_INDEX=true",
+            "MAX_RECORDS_IN_RAM=1000",
+            &format!("TMP_DIR={}", tempdir.path().display()),
+            &format!("REFERENCE_SEQUENCE={}", reference.display()),
+            "USE_JDK_DEFLATER=true",
+            "USE_JDK_INFLATER=true",
+            "VALIDATION_STRINGENCY=SILENT",
+            "QUIET=true",
+        ])
+        .assert()
+        .success();
+
+    assert!(tempdir.path().join("output.sam.md5").exists());
+    assert!(!tempdir.path().join("output.sam.bai").exists());
+    assert!(!tempdir.path().join("output.bai").exists());
 }
 
 #[test]
@@ -4539,6 +6016,55 @@ fn updatevcfsequencedictionary_replaces_contig_header() {
 }
 
 #[test]
+fn updatevcfsequencedictionary_writes_index_for_vcf_when_requested() {
+    let tempdir = tempfile::tempdir().expect("tempdir exists");
+    let input = tempdir.path().join("input.vcf");
+    let dictionary = tempdir.path().join("reference.dict");
+    let output = tempdir.path().join("output.vcf");
+    fs::write(
+        &input,
+        concat!(
+            "##fileformat=VCFv4.2\n",
+            "##contig=<ID=old,length=10>\n",
+            "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\n",
+            "chr2\t7\t.\tA\tC\t.\tPASS\t.\n",
+        ),
+    )
+    .expect("input VCF is written");
+    fs::write(
+        &dictionary,
+        concat!(
+            "@HD\tVN:1.6\n",
+            "@SQ\tSN:chr1\tLN:1000\n",
+            "@SQ\tSN:chr2\tLN:2000\n",
+        ),
+    )
+    .expect("dictionary is written");
+
+    Command::cargo_bin("picard")
+        .expect("binary exists")
+        .args([
+            "UpdateVcfSequenceDictionary",
+            &format!("I={}", input.display()),
+            &format!("O={}", output.display()),
+            &format!("SD={}", dictionary.display()),
+            "CREATE_MD5_FILE=true",
+            "CREATE_INDEX=true",
+            "MAX_RECORDS_IN_RAM=1000",
+            &format!("TMP_DIR={}", tempdir.path().display()),
+            "USE_JDK_DEFLATER=true",
+            "USE_JDK_INFLATER=true",
+            "VALIDATION_STRINGENCY=SILENT",
+            "QUIET=true",
+        ])
+        .assert()
+        .success();
+
+    assert!(tempdir.path().join("output.vcf.idx").exists());
+    assert!(!tempdir.path().join("output.vcf.md5").exists());
+}
+
+#[test]
 fn gathervcfs_concatenates_records_with_first_header() {
     let tempdir = tempfile::tempdir().expect("tempdir exists");
     let first = tempdir.path().join("first.vcf");
@@ -4585,6 +6111,56 @@ fn gathervcfs_concatenates_records_with_first_header() {
             "chr1\t5\t.\tG\tT\t.\tPASS\t.\n",
         )
     );
+}
+
+#[test]
+fn gathervcfs_writes_index_for_vcf_when_requested() {
+    let tempdir = tempfile::tempdir().expect("tempdir exists");
+    let first = tempdir.path().join("first.vcf");
+    let second = tempdir.path().join("second.vcf");
+    let output = tempdir.path().join("gathered.vcf");
+    fs::write(
+        &first,
+        concat!(
+            "##fileformat=VCFv4.2\n",
+            "##contig=<ID=chr1,length=1000>\n",
+            "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\n",
+            "chr1\t1\t.\tA\tC\t.\tPASS\t.\n",
+        ),
+    )
+    .expect("first VCF is written");
+    fs::write(
+        &second,
+        concat!(
+            "##fileformat=VCFv4.2\n",
+            "##contig=<ID=chr1,length=1000>\n",
+            "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\n",
+            "chr1\t5\t.\tG\tT\t.\tPASS\t.\n",
+        ),
+    )
+    .expect("second VCF is written");
+
+    Command::cargo_bin("picard")
+        .expect("binary exists")
+        .args([
+            "GatherVcfs",
+            &format!("I={}", first.display()),
+            &format!("I={}", second.display()),
+            &format!("O={}", output.display()),
+            "CREATE_MD5_FILE=true",
+            "CREATE_INDEX=true",
+            "MAX_RECORDS_IN_RAM=1000",
+            &format!("TMP_DIR={}", tempdir.path().display()),
+            "USE_JDK_DEFLATER=true",
+            "USE_JDK_INFLATER=true",
+            "VALIDATION_STRINGENCY=SILENT",
+            "QUIET=true",
+        ])
+        .assert()
+        .success();
+
+    assert!(tempdir.path().join("gathered.vcf.idx").exists());
+    assert!(!tempdir.path().join("gathered.vcf.md5").exists());
 }
 
 #[test]
@@ -4689,6 +6265,57 @@ fn sortvcf_replaces_contig_header_from_explicit_dictionary() {
         "##contig=<ID=chr1,length=1000,md5=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa,assembly=GRCh38>\n"
     ));
     assert!(output.contains("##contig=<ID=chr2,length=2000,URI=file:///ref.fa>\n"));
+}
+
+#[test]
+fn sortvcf_writes_index_for_vcf_when_requested() {
+    let tempdir = tempfile::tempdir().expect("tempdir exists");
+    let input = tempdir.path().join("input.vcf");
+    let dictionary = tempdir.path().join("reference.dict");
+    let output = tempdir.path().join("sorted.vcf");
+    fs::write(
+        &input,
+        concat!(
+            "##fileformat=VCFv4.2\n",
+            "##contig=<ID=chr1,length=1000>\n",
+            "##contig=<ID=chr2,length=1000>\n",
+            "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\n",
+            "chr2\t3\t.\tA\tC\t.\tPASS\t.\n",
+            "chr1\t2\t.\tT\tC\t.\tPASS\t.\n",
+        ),
+    )
+    .expect("input VCF is written");
+    fs::write(
+        &dictionary,
+        concat!(
+            "@HD\tVN:1.6\n",
+            "@SQ\tSN:chr1\tLN:1000\n",
+            "@SQ\tSN:chr2\tLN:1000\n",
+        ),
+    )
+    .expect("dictionary is written");
+
+    Command::cargo_bin("picard")
+        .expect("binary exists")
+        .args([
+            "SortVcf",
+            &format!("I={}", input.display()),
+            &format!("O={}", output.display()),
+            &format!("SD={}", dictionary.display()),
+            "CREATE_MD5_FILE=true",
+            "CREATE_INDEX=true",
+            "MAX_RECORDS_IN_RAM=1000",
+            &format!("TMP_DIR={}", tempdir.path().display()),
+            "USE_JDK_DEFLATER=true",
+            "USE_JDK_INFLATER=true",
+            "VALIDATION_STRINGENCY=SILENT",
+            "QUIET=true",
+        ])
+        .assert()
+        .success();
+
+    assert!(tempdir.path().join("sorted.vcf.idx").exists());
+    assert!(!tempdir.path().join("sorted.vcf.md5").exists());
 }
 
 #[test]
@@ -4852,6 +6479,69 @@ fn mergevcfs_replaces_contig_header_from_explicit_dictionary() {
 }
 
 #[test]
+fn mergevcfs_writes_index_for_vcf_when_requested() {
+    let tempdir = tempfile::tempdir().expect("tempdir exists");
+    let first = tempdir.path().join("first.vcf");
+    let second = tempdir.path().join("second.vcf");
+    let dictionary = tempdir.path().join("reference.dict");
+    let output = tempdir.path().join("merged.vcf");
+    fs::write(
+        &first,
+        concat!(
+            "##fileformat=VCFv4.2\n",
+            "##contig=<ID=chr1,length=1000>\n",
+            "##contig=<ID=chr2,length=1000>\n",
+            "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\n",
+            "chr2\t3\t.\tA\tC\t.\tPASS\t.\n",
+        ),
+    )
+    .expect("first VCF is written");
+    fs::write(
+        &second,
+        concat!(
+            "##fileformat=VCFv4.2\n",
+            "##contig=<ID=chr1,length=1000>\n",
+            "##contig=<ID=chr2,length=1000>\n",
+            "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\n",
+            "chr1\t2\t.\tT\tC\t.\tPASS\t.\n",
+        ),
+    )
+    .expect("second VCF is written");
+    fs::write(
+        &dictionary,
+        concat!(
+            "@HD\tVN:1.6\n",
+            "@SQ\tSN:chr1\tLN:1000\n",
+            "@SQ\tSN:chr2\tLN:1000\n",
+        ),
+    )
+    .expect("dictionary is written");
+
+    Command::cargo_bin("picard")
+        .expect("binary exists")
+        .args([
+            "MergeVcfs",
+            &format!("I={}", first.display()),
+            &format!("I={}", second.display()),
+            &format!("O={}", output.display()),
+            &format!("SD={}", dictionary.display()),
+            "CREATE_MD5_FILE=true",
+            "CREATE_INDEX=true",
+            "MAX_RECORDS_IN_RAM=1000",
+            &format!("TMP_DIR={}", tempdir.path().display()),
+            "USE_JDK_DEFLATER=true",
+            "USE_JDK_INFLATER=true",
+            "VALIDATION_STRINGENCY=SILENT",
+            "QUIET=true",
+        ])
+        .assert()
+        .success();
+
+    assert!(tempdir.path().join("merged.vcf.idx").exists());
+    assert!(!tempdir.path().join("merged.vcf.md5").exists());
+}
+
+#[test]
 fn mergevcfs_rejects_input_dictionary_that_differs_from_explicit_dictionary() {
     let tempdir = tempfile::tempdir().expect("tempdir exists");
     let first = tempdir.path().join("first.vcf");
@@ -4952,6 +6642,13 @@ fn picard_binary_supports_help_and_version_smoke_checks() {
         .assert()
         .success()
         .stdout(predicate::str::contains("INPUT"));
+
+    let mut cmd = Command::cargo_bin("picard").expect("binary exists");
+    cmd.args(["IntervalListTools", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("PADDING"))
+        .stdout(predicate::str::contains("PADDING=0").not());
 
     let mut cmd = Command::cargo_bin("picard").expect("binary exists");
     cmd.arg("--version")

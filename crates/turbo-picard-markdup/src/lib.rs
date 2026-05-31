@@ -5,6 +5,7 @@ use rust_htslib::bam::record::Aux;
 use rust_htslib::bam::{self, CompressionLevel, Read, index};
 use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 use std::cmp::Ordering;
+use std::collections::BTreeMap;
 use std::fmt;
 use std::fs;
 use std::path::Path;
@@ -19,11 +20,19 @@ pub struct MarkDuplicatesSummary {
     pub library: String,
     pub unpaired_reads_examined: u64,
     pub read_pairs_examined: u64,
+    paired_records_examined: u64,
     pub secondary_or_supplementary_records: u64,
     pub unpaired_duplicate_records: u64,
     pub duplicate_pair_records: u64,
     pub read_pair_optical_duplicates: u64,
     pub unmapped_records: u64,
+    duplicate_set_histogram: BTreeMap<u64, DuplicateSetCounts>,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct DuplicateSetCounts {
+    all_sets: u64,
+    non_optical_sets: u64,
 }
 
 #[derive(Debug)]
@@ -107,11 +116,13 @@ pub fn run(config: &MarkDuplicatesConfig) -> Result<MarkDuplicatesSummary, MarkD
         library: "Unknown Library".to_string(),
         unpaired_reads_examined: 0,
         read_pairs_examined: 0,
+        paired_records_examined: 0,
         secondary_or_supplementary_records: 0,
         unpaired_duplicate_records: 0,
         duplicate_pair_records: 0,
         read_pair_optical_duplicates: 0,
         unmapped_records: 0,
+        duplicate_set_histogram: BTreeMap::new(),
     };
 
     for (line_index, line) in input.lines().enumerate() {
@@ -151,6 +162,7 @@ pub fn run(config: &MarkDuplicatesConfig) -> Result<MarkDuplicatesSummary, MarkD
         }
 
         if flag & PAIRED_FLAG != 0 {
+            summary.paired_records_examined += 1;
             if flag & FIRST_IN_PAIR_FLAG != 0 {
                 summary.read_pairs_examined += 1;
             }
@@ -255,11 +267,13 @@ fn run_bam(config: &MarkDuplicatesConfig) -> Result<MarkDuplicatesSummary, MarkD
         library,
         unpaired_reads_examined: 0,
         read_pairs_examined: 0,
+        paired_records_examined: 0,
         secondary_or_supplementary_records: 0,
         unpaired_duplicate_records: 0,
         duplicate_pair_records: 0,
         read_pair_optical_duplicates: 0,
         unmapped_records: 0,
+        duplicate_set_histogram: BTreeMap::new(),
     };
 
     read_bam_records(
@@ -295,7 +309,18 @@ fn run_bam(config: &MarkDuplicatesConfig) -> Result<MarkDuplicatesSummary, MarkD
         if group.len() < 2 {
             continue;
         }
+        let paired_set_size = paired_duplicate_set_size(group, &records);
         if !has_multiple_read_names(group, &records) {
+            if let Some(set_size) = paired_set_size {
+                add_duplicate_set(&mut summary, set_size, Some(set_size));
+                if let Some(index) = group.first() {
+                    add_duplicate_set(
+                        library_registry.summary_mut(record_libraries[*index]),
+                        set_size,
+                        Some(set_size),
+                    );
+                }
+            }
             continue;
         }
 
@@ -307,6 +332,15 @@ fn run_bam(config: &MarkDuplicatesConfig) -> Result<MarkDuplicatesSummary, MarkD
             representative_name.as_slice(),
             config,
         );
+        if let Some(set_size) = paired_set_size {
+            let optical_names = u64::try_from(optical_duplicates.read_names).unwrap_or(u64::MAX);
+            let non_optical_size = (optical_names < set_size).then_some(set_size - optical_names);
+            add_duplicate_set(&mut summary, set_size, non_optical_size);
+            if let Some(index) = group.first() {
+                let library_summary = library_registry.summary_mut(record_libraries[*index]);
+                add_duplicate_set(library_summary, set_size, non_optical_size);
+            }
+        }
         summary.read_pair_optical_duplicates += optical_duplicates.read_names as u64;
         if let Some(index) = group.first() {
             library_registry
@@ -411,11 +445,13 @@ fn try_run_single_bam_no_duplicate_fast_path(
         library,
         unpaired_reads_examined: 0,
         read_pairs_examined: 0,
+        paired_records_examined: 0,
         secondary_or_supplementary_records: 0,
         unpaired_duplicate_records: 0,
         duplicate_pair_records: 0,
         read_pair_optical_duplicates: 0,
         unmapped_records: 0,
+        duplicate_set_histogram: BTreeMap::new(),
     };
     let mut seen_single_keys = HashMap::<BamDuplicateKey, Vec<u8>>::default();
     let mut last_pair_key = None::<(BamDuplicateKey, Vec<u8>)>;
@@ -474,6 +510,10 @@ fn try_run_single_bam_no_duplicate_fast_path(
         }
 
         if flag & PAIRED_FLAG != 0 {
+            summary.paired_records_examined += 1;
+            library_registry
+                .summary_mut(library_id)
+                .paired_records_examined += 1;
             if flag & FIRST_IN_PAIR_FLAG != 0 {
                 summary.read_pairs_examined += 1;
                 library_registry.summary_mut(library_id).read_pairs_examined += 1;
@@ -487,6 +527,8 @@ fn try_run_single_bam_no_duplicate_fast_path(
                         should_fallback = true;
                         break;
                     }
+                    add_duplicate_set(&mut summary, 1, Some(1));
+                    add_duplicate_set(library_registry.summary_mut(library_id), 1, Some(1));
                 } else {
                     pending_pairs.insert(pending_qname, first);
                     if let Some(first) = pending_pairs.remove(qname) {
@@ -499,6 +541,8 @@ fn try_run_single_bam_no_duplicate_fast_path(
                             should_fallback = true;
                             break;
                         }
+                        add_duplicate_set(&mut summary, 1, Some(1));
+                        add_duplicate_set(library_registry.summary_mut(library_id), 1, Some(1));
                     } else {
                         adjacent_pending_pair = Some((qname.to_vec(), current));
                     }
@@ -508,6 +552,8 @@ fn try_run_single_bam_no_duplicate_fast_path(
                     should_fallback = true;
                     break;
                 }
+                add_duplicate_set(&mut summary, 1, Some(1));
+                add_duplicate_set(library_registry.summary_mut(library_id), 1, Some(1));
             } else {
                 adjacent_pending_pair = Some((qname.to_vec(), current));
             }
@@ -751,6 +797,10 @@ fn read_bam_records<R: bam::Read>(
         }
 
         if flag & PAIRED_FLAG != 0 {
+            summary.paired_records_examined += 1;
+            library_registry
+                .summary_mut(library_id)
+                .paired_records_examined += 1;
             if flag & FIRST_IN_PAIR_FLAG != 0 {
                 summary.read_pairs_examined += 1;
                 library_registry.summary_mut(library_id).read_pairs_examined += 1;
@@ -1322,6 +1372,23 @@ fn has_multiple_read_names(group: &[usize], records: &[bam::Record]) -> bool {
         .any(|index| records[*index].qname() != first_name)
 }
 
+fn paired_duplicate_set_size(group: &[usize], records: &[bam::Record]) -> Option<u64> {
+    if !group
+        .iter()
+        .any(|index| records[*index].flags() & PAIRED_FLAG != 0)
+    {
+        return None;
+    }
+    let mut names = Vec::<&[u8]>::new();
+    for index in group.iter().copied() {
+        let name = records[index].qname();
+        if !names.contains(&name) {
+            names.push(name);
+        }
+    }
+    u64::try_from(names.len()).ok().filter(|size| *size > 0)
+}
+
 fn best_duplicate_representative_index(group: &[usize], records: &[bam::Record]) -> usize {
     let mut scores = Vec::<(usize, u64)>::new();
 
@@ -1345,6 +1412,28 @@ fn best_duplicate_representative_index(group: &[usize], records: &[bam::Record])
         .expect("non-empty duplicate group")
 }
 
+fn add_duplicate_set(
+    summary: &mut MarkDuplicatesSummary,
+    all_set_size: u64,
+    non_optical_set_size: Option<u64>,
+) {
+    if all_set_size == 0 {
+        return;
+    }
+    summary
+        .duplicate_set_histogram
+        .entry(all_set_size)
+        .or_default()
+        .all_sets += 1;
+    if let Some(non_optical_set_size) = non_optical_set_size.filter(|size| *size > 0) {
+        summary
+            .duplicate_set_histogram
+            .entry(non_optical_set_size)
+            .or_default()
+            .non_optical_sets += 1;
+    }
+}
+
 fn metrics_text(summary: &MarkDuplicatesSummary) -> String {
     metrics_text_for_libraries(std::iter::once(summary))
 }
@@ -1352,23 +1441,36 @@ fn metrics_text(summary: &MarkDuplicatesSummary) -> String {
 fn metrics_text_for_libraries<'a>(
     summaries: impl IntoIterator<Item = &'a MarkDuplicatesSummary>,
 ) -> String {
+    let summaries = summaries.into_iter().collect::<Vec<_>>();
     let mut output = concat!(
         "## METRICS CLASS\tpicard.sam.DuplicationMetrics\n",
         "LIBRARY\tUNPAIRED_READS_EXAMINED\tREAD_PAIRS_EXAMINED\tSECONDARY_OR_SUPPLEMENTARY_RDS\tUNMAPPED_READS\tUNPAIRED_READ_DUPLICATES\tREAD_PAIR_DUPLICATES\tREAD_PAIR_OPTICAL_DUPLICATES\tPERCENT_DUPLICATION\tESTIMATED_LIBRARY_SIZE\n",
     )
     .to_string();
 
-    for summary in summaries {
+    for summary in &summaries {
         output.push_str(&metrics_row(summary));
+    }
+    let histogram = combined_duplicate_set_histogram(summaries.iter().copied());
+    if !histogram.is_empty() {
+        output.push_str("\n## HISTOGRAM\tjava.lang.Double\n");
+        output.push_str("set_size\tall_sets\tnon_optical_sets\n");
+        for (set_size, counts) in histogram {
+            output.push_str(&format!(
+                "{:.1}\t{}\t{}\n",
+                set_size as f64, counts.all_sets, counts.non_optical_sets
+            ));
+        }
     }
 
     output
 }
 
 fn metrics_row(summary: &MarkDuplicatesSummary) -> String {
+    let read_pairs_examined = summary.effective_read_pairs_examined();
     let duplicate_fragments =
         summary.unpaired_duplicate_records + (summary.read_pair_duplicates() * 2);
-    let examined_fragments = summary.unpaired_reads_examined + (summary.read_pairs_examined * 2);
+    let examined_fragments = summary.unpaired_reads_examined + (read_pairs_examined * 2);
     let percent_duplication = if examined_fragments == 0 {
         0.0
     } else {
@@ -1377,10 +1479,10 @@ fn metrics_row(summary: &MarkDuplicatesSummary) -> String {
     let read_pair_duplicates = summary.read_pair_duplicates();
     let estimated_library_size = estimate_library_size(
         summary
-            .read_pairs_examined
+            .effective_read_pairs_examined()
             .saturating_sub(summary.read_pair_optical_duplicates),
         summary
-            .read_pairs_examined
+            .effective_read_pairs_examined()
             .saturating_sub(read_pair_duplicates),
     )
     .map(|value| value.to_string())
@@ -1390,7 +1492,7 @@ fn metrics_row(summary: &MarkDuplicatesSummary) -> String {
         "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
         summary.library,
         summary.unpaired_reads_examined,
-        summary.read_pairs_examined,
+        read_pairs_examined,
         summary.secondary_or_supplementary_records,
         summary.unmapped_records,
         summary.unpaired_duplicate_records,
@@ -1399,6 +1501,20 @@ fn metrics_row(summary: &MarkDuplicatesSummary) -> String {
         format_metric_float(percent_duplication),
         estimated_library_size
     )
+}
+
+fn combined_duplicate_set_histogram<'a>(
+    summaries: impl IntoIterator<Item = &'a MarkDuplicatesSummary>,
+) -> BTreeMap<u64, DuplicateSetCounts> {
+    let mut combined = BTreeMap::<u64, DuplicateSetCounts>::new();
+    for summary in summaries {
+        for (set_size, counts) in &summary.duplicate_set_histogram {
+            let target = combined.entry(*set_size).or_default();
+            target.all_sets += counts.all_sets;
+            target.non_optical_sets += counts.non_optical_sets;
+        }
+    }
+    combined
 }
 
 fn format_metric_float(value: f64) -> String {
@@ -1465,6 +1581,11 @@ impl MarkDuplicatesSummary {
     fn read_pair_duplicates(&self) -> u64 {
         self.duplicate_pair_records / 2
     }
+
+    fn effective_read_pairs_examined(&self) -> u64 {
+        self.read_pairs_examined
+            .max(self.paired_records_examined / 2)
+    }
 }
 
 struct LibraryLookup {
@@ -1496,11 +1617,13 @@ impl LibraryRegistry {
             library: library.to_string(),
             unpaired_reads_examined: 0,
             read_pairs_examined: 0,
+            paired_records_examined: 0,
             secondary_or_supplementary_records: 0,
             unpaired_duplicate_records: 0,
             duplicate_pair_records: 0,
             read_pair_optical_duplicates: 0,
             unmapped_records: 0,
+            duplicate_set_histogram: BTreeMap::new(),
         });
         id
     }
@@ -1530,6 +1653,8 @@ impl MarkDuplicatesSummary {
             && self.duplicate_pair_records == 0
             && self.read_pair_optical_duplicates == 0
             && self.unmapped_records == 0
+            && self.paired_records_examined == 0
+            && self.duplicate_set_histogram.is_empty()
     }
 }
 

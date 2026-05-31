@@ -72,3 +72,51 @@ if records(turbo_path) != records(picard_path):
     raise SystemExit("MergeVcfs records differ from Picard")
 print("MergeVcfs basic output matches Picard")
 PY
+
+cargo run -q -p turbo-picard-cli --bin picard -- \
+  MergeVcfs \
+  "I=$workdir/first.vcf" \
+  "I=$workdir/second.vcf" \
+  "O=$workdir/turbo-indexed.vcf" \
+  "SEQUENCE_DICTIONARY=$workdir/reference.dict" \
+  CREATE_MD5_FILE=true \
+  CREATE_INDEX=true \
+  MAX_RECORDS_IN_RAM=1000 \
+  "TMP_DIR=$workdir" \
+  USE_JDK_DEFLATER=true \
+  USE_JDK_INFLATER=true \
+  VALIDATION_STRINGENCY=SILENT \
+  QUIET=true
+
+"${conda_runner[@]}" run -p "$conda_prefix" picard MergeVcfs \
+  "I=$workdir/first.vcf" \
+  "I=$workdir/second.vcf" \
+  "O=$workdir/picard-indexed.vcf" \
+  "SEQUENCE_DICTIONARY=$workdir/reference.dict" \
+  CREATE_MD5_FILE=true \
+  CREATE_INDEX=true \
+  MAX_RECORDS_IN_RAM=1000 \
+  "TMP_DIR=$workdir" \
+  USE_JDK_DEFLATER=true \
+  USE_JDK_INFLATER=true \
+  VALIDATION_STRINGENCY=SILENT \
+  QUIET=true
+
+python3 - "$workdir/turbo-indexed.vcf" "$workdir/picard-indexed.vcf" <<'PY'
+import sys
+turbo_path, picard_path = sys.argv[1:]
+
+def records(path):
+    with open(path, encoding="utf-8") as handle:
+        return [line.rstrip("\n") for line in handle if not line.startswith("#")]
+
+if records(turbo_path) != records(picard_path):
+    raise SystemExit("MergeVcfs indexed records differ from Picard")
+print("MergeVcfs indexed records match Picard")
+PY
+
+test -f "$workdir/turbo-indexed.vcf.idx"
+test -f "$workdir/picard-indexed.vcf.idx"
+test ! -e "$workdir/turbo-indexed.vcf.md5"
+test ! -e "$workdir/picard-indexed.vcf.md5"
+echo "MergeVcfs CREATE_INDEX sidecar behavior matches Picard"

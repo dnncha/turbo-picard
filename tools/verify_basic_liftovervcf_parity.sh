@@ -77,3 +77,60 @@ if filters(turbo_reject) != filters(picard_reject):
     raise SystemExit("LiftoverVcf reject FILTER header differs from Picard")
 print("LiftoverVcf basic lifted and rejected records match Picard")
 PY
+
+cargo run -q -p turbo-picard-cli --bin picard -- \
+  LiftoverVcf \
+  "I=$workdir/input.vcf" \
+  "O=$workdir/turbo-indexed.vcf" \
+  "CHAIN=$workdir/identity.chain" \
+  "REJECT=$workdir/turbo-indexed-reject.vcf" \
+  "R=$workdir/ref.fa" \
+  VALIDATION_STRINGENCY=SILENT \
+  QUIET=true \
+  CREATE_INDEX=true \
+  CREATE_MD5_FILE=true \
+  "TMP_DIR=$workdir" \
+  MAX_RECORDS_IN_RAM=500 \
+  USE_JDK_DEFLATER=true \
+  USE_JDK_INFLATER=true
+
+"${conda_runner[@]}" run -p "$conda_prefix" picard LiftoverVcf \
+  "I=$workdir/input.vcf" \
+  "O=$workdir/picard-indexed.vcf" \
+  "CHAIN=$workdir/identity.chain" \
+  "REJECT=$workdir/picard-indexed-reject.vcf" \
+  "R=$workdir/ref.fa" \
+  VALIDATION_STRINGENCY=SILENT \
+  QUIET=true \
+  CREATE_INDEX=true \
+  CREATE_MD5_FILE=true \
+  "TMP_DIR=$workdir" \
+  MAX_RECORDS_IN_RAM=500 \
+  USE_JDK_DEFLATER=true \
+  USE_JDK_INFLATER=true
+
+python3 - "$workdir" <<'PY'
+import pathlib
+import sys
+
+workdir = pathlib.Path(sys.argv[1])
+expected = [
+    "turbo-indexed.vcf.idx",
+    "picard-indexed.vcf.idx",
+]
+missing = [name for name in expected if not (workdir / name).exists()]
+if missing:
+    raise SystemExit(f"missing LiftoverVcf index sidecars: {missing}")
+unexpected = [
+    "turbo-indexed-reject.vcf.idx",
+    "picard-indexed-reject.vcf.idx",
+    "turbo-indexed.vcf.md5",
+    "picard-indexed.vcf.md5",
+    "turbo-indexed-reject.vcf.md5",
+    "picard-indexed-reject.vcf.md5",
+]
+present = [name for name in unexpected if (workdir / name).exists()]
+if present:
+    raise SystemExit(f"unexpected LiftoverVcf sidecars: {present}")
+print("LiftoverVcf runtime sidecar behavior matches Picard")
+PY

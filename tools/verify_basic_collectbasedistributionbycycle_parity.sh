@@ -6,6 +6,12 @@ conda_prefix="${TURBO_PICARD_CONDA_PREFIX:-$repo_root/.conda-turbo-picard}"
 workdir="$(mktemp -d)"
 trap 'rm -rf "$workdir"' EXIT
 
+cat > "$workdir/Rscript" <<'SH'
+#!/usr/bin/env bash
+exit 0
+SH
+chmod +x "$workdir/Rscript"
+
 if command -v mamba >/dev/null 2>&1; then
   conda_runner=(mamba)
 elif command -v micromamba >/dev/null 2>&1; then
@@ -31,7 +37,7 @@ cargo run -q -p turbo-picard-cli --bin picard -- \
   VALIDATION_STRINGENCY=SILENT \
   QUIET=true
 
-"${conda_runner[@]}" run -p "$conda_prefix" picard CollectBaseDistributionByCycle \
+"${conda_runner[@]}" run -p "$conda_prefix" env "PATH=$workdir:$conda_prefix/bin:$PATH" picard CollectBaseDistributionByCycle \
   "I=$workdir/input.sam" \
   "O=$workdir/picard.txt" \
   "CHART=$workdir/picard.pdf" \
@@ -65,7 +71,7 @@ cargo run -q -p turbo-picard-cli --bin picard -- \
   VALIDATION_STRINGENCY=SILENT \
   QUIET=true
 
-"${conda_runner[@]}" run -p "$conda_prefix" picard CollectBaseDistributionByCycle \
+"${conda_runner[@]}" run -p "$conda_prefix" env "PATH=$workdir:$conda_prefix/bin:$PATH" picard CollectBaseDistributionByCycle \
   "I=$workdir/input.sam" \
   "O=$workdir/picard-temp-options.txt" \
   "CHART=$workdir/picard-temp-options.pdf" \
@@ -92,4 +98,43 @@ if turbo != picard:
         f"turbo={turbo}\npicard={picard}"
     )
 print("CollectBaseDistributionByCycle temp-option table matches Picard")
+PY
+
+cargo run -q -p turbo-picard-cli --bin picard -- \
+  CollectBaseDistributionByCycle \
+  "I=$workdir/input.sam" \
+  "O=$workdir/turbo-stop-after.txt" \
+  "CHART=$workdir/turbo-stop-after.pdf" \
+  STOP_AFTER=1 \
+  AS=true \
+  VALIDATION_STRINGENCY=SILENT \
+  QUIET=true
+
+"${conda_runner[@]}" run -p "$conda_prefix" env "PATH=$workdir:$conda_prefix/bin:$PATH" picard CollectBaseDistributionByCycle \
+  "I=$workdir/input.sam" \
+  "O=$workdir/picard-stop-after.txt" \
+  "CHART=$workdir/picard-stop-after.pdf" \
+  STOP_AFTER=1 \
+  AS=true \
+  VALIDATION_STRINGENCY=SILENT \
+  QUIET=true
+
+python3 - "$workdir/turbo-stop-after.txt" "$workdir/picard-stop-after.txt" <<'PY'
+import sys
+
+def stable(path):
+    lines = [line.rstrip("\n") for line in open(path, encoding="utf-8")]
+    for index, line in enumerate(lines):
+        if line.startswith("READ_END\tCYCLE\t"):
+            return [raw for raw in lines[index:] if raw]
+    raise SystemExit(f"no base distribution table in {path}")
+
+turbo = stable(sys.argv[1])
+picard = stable(sys.argv[2])
+if turbo != picard:
+    raise SystemExit(
+        f"CollectBaseDistributionByCycle STOP_AFTER/AS table differs:\n"
+        f"turbo={turbo}\npicard={picard}"
+    )
+print("CollectBaseDistributionByCycle STOP_AFTER and AS alias table matches Picard")
 PY

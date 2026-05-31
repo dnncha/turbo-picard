@@ -1,0 +1,23 @@
+{
+  "datasets": [
+    {
+      "id": "htslib-range",
+      "description": "HTSlib small public paired-alignment fixture for reproducible smoke evidence.",
+      "input_path": "benchmarks/real-data/htslib-range/input.bam",
+      "evidence_json": "benchmarks/real-data/htslib-range/evidence/real-data-comparison.json",
+      "evidence_markdown": "benchmarks/real-data/htslib-range/evidence/real-data-comparison.md",
+      "source_url": "https://github.com/samtools/htslib/blob/5cded8325aca2f84f6c18641664893b900638086/test/range.bam",
+      "source_commit": "5cded8325aca2f84f6c18641664893b900638086",
+      "sha256": "e15d14e3994027d433431c960bf1c5f2d6939f26b5094cd5a86bc6229a5b2661",
+      "scope_caveat": "small public fixture",
+      "release_tier": "public_smoke",
+      "expected_commands": {
+        "ViewSam": "SAM record digest",
+        "CleanSam": "post-command SAM record digest",
+        "CollectQualityYieldMetrics": "stable metrics digest",
+        "CollectAlignmentSummaryMetrics": "stable metrics digest",
+        "MarkDuplicates": "duplicate-marking semantic digest plus stable metrics digest"
+      }
+    }
+  ]
+}

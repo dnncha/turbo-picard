@@ -66,6 +66,33 @@ cargo run -q -p turbo-picard-cli --bin picard -- \
   VALIDATION_STRINGENCY=SILENT \
   QUIET=true
 
+cargo run -q -p turbo-picard-cli --bin picard -- \
+  SetNmMdAndUqTags \
+  "I=$workdir/input-existing-tags.sam" \
+  "O=$workdir/turbo-runtime.sam" \
+  "R=$workdir/ref.fa" \
+  CREATE_INDEX=true \
+  CREATE_MD5_FILE=true \
+  "TMP_DIR=$workdir" \
+  MAX_RECORDS_IN_RAM=500 \
+  USE_JDK_DEFLATER=true \
+  USE_JDK_INFLATER=true \
+  VALIDATION_STRINGENCY=SILENT \
+  QUIET=true
+
+"${conda_runner[@]}" run -p "$conda_prefix" picard SetNmMdAndUqTags \
+  "I=$workdir/input-existing-tags.sam" \
+  "O=$workdir/picard-runtime.sam" \
+  "R=$workdir/ref.fa" \
+  CREATE_INDEX=true \
+  CREATE_MD5_FILE=true \
+  "TMP_DIR=$workdir" \
+  MAX_RECORDS_IN_RAM=500 \
+  USE_JDK_DEFLATER=true \
+  USE_JDK_INFLATER=true \
+  VALIDATION_STRINGENCY=SILENT \
+  QUIET=true
+
 python3 - "$workdir/turbo.sam" "$workdir/picard.sam" <<'PY'
 import sys
 
@@ -98,4 +125,28 @@ picard = stable_lines(sys.argv[2])
 if turbo != picard:
     raise SystemExit(f"SetNmMdAndUqTags SET_ONLY_UQ output differs:\nturbo={turbo}\npicard={picard}")
 print("SetNmMdAndUqTags SET_ONLY_UQ output matches Picard")
+PY
+
+python3 - "$workdir" <<'PY'
+import pathlib
+import sys
+
+workdir = pathlib.Path(sys.argv[1])
+expected = [
+    "turbo-runtime.sam.md5",
+    "picard-runtime.sam.md5",
+]
+missing = [name for name in expected if not (workdir / name).exists()]
+if missing:
+    raise SystemExit(f"missing SetNmMdAndUqTags md5 sidecars: {missing}")
+unexpected = [
+    "turbo-runtime.sam.bai",
+    "picard-runtime.sam.bai",
+    "turbo-runtime.sam.idx",
+    "picard-runtime.sam.idx",
+]
+present = [name for name in unexpected if (workdir / name).exists()]
+if present:
+    raise SystemExit(f"unexpected SetNmMdAndUqTags index sidecars: {present}")
+print("SetNmMdAndUqTags runtime sidecar behavior matches Picard")
 PY

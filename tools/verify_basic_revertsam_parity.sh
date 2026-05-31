@@ -58,8 +58,11 @@ cargo run -q -p turbo-picard-cli --bin picard -- \
   "I=$workdir/input.sam" \
   "O=$workdir/turbo-md5.sam" \
   CREATE_MD5_FILE=true \
+  COMPRESSION_LEVEL=5 \
   "TMP_DIR=$workdir" \
   MAX_RECORDS_IN_RAM=500 \
+  USE_JDK_DEFLATER=true \
+  USE_JDK_INFLATER=true \
   VALIDATION_STRINGENCY=SILENT \
   QUIET=true
 
@@ -67,8 +70,11 @@ cargo run -q -p turbo-picard-cli --bin picard -- \
   "I=$workdir/input.sam" \
   "O=$workdir/picard-md5.sam" \
   CREATE_MD5_FILE=true \
+  COMPRESSION_LEVEL=5 \
   "TMP_DIR=$workdir" \
   MAX_RECORDS_IN_RAM=500 \
+  USE_JDK_DEFLATER=true \
+  USE_JDK_INFLATER=true \
   VALIDATION_STRINGENCY=SILENT \
   QUIET=true
 
@@ -90,7 +96,7 @@ if turbo != picard:
     raise SystemExit(f"RevertSam MD5 SAM output differs:\nturbo={turbo}\npicard={picard}")
 if open(turbo_md5_path, encoding="utf-8").read().strip() != open(picard_md5_path, encoding="utf-8").read().strip():
     raise SystemExit("RevertSam MD5 sidecar differs from Picard")
-print("RevertSam MD5 sidecar and temp-option output matches Picard")
+print("RevertSam MD5 sidecar and runtime-option output matches Picard")
 PY
 
 cargo run -q -p turbo-picard-cli --bin picard -- \

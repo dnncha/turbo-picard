@@ -1,6 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+turbo-picard --version
+turbo-picard MarkDuplicates --help
+turbo-picard SortSam --help
+turbo-picard CleanSam --help
+turbo-picard ViewSam --help
+
 cat > input.sam <<'SAM'
 @HD	VN:1.6	SO:coordinate
 @SQ	SN:chr1	LN:1000

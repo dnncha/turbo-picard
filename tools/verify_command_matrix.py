@@ -35,10 +35,42 @@ def matrix_parity_scripts():
     return scripts
 
 
+def matrix_entries():
+    entries = []
+    current = None
+    for line in MATRIX.read_text(encoding="utf-8").splitlines():
+        name_match = re.match(r"\s+- name: (.+)", line)
+        if name_match:
+            if current:
+                entries.append(current)
+            current = {"name": name_match.group(1)}
+            continue
+        field_match = re.match(r"\s+([a-z_]+): (.+)", line)
+        if field_match and current is not None:
+            key = field_match.group(1)
+            value = field_match.group(2).strip().strip('"')
+            current[key] = value
+    if current:
+        entries.append(current)
+    return entries
+
+
 def dispatcher_commands():
     text = CLI.read_text(encoding="utf-8")
     text = text.split("fn print_top_level_help", 1)[0]
     return set(re.findall(r'Some\("([^"]+)"\) =>', text))
+
+
+def validate_scope_notes(entries):
+    errors = []
+    for entry in entries:
+        for key in ("native_scope", "fallback_scope"):
+            value = entry.get(key, "").strip()
+            if not value:
+                errors.append(f"{entry['name']} missing {key}")
+            elif re.search(r"\b(TBD|TODO|unknown)\b", value, re.IGNORECASE):
+                errors.append(f"{entry['name']} has vague {key}: {value}")
+    return errors
 
 
 def main():
@@ -61,6 +93,11 @@ def main():
             + ", ".join(missing_scripts),
             file=sys.stderr,
         )
+        return 1
+    scope_errors = validate_scope_notes(matrix_entries())
+    if scope_errors:
+        for error in scope_errors:
+            print(error, file=sys.stderr)
         return 1
     ci_text = CI.read_text(encoding="utf-8")
     scripts_missing_from_ci = [

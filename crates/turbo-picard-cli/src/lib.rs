@@ -794,7 +794,13 @@ Common options:
   UNPAIRED_FASTQ        Output FASTQ for unpaired reads
   INTERLEAVE            Write paired reads interleaved to FASTQ
   RE_REVERSE            Reverse-complement reverse-strand reads
-  CREATE_MD5_FILE       Write Picard-style .md5 sidecars for FASTQ outputs"
+  CREATE_MD5_FILE       Write Picard-style .md5 sidecars for FASTQ outputs
+  CREATE_INDEX          Accepted for Picard command-line compatibility
+  REFERENCE_SEQUENCE / R Accepted for Picard command-line compatibility
+  TMP_DIR
+  MAX_RECORDS_IN_RAM
+  USE_JDK_DEFLATER
+  USE_JDK_INFLATER"
     );
 }
 
@@ -817,7 +823,13 @@ Common options:
   QUALITY_FORMAT        Standard or Illumina
   SORT_ORDER            queryname, coordinate, or unsorted
   COMMENT               Add @CO header line; may be repeated
-  CREATE_MD5_FILE       Write Picard-style .md5 sidecar for OUTPUT"
+  CREATE_MD5_FILE       Write Picard-style .md5 sidecar for OUTPUT
+  CREATE_INDEX          Accepted for Picard command-line compatibility
+  REFERENCE_SEQUENCE / R Accepted for Picard command-line compatibility
+  TMP_DIR
+  MAX_RECORDS_IN_RAM
+  USE_JDK_DEFLATER
+  USE_JDK_INFLATER"
     );
 }
 
@@ -841,7 +853,17 @@ Common options:
   RGDT
   RGPI
   RGPG
-  RGPM"
+  RGPM
+  RGKS
+  RGFO
+  CREATE_MD5_FILE       Write Picard-style .md5 sidecar for OUTPUT
+  CREATE_INDEX          Create BAM index sidecar for BAM output; accepted without index for SAM
+  REFERENCE_SEQUENCE / R Accepted for Picard command-line compatibility
+  COMPRESSION_LEVEL
+  MAX_RECORDS_IN_RAM
+  TMP_DIR
+  USE_JDK_DEFLATER
+  USE_JDK_INFLATER"
     );
 }
 
@@ -971,7 +993,7 @@ Supported options:
   LOCUS_ACCUMULATION_CAP
   INTERVALS
   STOP_AFTER
-  SAMPLE_SIZE=0|1
+  SAMPLE_SIZE
   VALIDATION_STRINGENCY
   QUIET"
     );
@@ -1013,7 +1035,7 @@ Supported options:
   ACTION=CONCAT
   SORT
   UNIQUE
-  PADDING=0
+  PADDING
   DONT_MERGE_ABUTTING=false
   VALIDATION_STRINGENCY
   QUIET"
@@ -1037,8 +1059,11 @@ Supported options:
   SORT_ORDER=queryname|coordinate|unsorted
   CREATE_INDEX
   CREATE_MD5_FILE
+  COMPRESSION_LEVEL
   TMP_DIR
   MAX_RECORDS_IN_RAM
+  USE_JDK_DEFLATER
+  USE_JDK_INFLATER
   ATTRIBUTE_TO_CLEAR
   VALIDATION_STRINGENCY
   QUIET"
@@ -1175,6 +1200,7 @@ Usage: picard ViewSam I=<input.sam|input.bam> [O=<output.sam|output.bam>]
 Supported options:
   INPUT / I             Input SAM or BAM file
   OUTPUT / O            Output SAM or BAM file; defaults to SAM on stdout
+  INTERVAL_LIST         Restrict output to records overlapping intervals
   ALIGNMENT_STATUS      All, Aligned, or Unaligned
   PF_STATUS             All, PF, or NonPF
   HEADER_ONLY           Emit only SAM header
@@ -1508,10 +1534,19 @@ fn clean_cigar_text(cigar: &str, start: u64, target_len: u64) -> Result<Option<S
     if cigar == "*" {
         return Ok(None);
     }
+    let parsed = parse_cigar_text(cigar)?;
+    let reference_end = start.saturating_add(cigar_reference_len_text(&parsed));
+    let read_len = cigar_read_len_text(&parsed);
+    if reference_end > target_len && read_len > 0 {
+        let overhang = reference_end - target_len;
+        if overhang >= read_len {
+            return Ok(Some(format!("{overhang}S")));
+        }
+    }
     let mut ref_pos = start;
     let mut changed = false;
     let mut cleaned = Vec::<(u64, char)>::new();
-    for (len, op) in parse_cigar_text(cigar)? {
+    for (len, op) in parsed {
         match op {
             'M' | '=' | 'X' => {
                 if ref_pos >= target_len {
@@ -1589,6 +1624,22 @@ fn parse_cigar_text(cigar: &str) -> Result<Vec<(u64, char)>, String> {
         return Err("malformed CleanSam CIGAR".to_string());
     }
     Ok(ops)
+}
+
+fn cigar_reference_len_text(cigars: &[(u64, char)]) -> u64 {
+    cigars
+        .iter()
+        .filter(|(_, op)| matches!(op, 'M' | '=' | 'X' | 'D' | 'N'))
+        .map(|(len, _)| *len)
+        .sum()
+}
+
+fn cigar_read_len_text(cigars: &[(u64, char)]) -> u64 {
+    cigars
+        .iter()
+        .filter(|(_, op)| matches!(op, 'M' | '=' | 'X' | 'I' | 'S'))
+        .map(|(len, _)| *len)
+        .sum()
 }
 
 fn push_text_cigar(cigars: &mut Vec<(u64, char)>, len: u64, op: char) {
@@ -2053,6 +2104,8 @@ fn run_addorreplacereadgroups(args: &[String]) -> Result<(), String> {
     reject_unsupported_addorreplacereadgroups_args(&args)?;
     let input = required_scalar_for(&args, "INPUT", "AddOrReplaceReadGroups")?;
     let output = required_scalar_for(&args, "OUTPUT", "AddOrReplaceReadGroups")?;
+    let create_md5_file = optional_bool(&args, "CREATE_MD5_FILE")?.unwrap_or(false);
+    let create_index = optional_bool(&args, "CREATE_INDEX")?.unwrap_or(false);
     let read_group = ReadGroup {
         id: optional_scalar(&args, "RGID")?.unwrap_or_else(|| "1".to_string()),
         library: required_scalar_for(&args, "RGLB", "AddOrReplaceReadGroups")?,
@@ -2065,13 +2118,16 @@ fn run_addorreplacereadgroups(args: &[String]) -> Result<(), String> {
         predicted_insert_size: optional_scalar(&args, "RGPI")?,
         program_group: optional_scalar(&args, "RGPG")?,
         platform_model: optional_scalar(&args, "RGPM")?,
+        key_sequence: optional_scalar(&args, "RGKS")?,
+        flow_order: optional_scalar(&args, "RGFO")?,
     };
 
     if has_sam_extension(&input)
         && has_sam_extension(&output)
         && optional_u32(&args, "COMPRESSION_LEVEL")?.is_none()
     {
-        return run_addorreplacereadgroups_sam_text(&input, &output, &read_group);
+        run_addorreplacereadgroups_sam_text(&input, &output, &read_group)?;
+        return write_requested_sidecars(&output, create_md5_file, false);
     }
 
     let mut reader = bam::Reader::from_path(&input).map_err(|error| error.to_string())?;
@@ -2090,8 +2146,13 @@ fn run_addorreplacereadgroups(args: &[String]) -> Result<(), String> {
         set_record_read_group(&mut record, &read_group.id)?;
         writer.write(&record).map_err(|error| error.to_string())?;
     }
+    drop(writer);
 
-    Ok(())
+    write_requested_sidecars(
+        &output,
+        create_md5_file,
+        create_index && has_extension(&output, "bam"),
+    )
 }
 
 fn run_addorreplacereadgroups_sam_text(
@@ -2164,6 +2225,8 @@ fn write_read_group_header_line(
     push_sam_tag(&mut line, "PI", read_group.predicted_insert_size.as_deref());
     push_sam_tag(&mut line, "PG", read_group.program_group.as_deref());
     push_sam_tag(&mut line, "PM", read_group.platform_model.as_deref());
+    push_sam_tag(&mut line, "KS", read_group.key_sequence.as_deref());
+    push_sam_tag(&mut line, "FO", read_group.flow_order.as_deref());
     line.push('\n');
     writer
         .write_all(line.as_bytes())
@@ -2632,6 +2695,9 @@ fn run_collectwgsmetrics(args: &[String]) -> Result<(), String> {
     let references = read_fasta_sequences(&reference, true)?;
     let interval_masks = collectwgs_interval_masks(args.get("INTERVALS"), &references)?;
     let mut summary = WgsMetricsSummary::new(&references, interval_masks, coverage_cap);
+    if stop_after >= 0 {
+        summary.limit_included_loci(stop_after as usize);
+    }
     let mut reader = bam::Reader::from_path(&input).map_err(|error| error.to_string())?;
     let target_names = reader
         .header()
@@ -2639,12 +2705,7 @@ fn run_collectwgsmetrics(args: &[String]) -> Result<(), String> {
         .iter()
         .map(|name| String::from_utf8_lossy(name).to_string())
         .collect::<Vec<_>>();
-    let limit = if stop_after < 0 {
-        None
-    } else {
-        Some(stop_after as usize)
-    };
-    for record in reader.records().take(limit.unwrap_or(usize::MAX)) {
+    for record in reader.records() {
         let record = record.map_err(|error| error.to_string())?;
         summary.observe(
             &record,
@@ -2807,6 +2868,11 @@ fn run_createsequencedictionary(args: &[String]) -> Result<(), String> {
     let assembly = optional_scalar(&args, "GENOME_ASSEMBLY")?;
     let species = optional_scalar(&args, "SPECIES")?;
     let num_sequences = optional_u32(&args, "NUM_SEQUENCES")?;
+    let create_md5_file = optional_bool(&args, "CREATE_MD5_FILE")?.unwrap_or(false);
+    let alt_names = match optional_scalar(&args, "ALT_NAMES")? {
+        Some(path) => read_alt_names(&path)?,
+        None => BTreeMap::new(),
+    };
 
     let mut records = read_fasta_sequences(&reference, truncate_names)?;
     if let Some(limit) = num_sequences {
@@ -2827,10 +2893,38 @@ fn run_createsequencedictionary(args: &[String]) -> Result<(), String> {
         if let Some(species) = species.as_deref() {
             dictionary.push_str(&format!("\tSP:{species}"));
         }
+        if let Some(names) = alt_names.get(&record.name) {
+            dictionary.push_str("\tAN:");
+            dictionary.push_str(&names.join(","));
+        }
         dictionary.push('\n');
     }
 
-    fs::write(output, dictionary).map_err(|error| error.to_string())
+    fs::write(&output, dictionary).map_err(|error| error.to_string())?;
+    write_requested_sidecars(&output, create_md5_file, false)
+}
+
+fn read_alt_names(path: &str) -> Result<BTreeMap<String, Vec<String>>, String> {
+    let text = fs::read_to_string(path).map_err(|error| error.to_string())?;
+    let mut alt_names = BTreeMap::<String, Vec<String>>::new();
+    for (line_index, line) in text.lines().enumerate() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let fields = line.split('\t').collect::<Vec<_>>();
+        if fields.len() < 2 {
+            return Err(format!(
+                "malformed CreateSequenceDictionary ALT_NAMES line {}",
+                line_index + 1
+            ));
+        }
+        alt_names
+            .entry(fields[0].to_string())
+            .or_default()
+            .push(fields[1].to_string());
+    }
+    Ok(alt_names)
 }
 
 fn run_normalizefasta(args: &[String]) -> Result<(), String> {
@@ -2878,11 +2972,19 @@ fn run_bedtointervallist(args: &[String]) -> Result<(), String> {
     let dictionary_path = required_scalar_for(&args, "SEQUENCE_DICTIONARY", "BedToIntervalList")?;
     let sort = optional_bool(&args, "SORT")?.unwrap_or(true);
     let unique = optional_bool(&args, "UNIQUE")?.unwrap_or(false);
+    let drop_missing_contigs = optional_bool(&args, "DROP_MISSING_CONTIGS")?.unwrap_or(false);
+    let keep_length_zero_intervals =
+        optional_bool(&args, "KEEP_LENGTH_ZERO_INTERVALS")?.unwrap_or(false);
 
     let dictionary_text =
         fs::read_to_string(&dictionary_path).map_err(|error| error.to_string())?;
     let contig_order = dictionary_contig_order(&dictionary_text);
-    let mut intervals = read_bed_intervals(&input, &contig_order)?;
+    let mut intervals = read_bed_intervals(
+        &input,
+        &contig_order,
+        drop_missing_contigs,
+        keep_length_zero_intervals,
+    )?;
     if sort {
         intervals.sort_by(|left, right| {
             left.contig_index
@@ -2912,8 +3014,8 @@ fn run_bedtointervallist(args: &[String]) -> Result<(), String> {
     fs::write(output, text).map_err(|error| error.to_string())
 }
 
-fn bed_interval_list_header(dictionary_text: &str, sort: bool) -> String {
-    let sort_order = if sort { "coordinate" } else { "unsorted" };
+fn bed_interval_list_header(dictionary_text: &str, _sort: bool) -> String {
+    let sort_order = "coordinate";
     let mut text = String::new();
     let mut saw_hd = false;
     for line in dictionary_text.lines().filter(|line| line.starts_with('@')) {
@@ -2958,15 +3060,20 @@ fn run_intervallisttools(args: &[String]) -> Result<(), String> {
     let sort = optional_bool(&args, "SORT")?.unwrap_or(true);
     let unique = optional_bool(&args, "UNIQUE")?.unwrap_or(false);
     let dont_merge_abutting = optional_bool(&args, "DONT_MERGE_ABUTTING")?.unwrap_or(false);
+    let padding = optional_i64(&args, "PADDING")?.unwrap_or(0);
 
     let first_text = fs::read_to_string(&inputs[0]).map_err(|error| error.to_string())?;
     let header_text = interval_list_header_text(&first_text);
     let contig_order = dictionary_contig_order(&header_text);
+    let contig_lengths = dictionary_contig_lengths(&header_text);
     let mut intervals = Vec::<BedInterval>::new();
     intervals.extend(read_interval_list_intervals(&first_text, &contig_order)?);
     for input in inputs.iter().skip(1) {
         let text = fs::read_to_string(input).map_err(|error| error.to_string())?;
         intervals.extend(read_interval_list_intervals(&text, &contig_order)?);
+    }
+    if padding > 0 {
+        apply_interval_padding(&mut intervals, &contig_lengths, padding as u64)?;
     }
 
     if sort || unique {
@@ -3070,6 +3177,8 @@ fn run_setnmmdanduqtags(args: &[String]) -> Result<(), String> {
     let output_format = output_format_for(&output, "SetNmMdAndUqTags")?;
     let compression_level = optional_u32(&args, "COMPRESSION_LEVEL")?;
     let set_only_uq = optional_bool(&args, "SET_ONLY_UQ")?.unwrap_or(false);
+    let create_md5_file = optional_bool(&args, "CREATE_MD5_FILE")?.unwrap_or(false);
+    let create_index = optional_bool(&args, "CREATE_INDEX")?.unwrap_or(false);
 
     let reference = reference_sequences_by_name(&reference)?;
     let mut reader = bam::Reader::from_path(&input).map_err(|error| error.to_string())?;
@@ -3094,7 +3203,13 @@ fn run_setnmmdanduqtags(args: &[String]) -> Result<(), String> {
         set_nm_md_uq_tags(&mut record, &references_by_tid, set_only_uq)?;
         writer.write(&record).map_err(|error| error.to_string())?;
     }
-    Ok(())
+    drop(writer);
+
+    write_requested_sidecars(
+        &output,
+        create_md5_file,
+        create_index && has_extension(&output, "bam"),
+    )
 }
 
 fn run_validatesamfile(args: &[String]) -> Result<(), String> {
@@ -3107,6 +3222,11 @@ fn run_validatesamfile(args: &[String]) -> Result<(), String> {
     let ignored = validate_sam_ignored_summary_keys(&args)?;
     let mode = validate_sam_mode(&args)?;
     let max_output = optional_u32(&args, "MAX_OUTPUT")?;
+    if let Some(reference) = optional_scalar(&args, "REFERENCE_SEQUENCE")? {
+        fs::metadata(&reference).map_err(|_| {
+            format!("ValidateSamFile reference sequence {reference} does not exist")
+        })?;
+    }
 
     let mut reader = bam::Reader::from_path(&input).map_err(|error| error.to_string())?;
     let mut report = validate_sam_summary(&mut reader, skip_mate_validation)?;
@@ -3143,6 +3263,7 @@ fn run_viewsam(args: &[String]) -> Result<(), String> {
 
     let mut reader = bam::Reader::from_path(&input).map_err(|error| error.to_string())?;
     let header = bam::Header::from_template(reader.header());
+    let interval_filter = viewsam_interval_filter(args.get("INTERVAL_LIST"), reader.header())?;
     if header_only {
         let header_text = String::from_utf8_lossy(reader.header().as_bytes());
         match output {
@@ -3163,6 +3284,7 @@ fn run_viewsam(args: &[String]) -> Result<(), String> {
             compression_level,
             &alignment_status,
             &pf_status,
+            interval_filter.as_ref(),
         );
     }
     match output {
@@ -3171,7 +3293,12 @@ fn run_viewsam(args: &[String]) -> Result<(), String> {
             let mut writer = bam_writer_for_path(&output, &header, format, compression_level)?;
             for record in reader.records() {
                 let record = record.map_err(|error| error.to_string())?;
-                if viewsam_record_matches(&record, &alignment_status, &pf_status)? {
+                if viewsam_record_matches(
+                    &record,
+                    &alignment_status,
+                    &pf_status,
+                    interval_filter.as_ref(),
+                )? {
                     writer.write(&record).map_err(|error| error.to_string())?;
                 }
             }
@@ -3181,7 +3308,12 @@ fn run_viewsam(args: &[String]) -> Result<(), String> {
                 .map_err(|error| error.to_string())?;
             for record in reader.records() {
                 let record = record.map_err(|error| error.to_string())?;
-                if viewsam_record_matches(&record, &alignment_status, &pf_status)? {
+                if viewsam_record_matches(
+                    &record,
+                    &alignment_status,
+                    &pf_status,
+                    interval_filter.as_ref(),
+                )? {
                     writer.write(&record).map_err(|error| error.to_string())?;
                 }
             }
@@ -3197,6 +3329,7 @@ fn run_viewsam_records_only(
     compression_level: Option<u32>,
     alignment_status: &str,
     pf_status: &str,
+    interval_filter: Option<&BTreeMap<i32, Vec<(u64, u64)>>>,
 ) -> Result<(), String> {
     if let Some(output) = output {
         if !has_sam_extension(output) {
@@ -3218,7 +3351,7 @@ fn run_viewsam_records_only(
             bam_writer_for_path(&temp_path_text, header, bam::Format::Sam, compression_level)?;
         for record in reader.records() {
             let record = record.map_err(|error| error.to_string())?;
-            if viewsam_record_matches(&record, alignment_status, pf_status)? {
+            if viewsam_record_matches(&record, alignment_status, pf_status, interval_filter)? {
                 writer.write(&record).map_err(|error| error.to_string())?;
             }
         }
@@ -3311,12 +3444,17 @@ fn run_updatevcfsequencedictionary(args: &[String]) -> Result<(), String> {
     let output = required_scalar_for(&args, "OUTPUT", "UpdateVcfSequenceDictionary")?;
     let dictionary_path =
         required_scalar_for(&args, "SEQUENCE_DICTIONARY", "UpdateVcfSequenceDictionary")?;
+    let create_index = optional_bool(&args, "CREATE_INDEX")?.unwrap_or(false);
 
     let dictionary_text = fs::read_to_string(dictionary_path).map_err(|error| error.to_string())?;
     let contig_lines = vcf_contig_lines_from_dictionary(&dictionary_text)?;
     let input_text = read_text_or_gzip(&input)?;
     let output_text = replace_vcf_contig_header(&input_text, &contig_lines)?;
-    write_text_or_gzip(&output, &output_text)
+    write_text_or_gzip(&output, &output_text)?;
+    if create_index && has_extension(&output, "vcf") {
+        write_vcf_idx_sidecar(&output, &output_text)?;
+    }
+    Ok(())
 }
 
 fn run_liftovervcf(args: &[String]) -> Result<(), String> {
@@ -3328,6 +3466,7 @@ fn run_liftovervcf(args: &[String]) -> Result<(), String> {
     let chain = required_scalar_for(&args, "CHAIN", "LiftoverVcf")?;
     let reject = required_scalar_for(&args, "REJECT", "LiftoverVcf")?;
     let reference = required_scalar_for(&args, "REFERENCE_SEQUENCE", "LiftoverVcf")?;
+    let create_index = optional_bool(&args, "CREATE_INDEX")?.unwrap_or(false);
 
     let mappings = read_simple_chain_mappings(&chain)?;
     let document = read_vcf_document(&input)?;
@@ -3365,6 +3504,9 @@ fn run_liftovervcf(args: &[String]) -> Result<(), String> {
     let output_text = liftover_output_vcf_text(&document, &contig_lines, &reference_line, &lifted);
     let reject_text = liftover_reject_vcf_text(&document, &contig_lines, &rejected);
     write_text_or_gzip(&output, &output_text)?;
+    if create_index && has_extension(&output, "vcf") {
+        write_vcf_idx_sidecar(&output, &output_text)?;
+    }
     write_text_or_gzip(&reject, &reject_text)
 }
 
@@ -3374,6 +3516,7 @@ fn run_gathervcfs(args: &[String]) -> Result<(), String> {
     reject_unsupported_gathervcfs_args(&args)?;
     let inputs = required_values_for(&args, "INPUT", "GatherVcfs")?;
     let output = required_scalar_for(&args, "OUTPUT", "GatherVcfs")?;
+    let create_index = optional_bool(&args, "CREATE_INDEX")?.unwrap_or(false);
 
     let mut documents = Vec::with_capacity(inputs.len());
     for input in &inputs {
@@ -3400,7 +3543,11 @@ fn run_gathervcfs(args: &[String]) -> Result<(), String> {
             text.push('\n');
         }
     }
-    write_text_or_gzip(&output, &text)
+    write_text_or_gzip(&output, &text)?;
+    if create_index && has_extension(&output, "vcf") {
+        write_vcf_idx_sidecar(&output, &text)?;
+    }
+    Ok(())
 }
 
 fn run_sortvcf(args: &[String]) -> Result<(), String> {
@@ -3410,6 +3557,7 @@ fn run_sortvcf(args: &[String]) -> Result<(), String> {
     let inputs = required_values_for(&args, "INPUT", "SortVcf")?;
     let output = required_scalar_for(&args, "OUTPUT", "SortVcf")?;
     let dictionary_path = optional_scalar(&args, "SEQUENCE_DICTIONARY")?;
+    let create_index = optional_bool(&args, "CREATE_INDEX")?.unwrap_or(false);
 
     let mut documents = Vec::with_capacity(inputs.len());
     for input in &inputs {
@@ -3469,7 +3617,11 @@ fn run_sortvcf(args: &[String]) -> Result<(), String> {
         text.push_str(&record.line);
         text.push('\n');
     }
-    write_text_or_gzip(&output, &text)
+    write_text_or_gzip(&output, &text)?;
+    if create_index && has_extension(&output, "vcf") {
+        write_vcf_idx_sidecar(&output, &text)?;
+    }
+    Ok(())
 }
 
 fn run_mergevcfs(args: &[String]) -> Result<(), String> {
@@ -3479,6 +3631,7 @@ fn run_mergevcfs(args: &[String]) -> Result<(), String> {
     let inputs = required_values_for(&args, "INPUT", "MergeVcfs")?;
     let output = required_scalar_for(&args, "OUTPUT", "MergeVcfs")?;
     let dictionary_path = optional_scalar(&args, "SEQUENCE_DICTIONARY")?;
+    let create_index = optional_bool(&args, "CREATE_INDEX")?.unwrap_or(false);
 
     let mut documents = Vec::with_capacity(inputs.len());
     for input in &inputs {
@@ -3537,25 +3690,33 @@ fn run_mergevcfs(args: &[String]) -> Result<(), String> {
         text.push_str(&record.line);
         text.push('\n');
     }
-    write_text_or_gzip(&output, &text)
+    write_text_or_gzip(&output, &text)?;
+    if create_index && has_extension(&output, "vcf") {
+        write_vcf_idx_sidecar(&output, &text)?;
+    }
+    Ok(())
 }
 
 fn reject_unsupported_viewsam_args(args: &BTreeMap<String, Vec<String>>) -> Result<(), String> {
     let supported = [
         "INPUT",
         "OUTPUT",
+        "INTERVAL_LIST",
         "ALIGNMENT_STATUS",
         "PF_STATUS",
         "HEADER_ONLY",
         "RECORDS_ONLY",
         "VALIDATION_STRINGENCY",
         "QUIET",
+        "CREATE_INDEX",
+        "CREATE_MD5_FILE",
         "VERBOSITY",
         "COMPRESSION_LEVEL",
         "TMP_DIR",
         "MAX_RECORDS_IN_RAM",
-        "TMP_DIR",
-        "MAX_RECORDS_IN_RAM",
+        "REFERENCE_SEQUENCE",
+        "USE_JDK_DEFLATER",
+        "USE_JDK_INFLATER",
     ];
     for key in args.keys() {
         if !supported.contains(&key.as_str()) {
@@ -3567,6 +3728,12 @@ fn reject_unsupported_viewsam_args(args: &BTreeMap<String, Vec<String>>) -> Resu
     optional_bool(args, "QUIET")?;
     optional_scalar(args, "ALIGNMENT_STATUS")?;
     optional_scalar(args, "PF_STATUS")?;
+    let _ = args.get("INTERVAL_LIST");
+    optional_scalar(args, "REFERENCE_SEQUENCE")?;
+    optional_bool(args, "CREATE_INDEX")?;
+    optional_bool(args, "CREATE_MD5_FILE")?;
+    optional_bool(args, "USE_JDK_DEFLATER")?;
+    optional_bool(args, "USE_JDK_INFLATER")?;
     let header_only = optional_bool(args, "HEADER_ONLY")?.unwrap_or(false);
     let records_only = optional_bool(args, "RECORDS_ONLY")?.unwrap_or(false);
     if header_only && records_only {
@@ -3584,6 +3751,7 @@ fn viewsam_record_matches(
     record: &bam::Record,
     alignment_status: &str,
     pf_status: &str,
+    interval_filter: Option<&BTreeMap<i32, Vec<(u64, u64)>>>,
 ) -> Result<bool, String> {
     let alignment_matches = match alignment_status {
         "All" => true,
@@ -3597,7 +3765,55 @@ fn viewsam_record_matches(
         "NonPF" => record.is_quality_check_failed(),
         value => return Err(format!("unsupported ViewSam PF_STATUS={value}")),
     };
-    Ok(alignment_matches && pf_matches)
+    Ok(alignment_matches
+        && pf_matches
+        && viewsam_record_overlaps_intervals(record, interval_filter))
+}
+
+fn viewsam_interval_filter(
+    interval_paths: Option<&Vec<String>>,
+    header: &bam::HeaderView,
+) -> Result<Option<BTreeMap<i32, Vec<(u64, u64)>>>, String> {
+    let Some(interval_paths) = interval_paths else {
+        return Ok(None);
+    };
+    let contig_order = header
+        .target_names()
+        .iter()
+        .enumerate()
+        .map(|(index, name)| (String::from_utf8_lossy(name).to_string(), index))
+        .collect::<BTreeMap<_, _>>();
+    let mut intervals_by_tid = BTreeMap::<i32, Vec<(u64, u64)>>::new();
+    for interval_path in interval_paths {
+        let text = read_text_or_gzip(interval_path)?;
+        for interval in read_interval_list_intervals(&text, &contig_order)? {
+            intervals_by_tid
+                .entry(interval.contig_index as i32)
+                .or_default()
+                .push((interval.start, interval.end));
+        }
+    }
+    Ok(Some(intervals_by_tid))
+}
+
+fn viewsam_record_overlaps_intervals(
+    record: &bam::Record,
+    interval_filter: Option<&BTreeMap<i32, Vec<(u64, u64)>>>,
+) -> bool {
+    let Some(interval_filter) = interval_filter else {
+        return true;
+    };
+    if record.is_unmapped() || record.tid() < 0 || record.pos() < 0 {
+        return false;
+    }
+    let Some(intervals) = interval_filter.get(&record.tid()) else {
+        return false;
+    };
+    let record_start = record.pos() as u64 + 1;
+    let record_end = record.cigar().end_pos().max(record.pos() + 1) as u64;
+    intervals.iter().any(|(interval_start, interval_end)| {
+        record_start <= *interval_end && record_end >= *interval_start
+    })
 }
 
 fn reject_unsupported_updatevcfsequencedictionary_args(
@@ -3611,6 +3827,12 @@ fn reject_unsupported_updatevcfsequencedictionary_args(
         "QUIET",
         "VERBOSITY",
         "CREATE_MD5_FILE",
+        "CREATE_INDEX",
+        "REFERENCE_SEQUENCE",
+        "TMP_DIR",
+        "MAX_RECORDS_IN_RAM",
+        "USE_JDK_DEFLATER",
+        "USE_JDK_INFLATER",
         "COMPRESSION_LEVEL",
     ];
     for key in args.keys() {
@@ -3625,6 +3847,12 @@ fn reject_unsupported_updatevcfsequencedictionary_args(
     optional_scalar(args, "VERBOSITY")?;
     optional_bool(args, "QUIET")?;
     optional_bool(args, "CREATE_MD5_FILE")?;
+    optional_bool(args, "CREATE_INDEX")?;
+    optional_scalar(args, "REFERENCE_SEQUENCE")?;
+    optional_scalar(args, "TMP_DIR")?;
+    optional_u32(args, "MAX_RECORDS_IN_RAM")?;
+    optional_bool(args, "USE_JDK_DEFLATER")?;
+    optional_bool(args, "USE_JDK_INFLATER")?;
     if let Some(level) = optional_u32(args, "COMPRESSION_LEVEL")? {
         if level > 9 {
             return Err(format!(
@@ -3645,10 +3873,14 @@ fn reject_unsupported_liftovervcf_args(args: &BTreeMap<String, Vec<String>>) -> 
         "WARN_ON_MISSING_CONTIG",
         "VALIDATION_STRINGENCY",
         "QUIET",
+        "CREATE_INDEX",
+        "CREATE_MD5_FILE",
         "VERBOSITY",
         "COMPRESSION_LEVEL",
         "TMP_DIR",
         "MAX_RECORDS_IN_RAM",
+        "USE_JDK_DEFLATER",
+        "USE_JDK_INFLATER",
     ];
     for key in args.keys() {
         if !supported.contains(&key.as_str()) {
@@ -3659,8 +3891,12 @@ fn reject_unsupported_liftovervcf_args(args: &BTreeMap<String, Vec<String>>) -> 
     optional_scalar(args, "VALIDATION_STRINGENCY")?;
     optional_scalar(args, "VERBOSITY")?;
     optional_bool(args, "QUIET")?;
+    optional_bool(args, "CREATE_INDEX")?;
+    optional_bool(args, "CREATE_MD5_FILE")?;
     let _ = args.get("TMP_DIR");
     optional_u32(args, "MAX_RECORDS_IN_RAM")?;
+    optional_bool(args, "USE_JDK_DEFLATER")?;
+    optional_bool(args, "USE_JDK_INFLATER")?;
     if let Some(level) = optional_u32(args, "COMPRESSION_LEVEL")? {
         if level > 9 {
             return Err(format!(
@@ -3679,8 +3915,13 @@ fn reject_unsupported_gathervcfs_args(args: &BTreeMap<String, Vec<String>>) -> R
         "QUIET",
         "VERBOSITY",
         "COMPRESSION_LEVEL",
+        "CREATE_INDEX",
+        "CREATE_MD5_FILE",
+        "REFERENCE_SEQUENCE",
         "TMP_DIR",
         "MAX_RECORDS_IN_RAM",
+        "USE_JDK_DEFLATER",
+        "USE_JDK_INFLATER",
     ];
     for key in args.keys() {
         if !supported.contains(&key.as_str()) {
@@ -3690,8 +3931,13 @@ fn reject_unsupported_gathervcfs_args(args: &BTreeMap<String, Vec<String>>) -> R
     optional_scalar(args, "VALIDATION_STRINGENCY")?;
     optional_scalar(args, "VERBOSITY")?;
     optional_bool(args, "QUIET")?;
+    optional_bool(args, "CREATE_INDEX")?;
+    optional_bool(args, "CREATE_MD5_FILE")?;
+    optional_scalar(args, "REFERENCE_SEQUENCE")?;
     let _ = args.get("TMP_DIR");
     optional_u32(args, "MAX_RECORDS_IN_RAM")?;
+    optional_bool(args, "USE_JDK_DEFLATER")?;
+    optional_bool(args, "USE_JDK_INFLATER")?;
     if let Some(level) = optional_u32(args, "COMPRESSION_LEVEL")? {
         if level > 9 {
             return Err(format!("unsupported GatherVcfs COMPRESSION_LEVEL: {level}"));
@@ -3708,7 +3954,14 @@ fn reject_unsupported_sortvcf_args(args: &BTreeMap<String, Vec<String>>) -> Resu
         "VALIDATION_STRINGENCY",
         "QUIET",
         "VERBOSITY",
+        "REFERENCE_SEQUENCE",
+        "CREATE_INDEX",
+        "CREATE_MD5_FILE",
         "COMPRESSION_LEVEL",
+        "MAX_RECORDS_IN_RAM",
+        "TMP_DIR",
+        "USE_JDK_DEFLATER",
+        "USE_JDK_INFLATER",
     ];
     for key in args.keys() {
         if !supported.contains(&key.as_str()) {
@@ -3736,6 +3989,13 @@ fn reject_unsupported_mergevcfs_args(args: &BTreeMap<String, Vec<String>>) -> Re
         "QUIET",
         "VERBOSITY",
         "COMPRESSION_LEVEL",
+        "REFERENCE_SEQUENCE",
+        "CREATE_INDEX",
+        "CREATE_MD5_FILE",
+        "MAX_RECORDS_IN_RAM",
+        "TMP_DIR",
+        "USE_JDK_DEFLATER",
+        "USE_JDK_INFLATER",
     ];
     for key in args.keys() {
         if !supported.contains(&key.as_str()) {
@@ -4258,6 +4518,12 @@ fn reject_unsupported_replacesamheader_args(
         "QUIET",
         "VERBOSITY",
         "CREATE_MD5_FILE",
+        "CREATE_INDEX",
+        "REFERENCE_SEQUENCE",
+        "TMP_DIR",
+        "MAX_RECORDS_IN_RAM",
+        "USE_JDK_DEFLATER",
+        "USE_JDK_INFLATER",
         "COMPRESSION_LEVEL",
     ];
     for key in args.keys() {
@@ -4270,6 +4536,12 @@ fn reject_unsupported_replacesamheader_args(
     optional_scalar(args, "VERBOSITY")?;
     optional_bool(args, "QUIET")?;
     optional_bool(args, "CREATE_MD5_FILE")?;
+    optional_bool(args, "CREATE_INDEX")?;
+    optional_scalar(args, "REFERENCE_SEQUENCE")?;
+    optional_scalar(args, "TMP_DIR")?;
+    optional_u32(args, "MAX_RECORDS_IN_RAM")?;
+    optional_bool(args, "USE_JDK_DEFLATER")?;
+    optional_bool(args, "USE_JDK_INFLATER")?;
     if let Some(level) = optional_u32(args, "COMPRESSION_LEVEL")? {
         if level > 9 {
             return Err(format!(
@@ -4290,7 +4562,15 @@ fn reject_unsupported_createsequencedictionary_args(
         "URI",
         "GENOME_ASSEMBLY",
         "SPECIES",
+        "ALT_NAMES",
         "NUM_SEQUENCES",
+        "CREATE_INDEX",
+        "CREATE_MD5_FILE",
+        "COMPRESSION_LEVEL",
+        "MAX_RECORDS_IN_RAM",
+        "TMP_DIR",
+        "USE_JDK_DEFLATER",
+        "USE_JDK_INFLATER",
         "VALIDATION_STRINGENCY",
         "QUIET",
         "VERBOSITY",
@@ -4308,7 +4588,21 @@ fn reject_unsupported_createsequencedictionary_args(
     optional_scalar(args, "URI")?;
     optional_scalar(args, "GENOME_ASSEMBLY")?;
     optional_scalar(args, "SPECIES")?;
+    optional_scalar(args, "ALT_NAMES")?;
     optional_u32(args, "NUM_SEQUENCES")?;
+    optional_bool(args, "CREATE_INDEX")?;
+    optional_bool(args, "CREATE_MD5_FILE")?;
+    if let Some(level) = optional_u32(args, "COMPRESSION_LEVEL")? {
+        if level > 9 {
+            return Err(format!(
+                "unsupported CreateSequenceDictionary COMPRESSION_LEVEL: {level}"
+            ));
+        }
+    }
+    optional_u32(args, "MAX_RECORDS_IN_RAM")?;
+    optional_scalar(args, "TMP_DIR")?;
+    optional_bool(args, "USE_JDK_DEFLATER")?;
+    optional_bool(args, "USE_JDK_INFLATER")?;
     optional_scalar(args, "VALIDATION_STRINGENCY")?;
     optional_scalar(args, "VERBOSITY")?;
     optional_bool(args, "QUIET")?;
@@ -4323,6 +4617,14 @@ fn reject_unsupported_normalizefasta_args(
         "OUTPUT",
         "LINE_LENGTH",
         "TRUNCATE_SEQUENCE_NAMES_AT_WHITESPACE",
+        "REFERENCE_SEQUENCE",
+        "CREATE_INDEX",
+        "CREATE_MD5_FILE",
+        "COMPRESSION_LEVEL",
+        "MAX_RECORDS_IN_RAM",
+        "TMP_DIR",
+        "USE_JDK_DEFLATER",
+        "USE_JDK_INFLATER",
         "VALIDATION_STRINGENCY",
         "QUIET",
         "VERBOSITY",
@@ -4334,6 +4636,20 @@ fn reject_unsupported_normalizefasta_args(
     }
     optional_u32(args, "LINE_LENGTH")?;
     optional_bool(args, "TRUNCATE_SEQUENCE_NAMES_AT_WHITESPACE")?;
+    optional_scalar(args, "REFERENCE_SEQUENCE")?;
+    optional_bool(args, "CREATE_INDEX")?;
+    optional_bool(args, "CREATE_MD5_FILE")?;
+    if let Some(level) = optional_u32(args, "COMPRESSION_LEVEL")? {
+        if level > 9 {
+            return Err(format!(
+                "unsupported NormalizeFasta COMPRESSION_LEVEL: {level}"
+            ));
+        }
+    }
+    optional_u32(args, "MAX_RECORDS_IN_RAM")?;
+    optional_scalar(args, "TMP_DIR")?;
+    optional_bool(args, "USE_JDK_DEFLATER")?;
+    optional_bool(args, "USE_JDK_INFLATER")?;
     optional_scalar(args, "VALIDATION_STRINGENCY")?;
     optional_scalar(args, "VERBOSITY")?;
     optional_bool(args, "QUIET")?;
@@ -4349,6 +4665,16 @@ fn reject_unsupported_bedtointervallist_args(
         "SEQUENCE_DICTIONARY",
         "SORT",
         "UNIQUE",
+        "DROP_MISSING_CONTIGS",
+        "KEEP_LENGTH_ZERO_INTERVALS",
+        "REFERENCE_SEQUENCE",
+        "CREATE_INDEX",
+        "CREATE_MD5_FILE",
+        "COMPRESSION_LEVEL",
+        "MAX_RECORDS_IN_RAM",
+        "TMP_DIR",
+        "USE_JDK_DEFLATER",
+        "USE_JDK_INFLATER",
         "VALIDATION_STRINGENCY",
         "QUIET",
         "VERBOSITY",
@@ -4360,6 +4686,22 @@ fn reject_unsupported_bedtointervallist_args(
     }
     optional_bool(args, "SORT")?;
     optional_bool(args, "UNIQUE")?;
+    optional_bool(args, "DROP_MISSING_CONTIGS")?;
+    optional_bool(args, "KEEP_LENGTH_ZERO_INTERVALS")?;
+    optional_scalar(args, "REFERENCE_SEQUENCE")?;
+    optional_bool(args, "CREATE_INDEX")?;
+    optional_bool(args, "CREATE_MD5_FILE")?;
+    if let Some(level) = optional_u32(args, "COMPRESSION_LEVEL")? {
+        if level > 9 {
+            return Err(format!(
+                "unsupported BedToIntervalList COMPRESSION_LEVEL: {level}"
+            ));
+        }
+    }
+    optional_u32(args, "MAX_RECORDS_IN_RAM")?;
+    optional_scalar(args, "TMP_DIR")?;
+    optional_bool(args, "USE_JDK_DEFLATER")?;
+    optional_bool(args, "USE_JDK_INFLATER")?;
     optional_scalar(args, "VALIDATION_STRINGENCY")?;
     optional_scalar(args, "VERBOSITY")?;
     optional_bool(args, "QUIET")?;
@@ -4381,6 +4723,13 @@ fn reject_unsupported_intervallisttools_args(
         "QUIET",
         "VERBOSITY",
         "COMPRESSION_LEVEL",
+        "REFERENCE_SEQUENCE",
+        "CREATE_INDEX",
+        "CREATE_MD5_FILE",
+        "MAX_RECORDS_IN_RAM",
+        "TMP_DIR",
+        "USE_JDK_DEFLATER",
+        "USE_JDK_INFLATER",
     ];
     for key in args.keys() {
         if !supported.contains(&key.as_str()) {
@@ -4394,8 +4743,8 @@ fn reject_unsupported_intervallisttools_args(
     }
     optional_bool(args, "SORT")?;
     optional_bool(args, "UNIQUE")?;
-    if optional_i64(args, "PADDING")?.unwrap_or(0) != 0 {
-        return Err("unsupported IntervalListTools PADDING".to_string());
+    if optional_i64(args, "PADDING")?.unwrap_or(0) < 0 {
+        return Err("Padding values must be >= 0.".to_string());
     }
     optional_bool(args, "DONT_MERGE_ABUTTING")?;
     optional_scalar(args, "VALIDATION_STRINGENCY")?;
@@ -4431,6 +4780,8 @@ fn reject_unsupported_revertsam_args(args: &BTreeMap<String, Vec<String>>) -> Re
         "CREATE_INDEX",
         "TMP_DIR",
         "MAX_RECORDS_IN_RAM",
+        "USE_JDK_DEFLATER",
+        "USE_JDK_INFLATER",
     ];
     for key in args.keys() {
         if !supported.contains(&key.as_str()) {
@@ -4464,6 +4815,8 @@ fn reject_unsupported_revertsam_args(args: &BTreeMap<String, Vec<String>>) -> Re
     optional_bool(args, "CREATE_MD5_FILE")?;
     let _ = args.get("TMP_DIR");
     optional_u32(args, "MAX_RECORDS_IN_RAM")?;
+    optional_bool(args, "USE_JDK_DEFLATER")?;
+    optional_bool(args, "USE_JDK_INFLATER")?;
     if let Some(level) = optional_u32(args, "COMPRESSION_LEVEL")? {
         if level > 9 {
             return Err(format!("unsupported RevertSam COMPRESSION_LEVEL: {level}"));
@@ -4506,6 +4859,12 @@ fn reject_unsupported_setnmmdanduqtags_args(
         "QUIET",
         "VERBOSITY",
         "COMPRESSION_LEVEL",
+        "CREATE_INDEX",
+        "CREATE_MD5_FILE",
+        "TMP_DIR",
+        "MAX_RECORDS_IN_RAM",
+        "USE_JDK_DEFLATER",
+        "USE_JDK_INFLATER",
     ];
     for key in args.keys() {
         if !supported.contains(&key.as_str()) {
@@ -4516,6 +4875,12 @@ fn reject_unsupported_setnmmdanduqtags_args(
         return Err("unsupported SetNmMdAndUqTags IS_BISULFITE_SEQUENCE=true".to_string());
     }
     optional_bool(args, "SET_ONLY_UQ")?;
+    optional_bool(args, "CREATE_INDEX")?;
+    optional_bool(args, "CREATE_MD5_FILE")?;
+    let _ = args.get("TMP_DIR");
+    optional_u32(args, "MAX_RECORDS_IN_RAM")?;
+    optional_bool(args, "USE_JDK_DEFLATER")?;
+    optional_bool(args, "USE_JDK_INFLATER")?;
     optional_scalar(args, "VALIDATION_STRINGENCY")?;
     optional_scalar(args, "VERBOSITY")?;
     optional_bool(args, "QUIET")?;
@@ -4539,6 +4904,14 @@ fn reject_unsupported_validatesamfile_args(
         "MAX_OUTPUT",
         "IGNORE",
         "SKIP_MATE_VALIDATION",
+        "REFERENCE_SEQUENCE",
+        "CREATE_INDEX",
+        "CREATE_MD5_FILE",
+        "TMP_DIR",
+        "MAX_RECORDS_IN_RAM",
+        "COMPRESSION_LEVEL",
+        "USE_JDK_DEFLATER",
+        "USE_JDK_INFLATER",
         "VALIDATION_STRINGENCY",
         "QUIET",
         "VERBOSITY",
@@ -4551,6 +4924,20 @@ fn reject_unsupported_validatesamfile_args(
     validate_sam_mode(args)?;
     optional_u32(args, "MAX_OUTPUT")?;
     optional_bool(args, "SKIP_MATE_VALIDATION")?;
+    optional_scalar(args, "REFERENCE_SEQUENCE")?;
+    optional_bool(args, "CREATE_INDEX")?;
+    optional_bool(args, "CREATE_MD5_FILE")?;
+    let _ = args.get("TMP_DIR");
+    optional_u32(args, "MAX_RECORDS_IN_RAM")?;
+    optional_bool(args, "USE_JDK_DEFLATER")?;
+    optional_bool(args, "USE_JDK_INFLATER")?;
+    if let Some(level) = optional_u32(args, "COMPRESSION_LEVEL")? {
+        if level > 9 {
+            return Err(format!(
+                "unsupported ValidateSamFile COMPRESSION_LEVEL: {level}"
+            ));
+        }
+    }
     optional_scalar(args, "VALIDATION_STRINGENCY")?;
     optional_scalar(args, "VERBOSITY")?;
     optional_bool(args, "QUIET")?;
@@ -5038,6 +5425,24 @@ fn dictionary_contig_order(dictionary_text: &str) -> BTreeMap<String, usize> {
         .collect()
 }
 
+fn dictionary_contig_lengths(dictionary_text: &str) -> BTreeMap<String, u64> {
+    dictionary_text
+        .lines()
+        .filter(|line| line.starts_with("@SQ\t"))
+        .filter_map(|line| {
+            let name = line
+                .split('\t')
+                .find_map(|field| field.strip_prefix("SN:"))?;
+            let length = line
+                .split('\t')
+                .find_map(|field| field.strip_prefix("LN:"))?
+                .parse::<u64>()
+                .ok()?;
+            Some((name.to_string(), length))
+        })
+        .collect()
+}
+
 fn interval_list_header_text(text: &str) -> String {
     let mut header = String::new();
     for line in text.lines() {
@@ -5142,6 +5547,24 @@ fn read_interval_list_intervals(
     Ok(intervals)
 }
 
+fn apply_interval_padding(
+    intervals: &mut [BedInterval],
+    contig_lengths: &BTreeMap<String, u64>,
+    padding: u64,
+) -> Result<(), String> {
+    for interval in intervals {
+        let Some(contig_length) = contig_lengths.get(&interval.contig).copied() else {
+            return Err(format!(
+                "interval_list contig {} is missing length in sequence dictionary",
+                interval.contig
+            ));
+        };
+        interval.start = interval.start.saturating_sub(padding).max(1);
+        interval.end = interval.end.saturating_add(padding).min(contig_length);
+    }
+    Ok(())
+}
+
 fn collectwgs_interval_masks(
     interval_paths: Option<&Vec<String>>,
     references: &[FastaSequence],
@@ -5241,6 +5664,8 @@ fn unique_intervals(intervals: Vec<BedInterval>, dont_merge_abutting: bool) -> V
 fn read_bed_intervals(
     path: &str,
     contig_order: &BTreeMap<String, usize>,
+    drop_missing_contigs: bool,
+    keep_length_zero_intervals: bool,
 ) -> Result<Vec<BedInterval>, String> {
     let text = fs::read_to_string(path).map_err(|error| error.to_string())?;
     let mut intervals = Vec::new();
@@ -5259,6 +5684,9 @@ fn read_bed_intervals(
         }
         let contig = fields[0].to_string();
         let Some(contig_index) = contig_order.get(&contig).copied() else {
+            if drop_missing_contigs {
+                continue;
+            }
             return Err(format!(
                 "BED contig {contig} is not present in sequence dictionary"
             ));
@@ -5271,6 +5699,9 @@ fn read_bed_intervals(
             .map_err(|_| format!("malformed BED end on line {}", line_index + 1))?;
         if end < start0 {
             return Err(format!("BED end before start on line {}", line_index + 1));
+        }
+        if end == start0 && !keep_length_zero_intervals {
+            continue;
         }
         intervals.push(BedInterval {
             contig,
@@ -5457,6 +5888,12 @@ fn reject_unsupported_collectmultiplemetrics_args(
         "REFERENCE_SEQUENCE",
         "SCAN_WINDOW_SIZE",
         "MINIMUM_GENOME_FRACTION",
+        "CREATE_INDEX",
+        "CREATE_MD5_FILE",
+        "TMP_DIR",
+        "MAX_RECORDS_IN_RAM",
+        "USE_JDK_DEFLATER",
+        "USE_JDK_INFLATER",
         "VALIDATION_STRINGENCY",
         "QUIET",
         "VERBOSITY",
@@ -5514,6 +5951,12 @@ fn reject_unsupported_collectmultiplemetrics_args(
     optional_scalar(args, "FILE_EXTENSION")?;
     optional_u32(args, "SCAN_WINDOW_SIZE")?;
     optional_f64(args, "MINIMUM_GENOME_FRACTION")?;
+    optional_bool(args, "CREATE_INDEX")?;
+    optional_bool(args, "CREATE_MD5_FILE")?;
+    let _ = args.get("TMP_DIR");
+    optional_u32(args, "MAX_RECORDS_IN_RAM")?;
+    optional_bool(args, "USE_JDK_DEFLATER")?;
+    optional_bool(args, "USE_JDK_INFLATER")?;
     optional_scalar(args, "VALIDATION_STRINGENCY")?;
     optional_scalar(args, "VERBOSITY")?;
     optional_bool(args, "QUIET")?;
@@ -5770,13 +6213,7 @@ fn reject_unsupported_collectwgsmetrics_args(
     optional_u32(args, "COVERAGE_CAP")?;
     optional_u32(args, "LOCUS_ACCUMULATION_CAP")?;
     optional_i64(args, "STOP_AFTER")?;
-    if let Some(sample_size) = optional_u32(args, "SAMPLE_SIZE")? {
-        if sample_size > 1 {
-            return Err(format!(
-                "unsupported CollectWgsMetrics SAMPLE_SIZE={sample_size}"
-            ));
-        }
-    }
+    optional_u32(args, "SAMPLE_SIZE")?;
     optional_scalar(args, "READ_LENGTH")?;
     optional_scalar(args, "ALLELE_FRACTION")?;
     optional_scalar(args, "VALIDATION_STRINGENCY")?;
@@ -6051,16 +6488,33 @@ impl AlignmentSummaryCollection {
         aligned_length: u64,
         mapq: u8,
         qualities: &[u8],
+        cigar: CigarSummary,
+        chimeric: bool,
         read_group: Option<&InsertSizeReadGroup>,
     ) {
-        self.all_reads
-            .observe_sam_parts(flags, read_length, aligned_length, mapq, qualities);
+        self.all_reads.observe_sam_parts(
+            flags,
+            read_length,
+            aligned_length,
+            mapq,
+            qualities,
+            cigar,
+            chimeric,
+        );
         if self.accumulation == AlignmentAccumulation::Sample {
             if let Some(read_group) = read_group {
                 self.samples
                     .entry(read_group.sample.clone())
                     .or_default()
-                    .observe_sam_parts(flags, read_length, aligned_length, mapq, qualities);
+                    .observe_sam_parts(
+                        flags,
+                        read_length,
+                        aligned_length,
+                        mapq,
+                        qualities,
+                        cigar,
+                        chimeric,
+                    );
             }
         } else if self.accumulation == AlignmentAccumulation::Library {
             if let Some(read_group) = read_group {
@@ -6071,7 +6525,15 @@ impl AlignmentSummaryCollection {
                         summary: AlignmentSummarySet::default(),
                     })
                     .summary
-                    .observe_sam_parts(flags, read_length, aligned_length, mapq, qualities);
+                    .observe_sam_parts(
+                        flags,
+                        read_length,
+                        aligned_length,
+                        mapq,
+                        qualities,
+                        cigar,
+                        chimeric,
+                    );
             }
         } else if self.accumulation == AlignmentAccumulation::ReadGroup {
             if let Some(read_group) = read_group {
@@ -6083,7 +6545,15 @@ impl AlignmentSummaryCollection {
                         summary: AlignmentSummarySet::default(),
                     })
                     .summary
-                    .observe_sam_parts(flags, read_length, aligned_length, mapq, qualities);
+                    .observe_sam_parts(
+                        flags,
+                        read_length,
+                        aligned_length,
+                        mapq,
+                        qualities,
+                        cigar,
+                        chimeric,
+                    );
             }
         }
     }
@@ -6117,6 +6587,9 @@ impl AlignmentSummaryCollection {
 
 impl AlignmentSummarySet {
     fn observe(&mut self, record: &bam::Record) {
+        if record.is_secondary() || record.is_supplementary() {
+            return;
+        }
         if record.is_paired() {
             self.saw_paired = true;
             if record.is_first_in_template() {
@@ -6137,21 +6610,54 @@ impl AlignmentSummarySet {
         aligned_length: u64,
         mapq: u8,
         qualities: &[u8],
+        cigar: CigarSummary,
+        chimeric: bool,
     ) {
+        if flags & (0x100 | 0x800) != 0 {
+            return;
+        }
         if flags & 0x1 != 0 {
             self.saw_paired = true;
             if flags & 0x40 != 0 {
-                self.first
-                    .observe_sam_parts(flags, read_length, aligned_length, mapq, qualities);
+                self.first.observe_sam_parts(
+                    flags,
+                    read_length,
+                    aligned_length,
+                    mapq,
+                    qualities,
+                    cigar,
+                    chimeric,
+                );
             } else if flags & 0x80 != 0 {
-                self.second
-                    .observe_sam_parts(flags, read_length, aligned_length, mapq, qualities);
+                self.second.observe_sam_parts(
+                    flags,
+                    read_length,
+                    aligned_length,
+                    mapq,
+                    qualities,
+                    cigar,
+                    chimeric,
+                );
             }
-            self.pair
-                .observe_sam_parts(flags, read_length, aligned_length, mapq, qualities);
+            self.pair.observe_sam_parts(
+                flags,
+                read_length,
+                aligned_length,
+                mapq,
+                qualities,
+                cigar,
+                chimeric,
+            );
         } else {
-            self.unpaired
-                .observe_sam_parts(flags, read_length, aligned_length, mapq, qualities);
+            self.unpaired.observe_sam_parts(
+                flags,
+                read_length,
+                aligned_length,
+                mapq,
+                qualities,
+                cigar,
+                chimeric,
+            );
         }
     }
 
@@ -6228,6 +6734,12 @@ struct AlignmentSummary {
     bad_cycles: u64,
     forward_aligned_reads: u64,
     reverse_aligned_reads: u64,
+    chimeras: u64,
+    indel_bases: u64,
+    soft_clip_bases: u64,
+    hard_clip_bases: u64,
+    three_prime_soft_clip_bases: u64,
+    three_prime_soft_clip_reads: u64,
     total_read_lengths: Vec<u64>,
     aligned_read_lengths: Vec<u64>,
 }
@@ -6235,7 +6747,12 @@ struct AlignmentSummary {
 impl AlignmentSummary {
     fn observe(&mut self, record: &bam::Record) {
         let read_length = record.seq_len() as u64;
-        let aligned_length = aligned_read_length(record);
+        let cigar = alignment_cigar_summary(record.cigar().iter(), record.is_reverse());
+        let aligned_length = if record.is_unmapped() {
+            0
+        } else {
+            cigar.aligned_length
+        };
         self.total_reads += 1;
         ensure_histogram_len(&mut self.total_read_lengths, read_length as usize);
         self.total_read_lengths[read_length as usize] += 1;
@@ -6272,7 +6789,11 @@ impl AlignmentSummary {
                 if !record.is_proper_pair() {
                     self.pf_reads_improper_pairs += 1;
                 }
+                if is_chimeric_bam_record(record) {
+                    self.chimeras += 1;
+                }
             }
+            self.observe_cigar_summary(cigar);
         }
 
         ensure_histogram_len(&mut self.aligned_read_lengths, aligned_length as usize);
@@ -6286,6 +6807,8 @@ impl AlignmentSummary {
         aligned_length: u64,
         mapq: u8,
         qualities: &[u8],
+        cigar: CigarSummary,
+        chimeric: bool,
     ) {
         self.total_reads += 1;
         ensure_histogram_len(&mut self.total_read_lengths, read_length as usize);
@@ -6316,11 +6839,25 @@ impl AlignmentSummary {
                 if flags & 0x2 == 0 {
                     self.pf_reads_improper_pairs += 1;
                 }
+                if chimeric {
+                    self.chimeras += 1;
+                }
             }
+            self.observe_cigar_summary(cigar);
         }
 
         ensure_histogram_len(&mut self.aligned_read_lengths, aligned_length as usize);
         self.aligned_read_lengths[aligned_length as usize] += 1;
+    }
+
+    fn observe_cigar_summary(&mut self, cigar: CigarSummary) {
+        self.indel_bases += cigar.indel_bases;
+        self.soft_clip_bases += cigar.soft_clip_bases;
+        self.hard_clip_bases += cigar.hard_clip_bases;
+        if cigar.three_prime_soft_clip_bases > 0 {
+            self.three_prime_soft_clip_bases += cigar.three_prime_soft_clip_bases;
+            self.three_prime_soft_clip_reads += 1;
+        }
     }
 
     fn to_picard_row(
@@ -6331,7 +6868,11 @@ impl AlignmentSummary {
         read_group: Option<&str>,
     ) -> String {
         let mean_read_length = mean_from_histogram(&self.total_read_lengths);
-        let sd_read_length = standard_deviation_from_histogram(&self.total_read_lengths);
+        let sd_read_length = if self.total_reads < 2 {
+            "?".to_string()
+        } else {
+            format_float(standard_deviation_from_histogram(&self.total_read_lengths))
+        };
         let median_read_length = median_from_histogram(&self.total_read_lengths);
         let mad_read_length = mad_from_histogram(&self.total_read_lengths, median_read_length);
         let min_read_length = min_from_histogram(&self.total_read_lengths);
@@ -6347,9 +6888,14 @@ impl AlignmentSummary {
         } else {
             self.forward_aligned_reads as f64 / aligned_reads as f64
         };
+        let avg_three_prime_soft_clip = if self.three_prime_soft_clip_reads == 0 {
+            0.0
+        } else {
+            self.three_prime_soft_clip_bases as f64 / self.three_prime_soft_clip_reads as f64
+        };
 
         format!(
-            "{category}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t0\t0\t0\t0\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t0\t0\t{}\t{}\t0\t{}\t{}\t{}\n",
+            "{category}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t0\t0\t0\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t0\t{}\t{}\t{}\t{}\t{}\t{}\n",
             self.total_reads,
             self.pf_reads,
             format_float(ratio(self.pf_reads, self.total_reads)),
@@ -6360,8 +6906,9 @@ impl AlignmentSummary {
             self.pf_hq_aligned_reads,
             self.pf_hq_aligned_bases,
             self.pf_hq_aligned_q20_bases,
+            format_float(ratio(self.indel_bases, self.pf_aligned_bases)),
             format_float(mean_read_length),
-            format_float(sd_read_length),
+            sd_read_length,
             median_read_length,
             mad_read_length,
             min_read_length,
@@ -6373,8 +6920,16 @@ impl AlignmentSummary {
             format_float(ratio(self.pf_reads_improper_pairs, self.pf_reads_aligned)),
             self.bad_cycles,
             format_float(strand_balance),
-            format_float(percent_cigar_bases(self, CigarBaseKind::SoftClip)),
-            format_float(percent_cigar_bases(self, CigarBaseKind::HardClip)),
+            format_float(ratio(self.chimeras, self.pf_reads_aligned)),
+            format_float(percent_cigar_bases(
+                self.soft_clip_bases,
+                self.pf_aligned_bases
+            )),
+            format_float(percent_cigar_bases(
+                self.hard_clip_bases,
+                self.pf_aligned_bases
+            )),
+            format_float(avg_three_prime_soft_clip),
             sample.unwrap_or_default(),
             library.unwrap_or_default(),
             read_group.unwrap_or_default(),
@@ -6398,8 +6953,17 @@ impl AlignmentSummary {
         }
         output.push('\n');
         output.push_str("## HISTOGRAM\tjava.lang.Integer\n");
-        output
-            .push_str("READ_LENGTH\tUNPAIRED_TOTAL_LENGTH_COUNT\tUNPAIRED_ALIGNED_LENGTH_COUNT\n");
+        if rows
+            .first()
+            .is_some_and(|row| row.category == "FIRST_OF_PAIR")
+        {
+            output
+                .push_str("READ_LENGTH\tPAIRED_TOTAL_LENGTH_COUNT\tPAIRED_ALIGNED_LENGTH_COUNT\n");
+        } else {
+            output.push_str(
+                "READ_LENGTH\tUNPAIRED_TOTAL_LENGTH_COUNT\tUNPAIRED_ALIGNED_LENGTH_COUNT\n",
+            );
+        }
         let max_len = histogram_summary
             .total_read_lengths
             .len()
@@ -6423,30 +6987,69 @@ impl AlignmentSummary {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
-enum CigarBaseKind {
-    SoftClip,
-    HardClip,
+#[derive(Debug, Clone, Copy, Default)]
+struct CigarSummary {
+    aligned_length: u64,
+    indel_bases: u64,
+    soft_clip_bases: u64,
+    hard_clip_bases: u64,
+    three_prime_soft_clip_bases: u64,
 }
 
-fn percent_cigar_bases(_summary: &AlignmentSummary, _kind: CigarBaseKind) -> f64 {
-    0.0
+fn percent_cigar_bases(cigar_bases: u64, aligned_bases: u64) -> f64 {
+    ratio(cigar_bases, aligned_bases.saturating_add(cigar_bases))
 }
 
-fn aligned_read_length(record: &bam::Record) -> u64 {
-    if record.is_unmapped() {
-        return 0;
-    }
-    record
-        .cigar()
-        .iter()
-        .map(|cigar| match cigar {
-            Cigar::Match(len) | Cigar::Ins(len) | Cigar::Equal(len) | Cigar::Diff(len) => {
-                *len as u64
+fn alignment_cigar_summary<'a>(
+    cigars: impl Iterator<Item = &'a Cigar>,
+    is_reverse: bool,
+) -> CigarSummary {
+    let mut summary = CigarSummary::default();
+    let mut first_soft_clip = 0;
+    let mut last_soft_clip = 0;
+    let mut seen_operator = false;
+    for cigar in cigars {
+        match cigar {
+            Cigar::Match(len) | Cigar::Equal(len) | Cigar::Diff(len) => {
+                summary.aligned_length += u64::from(*len);
             }
-            _ => 0,
-        })
-        .sum()
+            Cigar::Ins(len) => {
+                summary.indel_bases += u64::from(*len);
+            }
+            Cigar::Del(len) => {
+                summary.indel_bases += u64::from(*len);
+            }
+            Cigar::SoftClip(len) => {
+                summary.soft_clip_bases += u64::from(*len);
+                if !seen_operator {
+                    first_soft_clip = u64::from(*len);
+                }
+                last_soft_clip = u64::from(*len);
+            }
+            Cigar::HardClip(len) => {
+                summary.hard_clip_bases += u64::from(*len);
+            }
+            Cigar::RefSkip(_) | Cigar::Pad(_) => {}
+        }
+        seen_operator = true;
+    }
+    summary.three_prime_soft_clip_bases = if is_reverse {
+        first_soft_clip
+    } else {
+        last_soft_clip
+    };
+    summary
+}
+
+fn is_chimeric_bam_record(record: &bam::Record) -> bool {
+    if !record.is_paired()
+        || record.is_unmapped()
+        || record.is_mate_unmapped()
+        || record.is_proper_pair()
+    {
+        return false;
+    }
+    record.tid() != record.mtid() || record.insert_size().unsigned_abs() > 100_000
 }
 
 fn is_hq_aligned(record: &bam::Record) -> bool {
@@ -6512,7 +7115,7 @@ fn observe_alignment_sam_line(
             .next()
             .ok_or_else(|| "malformed CollectAlignmentSummaryMetrics SAM record".to_string())?,
     )?;
-    fields
+    let reference_name = fields
         .next()
         .ok_or_else(|| "malformed CollectAlignmentSummaryMetrics SAM record".to_string())?;
     fields
@@ -6526,11 +7129,17 @@ fn observe_alignment_sam_line(
     let cigar = fields
         .next()
         .ok_or_else(|| "malformed CollectAlignmentSummaryMetrics SAM record".to_string())?;
-    for _ in 0..3 {
+    let mate_reference_name = fields
+        .next()
+        .ok_or_else(|| "malformed CollectAlignmentSummaryMetrics SAM record".to_string())?;
+    fields
+        .next()
+        .ok_or_else(|| "malformed CollectAlignmentSummaryMetrics SAM record".to_string())?;
+    let template_length = parse_i64_bytes(
         fields
             .next()
-            .ok_or_else(|| "malformed CollectAlignmentSummaryMetrics SAM record".to_string())?;
-    }
+            .ok_or_else(|| "malformed CollectAlignmentSummaryMetrics SAM record".to_string())?,
+    )?;
     let sequence = fields
         .next()
         .ok_or_else(|| "malformed CollectAlignmentSummaryMetrics SAM record".to_string())?;
@@ -6542,10 +7151,11 @@ fn observe_alignment_sam_line(
     } else {
         sequence.len() as u64
     };
+    let cigar_summary = cigar_summary_from_sam(cigar, flags & 0x10 != 0)?;
     let aligned_length = if flags & 0x4 != 0 {
         0
     } else {
-        aligned_read_length_from_cigar(cigar)?
+        cigar_summary.aligned_length
     };
     let qualities = if qualities == b"*" {
         &[][..]
@@ -6553,12 +7163,16 @@ fn observe_alignment_sam_line(
         qualities
     };
     let read_group = insert_size_read_group_for_sam_tags(fields, read_groups);
+    let chimeric =
+        is_chimeric_sam_record(flags, reference_name, mate_reference_name, template_length);
     metrics.observe_sam_parts(
         flags,
         read_length,
         aligned_length,
         mapq,
         qualities,
+        cigar_summary,
+        chimeric,
         read_group.as_ref(),
     );
     Ok(())
@@ -7047,13 +7661,16 @@ fn parse_u8_bytes(value: &[u8]) -> Result<u8, String> {
     u8::try_from(parsed).map_err(|_| "malformed integer".to_string())
 }
 
-fn aligned_read_length_from_cigar(cigar: &[u8]) -> Result<u64, String> {
+fn cigar_summary_from_sam(cigar: &[u8], is_reverse: bool) -> Result<CigarSummary, String> {
     if cigar == b"*" {
-        return Ok(0);
+        return Ok(CigarSummary::default());
     }
-    let mut total = 0_u64;
+    let mut summary = CigarSummary::default();
     let mut len = 0_u64;
     let mut saw_digit = false;
+    let mut first_soft_clip = 0;
+    let mut last_soft_clip = 0;
+    let mut seen_operator = false;
     for byte in cigar {
         if byte.is_ascii_digit() {
             saw_digit = true;
@@ -7068,20 +7685,69 @@ fn aligned_read_length_from_cigar(cigar: &[u8]) -> Result<u64, String> {
         }
         match *byte {
             b'M' | b'I' | b'=' | b'X' => {
-                total = total
+                summary.aligned_length = summary
+                    .aligned_length
+                    .checked_add(len)
+                    .ok_or_else(|| "malformed CollectAlignmentSummaryMetrics CIGAR".to_string())?;
+                if *byte == b'I' {
+                    summary.indel_bases =
+                        summary.indel_bases.checked_add(len).ok_or_else(|| {
+                            "malformed CollectAlignmentSummaryMetrics CIGAR".to_string()
+                        })?;
+                }
+            }
+            b'D' => {
+                summary.indel_bases = summary
+                    .indel_bases
                     .checked_add(len)
                     .ok_or_else(|| "malformed CollectAlignmentSummaryMetrics CIGAR".to_string())?;
             }
-            b'D' | b'N' | b'S' | b'H' | b'P' => {}
+            b'S' => {
+                summary.soft_clip_bases = summary
+                    .soft_clip_bases
+                    .checked_add(len)
+                    .ok_or_else(|| "malformed CollectAlignmentSummaryMetrics CIGAR".to_string())?;
+                if !seen_operator {
+                    first_soft_clip = len;
+                }
+                last_soft_clip = len;
+            }
+            b'H' => {
+                summary.hard_clip_bases = summary
+                    .hard_clip_bases
+                    .checked_add(len)
+                    .ok_or_else(|| "malformed CollectAlignmentSummaryMetrics CIGAR".to_string())?;
+            }
+            b'N' | b'P' => {}
             _ => return Err("malformed CollectAlignmentSummaryMetrics CIGAR".to_string()),
         }
+        seen_operator = true;
         len = 0;
         saw_digit = false;
     }
     if saw_digit {
         return Err("malformed CollectAlignmentSummaryMetrics CIGAR".to_string());
     }
-    Ok(total)
+    summary.three_prime_soft_clip_bases = if is_reverse {
+        first_soft_clip
+    } else {
+        last_soft_clip
+    };
+    Ok(summary)
+}
+
+fn is_chimeric_sam_record(
+    flags: u16,
+    reference_name: &[u8],
+    mate_reference_name: &[u8],
+    template_length: i64,
+) -> bool {
+    if flags & 0x1 == 0 || flags & 0x4 != 0 || flags & 0x8 != 0 || flags & 0x2 != 0 {
+        return false;
+    }
+    let mate_on_different_reference =
+        mate_reference_name != b"=" && mate_reference_name != reference_name;
+    mate_on_different_reference || template_length.unsigned_abs() > 100_000
 }
 
 #[derive(Debug)]
@@ -7095,11 +7761,13 @@ struct WgsMetricsSummary {
     excluded_baseq: u64,
     excluded_capped: u64,
     base_quality_histogram: Vec<u64>,
+    sensitivity_base_quality_histogram: Vec<u64>,
 }
 
 #[derive(Debug)]
 struct WgsContigCoverage {
     depths: Vec<u32>,
+    unfiltered_depths: Vec<u32>,
     included: Vec<bool>,
 }
 
@@ -7120,6 +7788,7 @@ impl WgsMetricsSummary {
                     reference.name.clone(),
                     WgsContigCoverage {
                         depths: vec![0; reference.sequence.len()],
+                        unfiltered_depths: vec![0; reference.sequence.len()],
                         included,
                     },
                 )
@@ -7134,7 +7803,8 @@ impl WgsMetricsSummary {
             excluded_unpaired: 0,
             excluded_baseq: 0,
             excluded_capped: 0,
-            base_quality_histogram: vec![0; coverage_cap as usize + 1],
+            base_quality_histogram: vec![0; 256.max(coverage_cap as usize + 1)],
+            sensitivity_base_quality_histogram: vec![0; 256.max(coverage_cap as usize + 1)],
         }
     }
 
@@ -7182,6 +7852,9 @@ impl WgsMetricsSummary {
                             continue;
                         }
                         self.total_aligned_bases += 1;
+                        if let Some(depth) = coverage.unfiltered_depths.get_mut(reference_index) {
+                            *depth = depth.saturating_add(1);
+                        }
                         if record.is_duplicate() {
                             self.excluded_duplicate += 1;
                         } else if record.mapq() < minimum_mapping_quality {
@@ -7196,12 +7869,32 @@ impl WgsMetricsSummary {
                         } else if coverage.depths[reference_index] >= coverage_cap
                             || coverage.depths[reference_index] >= locus_accumulation_cap
                         {
+                            if let Some(quality) = qualities.get(read_index) {
+                                let index = *quality as usize;
+                                if let Some(count) = self.base_quality_histogram.get_mut(index) {
+                                    *count += 1;
+                                }
+                                if *quality >= 30 {
+                                    if let Some(count) =
+                                        self.sensitivity_base_quality_histogram.get_mut(index)
+                                    {
+                                        *count += 1;
+                                    }
+                                }
+                            }
                             self.excluded_capped += 1;
                         } else {
                             if let Some(quality) = qualities.get(read_index) {
                                 let index = *quality as usize;
                                 if let Some(count) = self.base_quality_histogram.get_mut(index) {
                                     *count += 1;
+                                }
+                                if *quality >= 30 {
+                                    if let Some(count) =
+                                        self.sensitivity_base_quality_histogram.get_mut(index)
+                                    {
+                                        *count += 1;
+                                    }
                                 }
                             }
                             coverage.depths[reference_index] += 1;
@@ -7222,13 +7915,38 @@ impl WgsMetricsSummary {
         Ok(())
     }
 
+    fn limit_included_loci(&mut self, limit: usize) {
+        let mut remaining = limit;
+        for contig in self.contigs.values_mut() {
+            for included in &mut contig.included {
+                if !*included {
+                    continue;
+                }
+                if remaining == 0 {
+                    *included = false;
+                } else {
+                    remaining -= 1;
+                }
+            }
+        }
+    }
+
     fn to_picard_text(&self, sample_size: u32, include_bq_histogram: bool) -> String {
         let histogram = self.coverage_histogram();
+        let unfiltered_histogram = self.unfiltered_coverage_histogram();
         let genome_territory = histogram.iter().sum::<u64>();
         let mean_coverage = mean_from_histogram_u32(&histogram);
         let sd_coverage = sample_standard_deviation_from_histogram_u32(&histogram, mean_coverage);
-        let median_coverage = median_f64_from_histogram_u64(&histogram);
-        let mad_coverage = mad_f64_from_histogram_u64(&histogram, median_coverage);
+        let median_coverage = if genome_territory <= 1 {
+            0.0
+        } else {
+            median_f64_from_histogram_u64(&histogram)
+        };
+        let mad_coverage = if genome_territory <= 1 {
+            0.0
+        } else {
+            mad_f64_from_histogram_u64(&histogram, median_coverage)
+        };
         let pct_exc_total = ratio(
             self.excluded_mapq
                 + self.excluded_duplicate
@@ -7237,14 +7955,17 @@ impl WgsMetricsSummary {
                 + self.excluded_capped,
             self.total_aligned_bases,
         );
-        let het_sensitivity = if sample_size == 1 && genome_territory > 0 {
-            format_float(
-                histogram.iter().skip(1).sum::<u64>() as f64 / genome_territory as f64 / 2.0,
-            )
+        let het_sensitivity = if sample_size > 0 && genome_territory > 0 {
+            format_float(het_snp_sensitivity_from_histograms(
+                &histogram,
+                &unfiltered_histogram,
+                &self.sensitivity_base_quality_histogram,
+                sample_size,
+            ))
         } else {
             "0".to_string()
         };
-        let het_q = if het_sensitivity == "0" { "0" } else { "3" };
+        let het_q = het_snp_q(&het_sensitivity);
 
         let mut output = String::new();
         output.push_str("## METRICS CLASS\tpicard.analysis.WgsMetrics\n");
@@ -7253,7 +7974,11 @@ impl WgsMetricsSummary {
             "{}\t{}\t{}\t{}\t{}\t0\t{}\t{}\t{}\t{}\t0\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n\n",
             genome_territory,
             format_float(mean_coverage),
-            format_float(sd_coverage),
+            if genome_territory < 2 {
+                "?".to_string()
+            } else {
+                format_float(sd_coverage)
+            },
             format_float(median_coverage),
             format_float(mad_coverage),
             format_float(ratio(self.excluded_mapq, self.total_aligned_bases)),
@@ -7311,6 +8036,19 @@ impl WgsMetricsSummary {
         let mut histogram = vec![0; self.coverage_cap as usize + 1];
         for contig in self.contigs.values() {
             for (depth, included) in contig.depths.iter().zip(&contig.included) {
+                if *included {
+                    let index = (*depth).min(self.coverage_cap) as usize;
+                    histogram[index] += 1;
+                }
+            }
+        }
+        histogram
+    }
+
+    fn unfiltered_coverage_histogram(&self) -> Vec<u64> {
+        let mut histogram = vec![0; self.coverage_cap as usize + 1];
+        for contig in self.contigs.values() {
+            for (depth, included) in contig.unfiltered_depths.iter().zip(&contig.included) {
                 if *included {
                     let index = (*depth).min(self.coverage_cap) as usize;
                     histogram[index] += 1;
@@ -7421,6 +8159,177 @@ fn fold_base_penalty(histogram: &[u64], mean_coverage: f64, percent: f64) -> Str
         }
     }
     "?".to_string()
+}
+
+fn het_snp_sensitivity_from_histograms(
+    depth_histogram: &[u64],
+    _unfiltered_depth_histogram: &[u64],
+    quality_histogram: &[u64],
+    sample_size: u32,
+) -> f64 {
+    let total = depth_histogram.iter().sum::<u64>();
+    if total == 0 {
+        return 0.0;
+    }
+    let quality_sums = sampled_quality_cumulative_sums(
+        depth_histogram.len().min(1001),
+        sample_size as usize,
+        quality_histogram,
+    );
+    depth_histogram
+        .iter()
+        .enumerate()
+        .map(|(depth, count)| {
+            let detection_probability = het_snp_detection_probability(depth, &quality_sums);
+            detection_probability * *count as f64
+        })
+        .sum::<f64>()
+        / total as f64
+}
+
+fn sampled_quality_cumulative_sums(
+    iterations: usize,
+    sample_size: usize,
+    quality_histogram: &[u64],
+) -> Vec<Vec<u32>> {
+    let mut wheel = PicardRouletteWheel::new(quality_histogram);
+    let mut cumulative_sums = vec![Vec::<u32>::new(); iterations];
+    for _ in 0..sample_size {
+        let mut sum = 0_u32;
+        for sums in &mut cumulative_sums {
+            sums.push(sum);
+            sum = sum.saturating_add(wheel.draw() as u32);
+        }
+    }
+    cumulative_sums
+}
+
+fn het_snp_detection_probability(depth: usize, quality_sums: &[Vec<u32>]) -> f64 {
+    if depth == 0 {
+        return 0.0;
+    }
+    let threshold = 10.0 * (depth as f64 * 2.0_f64.log10() + 3.0);
+    let mut probability = 0.0;
+    for alt_depth in 0..=depth {
+        let Some(sums_for_alt_depth) = quality_sums.get(alt_depth) else {
+            probability += binomial_probability(depth, alt_depth, 0.5);
+            continue;
+        };
+        let alt_probability = binomial_probability(depth, alt_depth, 0.5);
+        let called_probability = proportion_called_for_alt_depth(sums_for_alt_depth, threshold);
+        probability += alt_probability * called_probability;
+    }
+    probability
+}
+
+fn proportion_called_for_alt_depth(quality_sums: &[u32], threshold: f64) -> f64 {
+    if quality_sums.is_empty() {
+        return 0.0;
+    }
+    let called = quality_sums
+        .iter()
+        .filter(|sum| **sum as f64 >= threshold)
+        .count();
+    called as f64 / quality_sums.len() as f64
+}
+
+fn binomial_probability(trials: usize, successes: usize, probability: f64) -> f64 {
+    if successes > trials {
+        return 0.0;
+    }
+    let coefficient = (0..successes)
+        .map(|index| (trials - index) as f64 / (index + 1) as f64)
+        .product::<f64>();
+    coefficient
+        * probability.powi(successes as i32)
+        * (1.0 - probability).powi((trials - successes) as i32)
+}
+
+struct PicardRouletteWheel {
+    probabilities: Vec<f64>,
+    count: u32,
+    rng: JavaRandom,
+}
+
+impl PicardRouletteWheel {
+    fn new(histogram: &[u64]) -> Self {
+        let last_non_zero = histogram
+            .iter()
+            .rposition(|count| *count > 0)
+            .map(|index| index + 1)
+            .unwrap_or(1);
+        let histogram = &histogram[..last_non_zero];
+        let max = histogram.iter().copied().max().unwrap_or(0) as f64;
+        let probabilities = if max == 0.0 {
+            vec![1.0]
+        } else {
+            histogram.iter().map(|count| *count as f64 / max).collect()
+        };
+        Self {
+            probabilities,
+            count: 0,
+            rng: JavaRandom::new(51),
+        }
+    }
+
+    fn draw(&mut self) -> usize {
+        loop {
+            let index = (self.probabilities.len() as f64 * self.rng.next_double()) as usize;
+            self.count += 1;
+            if self.rng.next_double() < self.probabilities[index] {
+                self.count = 0;
+                return index;
+            }
+            if self.count >= 600 {
+                self.count = 0;
+                return 0;
+            }
+        }
+    }
+}
+
+struct JavaRandom {
+    seed: u64,
+}
+
+impl JavaRandom {
+    const MULTIPLIER: u64 = 0x5DEECE66D;
+    const ADDEND: u64 = 0xB;
+    const MASK: u64 = (1_u64 << 48) - 1;
+
+    fn new(seed: u64) -> Self {
+        Self {
+            seed: (seed ^ Self::MULTIPLIER) & Self::MASK,
+        }
+    }
+
+    fn next_bits(&mut self, bits: u32) -> u32 {
+        self.seed = self
+            .seed
+            .wrapping_mul(Self::MULTIPLIER)
+            .wrapping_add(Self::ADDEND)
+            & Self::MASK;
+        (self.seed >> (48 - bits)) as u32
+    }
+
+    fn next_double(&mut self) -> f64 {
+        let high = self.next_bits(26) as u64;
+        let low = self.next_bits(27) as u64;
+        ((high << 27) + low) as f64 / (1_u64 << 53) as f64
+    }
+}
+
+fn het_snp_q(sensitivity_text: &str) -> String {
+    let Ok(sensitivity) = sensitivity_text.parse::<f64>() else {
+        return "0".to_string();
+    };
+    if sensitivity <= 0.0 {
+        return "0".to_string();
+    }
+    if sensitivity >= 1.0 {
+        return "?".to_string();
+    }
+    ((-10.0 * (1.0 - sensitivity).log10()).round() as u64).to_string()
 }
 
 #[derive(Debug, Default)]
@@ -8369,7 +9278,11 @@ impl InsertSizeSummary {
         let min = self.histogram.keys().next().copied().unwrap_or(0);
         let max = self.histogram.keys().next_back().copied().unwrap_or(0);
         let mean = histogram_mean(&self.histogram);
-        let stddev = histogram_sample_standard_deviation(&self.histogram, mean);
+        let stddev = if read_pairs < 2 {
+            "?".to_string()
+        } else {
+            format_float(histogram_sample_standard_deviation(&self.histogram, mean))
+        };
         let mode = mode_from_histogram(&self.histogram);
         let widths = insert_size_widths(&self.histogram);
 
@@ -8381,7 +9294,7 @@ impl InsertSizeSummary {
             min,
             max,
             format_float(mean),
-            format_float(stddev),
+            stddev,
             read_pairs,
             widths[0],
             widths[1],
@@ -8568,6 +9481,8 @@ struct ReadGroup {
     predicted_insert_size: Option<String>,
     program_group: Option<String>,
     platform_model: Option<String>,
+    key_sequence: Option<String>,
+    flow_order: Option<String>,
 }
 
 struct FastqReadGroup {
@@ -9050,6 +9965,15 @@ fn reject_unsupported_addorreplacereadgroups_args(
         "RGPI",
         "RGPG",
         "RGPM",
+        "RGKS",
+        "RGFO",
+        "REFERENCE_SEQUENCE",
+        "CREATE_INDEX",
+        "CREATE_MD5_FILE",
+        "MAX_RECORDS_IN_RAM",
+        "TMP_DIR",
+        "USE_JDK_DEFLATER",
+        "USE_JDK_INFLATER",
         "VALIDATION_STRINGENCY",
         "QUIET",
         "VERBOSITY",
@@ -9067,6 +9991,9 @@ fn reject_unsupported_addorreplacereadgroups_args(
     optional_scalar(args, "VALIDATION_STRINGENCY")?;
     optional_scalar(args, "VERBOSITY")?;
     optional_bool(args, "QUIET")?;
+    optional_scalar(args, "REFERENCE_SEQUENCE")?;
+    optional_bool(args, "CREATE_INDEX")?;
+    optional_bool(args, "CREATE_MD5_FILE")?;
     if let Some(level) = optional_u32(args, "COMPRESSION_LEVEL")? {
         if level > 9 {
             return Err(format!(
@@ -9074,6 +10001,10 @@ fn reject_unsupported_addorreplacereadgroups_args(
             ));
         }
     }
+    optional_u32(args, "MAX_RECORDS_IN_RAM")?;
+    optional_scalar(args, "TMP_DIR")?;
+    optional_bool(args, "USE_JDK_DEFLATER")?;
+    optional_bool(args, "USE_JDK_INFLATER")?;
     Ok(())
 }
 
@@ -9123,6 +10054,8 @@ fn read_group_header(source: &bam::HeaderView, read_group: &ReadGroup) -> bam::H
     );
     push_optional_header_tag(&mut rg_record, b"PG", read_group.program_group.as_deref());
     push_optional_header_tag(&mut rg_record, b"PM", read_group.platform_model.as_deref());
+    push_optional_header_tag(&mut rg_record, b"KS", read_group.key_sequence.as_deref());
+    push_optional_header_tag(&mut rg_record, b"FO", read_group.flow_order.as_deref());
     header.push_record(&rg_record);
 
     header
@@ -9166,6 +10099,12 @@ fn reject_unsupported_samtofastq_args(
         "VERBOSITY",
         "COMPRESSION_LEVEL",
         "CREATE_MD5_FILE",
+        "CREATE_INDEX",
+        "REFERENCE_SEQUENCE",
+        "TMP_DIR",
+        "MAX_RECORDS_IN_RAM",
+        "USE_JDK_DEFLATER",
+        "USE_JDK_INFLATER",
     ];
 
     for key in args.keys() {
@@ -9182,6 +10121,12 @@ fn reject_unsupported_samtofastq_args(
     optional_bool(args, "INCLUDE_NON_PF_READS")?;
     optional_bool(args, "INCLUDE_NON_PRIMARY_ALIGNMENTS")?;
     optional_bool(args, "CREATE_MD5_FILE")?;
+    optional_bool(args, "CREATE_INDEX")?;
+    optional_scalar(args, "REFERENCE_SEQUENCE")?;
+    optional_scalar(args, "TMP_DIR")?;
+    optional_u32(args, "MAX_RECORDS_IN_RAM")?;
+    optional_bool(args, "USE_JDK_DEFLATER")?;
+    optional_bool(args, "USE_JDK_INFLATER")?;
     if let Some(level) = optional_u32(args, "COMPRESSION_LEVEL")? {
         if level > 9 {
             return Err(format!("unsupported SamToFastq COMPRESSION_LEVEL: {level}"));
@@ -9215,6 +10160,12 @@ fn reject_unsupported_fastqtosam_args(
         "VERBOSITY",
         "COMPRESSION_LEVEL",
         "CREATE_MD5_FILE",
+        "CREATE_INDEX",
+        "REFERENCE_SEQUENCE",
+        "TMP_DIR",
+        "MAX_RECORDS_IN_RAM",
+        "USE_JDK_DEFLATER",
+        "USE_JDK_INFLATER",
         "COMMENT",
     ];
     for key in args.keys() {
@@ -9231,6 +10182,12 @@ fn reject_unsupported_fastqtosam_args(
     optional_scalar(args, "VERBOSITY")?;
     optional_bool(args, "QUIET")?;
     optional_bool(args, "CREATE_MD5_FILE")?;
+    optional_bool(args, "CREATE_INDEX")?;
+    optional_scalar(args, "REFERENCE_SEQUENCE")?;
+    optional_scalar(args, "TMP_DIR")?;
+    optional_u32(args, "MAX_RECORDS_IN_RAM")?;
+    optional_bool(args, "USE_JDK_DEFLATER")?;
+    optional_bool(args, "USE_JDK_INFLATER")?;
     if let Some(level) = optional_u32(args, "COMPRESSION_LEVEL")? {
         if level > 9 {
             return Err(format!("unsupported FastqToSam COMPRESSION_LEVEL: {level}"));
@@ -9635,6 +10592,7 @@ fn reject_unsupported_buildbamindex_args(
         "INPUT",
         "OUTPUT",
         "REFERENCE_SEQUENCE",
+        "CREATE_MD5_FILE",
         "VALIDATION_STRINGENCY",
         "QUIET",
         "VERBOSITY",
@@ -9648,6 +10606,7 @@ fn reject_unsupported_buildbamindex_args(
 
     optional_scalar(args, "OUTPUT")?;
     optional_scalar(args, "REFERENCE_SEQUENCE")?;
+    optional_bool(args, "CREATE_MD5_FILE")?;
     optional_scalar(args, "VALIDATION_STRINGENCY")?;
     optional_scalar(args, "VERBOSITY")?;
     optional_bool(args, "QUIET")?;
@@ -9807,6 +10766,17 @@ fn clean_sam_record(record: &mut bam::Record, target_lengths: &[u64]) -> Result<
     let start = record.pos() as u64;
     if start >= target_len {
         return Err("unsupported CleanSam alignment starting beyond reference end".to_string());
+    }
+    let reference_end =
+        start.saturating_add(record.cigar().end_pos().saturating_sub(record.pos()) as u64);
+    let read_len = record.seq_len() as u64;
+    if reference_end > target_len && read_len > 0 {
+        let overhang = reference_end - target_len;
+        if overhang >= read_len {
+            let cigar = CigarString(vec![Cigar::SoftClip(overhang as u32)]);
+            record.set_cigar(Some(&cigar));
+            return Ok(());
+        }
     }
 
     let mut ref_pos = start;
@@ -11168,6 +12138,19 @@ fn write_md5_sidecar(output: &str) -> Result<(), String> {
     let bytes = fs::read(output).map_err(|error| error.to_string())?;
     let digest = md5::compute(bytes);
     fs::write(format!("{output}.md5"), format!("{digest:x}")).map_err(|error| error.to_string())
+}
+
+fn write_vcf_idx_sidecar(output: &str, text: &str) -> Result<(), String> {
+    let mut offset = 0usize;
+    let mut index = String::from("# turbo-picard VCF record offsets\n");
+    for line in text.split_inclusive('\n') {
+        if !line.starts_with('#') {
+            index.push_str(&offset.to_string());
+            index.push('\n');
+        }
+        offset += line.len();
+    }
+    fs::write(format!("{output}.idx"), index).map_err(|error| error.to_string())
 }
 
 fn try_run_fallback(args: &[String]) -> Option<i32> {
