@@ -2,3 +2,4 @@
 /.conda-*
 /benchmarks/inputs/
 /benchmarks/runs/
+/docs/_build/
