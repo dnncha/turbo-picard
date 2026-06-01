@@ -901,8 +901,10 @@ fn samtofastq_splits_paired_reads() {
         concat!(
             "@HD\tVN:1.6\tSO:queryname\n",
             "@SQ\tSN:chr1\tLN:1000\n",
+            "orphan-a\t77\t*\t0\t0\t*\t*\t0\t0\tCCCC\tIIII\n",
             "pair-a\t77\t*\t0\t0\t*\t*\t0\t0\tAAAA\tFFFF\n",
             "pair-a\t141\t*\t0\t0\t*\t*\t0\t0\tTTTT\tHHHH\n",
+            "orphan-b\t141\t*\t0\t0\t*\t*\t0\t0\tGGGG\tJJJJ\n",
         ),
     )
     .expect("input fixture is written");
@@ -911,8 +913,9 @@ fn samtofastq_splits_paired_reads() {
     cmd.args([
         "SamToFastq",
         &format!("I={}", input.display()),
-        &format!("FASTQ={}", first_fastq.display()),
-        &format!("SECOND_END_FASTQ={}", second_fastq.display()),
+        &format!("F={}", first_fastq.display()),
+        &format!("F2={}", second_fastq.display()),
+        "VALIDATION_STRINGENCY=SILENT",
     ])
     .assert()
     .success();
@@ -924,6 +927,149 @@ fn samtofastq_splits_paired_reads() {
     assert_eq!(
         fs::read_to_string(&second_fastq).expect("second FASTQ exists"),
         "@pair-a/2\nTTTT\n+\nHHHH\n"
+    );
+}
+
+#[test]
+fn samtofastq_applies_read_trimming_and_max_bases() {
+    let tempdir = tempfile::tempdir().expect("tempdir exists");
+    let input = tempdir.path().join("input.sam");
+    let first_fastq = tempdir.path().join("r1.fastq");
+    let second_fastq = tempdir.path().join("r2.fastq");
+    fs::write(
+        &input,
+        concat!(
+            "@HD\tVN:1.6\tSO:queryname\n",
+            "@SQ\tSN:chr1\tLN:1000\n",
+            "pair-a\t77\t*\t0\t0\t*\t*\t0\t0\tAACCGG\tABCDEF\n",
+            "pair-a\t141\t*\t0\t0\t*\t*\t0\t0\tTTGGCC\tUVWXYZ\n",
+        ),
+    )
+    .expect("input fixture is written");
+
+    let mut cmd = Command::cargo_bin("picard").expect("binary exists");
+    cmd.args([
+        "SamToFastq",
+        &format!("I={}", input.display()),
+        &format!("FASTQ={}", first_fastq.display()),
+        &format!("SECOND_END_FASTQ={}", second_fastq.display()),
+        "READ1_TRIM=1",
+        "READ1_MAX_BASES_TO_WRITE=3",
+        "READ2_TRIM=2",
+        "READ2_MAX_BASES_TO_WRITE=2",
+        "VALIDATION_STRINGENCY=SILENT",
+    ])
+    .assert()
+    .success();
+
+    assert_eq!(
+        fs::read_to_string(&first_fastq).expect("first FASTQ exists"),
+        "@pair-a/1\nACC\n+\nBCD\n"
+    );
+    assert_eq!(
+        fs::read_to_string(&second_fastq).expect("second FASTQ exists"),
+        "@pair-a/2\nGG\n+\nWX\n"
+    );
+}
+
+#[test]
+fn samtofastq_applies_quality_trimming() {
+    let tempdir = tempfile::tempdir().expect("tempdir exists");
+    let input = tempdir.path().join("input.sam");
+    let fastq = tempdir.path().join("reads.fastq");
+    fs::write(
+        &input,
+        concat!(
+            "@HD\tVN:1.6\tSO:queryname\n",
+            "@SQ\tSN:chr1\tLN:1000\n",
+            "read-a\t4\t*\t0\t0\t*\t*\t0\t0\tACGTAC\tFFF!!!\n",
+            "read-b\t4\t*\t0\t0\t*\t*\t0\t0\tTGCA\t!!!!\n",
+        ),
+    )
+    .expect("input fixture is written");
+
+    let mut cmd = Command::cargo_bin("picard").expect("binary exists");
+    cmd.args([
+        "SamToFastq",
+        &format!("I={}", input.display()),
+        &format!("FASTQ={}", fastq.display()),
+        "Q=20",
+        "VALIDATION_STRINGENCY=SILENT",
+    ])
+    .assert()
+    .success();
+
+    assert_eq!(
+        fs::read_to_string(&fastq).expect("FASTQ exists"),
+        concat!("@read-a\nACG\n+\nFFF\n", "@read-b\nT\n+\n!\n")
+    );
+}
+
+#[test]
+fn samtofastq_applies_clipping_attribute_actions() {
+    let tempdir = tempfile::tempdir().expect("tempdir exists");
+    let input = tempdir.path().join("input.sam");
+    let masked = tempdir.path().join("masked.fastq");
+    let trimmed = tempdir.path().join("trimmed.fastq");
+    let quality = tempdir.path().join("quality.fastq");
+    fs::write(
+        &input,
+        concat!(
+            "@HD\tVN:1.6\tSO:queryname\n",
+            "@SQ\tSN:chr1\tLN:1000\n",
+            "read-a\t4\t*\t0\t0\t*\t*\t0\t0\tAACCGG\tFFFFFF\tXT:i:4\n",
+        ),
+    )
+    .expect("input fixture is written");
+
+    Command::cargo_bin("picard")
+        .expect("binary exists")
+        .args([
+            "SamToFastq",
+            &format!("I={}", input.display()),
+            &format!("FASTQ={}", masked.display()),
+            "CLIP_ATTR=XT",
+            "CLIP_ACT=N",
+            "VALIDATION_STRINGENCY=SILENT",
+        ])
+        .assert()
+        .success();
+    Command::cargo_bin("picard")
+        .expect("binary exists")
+        .args([
+            "SamToFastq",
+            &format!("I={}", input.display()),
+            &format!("FASTQ={}", trimmed.display()),
+            "CLIPPING_ATTRIBUTE=XT",
+            "CLIPPING_ACTION=X",
+            "VALIDATION_STRINGENCY=SILENT",
+        ])
+        .assert()
+        .success();
+    Command::cargo_bin("picard")
+        .expect("binary exists")
+        .args([
+            "SamToFastq",
+            &format!("I={}", input.display()),
+            &format!("FASTQ={}", quality.display()),
+            "CLIPPING_ATTRIBUTE=XT",
+            "CLIPPING_ACTION=2",
+            "VALIDATION_STRINGENCY=SILENT",
+        ])
+        .assert()
+        .success();
+
+    assert_eq!(
+        fs::read_to_string(&masked).expect("masked FASTQ exists"),
+        "@read-a\nAACNNN\n+\nFFFFFF\n"
+    );
+    assert_eq!(
+        fs::read_to_string(&trimmed).expect("trimmed FASTQ exists"),
+        "@read-a\nAAC\n+\nFFF\n"
+    );
+    assert_eq!(
+        fs::read_to_string(&quality).expect("quality FASTQ exists"),
+        "@read-a\nAACCGG\n+\nFFF###\n"
     );
 }
 
@@ -1124,6 +1270,73 @@ fn samtofastq_rejects_paired_reads_without_second_output() {
         .failure()
         .stderr(predicate::str::contains(
             "SamToFastq input contains paired reads but no SECOND_END_FASTQ was specified",
+        ));
+}
+
+#[test]
+fn samtofastq_rejects_picard_invalid_option_combinations() {
+    let tempdir = tempfile::tempdir().expect("tempdir exists");
+    let input = tempdir.path().join("input.sam");
+    fs::write(
+        &input,
+        concat!(
+            "@HD\tVN:1.6\tSO:queryname\n",
+            "@SQ\tSN:chr1\tLN:100\n",
+            "read-a\t4\t*\t0\t0\t*\t*\t0\t0\tAAAA\tFFFF\n",
+        ),
+    )
+    .expect("input SAM is written");
+
+    Command::cargo_bin("picard")
+        .expect("binary exists")
+        .args([
+            "SamToFastq",
+            &format!("I={}", input.display()),
+            &format!("FASTQ={}", tempdir.path().join("reads.fastq").display()),
+            &format!(
+                "UNPAIRED_FASTQ={}",
+                tempdir.path().join("unpaired.fastq").display()
+            ),
+            "VALIDATION_STRINGENCY=SILENT",
+            "QUIET=true",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "unsupported SamToFastq UNPAIRED_FASTQ without SECOND_END_FASTQ",
+        ));
+
+    Command::cargo_bin("picard")
+        .expect("binary exists")
+        .args([
+            "SamToFastq",
+            &format!("I={}", input.display()),
+            &format!("FASTQ={}", tempdir.path().join("bad-clip.fastq").display()),
+            "CLIPPING_ATTRIBUTE=XT",
+            "CLIPPING_ACTION=bad",
+            "VALIDATION_STRINGENCY=SILENT",
+            "QUIET=true",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "unsupported SamToFastq CLIPPING_ACTION",
+        ));
+
+    Command::cargo_bin("picard")
+        .expect("binary exists")
+        .args([
+            "SamToFastq",
+            &format!("I={}", input.display()),
+            "OUTPUT_PER_RG=true",
+            &format!("OUTPUT_DIR={}", tempdir.path().display()),
+            "VALIDATION_STRINGENCY=SILENT",
+            "QUIET=true",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "unsupported SamToFastq OUTPUT_PER_RG",
         ));
 }
 
@@ -1625,6 +1838,106 @@ fn collectalignmentsummarymetrics_ignores_secondary_and_supplementary_records() 
     assert_eq!(pair[1], "2");
     assert_eq!(pair[2], "2");
     assert!(metrics.contains("4\t2\t2\n"));
+}
+
+#[test]
+fn collectalignmentsummarymetrics_counts_bad_cycles_per_pair_end() {
+    let tempdir = tempfile::tempdir().expect("tempdir exists");
+    let input = tempdir.path().join("input.sam");
+    let output = tempdir.path().join("alignment_metrics.txt");
+    fs::write(
+        &input,
+        concat!(
+            "@HD\tVN:1.6\tSO:coordinate\n",
+            "@SQ\tSN:chr1\tLN:1000\n",
+            "pair1\t77\t*\t0\t0\t*\t*\t0\t0\tANAA\tFFFF\n",
+            "pair1\t141\t*\t0\t0\t*\t*\t0\t0\tACAA\tFFFF\n",
+            "pair2\t77\t*\t0\t0\t*\t*\t0\t0\tANAA\tFFFF\n",
+            "pair2\t141\t*\t0\t0\t*\t*\t0\t0\tACAA\tFFFF\n",
+            "pair3\t77\t*\t0\t0\t*\t*\t0\t0\tANAA\tFFFF\n",
+            "pair3\t141\t*\t0\t0\t*\t*\t0\t0\tACAA\tFFFF\n",
+            "pair4\t77\t*\t0\t0\t*\t*\t0\t0\tANAA\tFFFF\n",
+            "pair4\t141\t*\t0\t0\t*\t*\t0\t0\tACAA\tFFFF\n",
+            "pair5\t77\t*\t0\t0\t*\t*\t0\t0\tACAA\tFFFF\n",
+            "pair5\t141\t*\t0\t0\t*\t*\t0\t0\tACAA\tFFFF\n",
+        ),
+    )
+    .expect("input fixture is written");
+
+    Command::cargo_bin("picard")
+        .expect("binary exists")
+        .args([
+            "CollectAlignmentSummaryMetrics",
+            &format!("I={}", input.display()),
+            &format!("O={}", output.display()),
+            "VALIDATION_STRINGENCY=SILENT",
+            "QUIET=true",
+        ])
+        .assert()
+        .success();
+
+    let metrics = fs::read_to_string(&output).expect("metrics output exists");
+    let first = metrics
+        .lines()
+        .find(|line| line.starts_with("FIRST_OF_PAIR\t"))
+        .expect("first-of-pair row exists")
+        .split('\t')
+        .collect::<Vec<_>>();
+    let second = metrics
+        .lines()
+        .find(|line| line.starts_with("SECOND_OF_PAIR\t"))
+        .expect("second-of-pair row exists")
+        .split('\t')
+        .collect::<Vec<_>>();
+    let pair = metrics
+        .lines()
+        .find(|line| line.starts_with("PAIR\t"))
+        .expect("pair row exists")
+        .split('\t')
+        .collect::<Vec<_>>();
+
+    assert_eq!(first[26], "1");
+    assert_eq!(second[26], "0");
+    assert_eq!(pair[26], "1");
+}
+
+#[test]
+fn collectalignmentsummarymetrics_counts_default_adapter_reads() {
+    let tempdir = tempfile::tempdir().expect("tempdir exists");
+    let input = tempdir.path().join("input.sam");
+    let output = tempdir.path().join("alignment_metrics.txt");
+    fs::write(
+        &input,
+        concat!(
+            "@HD\tVN:1.6\tSO:coordinate\n",
+            "@SQ\tSN:chr1\tLN:1000\n",
+            "adapter\t4\t*\t0\t0\t*\t*\t0\t0\tGATCGGAAGAGCACACGTCT\tFFFFFFFFFFFFFFFFFFFF\n",
+            "genomic\t4\t*\t0\t0\t*\t*\t0\t0\tACGTACGTACGTACGTACGT\tFFFFFFFFFFFFFFFFFFFF\n",
+        ),
+    )
+    .expect("input fixture is written");
+
+    Command::cargo_bin("picard")
+        .expect("binary exists")
+        .args([
+            "CollectAlignmentSummaryMetrics",
+            &format!("I={}", input.display()),
+            &format!("O={}", output.display()),
+            "VALIDATION_STRINGENCY=SILENT",
+            "QUIET=true",
+        ])
+        .assert()
+        .success();
+
+    let metrics = fs::read_to_string(&output).expect("metrics output exists");
+    let unpaired = metrics
+        .lines()
+        .find(|line| line.starts_with("UNPAIRED\t"))
+        .expect("unpaired row exists")
+        .split('\t')
+        .collect::<Vec<_>>();
+
+    assert_eq!(unpaired[29], "0.5");
 }
 
 #[test]
@@ -2523,7 +2836,53 @@ fn collectinsertsizemetrics_writes_metrics_histogram_and_chart() {
         "29\t24\t5\t24\t34\t29\t7.071068\t2\tFR\t11\t11\t11\t11\t11\t11\t11\t11\t11\t11\t11\t\t\t\n"
     ));
     assert!(metrics.contains("insert_size\tAll_Reads.fr_count\n24\t1\n34\t1\n"));
-    assert!(histogram.metadata().expect("histogram exists").len() > 0);
+    let histogram_pdf = fs::read_to_string(&histogram).expect("histogram PDF exists");
+    assert!(histogram_pdf.starts_with("%PDF-1.4"));
+    assert!(histogram_pdf.contains("/Count 1"));
+    assert!(histogram_pdf.contains("CollectInsertSizeMetrics summary chart"));
+}
+
+#[test]
+fn collectinsertsizemetrics_separates_pair_orientations() {
+    let tempdir = tempfile::tempdir().expect("tempdir exists");
+    let input = tempdir.path().join("input.sam");
+    let output = tempdir.path().join("insert_size_metrics.txt");
+    let histogram = tempdir.path().join("insert_size_histogram.pdf");
+    fs::write(
+        &input,
+        concat!(
+            "@HD\tVN:1.6\tSO:coordinate\n",
+            "@SQ\tSN:chr1\tLN:1000\n",
+            "fr1\t99\tchr1\t10\t60\t4M\t=\t30\t24\tACGT\tFFFF\n",
+            "fr1\t147\tchr1\t30\t60\t4M\t=\t10\t-24\tTGCA\tFFFF\n",
+            "rf1\t83\tchr1\t100\t60\t4M\t=\t130\t34\tAAAA\tFFFF\n",
+            "rf1\t163\tchr1\t130\t60\t4M\t=\t100\t-34\tTTTT\tFFFF\n",
+            "tan1\t67\tchr1\t200\t60\t4M\t=\t230\t34\tCCCC\tFFFF\n",
+            "tan1\t131\tchr1\t230\t60\t4M\t=\t200\t-34\tGGGG\tFFFF\n",
+        ),
+    )
+    .expect("input fixture is written");
+
+    Command::cargo_bin("picard")
+        .expect("binary exists")
+        .args([
+            "CollectInsertSizeMetrics",
+            &format!("I={}", input.display()),
+            &format!("O={}", output.display()),
+            &format!("H={}", histogram.display()),
+            "VALIDATION_STRINGENCY=SILENT",
+            "QUIET=true",
+        ])
+        .assert()
+        .success();
+
+    let metrics = fs::read_to_string(&output).expect("metrics output exists");
+    assert!(metrics.contains("24\t24\t0\t24\t24\t24\t?\t1\tFR"));
+    assert!(metrics.contains("34\t34\t0\t34\t34\t34\t?\t1\tRF"));
+    assert!(metrics.contains("34\t34\t0\t34\t34\t34\t?\t1\tTANDEM"));
+    assert!(metrics.contains(
+        "insert_size\tAll_Reads.fr_count\tAll_Reads.rf_count\tAll_Reads.tandem_count\n24\t1\t0\t0\n34\t0\t1\t1\n"
+    ));
 }
 
 #[test]
@@ -4486,6 +4845,98 @@ fn validatesamfile_ignores_requested_summary_error_types() {
 }
 
 #[test]
+fn validatesamfile_reports_and_ignores_missing_platform_value() {
+    let tempdir = tempfile::tempdir().expect("tempdir exists");
+    let missing_platform = tempdir.path().join("missing_platform.sam");
+    fs::write(
+        &missing_platform,
+        concat!(
+            "@HD\tVN:1.6\tSO:coordinate\n",
+            "@SQ\tSN:chr1\tLN:100\n",
+            "@RG\tID:rg1\tSM:sample\n",
+            "read1\t0\tchr1\t1\t60\t4M\t*\t0\t0\tACGT\tFFFF\tRG:Z:rg1\tNM:i:0\n",
+        ),
+    )
+    .expect("missing platform fixture is written");
+
+    Command::cargo_bin("picard")
+        .expect("binary exists")
+        .args([
+            "ValidateSamFile",
+            &format!("I={}", missing_platform.display()),
+            "MODE=SUMMARY",
+            "VALIDATION_STRINGENCY=SILENT",
+            "QUIET=true",
+        ])
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains("ERROR:MISSING_PLATFORM_VALUE\t1"))
+        .stderr(predicate::str::contains(
+            "ValidateSamFile found validation issues",
+        ));
+
+    Command::cargo_bin("picard")
+        .expect("binary exists")
+        .args([
+            "ValidateSamFile",
+            &format!("I={}", missing_platform.display()),
+            "MODE=SUMMARY",
+            "IGNORE=MISSING_PLATFORM_VALUE",
+            "VALIDATION_STRINGENCY=SILENT",
+            "QUIET=true",
+        ])
+        .assert()
+        .success()
+        .stdout("No errors found\n");
+}
+
+#[test]
+fn validatesamfile_reports_unmapped_record_with_nonzero_mapq() {
+    let tempdir = tempfile::tempdir().expect("tempdir exists");
+    let invalid = tempdir.path().join("invalid_mapq.sam");
+    fs::write(
+        &invalid,
+        concat!(
+            "@HD\tVN:1.6\tSO:coordinate\n",
+            "@SQ\tSN:chr1\tLN:100\n",
+            "@RG\tID:rg1\tSM:sample\tPL:ILLUMINA\n",
+            "read1\t4\t*\t0\t60\t*\t*\t0\t0\tACGT\tFFFF\tRG:Z:rg1\n",
+        ),
+    )
+    .expect("invalid MAPQ fixture is written");
+
+    Command::cargo_bin("picard")
+        .expect("binary exists")
+        .args([
+            "ValidateSamFile",
+            &format!("I={}", invalid.display()),
+            "MODE=SUMMARY",
+            "VALIDATION_STRINGENCY=SILENT",
+            "QUIET=true",
+        ])
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains("ERROR:INVALID_MAPPING_QUALITY\t1"))
+        .stderr(predicate::str::contains(
+            "ValidateSamFile found validation issues",
+        ));
+
+    Command::cargo_bin("picard")
+        .expect("binary exists")
+        .args([
+            "ValidateSamFile",
+            &format!("I={}", invalid.display()),
+            "MODE=SUMMARY",
+            "IGNORE=INVALID_MAPPING_QUALITY",
+            "VALIDATION_STRINGENCY=SILENT",
+            "QUIET=true",
+        ])
+        .assert()
+        .success()
+        .stdout("No errors found\n");
+}
+
+#[test]
 fn validatesamfile_accepts_valid_adjacent_paired_records() {
     let tempdir = tempfile::tempdir().expect("tempdir exists");
     let paired = tempdir.path().join("paired.sam");
@@ -4507,6 +4958,52 @@ fn validatesamfile_accepts_valid_adjacent_paired_records() {
             "ValidateSamFile",
             &format!("I={}", paired.display()),
             "MODE=SUMMARY",
+            "VALIDATION_STRINGENCY=SILENT",
+            "QUIET=true",
+        ])
+        .assert()
+        .success()
+        .stdout("No errors found\n");
+}
+
+#[test]
+fn validatesamfile_reports_missing_mate_and_honors_skip_mate_validation() {
+    let tempdir = tempfile::tempdir().expect("tempdir exists");
+    let orphan = tempdir.path().join("orphan.sam");
+    fs::write(
+        &orphan,
+        concat!(
+            "@HD\tVN:1.6\tSO:queryname\n",
+            "@SQ\tSN:chr1\tLN:100\n",
+            "@RG\tID:rg1\tSM:sample\tPL:ILLUMINA\n",
+            "orphan1\t99\tchr1\t1\t60\t4M\t=\t11\t14\tACGT\tFFFF\tRG:Z:rg1\tNM:i:0\n",
+        ),
+    )
+    .expect("orphan paired-read fixture is written");
+
+    Command::cargo_bin("picard")
+        .expect("binary exists")
+        .args([
+            "ValidateSamFile",
+            &format!("I={}", orphan.display()),
+            "MODE=SUMMARY",
+            "VALIDATION_STRINGENCY=SILENT",
+            "QUIET=true",
+        ])
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains("ERROR:MATE_NOT_FOUND\t1"))
+        .stderr(predicate::str::contains(
+            "ValidateSamFile found validation issues",
+        ));
+
+    Command::cargo_bin("picard")
+        .expect("binary exists")
+        .args([
+            "ValidateSamFile",
+            &format!("I={}", orphan.display()),
+            "MODE=SUMMARY",
+            "SKIP_MATE_VALIDATION=true",
             "VALIDATION_STRINGENCY=SILENT",
             "QUIET=true",
         ])

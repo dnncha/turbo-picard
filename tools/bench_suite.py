@@ -82,18 +82,22 @@ def main():
     parser.add_argument("--alignmentmetrics-reads", type=int, default=100_000)
     parser.add_argument("--cleansam-reads", type=int, default=50_000)
     parser.add_argument("--basedistributionbycycle-reads", type=int, default=100_000)
+    parser.add_argument("--collectgcbiasmetrics-reads", type=int, default=100_000)
     parser.add_argument("--collectwgsmetrics-reads", type=int, default=100_000)
     parser.add_argument("--qualityscoredistribution-reads", type=int, default=100_000)
     parser.add_argument("--qualityyield-reads", type=int, default=100_000)
+    parser.add_argument("--collectmultiplemetrics-reads", type=int, default=100_000)
     parser.add_argument("--revertsam-reads", type=int, default=100_000)
     parser.add_argument("--setnmmdanduqtags-reads", type=int, default=100_000)
     parser.add_argument("--validatesamfile-reads", type=int, default=100_000)
     parser.add_argument("--createdict-reads", type=int, default=10_000)
     parser.add_argument("--normalizefasta-reads", type=int, default=10_000)
     parser.add_argument("--bedtointervallist-reads", type=int, default=100_000)
+    parser.add_argument("--intervallisttools-reads", type=int, default=100_000)
     parser.add_argument("--gathervcfs-reads", type=int, default=100_000)
     parser.add_argument("--sortvcf-reads", type=int, default=100_000)
     parser.add_argument("--mergevcfs-reads", type=int, default=100_000)
+    parser.add_argument("--liftovervcf-reads", type=int, default=100_000)
     parser.add_argument("--viewsam-reads", type=int, default=50_000)
     parser.add_argument("--replacesamheader-reads", type=int, default=50_000)
     parser.add_argument("--updatevcfdict-reads", type=int, default=100_000)
@@ -165,6 +169,12 @@ def main():
             args.repeats,
         ),
         run_benchmark(
+            "collectgcbiasmetrics",
+            "bench_collectgcbiasmetrics.py",
+            args.collectgcbiasmetrics_reads,
+            args.repeats,
+        ),
+        run_benchmark(
             "collectwgsmetrics",
             "bench_collectwgsmetrics.py",
             args.collectwgsmetrics_reads,
@@ -177,6 +187,12 @@ def main():
             args.repeats,
         ),
         run_benchmark("qualityyield", "bench_qualityyield.py", args.qualityyield_reads, args.repeats),
+        run_benchmark(
+            "collectmultiplemetrics",
+            "bench_collectmultiplemetrics.py",
+            args.collectmultiplemetrics_reads,
+            args.repeats,
+        ),
         run_benchmark("revertsam", "bench_revertsam.py", args.revertsam_reads, args.repeats),
         run_benchmark(
             "setnmmdanduqtags",
@@ -203,9 +219,21 @@ def main():
             args.bedtointervallist_reads,
             args.repeats,
         ),
+        run_benchmark(
+            "intervallisttools",
+            "bench_intervallisttools.py",
+            args.intervallisttools_reads,
+            args.repeats,
+        ),
         run_benchmark("gathervcfs", "bench_gathervcfs.py", args.gathervcfs_reads, args.repeats),
         run_benchmark("sortvcf", "bench_sortvcf.py", args.sortvcf_reads, args.repeats),
         run_benchmark("mergevcfs", "bench_mergevcfs.py", args.mergevcfs_reads, args.repeats),
+        run_benchmark(
+            "liftovervcf",
+            "bench_liftovervcf.py",
+            args.liftovervcf_reads,
+            args.repeats,
+        ),
         run_benchmark("viewsam", "bench_viewsam.py", args.viewsam_reads, args.repeats),
         run_benchmark(
             "replacesamheader",

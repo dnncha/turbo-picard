@@ -45,15 +45,18 @@ test:
 
 about:
   home: https://github.com/dnncha/turbo-picard
+  doc_url: https://turbo-picard.readthedocs.io/
+  dev_url: https://github.com/dnncha/turbo-picard
   license: MIT
   license_file:
     - LICENSE
     - THIRDPARTY.yml
-  summary: Opt-in picard command shim for turbo-picard.
+  summary: Optional picard command shim for turbo-picard.
   description: |
     Installs a picard compatibility entrypoint backed by turbo-picard. This
     package intentionally conflicts with upstream picard because it shadows the
-    same command name.
+    same command name. See CITATION.cff for the software citation and the
+    documentation for the separate real-data evidence citations.
 
 extra:
   recipe-maintainers:

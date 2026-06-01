@@ -19,7 +19,8 @@ from verify_command_matrix import matrix_native_commands  # noqa: E402
 
 BENCH_SUITE = ROOT / "tools" / "bench_suite.py"
 BENCHMARK_DATA = ROOT / "docs" / "site" / "assets" / "benchmark-data.json"
-MINIMUM_BENCHMARK_COUNT = 28
+BENCHMARK_DOCS = ROOT / "docs" / "benchmarks.rst"
+BENCHMARK_EXEMPTIONS: dict[str, str] = {}
 
 
 def suite_benchmark_commands(text: str) -> set[str]:
@@ -76,7 +77,29 @@ def string_literal_value(node: ast.AST) -> str | None:
 
 
 def manifest_benchmark_commands(data: dict) -> set[str]:
-    return {row["command"] for row in data.get("benchmarks", [])}
+    commands, _errors = manifest_benchmark_commands_with_errors(data)
+    return commands
+
+
+def manifest_benchmark_commands_with_errors(data: dict) -> tuple[set[str], list[str]]:
+    errors: list[str] = []
+    commands: set[str] = set()
+    rows = data.get("benchmarks", [])
+    if not isinstance(rows, list):
+        return commands, ["benchmark-data benchmarks must be a list"]
+    for index, row in enumerate(rows):
+        if not isinstance(row, dict):
+            errors.append(f"benchmark-data row {index} must be an object")
+            continue
+        command = row.get("command")
+        if not isinstance(command, str) or not command:
+            errors.append(f"benchmark-data row {index} missing command")
+            continue
+        if command in commands:
+            errors.append(f"benchmark-data has duplicate command row: {command}")
+            continue
+        commands.add(command)
+    return commands, errors
 
 
 def validate_benchmark_suite_coverage(
@@ -84,12 +107,29 @@ def validate_benchmark_suite_coverage(
     matrix_commands: set[str],
     suite_commands: set[str],
     manifest_commands: set[str],
-    minimum_benchmark_count: int = MINIMUM_BENCHMARK_COUNT,
+    benchmark_exemptions: dict[str, str] | None = None,
+    benchmark_docs: str = "",
+    minimum_benchmark_count: int | None = None,
 ) -> list[str]:
     errors = []
+    benchmark_exemptions = benchmark_exemptions or {}
+    if minimum_benchmark_count is None:
+        minimum_benchmark_count = len(matrix_commands - benchmark_exemptions.keys())
 
     for command in sorted((suite_commands | manifest_commands) - matrix_commands):
         errors.append(f"benchmarked command missing from command matrix: {command}")
+    missing_from_suite = matrix_commands - suite_commands
+    for command in sorted(missing_from_suite - benchmark_exemptions.keys()):
+        errors.append(f"matrix native command missing benchmark or exemption: {command}")
+    for command in sorted(benchmark_exemptions.keys() - matrix_commands):
+        errors.append(f"benchmark exemption is not a matrix native command: {command}")
+    for command in sorted(benchmark_exemptions.keys() & suite_commands):
+        errors.append(f"benchmark exemption also appears in suite: {command}")
+    for command, reason in sorted(benchmark_exemptions.items()):
+        if not reason.strip() or reason.lower() in {"todo", "tbd", "unknown"}:
+            errors.append(f"benchmark exemption for {command} has no useful reason")
+        if benchmark_docs and (command not in benchmark_docs or reason not in benchmark_docs):
+            errors.append(f"benchmark docs missing exemption reason for {command}")
     for command in sorted(suite_commands - manifest_commands):
         errors.append(f"suite benchmark missing from manifest: {command}")
     for command in sorted(manifest_commands - suite_commands):
@@ -105,14 +145,17 @@ def validate_benchmark_suite_coverage(
 def main() -> int:
     matrix_commands = matrix_native_commands()
     suite_commands = suite_benchmark_commands(BENCH_SUITE.read_text(encoding="utf-8"))
-    manifest_commands = manifest_benchmark_commands(
+    manifest_commands, manifest_errors = manifest_benchmark_commands_with_errors(
         json.loads(BENCHMARK_DATA.read_text(encoding="utf-8"))
     )
     errors = validate_benchmark_suite_coverage(
         matrix_commands=matrix_commands,
         suite_commands=suite_commands,
         manifest_commands=manifest_commands,
+        benchmark_exemptions=BENCHMARK_EXEMPTIONS,
+        benchmark_docs=BENCHMARK_DOCS.read_text(encoding="utf-8"),
     )
+    errors = [*manifest_errors, *errors]
     if errors:
         for error in errors:
             print(error, file=sys.stderr)

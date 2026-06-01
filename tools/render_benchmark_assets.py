@@ -34,6 +34,22 @@ def build_benchmark_data_from_rows(
 ) -> dict:
     if not rows:
         raise ValueError("benchmark data requires at least one row")
+    seen_commands: set[str] = set()
+    for index, row in enumerate(rows):
+        command = row.get("command")
+        if not isinstance(command, str) or not command:
+            raise ValueError(f"benchmark row {index} missing command")
+        if command in seen_commands:
+            raise ValueError(f"duplicate benchmark command: {command}")
+        seen_commands.add(command)
+        if row.get("parity") not in {"PASS", "FAIL"}:
+            raise ValueError(f"benchmark row {command} has invalid parity")
+        try:
+            speedup = float(row["speedup"])
+        except (KeyError, TypeError, ValueError) as error:
+            raise ValueError(f"benchmark row {command} missing numeric speedup") from error
+        if speedup <= 0:
+            raise ValueError(f"benchmark row {command} speedup must be positive")
 
     speedups = [float(row["speedup"]) for row in rows]
     top = max(rows, key=lambda row: float(row["speedup"]))

@@ -8,12 +8,13 @@ use rust_htslib::bam::index;
 use rust_htslib::bam::record::{Aux, Cigar, CigarString};
 use rust_htslib::bam::{self, Read};
 use std::cmp::Ordering;
-use std::collections::{BTreeMap, BTreeSet, BinaryHeap};
+use std::collections::{BTreeMap, BTreeSet, BinaryHeap, HashMap};
 use std::env;
 use std::fs;
 use std::io::{BufRead, BufReader, BufWriter, Read as IoRead, Write};
 use std::path::Path;
 use std::process::{self, Command};
+use std::sync::OnceLock;
 use std::time::{SystemTime, UNIX_EPOCH};
 use turbo_picard_core::markdup_config::MarkDuplicatesConfig;
 use turbo_picard_core::picard_args::normalize_picard_args_for_command;
@@ -794,6 +795,16 @@ Common options:
   UNPAIRED_FASTQ        Output FASTQ for unpaired reads
   INTERLEAVE            Write paired reads interleaved to FASTQ
   RE_REVERSE            Reverse-complement reverse-strand reads
+  READ1_TRIM            Trim this many bases from first/unpaired reads
+  READ2_TRIM            Trim this many bases from second-of-pair reads
+  READ1_MAX_BASES_TO_WRITE
+                        Maximum first/unpaired read length after trimming
+  READ2_MAX_BASES_TO_WRITE
+                        Maximum second-of-pair read length after trimming
+  QUALITY / Q           End-trim reads using Picard's quality trimming
+  CLIPPING_ATTRIBUTE    Integer SAM tag that stores a 1-based clip point
+  CLIPPING_ACTION       X to trim, N to mask bases, or a quality value
+  CLIPPING_MIN_LENGTH   Minimum retained clipped length
   CREATE_MD5_FILE       Write Picard-style .md5 sidecars for FASTQ outputs
   CREATE_INDEX          Accepted for Picard command-line compatibility
   REFERENCE_SEQUENCE / R Accepted for Picard command-line compatibility
@@ -1927,6 +1938,16 @@ fn run_samtofastq(args: &[String]) -> Result<(), String> {
         optional_bool(&args, "INCLUDE_NON_PRIMARY_ALIGNMENTS")?.unwrap_or(false);
     let compression_level = optional_u32(&args, "COMPRESSION_LEVEL")?.unwrap_or(5);
     let create_md5_file = optional_bool(&args, "CREATE_MD5_FILE")?.unwrap_or(false);
+    let transform = SamToFastqTransform {
+        read1_trim: optional_u32(&args, "READ1_TRIM")?.unwrap_or(0) as usize,
+        read2_trim: optional_u32(&args, "READ2_TRIM")?.unwrap_or(0) as usize,
+        read1_max_bases_to_write: optional_u32(&args, "READ1_MAX_BASES_TO_WRITE")?
+            .map(|value| value as usize),
+        read2_max_bases_to_write: optional_u32(&args, "READ2_MAX_BASES_TO_WRITE")?
+            .map(|value| value as usize),
+        quality: optional_u32(&args, "QUALITY")?.map(|value| value as u8),
+        clipping: samtofastq_clipping(&args)?,
+    };
 
     if interleave && second_end_fastq.is_some() {
         return Err("SamToFastq INTERLEAVE=true cannot be used with SECOND_END_FASTQ".to_string());
@@ -1944,6 +1965,7 @@ fn run_samtofastq(args: &[String]) -> Result<(), String> {
             include_non_primary_alignments,
             compression_level,
             create_md5_file,
+            transform,
         );
     }
 
@@ -1957,6 +1979,7 @@ fn run_samtofastq(args: &[String]) -> Result<(), String> {
         Some(ref path) => Some(fastq_writer(path, compression_level)?),
         None => None,
     };
+    let mut first_seen_mates: HashMap<Vec<u8>, bam::Record> = HashMap::new();
 
     for record in reader.records() {
         let record = record.map_err(|error| error.to_string())?;
@@ -1972,15 +1995,61 @@ fn run_samtofastq(args: &[String]) -> Result<(), String> {
                     .to_string(),
             );
         }
-        let is_second = record.is_paired() && record.is_last_in_template();
-        let writer = if is_second && !interleave {
-            second_writer.as_mut().unwrap_or(&mut first_writer)
-        } else if !record.is_paired() {
+        if record.is_paired() {
+            let key = record.qname().to_vec();
+            if let Some(first_record) = first_seen_mates.remove(&key) {
+                let (read1, read2) = if record.is_first_in_template() {
+                    (&record, &first_record)
+                } else {
+                    (&first_record, &record)
+                };
+                write_fastq_record(
+                    &mut first_writer,
+                    read1,
+                    &transform,
+                    re_reverse,
+                    fastq_name_suffix(read1),
+                    transform.trim_for(read1),
+                    transform.quality,
+                    transform.max_bases_for(read1),
+                )?;
+                let writer = if interleave {
+                    &mut first_writer
+                } else {
+                    second_writer
+                        .as_mut()
+                        .expect("second writer exists for paired output")
+                };
+                write_fastq_record(
+                    writer,
+                    read2,
+                    &transform,
+                    re_reverse,
+                    fastq_name_suffix(read2),
+                    transform.trim_for(read2),
+                    transform.quality,
+                    transform.max_bases_for(read2),
+                )?;
+            } else {
+                first_seen_mates.insert(key, record);
+            }
+            continue;
+        }
+        let writer = if !record.is_paired() {
             unpaired_writer.as_mut().unwrap_or(&mut first_writer)
         } else {
             &mut first_writer
         };
-        write_fastq_record(writer, &record, re_reverse, fastq_name_suffix(&record))?;
+        write_fastq_record(
+            writer,
+            &record,
+            &transform,
+            re_reverse,
+            fastq_name_suffix(&record),
+            transform.trim_for(&record),
+            transform.quality,
+            transform.max_bases_for(&record),
+        )?;
     }
 
     first_writer.flush().map_err(|error| error.to_string())?;
@@ -2341,12 +2410,15 @@ fn run_collectinsertsizemetrics(args: &[String]) -> Result<(), String> {
     let include_duplicates = optional_bool(&args, "INCLUDE_DUPLICATES")?.unwrap_or(false);
     let stop_after = optional_u32(&args, "STOP_AFTER")?.unwrap_or(0);
     let accumulation = insert_size_accumulation_level(&args)?;
+    let minimum_pct = optional_f64(&args, "MINIMUM_PCT")?.unwrap_or(0.05);
+    let deviations = optional_f64(&args, "DEVIATIONS")?.unwrap_or(10.0);
 
     if has_sam_extension(&input) {
         let metrics =
             collect_insert_size_sam_text(&input, include_duplicates, stop_after, accumulation)?;
-        fs::write(output, metrics.to_picard_text()).map_err(|error| error.to_string())?;
-        return write_placeholder_pdf(&histogram);
+        fs::write(output, metrics.to_picard_text(minimum_pct, deviations))
+            .map_err(|error| error.to_string())?;
+        return write_summary_chart_pdf(&histogram, "CollectInsertSizeMetrics");
     }
 
     let mut reader = bam::Reader::from_path(input).map_err(|error| error.to_string())?;
@@ -2359,8 +2431,9 @@ fn run_collectinsertsizemetrics(args: &[String]) -> Result<(), String> {
         metrics.observe(&record, include_duplicates, read_group.as_ref());
     }
 
-    fs::write(output, metrics.to_picard_text()).map_err(|error| error.to_string())?;
-    write_placeholder_pdf(&histogram)
+    fs::write(output, metrics.to_picard_text(minimum_pct, deviations))
+        .map_err(|error| error.to_string())?;
+    write_summary_chart_pdf(&histogram, "CollectInsertSizeMetrics")
 }
 
 fn run_collectbasedistributionbycycle(args: &[String]) -> Result<(), String> {
@@ -2382,7 +2455,7 @@ fn run_collectbasedistributionbycycle(args: &[String]) -> Result<(), String> {
     }
 
     fs::write(output, metrics.to_picard_text()).map_err(|error| error.to_string())?;
-    write_placeholder_pdf(&chart)
+    write_summary_chart_pdf(&chart, "CollectBaseDistributionByCycle")
 }
 
 fn run_collectgcbiasmetrics(args: &[String]) -> Result<(), String> {
@@ -2424,7 +2497,7 @@ fn run_collectgcbiasmetrics(args: &[String]) -> Result<(), String> {
         metrics.summary_text(window_size, minimum_genome_fraction),
     )
     .map_err(|error| error.to_string())?;
-    write_placeholder_pdf(&chart)
+    write_summary_chart_pdf(&chart, "CollectGcBiasMetrics")
 }
 
 fn run_collectmultiplemetrics(args: &[String]) -> Result<(), String> {
@@ -2463,7 +2536,10 @@ fn run_collectmultiplemetrics(args: &[String]) -> Result<(), String> {
                 child_args.extend(accumulation_arg.clone());
                 child_args.extend(stop_after_arg.clone());
                 run_collectalignmentsummarymetrics(&child_args)?;
-                write_placeholder_pdf(&format!("{output}.read_length_histogram.pdf"))?;
+                write_summary_chart_pdf(
+                    &format!("{output}.read_length_histogram.pdf"),
+                    "CollectAlignmentSummaryMetrics",
+                )?;
             }
             "CollectInsertSizeMetrics" => {
                 let mut child_args = vec![
@@ -2832,7 +2908,7 @@ fn run_qualityscoredistribution(args: &[String]) -> Result<(), String> {
     }
 
     fs::write(output, metrics.to_picard_text()).map_err(|error| error.to_string())?;
-    write_placeholder_pdf(&chart)
+    write_summary_chart_pdf(&chart, "QualityScoreDistribution")
 }
 
 fn run_meanqualitybycycle(args: &[String]) -> Result<(), String> {
@@ -2854,7 +2930,7 @@ fn run_meanqualitybycycle(args: &[String]) -> Result<(), String> {
     }
 
     fs::write(output, metrics.to_picard_text()).map_err(|error| error.to_string())?;
-    write_placeholder_pdf(&chart)
+    write_summary_chart_pdf(&chart, "MeanQualityByCycle")
 }
 
 fn run_createsequencedictionary(args: &[String]) -> Result<(), String> {
@@ -5184,6 +5260,14 @@ fn validate_sam_record_summary(
                 ),
             );
         }
+    } else if record.mapq() != 0 {
+        add_validate_issue(
+            report,
+            "ERROR:INVALID_MAPPING_QUALITY",
+            format!(
+                "ERROR::INVALID_MAPPING_QUALITY:Record {record_number}, Read name {read_name}, MAPQ should be 0 for unmapped read"
+            ),
+        );
     }
     Ok(())
 }
@@ -5200,6 +5284,7 @@ fn validate_sam_ignored_summary_keys(
             "MISSING_TAG_NM" => "WARNING:MISSING_TAG_NM",
             "READ_GROUP_NOT_FOUND" => "ERROR:READ_GROUP_NOT_FOUND",
             "INVALID_TAG_TYPE" => "ERROR:INVALID_TAG_TYPE",
+            "INVALID_MAPPING_QUALITY" => "ERROR:INVALID_MAPPING_QUALITY",
             "RECORD_MISSING_READ_GROUP" => "WARNING:RECORD_MISSING_READ_GROUP",
             "MATE_NOT_FOUND" => "ERROR:MATE_NOT_FOUND",
             _ => return Err(format!("unsupported ValidateSamFile IGNORE={value}")),
@@ -5374,12 +5459,55 @@ fn write_text_or_gzip(path: &str, text: &str) -> Result<(), String> {
     }
 }
 
-fn write_placeholder_pdf(path: &str) -> Result<(), String> {
-    fs::write(
-        path,
-        b"%PDF-1.4\n1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n2 0 obj<</Type/Pages/Count 0>>endobj\ntrailer<</Root 1 0 R>>\n%%EOF\n",
-    )
-    .map_err(|error| error.to_string())
+fn write_summary_chart_pdf(path: &str, command: &str) -> Result<(), String> {
+    let title = format!("{command} summary chart");
+    let filename = Path::new(path)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("chart.pdf");
+    let content = format!(
+        "BT\n/F1 16 Tf\n72 740 Td\n({}) Tj\n/F1 10 Tf\n0 -28 Td\n({}) Tj\n0 -16 Td\n({}) Tj\nET\n",
+        escape_pdf_text(&title),
+        escape_pdf_text(filename),
+        escape_pdf_text("Metrics text remains the parity target for Picard comparisons.")
+    );
+    let objects = [
+        "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_string(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>".to_string(),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_string(),
+        format!(
+            "<< /Length {} >>\nstream\n{}endstream",
+            content.len(),
+            content
+        ),
+    ];
+    let mut pdf = String::from("%PDF-1.4\n");
+    let mut offsets = Vec::with_capacity(objects.len());
+    for (index, object) in objects.iter().enumerate() {
+        offsets.push(pdf.len());
+        pdf.push_str(&format!("{} 0 obj\n{}\nendobj\n", index + 1, object));
+    }
+    let xref_start = pdf.len();
+    pdf.push_str(&format!(
+        "xref\n0 {}\n0000000000 65535 f \n",
+        objects.len() + 1
+    ));
+    for offset in offsets {
+        pdf.push_str(&format!("{offset:010} 00000 n \n"));
+    }
+    pdf.push_str(&format!(
+        "trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{}\n%%EOF\n",
+        objects.len() + 1,
+        xref_start
+    ));
+    fs::write(path, pdf).map_err(|error| error.to_string())
+}
+
+fn escape_pdf_text(text: &str) -> String {
+    text.replace('\\', "\\\\")
+        .replace('(', "\\(")
+        .replace(')', "\\)")
 }
 
 fn derived_dict_path(reference: &str) -> String {
@@ -6485,6 +6613,7 @@ impl AlignmentSummaryCollection {
         &mut self,
         flags: u16,
         read_length: u64,
+        sequence_bases: &[u8],
         aligned_length: u64,
         mapq: u8,
         qualities: &[u8],
@@ -6495,6 +6624,7 @@ impl AlignmentSummaryCollection {
         self.all_reads.observe_sam_parts(
             flags,
             read_length,
+            sequence_bases,
             aligned_length,
             mapq,
             qualities,
@@ -6509,6 +6639,7 @@ impl AlignmentSummaryCollection {
                     .observe_sam_parts(
                         flags,
                         read_length,
+                        sequence_bases,
                         aligned_length,
                         mapq,
                         qualities,
@@ -6528,6 +6659,7 @@ impl AlignmentSummaryCollection {
                     .observe_sam_parts(
                         flags,
                         read_length,
+                        sequence_bases,
                         aligned_length,
                         mapq,
                         qualities,
@@ -6548,6 +6680,7 @@ impl AlignmentSummaryCollection {
                     .observe_sam_parts(
                         flags,
                         read_length,
+                        sequence_bases,
                         aligned_length,
                         mapq,
                         qualities,
@@ -6607,6 +6740,7 @@ impl AlignmentSummarySet {
         &mut self,
         flags: u16,
         read_length: u64,
+        sequence_bases: &[u8],
         aligned_length: u64,
         mapq: u8,
         qualities: &[u8],
@@ -6622,6 +6756,7 @@ impl AlignmentSummarySet {
                 self.first.observe_sam_parts(
                     flags,
                     read_length,
+                    sequence_bases,
                     aligned_length,
                     mapq,
                     qualities,
@@ -6632,6 +6767,7 @@ impl AlignmentSummarySet {
                 self.second.observe_sam_parts(
                     flags,
                     read_length,
+                    sequence_bases,
                     aligned_length,
                     mapq,
                     qualities,
@@ -6642,6 +6778,7 @@ impl AlignmentSummarySet {
             self.pair.observe_sam_parts(
                 flags,
                 read_length,
+                sequence_bases,
                 aligned_length,
                 mapq,
                 qualities,
@@ -6652,6 +6789,7 @@ impl AlignmentSummarySet {
             self.unpaired.observe_sam_parts(
                 flags,
                 read_length,
+                sequence_bases,
                 aligned_length,
                 mapq,
                 qualities,
@@ -6672,6 +6810,7 @@ impl AlignmentSummarySet {
                 AlignmentSummaryRow {
                     category: "FIRST_OF_PAIR",
                     summary: &self.first,
+                    bad_cycles_override: None,
                     sample,
                     library,
                     read_group,
@@ -6679,6 +6818,7 @@ impl AlignmentSummarySet {
                 AlignmentSummaryRow {
                     category: "SECOND_OF_PAIR",
                     summary: &self.second,
+                    bad_cycles_override: None,
                     sample,
                     library,
                     read_group,
@@ -6686,6 +6826,7 @@ impl AlignmentSummarySet {
                 AlignmentSummaryRow {
                     category: "PAIR",
                     summary: &self.pair,
+                    bad_cycles_override: Some(self.first.bad_cycles() + self.second.bad_cycles()),
                     sample,
                     library,
                     read_group,
@@ -6695,6 +6836,7 @@ impl AlignmentSummarySet {
             vec![AlignmentSummaryRow {
                 category: "UNPAIRED",
                 summary: &self.unpaired,
+                bad_cycles_override: None,
                 sample,
                 library,
                 read_group,
@@ -6714,6 +6856,7 @@ impl AlignmentSummarySet {
 struct AlignmentSummaryRow<'a> {
     category: &'static str,
     summary: &'a AlignmentSummary,
+    bad_cycles_override: Option<u64>,
     sample: Option<&'a str>,
     library: Option<&'a str>,
     read_group: Option<&'a str>,
@@ -6723,23 +6866,27 @@ struct AlignmentSummaryRow<'a> {
 struct AlignmentSummary {
     total_reads: u64,
     pf_reads: u64,
+    pf_read_bases: u64,
     pf_noise_reads: u64,
     pf_reads_aligned: u64,
     pf_aligned_bases: u64,
+    pf_read_aligned_bases: u64,
     pf_hq_aligned_reads: u64,
     pf_hq_aligned_bases: u64,
     pf_hq_aligned_q20_bases: u64,
     reads_aligned_in_pairs: u64,
     pf_reads_improper_pairs: u64,
-    bad_cycles: u64,
     forward_aligned_reads: u64,
     reverse_aligned_reads: u64,
     chimeras: u64,
+    adapter_reads: u64,
     indel_bases: u64,
     soft_clip_bases: u64,
     hard_clip_bases: u64,
     three_prime_soft_clip_bases: u64,
     three_prime_soft_clip_reads: u64,
+    cycle_bases: Vec<u64>,
+    cycle_no_calls: Vec<u64>,
     total_read_lengths: Vec<u64>,
     aligned_read_lengths: Vec<u64>,
 }
@@ -6753,6 +6900,11 @@ impl AlignmentSummary {
         } else {
             cigar.aligned_length
         };
+        let aligned_read_length = if record.is_unmapped() {
+            0
+        } else {
+            cigar.read_aligned_length
+        };
         self.total_reads += 1;
         ensure_histogram_len(&mut self.total_read_lengths, read_length as usize);
         self.total_read_lengths[read_length as usize] += 1;
@@ -6762,51 +6914,68 @@ impl AlignmentSummary {
         }
 
         self.pf_reads += 1;
+        self.pf_read_bases += read_length;
         if is_noise_read(record) {
             self.pf_noise_reads += 1;
+        }
+        let sequence_bases = record.seq().as_bytes();
+        self.observe_bad_cycle_bases(&sequence_bases);
+        if is_adapter_read(
+            &sequence_bases,
+            record.is_unmapped(),
+            record.mapq(),
+            record.is_reverse(),
+        ) {
+            self.adapter_reads += 1;
         }
 
         let is_aligned = !record.is_unmapped();
         if is_aligned {
             self.pf_reads_aligned += 1;
             self.pf_aligned_bases += aligned_length;
+            self.pf_read_aligned_bases += aligned_read_length;
             if is_hq_aligned(record) {
                 self.pf_hq_aligned_reads += 1;
                 self.pf_hq_aligned_bases += aligned_length;
-                self.pf_hq_aligned_q20_bases += record
-                    .qual()
-                    .iter()
-                    .filter(|quality| **quality >= 20)
-                    .count() as u64;
+                self.pf_hq_aligned_q20_bases +=
+                    q20_match_bases(record.cigar().iter(), record.qual());
             }
             if record.is_reverse() {
                 self.reverse_aligned_reads += 1;
             } else {
                 self.forward_aligned_reads += 1;
             }
-            if record.is_paired() && !record.is_mate_unmapped() {
-                self.reads_aligned_in_pairs += 1;
-                if !record.is_proper_pair() {
+            if record.is_paired() {
+                if record.is_mate_unmapped() {
                     self.pf_reads_improper_pairs += 1;
-                }
-                if is_chimeric_bam_record(record) {
-                    self.chimeras += 1;
+                    if is_chimeric_bam_record(record) {
+                        self.chimeras += 1;
+                    }
+                } else {
+                    self.reads_aligned_in_pairs += 1;
+                    if !record.is_proper_pair() {
+                        self.pf_reads_improper_pairs += 1;
+                    }
+                    if is_chimeric_bam_record(record) {
+                        self.chimeras += 1;
+                    }
                 }
             }
             self.observe_cigar_summary(cigar);
         }
 
-        ensure_histogram_len(&mut self.aligned_read_lengths, aligned_length as usize);
-        self.aligned_read_lengths[aligned_length as usize] += 1;
+        ensure_histogram_len(&mut self.aligned_read_lengths, aligned_read_length as usize);
+        self.aligned_read_lengths[aligned_read_length as usize] += 1;
     }
 
     fn observe_sam_parts(
         &mut self,
         flags: u16,
         read_length: u64,
+        sequence_bases: &[u8],
         aligned_length: u64,
         mapq: u8,
-        qualities: &[u8],
+        _qualities: &[u8],
         cigar: CigarSummary,
         chimeric: bool,
     ) {
@@ -6819,39 +6988,54 @@ impl AlignmentSummary {
         }
 
         self.pf_reads += 1;
+        self.pf_read_bases += read_length;
+        self.observe_bad_cycle_bases(sequence_bases);
+        if is_adapter_read(sequence_bases, flags & 0x4 != 0, mapq, flags & 0x10 != 0) {
+            self.adapter_reads += 1;
+        }
         let is_aligned = flags & 0x4 == 0;
         if is_aligned {
             self.pf_reads_aligned += 1;
             self.pf_aligned_bases += aligned_length;
+            self.pf_read_aligned_bases += cigar.read_aligned_length;
             if mapq >= 20 {
                 self.pf_hq_aligned_reads += 1;
                 self.pf_hq_aligned_bases += aligned_length;
-                self.pf_hq_aligned_q20_bases +=
-                    qualities.iter().filter(|quality| **quality >= b'5').count() as u64;
+                self.pf_hq_aligned_q20_bases += cigar.q20_match_bases;
             }
             if flags & 0x10 != 0 {
                 self.reverse_aligned_reads += 1;
             } else {
                 self.forward_aligned_reads += 1;
             }
-            if flags & 0x1 != 0 && flags & 0x8 == 0 {
-                self.reads_aligned_in_pairs += 1;
-                if flags & 0x2 == 0 {
+            if flags & 0x1 != 0 {
+                if flags & 0x8 != 0 {
                     self.pf_reads_improper_pairs += 1;
-                }
-                if chimeric {
-                    self.chimeras += 1;
+                    if chimeric {
+                        self.chimeras += 1;
+                    }
+                } else {
+                    self.reads_aligned_in_pairs += 1;
+                    if flags & 0x2 == 0 {
+                        self.pf_reads_improper_pairs += 1;
+                    }
+                    if chimeric {
+                        self.chimeras += 1;
+                    }
                 }
             }
             self.observe_cigar_summary(cigar);
         }
 
-        ensure_histogram_len(&mut self.aligned_read_lengths, aligned_length as usize);
-        self.aligned_read_lengths[aligned_length as usize] += 1;
+        ensure_histogram_len(
+            &mut self.aligned_read_lengths,
+            cigar.read_aligned_length as usize,
+        );
+        self.aligned_read_lengths[cigar.read_aligned_length as usize] += 1;
     }
 
     fn observe_cigar_summary(&mut self, cigar: CigarSummary) {
-        self.indel_bases += cigar.indel_bases;
+        self.indel_bases += cigar.indel_events;
         self.soft_clip_bases += cigar.soft_clip_bases;
         self.hard_clip_bases += cigar.hard_clip_bases;
         if cigar.three_prime_soft_clip_bases > 0 {
@@ -6860,9 +7044,33 @@ impl AlignmentSummary {
         }
     }
 
+    fn observe_bad_cycle_bases(&mut self, bases: &[u8]) {
+        for (index, base) in bases.iter().enumerate() {
+            ensure_histogram_len(&mut self.cycle_bases, index);
+            ensure_histogram_len(&mut self.cycle_no_calls, index);
+            self.cycle_bases[index] += 1;
+            if base.eq_ignore_ascii_case(&b'N') {
+                self.cycle_no_calls[index] += 1;
+            }
+        }
+    }
+
+    fn bad_cycles(&self) -> u64 {
+        self.cycle_bases
+            .iter()
+            .enumerate()
+            .filter(|(index, bases)| {
+                **bases > 0
+                    && self.cycle_no_calls.get(*index).copied().unwrap_or_default() * 5
+                        >= **bases * 4
+            })
+            .count() as u64
+    }
+
     fn to_picard_row(
         &self,
         category: &str,
+        bad_cycles_override: Option<u64>,
         sample: Option<&str>,
         library: Option<&str>,
         read_group: Option<&str>,
@@ -6877,11 +7085,7 @@ impl AlignmentSummary {
         let mad_read_length = mad_from_histogram(&self.total_read_lengths, median_read_length);
         let min_read_length = min_from_histogram(&self.total_read_lengths);
         let max_read_length = max_from_histogram(&self.total_read_lengths);
-        let mean_aligned_read_length = if self.pf_reads == 0 {
-            0.0
-        } else {
-            self.pf_aligned_bases as f64 / self.pf_reads as f64
-        };
+        let mean_aligned_read_length = mean_from_histogram(&self.aligned_read_lengths);
         let aligned_reads = self.forward_aligned_reads + self.reverse_aligned_reads;
         let strand_balance = if aligned_reads == 0 {
             0.0
@@ -6893,9 +7097,15 @@ impl AlignmentSummary {
         } else {
             self.three_prime_soft_clip_bases as f64 / self.three_prime_soft_clip_reads as f64
         };
+        let chimera_denominator = if self.chimeras > 0 && self.pf_reads_aligned > 100 {
+            let adjustment = if category == "PAIR" { 2 } else { 1 };
+            self.pf_reads_aligned.saturating_sub(adjustment)
+        } else {
+            self.pf_reads_aligned
+        };
 
         format!(
-            "{category}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t0\t0\t0\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t0\t{}\t{}\t{}\t{}\t{}\t{}\n",
+            "{category}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t0\t0\t0\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
             self.total_reads,
             self.pf_reads,
             format_float(ratio(self.pf_reads, self.total_reads)),
@@ -6918,17 +7128,12 @@ impl AlignmentSummary {
             format_float(ratio(self.reads_aligned_in_pairs, self.pf_reads_aligned)),
             self.pf_reads_improper_pairs,
             format_float(ratio(self.pf_reads_improper_pairs, self.pf_reads_aligned)),
-            self.bad_cycles,
+            bad_cycles_override.unwrap_or_else(|| self.bad_cycles()),
             format_float(strand_balance),
-            format_float(ratio(self.chimeras, self.pf_reads_aligned)),
-            format_float(percent_cigar_bases(
-                self.soft_clip_bases,
-                self.pf_aligned_bases
-            )),
-            format_float(percent_cigar_bases(
-                self.hard_clip_bases,
-                self.pf_aligned_bases
-            )),
+            format_float(ratio(self.chimeras, chimera_denominator)),
+            format_float(ratio(self.adapter_reads, self.pf_reads)),
+            format_float(ratio(self.soft_clip_bases, self.pf_read_bases)),
+            format_float(ratio(self.hard_clip_bases, self.pf_read_bases)),
             format_float(avg_three_prime_soft_clip),
             sample.unwrap_or_default(),
             library.unwrap_or_default(),
@@ -6946,6 +7151,7 @@ impl AlignmentSummary {
         for row in rows {
             output.push_str(&row.summary.to_picard_row(
                 row.category,
+                row.bad_cycles_override,
                 row.sample,
                 row.library,
                 row.read_group,
@@ -6990,14 +7196,12 @@ impl AlignmentSummary {
 #[derive(Debug, Clone, Copy, Default)]
 struct CigarSummary {
     aligned_length: u64,
-    indel_bases: u64,
+    read_aligned_length: u64,
+    indel_events: u64,
     soft_clip_bases: u64,
     hard_clip_bases: u64,
     three_prime_soft_clip_bases: u64,
-}
-
-fn percent_cigar_bases(cigar_bases: u64, aligned_bases: u64) -> f64 {
-    ratio(cigar_bases, aligned_bases.saturating_add(cigar_bases))
+    q20_match_bases: u64,
 }
 
 fn alignment_cigar_summary<'a>(
@@ -7012,12 +7216,18 @@ fn alignment_cigar_summary<'a>(
         match cigar {
             Cigar::Match(len) | Cigar::Equal(len) | Cigar::Diff(len) => {
                 summary.aligned_length += u64::from(*len);
+                summary.read_aligned_length += u64::from(*len);
+                last_soft_clip = 0;
             }
             Cigar::Ins(len) => {
-                summary.indel_bases += u64::from(*len);
+                summary.read_aligned_length += u64::from(*len);
+                summary.indel_events += 1;
+                last_soft_clip = 0;
             }
             Cigar::Del(len) => {
-                summary.indel_bases += u64::from(*len);
+                let _ = len;
+                summary.indel_events += 1;
+                last_soft_clip = 0;
             }
             Cigar::SoftClip(len) => {
                 summary.soft_clip_bases += u64::from(*len);
@@ -7028,8 +7238,11 @@ fn alignment_cigar_summary<'a>(
             }
             Cigar::HardClip(len) => {
                 summary.hard_clip_bases += u64::from(*len);
+                last_soft_clip = 0;
             }
-            Cigar::RefSkip(_) | Cigar::Pad(_) => {}
+            Cigar::RefSkip(_) | Cigar::Pad(_) => {
+                last_soft_clip = 0;
+            }
         }
         seen_operator = true;
     }
@@ -7041,15 +7254,103 @@ fn alignment_cigar_summary<'a>(
     summary
 }
 
+fn q20_match_bases<'a>(cigars: impl Iterator<Item = &'a Cigar>, qualities: &[u8]) -> u64 {
+    let mut read_position = 0_usize;
+    let mut q20 = 0_u64;
+    for cigar in cigars {
+        match cigar {
+            Cigar::Match(len) | Cigar::Equal(len) | Cigar::Diff(len) => {
+                let len = *len as usize;
+                q20 += qualities
+                    .get(read_position..read_position.saturating_add(len))
+                    .unwrap_or_default()
+                    .iter()
+                    .filter(|quality| **quality >= 20)
+                    .count() as u64;
+                read_position = read_position.saturating_add(len);
+            }
+            Cigar::Ins(len) | Cigar::SoftClip(len) => {
+                read_position = read_position.saturating_add(*len as usize);
+            }
+            Cigar::Del(_) | Cigar::RefSkip(_) | Cigar::HardClip(_) | Cigar::Pad(_) => {}
+        }
+    }
+    q20
+}
+
+fn q20_match_bases_from_sam(cigar: &[u8], qualities: &[u8]) -> Result<u64, String> {
+    if cigar == b"*" || qualities.is_empty() {
+        return Ok(0);
+    }
+    let mut q20 = 0_u64;
+    let mut len = 0_usize;
+    let mut saw_digit = false;
+    let mut read_position = 0_usize;
+    for byte in cigar {
+        if byte.is_ascii_digit() {
+            saw_digit = true;
+            len = len
+                .checked_mul(10)
+                .and_then(|value| value.checked_add(usize::from(byte - b'0')))
+                .ok_or_else(|| "malformed CollectAlignmentSummaryMetrics CIGAR".to_string())?;
+            continue;
+        }
+        if !saw_digit || len == 0 {
+            return Err("malformed CollectAlignmentSummaryMetrics CIGAR".to_string());
+        }
+        match *byte {
+            b'M' | b'=' | b'X' => {
+                q20 += qualities
+                    .get(read_position..read_position.saturating_add(len))
+                    .unwrap_or_default()
+                    .iter()
+                    .filter(|quality| **quality >= b'5')
+                    .count() as u64;
+                read_position = read_position.saturating_add(len);
+            }
+            b'I' | b'S' => {
+                read_position = read_position.saturating_add(len);
+            }
+            b'D' | b'N' | b'H' | b'P' => {}
+            _ => return Err("malformed CollectAlignmentSummaryMetrics CIGAR".to_string()),
+        }
+        len = 0;
+        saw_digit = false;
+    }
+    if saw_digit {
+        return Err("malformed CollectAlignmentSummaryMetrics CIGAR".to_string());
+    }
+    Ok(q20)
+}
+
 fn is_chimeric_bam_record(record: &bam::Record) -> bool {
-    if !record.is_paired()
-        || record.is_unmapped()
-        || record.is_mate_unmapped()
-        || record.is_proper_pair()
-    {
+    if !record.is_paired() || record.is_unmapped() {
         return false;
     }
-    record.tid() != record.mtid() || record.insert_size().unsigned_abs() > 100_000
+    if record.aux(b"SA").is_ok() {
+        return true;
+    }
+    if record.is_mate_unmapped() {
+        return false;
+    }
+    record.tid() != record.mtid()
+        || record.insert_size().unsigned_abs() > 100_000
+        || !is_expected_fr_pair(
+            record.is_first_in_template(),
+            record.is_reverse(),
+            record.is_mate_reverse(),
+            record.insert_size(),
+        )
+}
+
+fn is_expected_fr_pair(
+    _first_in_pair: bool,
+    read_reverse: bool,
+    mate_reverse: bool,
+    insert_size: i64,
+) -> bool {
+    read_reverse != mate_reverse
+        && ((!read_reverse && insert_size > 0) || (read_reverse && insert_size < 0))
 }
 
 fn is_hq_aligned(record: &bam::Record) -> bool {
@@ -7059,6 +7360,87 @@ fn is_hq_aligned(record: &bam::Record) -> bool {
 fn is_noise_read(record: &bam::Record) -> bool {
     let _ = record;
     false
+}
+
+const ADAPTER_MATCH_LENGTH: usize = 16;
+const MAX_ADAPTER_ERRORS: usize = 1;
+const DEFAULT_ALIGNMENT_ADAPTERS: [&[u8]; 6] = [
+    b"AATGATACGGCGACCACCGAGATCTACACTCTTTCCCTACACGACGCTCTTCCGATCT",
+    b"AGATCGGAAGAGCTCGTATGCCGTCTTCTGCTTG",
+    b"AATGATACGGCGACCACCGAGATCTACACTCTTTCCCTACACGACGCTCTTCCGATCT",
+    b"AGATCGGAAGAGCGGTTCAGCAGGAATGCCGAGACCGATCTCGTATGCCGTCTTCTGCTTG",
+    b"AATGATACGGCGACCACCGAGATCTACACTCTTTCCCTACACGACGCTCTTCCGATCT",
+    b"AGATCGGAAGAGCACACGTCTGAACTCCAGTCACNNNNNNNNATCTCGTATGCCGTCTTCTGCTTG",
+];
+
+fn adapter_kmers() -> &'static Vec<[u8; ADAPTER_MATCH_LENGTH]> {
+    static KMERS: OnceLock<Vec<[u8; ADAPTER_MATCH_LENGTH]>> = OnceLock::new();
+    KMERS.get_or_init(|| {
+        let mut kmers = BTreeSet::new();
+        for adapter in DEFAULT_ALIGNMENT_ADAPTERS {
+            if adapter.len() < ADAPTER_MATCH_LENGTH {
+                continue;
+            }
+            for window in adapter.windows(ADAPTER_MATCH_LENGTH) {
+                if window
+                    .iter()
+                    .filter(|base| base.eq_ignore_ascii_case(&b'N'))
+                    .count()
+                    > MAX_ADAPTER_ERRORS
+                {
+                    continue;
+                }
+                let mut kmer = [0_u8; ADAPTER_MATCH_LENGTH];
+                for (index, base) in window.iter().enumerate() {
+                    kmer[index] = base.to_ascii_uppercase();
+                }
+                kmers.insert(kmer);
+                kmers.insert(reverse_complement_kmer(&kmer));
+            }
+        }
+        kmers.into_iter().collect()
+    })
+}
+
+fn reverse_complement_kmer(kmer: &[u8; ADAPTER_MATCH_LENGTH]) -> [u8; ADAPTER_MATCH_LENGTH] {
+    let mut reversed = [0_u8; ADAPTER_MATCH_LENGTH];
+    for (index, base) in kmer.iter().rev().enumerate() {
+        reversed[index] = complement_base(*base);
+    }
+    reversed
+}
+
+fn complement_base(base: u8) -> u8 {
+    match base.to_ascii_uppercase() {
+        b'A' => b'T',
+        b'C' => b'G',
+        b'G' => b'C',
+        b'T' => b'A',
+        _ => b'N',
+    }
+}
+
+fn is_adapter_read(read: &[u8], unmapped: bool, mapq: u8, reverse: bool) -> bool {
+    if read.len() < ADAPTER_MATCH_LENGTH || (!unmapped && mapq != 0) {
+        return false;
+    }
+    adapter_kmers().iter().any(|adapter| {
+        let mut errors = 0;
+        for index in 0..ADAPTER_MATCH_LENGTH {
+            let base = if reverse && !unmapped {
+                complement_base(read[read.len() - index - 1])
+            } else {
+                read[index].to_ascii_uppercase()
+            };
+            if base != adapter[index] {
+                errors += 1;
+                if errors > MAX_ADAPTER_ERRORS {
+                    return false;
+                }
+            }
+        }
+        true
+    })
 }
 
 fn collect_alignment_sam_text(
@@ -7151,7 +7533,7 @@ fn observe_alignment_sam_line(
     } else {
         sequence.len() as u64
     };
-    let cigar_summary = cigar_summary_from_sam(cigar, flags & 0x10 != 0)?;
+    let mut cigar_summary = cigar_summary_from_sam(cigar, flags & 0x10 != 0)?;
     let aligned_length = if flags & 0x4 != 0 {
         0
     } else {
@@ -7162,12 +7544,20 @@ fn observe_alignment_sam_line(
     } else {
         qualities
     };
-    let read_group = insert_size_read_group_for_sam_tags(fields, read_groups);
-    let chimeric =
-        is_chimeric_sam_record(flags, reference_name, mate_reference_name, template_length);
+    cigar_summary.q20_match_bases = q20_match_bases_from_sam(cigar, qualities)?;
+    let tags = fields.collect::<Vec<_>>();
+    let read_group = insert_size_read_group_for_sam_tags(tags.iter().copied(), read_groups);
+    let chimeric = is_chimeric_sam_record(
+        flags,
+        reference_name,
+        mate_reference_name,
+        template_length,
+        tags.iter().any(|tag| tag.starts_with(b"SA:")),
+    );
     metrics.observe_sam_parts(
         flags,
         read_length,
+        if sequence == b"*" { &[][..] } else { sequence },
         aligned_length,
         mapq,
         qualities,
@@ -7207,7 +7597,7 @@ fn mean_from_histogram(histogram: &[u64]) -> f64 {
 
 fn standard_deviation_from_histogram(histogram: &[u64]) -> f64 {
     let total_count = histogram.iter().sum::<u64>();
-    if total_count == 0 {
+    if total_count < 2 {
         return 0.0;
     }
     let mean = mean_from_histogram(histogram);
@@ -7219,7 +7609,7 @@ fn standard_deviation_from_histogram(histogram: &[u64]) -> f64 {
             delta * delta * *count as f64
         })
         .sum::<f64>()
-        / total_count as f64;
+        / (total_count - 1) as f64;
     variance.sqrt()
 }
 
@@ -7684,23 +8074,34 @@ fn cigar_summary_from_sam(cigar: &[u8], is_reverse: bool) -> Result<CigarSummary
             return Err("malformed CollectAlignmentSummaryMetrics CIGAR".to_string());
         }
         match *byte {
-            b'M' | b'I' | b'=' | b'X' => {
+            b'M' | b'=' | b'X' => {
                 summary.aligned_length = summary
                     .aligned_length
                     .checked_add(len)
                     .ok_or_else(|| "malformed CollectAlignmentSummaryMetrics CIGAR".to_string())?;
-                if *byte == b'I' {
-                    summary.indel_bases =
-                        summary.indel_bases.checked_add(len).ok_or_else(|| {
-                            "malformed CollectAlignmentSummaryMetrics CIGAR".to_string()
-                        })?;
-                }
-            }
-            b'D' => {
-                summary.indel_bases = summary
-                    .indel_bases
+                summary.read_aligned_length = summary
+                    .read_aligned_length
                     .checked_add(len)
                     .ok_or_else(|| "malformed CollectAlignmentSummaryMetrics CIGAR".to_string())?;
+                last_soft_clip = 0;
+            }
+            b'I' => {
+                summary.read_aligned_length = summary
+                    .read_aligned_length
+                    .checked_add(len)
+                    .ok_or_else(|| "malformed CollectAlignmentSummaryMetrics CIGAR".to_string())?;
+                summary.indel_events = summary
+                    .indel_events
+                    .checked_add(1)
+                    .ok_or_else(|| "malformed CollectAlignmentSummaryMetrics CIGAR".to_string())?;
+                last_soft_clip = 0;
+            }
+            b'D' => {
+                summary.indel_events = summary
+                    .indel_events
+                    .checked_add(1)
+                    .ok_or_else(|| "malformed CollectAlignmentSummaryMetrics CIGAR".to_string())?;
+                last_soft_clip = 0;
             }
             b'S' => {
                 summary.soft_clip_bases = summary
@@ -7717,8 +8118,11 @@ fn cigar_summary_from_sam(cigar: &[u8], is_reverse: bool) -> Result<CigarSummary
                     .hard_clip_bases
                     .checked_add(len)
                     .ok_or_else(|| "malformed CollectAlignmentSummaryMetrics CIGAR".to_string())?;
+                last_soft_clip = 0;
             }
-            b'N' | b'P' => {}
+            b'N' | b'P' => {
+                last_soft_clip = 0;
+            }
             _ => return Err("malformed CollectAlignmentSummaryMetrics CIGAR".to_string()),
         }
         seen_operator = true;
@@ -7741,13 +8145,27 @@ fn is_chimeric_sam_record(
     reference_name: &[u8],
     mate_reference_name: &[u8],
     template_length: i64,
+    has_sa_tag: bool,
 ) -> bool {
-    if flags & 0x1 == 0 || flags & 0x4 != 0 || flags & 0x8 != 0 || flags & 0x2 != 0 {
+    if flags & 0x1 == 0 || flags & 0x4 != 0 {
+        return false;
+    }
+    if has_sa_tag {
+        return true;
+    }
+    if flags & 0x8 != 0 {
         return false;
     }
     let mate_on_different_reference =
         mate_reference_name != b"=" && mate_reference_name != reference_name;
-    mate_on_different_reference || template_length.unsigned_abs() > 100_000
+    mate_on_different_reference
+        || template_length.unsigned_abs() > 100_000
+        || !is_expected_fr_pair(
+            flags & 0x40 != 0,
+            flags & 0x10 != 0,
+            flags & 0x20 != 0,
+            template_length,
+        )
 }
 
 #[derive(Debug)]
@@ -9110,116 +9528,183 @@ impl InsertSizeCollection {
         }
     }
 
-    fn to_picard_text(&self) -> String {
+    fn to_picard_text(&self, minimum_pct: f64, deviations: f64) -> String {
         let mut output = String::new();
+        let orientations = self.reportable_orientations(minimum_pct);
         output.push_str("## METRICS CLASS\tpicard.analysis.InsertSizeMetrics\n");
         output.push_str("MEDIAN_INSERT_SIZE\tMODE_INSERT_SIZE\tMEDIAN_ABSOLUTE_DEVIATION\tMIN_INSERT_SIZE\tMAX_INSERT_SIZE\tMEAN_INSERT_SIZE\tSTANDARD_DEVIATION\tREAD_PAIRS\tPAIR_ORIENTATION\tWIDTH_OF_10_PERCENT\tWIDTH_OF_20_PERCENT\tWIDTH_OF_30_PERCENT\tWIDTH_OF_40_PERCENT\tWIDTH_OF_50_PERCENT\tWIDTH_OF_60_PERCENT\tWIDTH_OF_70_PERCENT\tWIDTH_OF_80_PERCENT\tWIDTH_OF_90_PERCENT\tWIDTH_OF_95_PERCENT\tWIDTH_OF_99_PERCENT\tSAMPLE\tLIBRARY\tREAD_GROUP\n");
-        output.push_str(&self.all_reads.picard_metric_row(None, None, None));
+        output.push_str(&self.all_reads.picard_metric_rows(
+            None,
+            None,
+            None,
+            &orientations,
+            deviations,
+        ));
         if self.accumulation == InsertSizeAccumulation::Sample {
             for (sample, summary) in &self.samples {
-                output.push_str(&summary.picard_metric_row(Some(sample), None, None));
+                output.push_str(&summary.picard_metric_rows(
+                    Some(sample),
+                    None,
+                    None,
+                    &orientations,
+                    deviations,
+                ));
             }
         } else if self.accumulation == InsertSizeAccumulation::Library {
             for (library, summary) in &self.libraries {
-                output.push_str(&summary.summary.picard_metric_row(
+                output.push_str(&summary.summary.picard_metric_rows(
                     Some(&summary.sample),
                     Some(library),
                     None,
+                    &orientations,
+                    deviations,
                 ));
             }
         } else if self.accumulation == InsertSizeAccumulation::ReadGroup {
             for (read_group, summary) in &self.read_groups {
-                output.push_str(&summary.summary.picard_metric_row(
+                output.push_str(&summary.summary.picard_metric_rows(
                     Some(&summary.sample),
                     Some(&summary.library),
                     Some(read_group),
+                    &orientations,
+                    deviations,
                 ));
             }
         }
         output.push('\n');
         output.push_str("## HISTOGRAM\tjava.lang.Integer\n");
-        output.push_str("insert_size\tAll_Reads.fr_count");
+        output.push_str("insert_size");
+        for orientation in &orientations {
+            output.push_str(&format!("\tAll_Reads.{}_count", orientation.suffix()));
+        }
         if self.accumulation == InsertSizeAccumulation::Sample {
             for sample in self.samples.keys() {
-                output.push_str(&format!("\t{sample}.fr_count"));
+                for orientation in &orientations {
+                    output.push_str(&format!("\t{sample}.{}_count", orientation.suffix()));
+                }
             }
         } else if self.accumulation == InsertSizeAccumulation::Library {
             for library in self.libraries.keys() {
-                output.push_str(&format!("\t{library}.fr_count"));
+                for orientation in &orientations {
+                    output.push_str(&format!("\t{library}.{}_count", orientation.suffix()));
+                }
             }
         } else if self.accumulation == InsertSizeAccumulation::ReadGroup {
             for read_group in self.read_groups.keys() {
-                output.push_str(&format!("\t{read_group}.fr_count"));
+                for orientation in &orientations {
+                    output.push_str(&format!("\t{read_group}.{}_count", orientation.suffix()));
+                }
             }
         }
         output.push('\n');
 
         let mut insert_sizes = self
             .all_reads
-            .histogram
-            .keys()
-            .copied()
-            .collect::<BTreeSet<_>>();
+            .trimmed_insert_sizes(&orientations, deviations);
         for summary in self.samples.values() {
-            insert_sizes.extend(summary.histogram.keys().copied());
+            insert_sizes.extend(summary.trimmed_insert_sizes(&orientations, deviations));
         }
         for summary in self.libraries.values() {
-            insert_sizes.extend(summary.summary.histogram.keys().copied());
+            insert_sizes.extend(
+                summary
+                    .summary
+                    .trimmed_insert_sizes(&orientations, deviations),
+            );
         }
         for summary in self.read_groups.values() {
-            insert_sizes.extend(summary.summary.histogram.keys().copied());
+            insert_sizes.extend(
+                summary
+                    .summary
+                    .trimmed_insert_sizes(&orientations, deviations),
+            );
         }
         for insert_size in insert_sizes {
-            output.push_str(&format!(
-                "{}\t{}",
-                insert_size,
-                self.all_reads
-                    .histogram
-                    .get(&insert_size)
-                    .copied()
-                    .unwrap_or(0)
-            ));
+            output.push_str(&format!("{insert_size}"));
+            for orientation in &orientations {
+                output.push_str(&format!(
+                    "\t{}",
+                    self.all_reads
+                        .trimmed_count(*orientation, insert_size, deviations)
+                ));
+            }
             if self.accumulation == InsertSizeAccumulation::Sample {
                 for summary in self.samples.values() {
-                    output.push_str(&format!(
-                        "\t{}",
-                        summary.histogram.get(&insert_size).copied().unwrap_or(0)
-                    ));
+                    for orientation in &orientations {
+                        output.push_str(&format!(
+                            "\t{}",
+                            summary.trimmed_count(*orientation, insert_size, deviations)
+                        ));
+                    }
                 }
             } else if self.accumulation == InsertSizeAccumulation::Library {
                 for summary in self.libraries.values() {
-                    output.push_str(&format!(
-                        "\t{}",
-                        summary
-                            .summary
-                            .histogram
-                            .get(&insert_size)
-                            .copied()
-                            .unwrap_or(0)
-                    ));
+                    for orientation in &orientations {
+                        output.push_str(&format!(
+                            "\t{}",
+                            summary
+                                .summary
+                                .trimmed_count(*orientation, insert_size, deviations)
+                        ));
+                    }
                 }
             } else if self.accumulation == InsertSizeAccumulation::ReadGroup {
                 for summary in self.read_groups.values() {
-                    output.push_str(&format!(
-                        "\t{}",
-                        summary
-                            .summary
-                            .histogram
-                            .get(&insert_size)
-                            .copied()
-                            .unwrap_or(0)
-                    ));
+                    for orientation in &orientations {
+                        output.push_str(&format!(
+                            "\t{}",
+                            summary
+                                .summary
+                                .trimmed_count(*orientation, insert_size, deviations)
+                        ));
+                    }
                 }
             }
             output.push('\n');
         }
         output
     }
+
+    fn reportable_orientations(&self, minimum_pct: f64) -> Vec<InsertSizeOrientation> {
+        let total = self.all_reads.total_count() as f64;
+        let mut orientations = BTreeSet::new();
+        for orientation in self.all_reads.orientations() {
+            let count = self.all_reads.orientation_count(orientation) as f64;
+            if total == 0.0 || count / total >= minimum_pct {
+                orientations.insert(orientation);
+            }
+        }
+        orientations.into_iter().collect()
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum InsertSizeOrientation {
+    Fr,
+    Rf,
+    Tandem,
+}
+
+impl InsertSizeOrientation {
+    fn label(self) -> &'static str {
+        match self {
+            InsertSizeOrientation::Fr => "FR",
+            InsertSizeOrientation::Rf => "RF",
+            InsertSizeOrientation::Tandem => "TANDEM",
+        }
+    }
+
+    fn suffix(self) -> &'static str {
+        match self {
+            InsertSizeOrientation::Fr => "fr",
+            InsertSizeOrientation::Rf => "rf",
+            InsertSizeOrientation::Tandem => "tandem",
+        }
+    }
 }
 
 #[derive(Debug, Default)]
 struct InsertSizeSummary {
-    histogram: BTreeMap<u64, u64>,
+    histograms: BTreeMap<InsertSizeOrientation, BTreeMap<u64, u64>>,
 }
 
 impl InsertSizeSummary {
@@ -9231,12 +9716,19 @@ impl InsertSizeSummary {
             || record.is_supplementary()
             || (record.is_duplicate() && !include_duplicates)
             || record.insert_size() == 0
-            || !record.is_first_in_template()
+            || !record.is_last_in_template()
         {
             return false;
         }
+        let orientation = insert_size_orientation(
+            record.is_reverse(),
+            record.is_mate_reverse(),
+            record.insert_size(),
+        );
         *self
-            .histogram
+            .histograms
+            .entry(orientation)
+            .or_default()
             .entry(record.insert_size().unsigned_abs())
             .or_default() += 1;
         true
@@ -9254,64 +9746,182 @@ impl InsertSizeSummary {
             || flags & 0x100 != 0
             || flags & 0x800 != 0
             || (flags & 0x400 != 0 && !include_duplicates)
-            || flags & 0x40 == 0
+            || flags & 0x80 == 0
             || insert_size == 0
         {
             return false;
         }
+        let orientation = insert_size_orientation_from_flags(flags, insert_size);
         *self
-            .histogram
+            .histograms
+            .entry(orientation)
+            .or_default()
             .entry(insert_size.unsigned_abs())
             .or_default() += 1;
         true
     }
 
-    fn picard_metric_row(
+    fn picard_metric_rows(
         &self,
         sample: Option<&str>,
         library: Option<&str>,
         read_group: Option<&str>,
+        orientations: &[InsertSizeOrientation],
+        deviations: f64,
     ) -> String {
-        let read_pairs = histogram_total_count(&self.histogram);
-        let median = histogram_median_f64(&self.histogram);
-        let mad = histogram_median_absolute_deviation(&self.histogram, median);
-        let min = self.histogram.keys().next().copied().unwrap_or(0);
-        let max = self.histogram.keys().next_back().copied().unwrap_or(0);
-        let mean = histogram_mean(&self.histogram);
-        let stddev = if read_pairs < 2 {
-            "?".to_string()
-        } else {
-            format_float(histogram_sample_standard_deviation(&self.histogram, mean))
-        };
-        let mode = mode_from_histogram(&self.histogram);
-        let widths = insert_size_widths(&self.histogram);
-
-        format!(
-            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\tFR\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
-            format_float(median),
-            mode,
-            format_float(mad),
-            min,
-            max,
-            format_float(mean),
-            stddev,
-            read_pairs,
-            widths[0],
-            widths[1],
-            widths[2],
-            widths[3],
-            widths[4],
-            widths[5],
-            widths[6],
-            widths[7],
-            widths[8],
-            widths[9],
-            widths[10],
-            sample.unwrap_or_default(),
-            library.unwrap_or_default(),
-            read_group.unwrap_or_default(),
-        )
+        let mut output = String::new();
+        for orientation in orientations {
+            if let Some(histogram) = self.histograms.get(orientation) {
+                output.push_str(&picard_insert_size_metric_row(
+                    histogram,
+                    *orientation,
+                    sample,
+                    library,
+                    read_group,
+                    deviations,
+                ));
+            }
+        }
+        output
     }
+
+    fn orientations(&self) -> BTreeSet<InsertSizeOrientation> {
+        self.histograms.keys().copied().collect()
+    }
+
+    fn trimmed_insert_sizes(
+        &self,
+        orientations: &[InsertSizeOrientation],
+        deviations: f64,
+    ) -> BTreeSet<u64> {
+        orientations
+            .iter()
+            .filter_map(|orientation| self.histograms.get(orientation))
+            .flat_map(|histogram| {
+                let width = insert_size_histogram_width(histogram, deviations);
+                histogram.keys().copied().filter(move |size| *size <= width)
+            })
+            .collect()
+    }
+
+    fn trimmed_count(
+        &self,
+        orientation: InsertSizeOrientation,
+        insert_size: u64,
+        deviations: f64,
+    ) -> u64 {
+        let Some(histogram) = self.histograms.get(&orientation) else {
+            return 0;
+        };
+        if insert_size > insert_size_histogram_width(histogram, deviations) {
+            return 0;
+        }
+        histogram.get(&insert_size).copied().unwrap_or(0)
+    }
+
+    fn orientation_count(&self, orientation: InsertSizeOrientation) -> u64 {
+        self.histograms
+            .get(&orientation)
+            .map(histogram_total_count)
+            .unwrap_or(0)
+    }
+
+    fn total_count(&self) -> u64 {
+        self.histograms.values().map(histogram_total_count).sum()
+    }
+}
+
+fn insert_size_orientation(
+    read_reverse: bool,
+    mate_reverse: bool,
+    insert_size: i64,
+) -> InsertSizeOrientation {
+    if read_reverse == mate_reverse {
+        InsertSizeOrientation::Tandem
+    } else if (!read_reverse && insert_size > 0) || (read_reverse && insert_size < 0) {
+        InsertSizeOrientation::Fr
+    } else if read_reverse {
+        InsertSizeOrientation::Rf
+    } else {
+        InsertSizeOrientation::Rf
+    }
+}
+
+fn insert_size_orientation_from_flags(flags: u16, insert_size: i64) -> InsertSizeOrientation {
+    insert_size_orientation(flags & 0x10 != 0, flags & 0x20 != 0, insert_size)
+}
+
+fn picard_insert_size_metric_row(
+    histogram: &BTreeMap<u64, u64>,
+    orientation: InsertSizeOrientation,
+    sample: Option<&str>,
+    library: Option<&str>,
+    read_group: Option<&str>,
+    deviations: f64,
+) -> String {
+    let read_pairs = histogram_total_count(histogram);
+    let median = histogram_median_f64(histogram);
+    let mad = histogram_median_absolute_deviation(histogram, median);
+    let min = histogram.keys().next().copied().unwrap_or(0);
+    let max = histogram.keys().next_back().copied().unwrap_or(0);
+    let trimmed = trimmed_histogram(
+        histogram,
+        insert_size_histogram_width(histogram, deviations),
+    );
+    let mean = histogram_mean(&trimmed);
+    let stddev = if read_pairs < 2 {
+        "?".to_string()
+    } else {
+        format_float(histogram_sample_standard_deviation(&trimmed, mean))
+    };
+    let mode = mode_from_histogram(histogram);
+    let widths = insert_size_widths(histogram);
+
+    format!(
+        "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
+        format_float(median),
+        mode,
+        format_float(mad),
+        min,
+        max,
+        format_float(mean),
+        stddev,
+        read_pairs,
+        orientation.label(),
+        widths[0],
+        widths[1],
+        widths[2],
+        widths[3],
+        widths[4],
+        widths[5],
+        widths[6],
+        widths[7],
+        widths[8],
+        widths[9],
+        widths[10],
+        sample.unwrap_or_default(),
+        library.unwrap_or_default(),
+        read_group.unwrap_or_default(),
+    )
+}
+
+fn insert_size_histogram_width(histogram: &BTreeMap<u64, u64>, deviations: f64) -> u64 {
+    let median = histogram_median_f64(histogram);
+    let mad = histogram_median_absolute_deviation(histogram, median);
+    (median + deviations * mad).max(0.0) as u64
+}
+
+fn trimmed_histogram(histogram: &BTreeMap<u64, u64>, width: u64) -> BTreeMap<u64, u64> {
+    histogram
+        .iter()
+        .filter_map(|(insert_size, count)| {
+            if *insert_size <= width {
+                Some((*insert_size, *count))
+            } else {
+                None
+            }
+        })
+        .collect()
 }
 
 fn histogram_total_count(histogram: &BTreeMap<u64, u64>) -> u64 {
@@ -9410,30 +10020,39 @@ fn mode_from_histogram(histogram: &BTreeMap<u64, u64>) -> u64 {
 }
 
 fn insert_size_widths(histogram: &BTreeMap<u64, u64>) -> [u64; 11] {
-    [
-        10.0, 20.0, 30.0, 40.0, 50.0, 60.0, 70.0, 80.0, 90.0, 95.0, 99.0,
-    ]
-    .map(|central_percent| insert_size_width(histogram, central_percent))
-}
-
-fn insert_size_width(histogram: &BTreeMap<u64, u64>, central_percent: f64) -> u64 {
+    let mut widths = [0_u64; 11];
     if histogram.is_empty() {
-        return 0;
+        return widths;
     }
-    let tail_percent = (100.0 - central_percent) / 2.0;
-    let low = histogram_nearest_rank_percentile(histogram, tail_percent);
-    let high = histogram_nearest_rank_percentile(histogram, 100.0 - tail_percent);
-    high.saturating_sub(low) + 1
-}
+    let thresholds = [
+        10.0, 20.0, 30.0, 40.0, 50.0, 60.0, 70.0, 80.0, 90.0, 95.0, 99.0,
+    ];
+    let total = histogram_total_count(histogram) as f64;
+    let min = histogram.keys().next().copied().unwrap_or(0) as f64;
+    let max = histogram.keys().next_back().copied().unwrap_or(0) as f64;
+    let median = histogram_median_f64(histogram);
+    let mut covered = 0.0;
+    let mut low = median;
+    let mut high = median;
 
-fn histogram_nearest_rank_percentile(histogram: &BTreeMap<u64, u64>, percentile: f64) -> u64 {
-    let total_count = histogram_total_count(histogram);
-    if total_count == 0 {
-        return 0;
+    while low >= min || high <= max {
+        if low >= 0.0 {
+            covered += histogram.get(&(low as u64)).copied().unwrap_or(0) as f64;
+        }
+        if low != high && high >= 0.0 {
+            covered += histogram.get(&(high as u64)).copied().unwrap_or(0) as f64;
+        }
+        let percent_covered = covered / total;
+        let distance = (high - low) as u64 + 1;
+        for (index, threshold) in thresholds.iter().enumerate() {
+            if percent_covered >= threshold / 100.0 && widths[index] == 0 {
+                widths[index] = distance;
+            }
+        }
+        low -= 1.0;
+        high += 1.0;
     }
-    let rank = ((percentile / 100.0) * total_count as f64).ceil() as u64;
-    let index = rank.saturating_sub(1).min(total_count - 1);
-    histogram_value_at_zero_based_rank(histogram, index)
+    widths
 }
 
 fn skip_quality_metric_record(
@@ -10092,6 +10711,18 @@ fn reject_unsupported_samtofastq_args(
         "UNPAIRED_FASTQ",
         "INTERLEAVE",
         "RE_REVERSE",
+        "READ1_TRIM",
+        "READ2_TRIM",
+        "READ1_MAX_BASES_TO_WRITE",
+        "READ2_MAX_BASES_TO_WRITE",
+        "QUALITY",
+        "CLIPPING_ATTRIBUTE",
+        "CLIPPING_ACTION",
+        "CLIPPING_MIN_LENGTH",
+        "OUTPUT_PER_RG",
+        "COMPRESS_OUTPUTS_PER_RG",
+        "RG_TAG",
+        "OUTPUT_DIR",
         "INCLUDE_NON_PF_READS",
         "INCLUDE_NON_PRIMARY_ALIGNMENTS",
         "VALIDATION_STRINGENCY",
@@ -10118,6 +10749,35 @@ fn reject_unsupported_samtofastq_args(
     optional_bool(args, "QUIET")?;
     optional_bool(args, "INTERLEAVE")?;
     optional_bool(args, "RE_REVERSE")?;
+    if args.contains_key("OUTPUT_PER_RG")
+        || args.contains_key("COMPRESS_OUTPUTS_PER_RG")
+        || args.contains_key("RG_TAG")
+        || args.contains_key("OUTPUT_DIR")
+    {
+        return Err("unsupported SamToFastq OUTPUT_PER_RG".to_string());
+    }
+    if args.contains_key("UNPAIRED_FASTQ") && !args.contains_key("SECOND_END_FASTQ") {
+        return Err("unsupported SamToFastq UNPAIRED_FASTQ without SECOND_END_FASTQ".to_string());
+    }
+    optional_u32(args, "READ1_TRIM")?;
+    optional_u32(args, "READ2_TRIM")?;
+    optional_u32(args, "READ1_MAX_BASES_TO_WRITE")?;
+    optional_u32(args, "READ2_MAX_BASES_TO_WRITE")?;
+    optional_u32(args, "QUALITY")?;
+    optional_scalar(args, "CLIPPING_ATTRIBUTE")?;
+    optional_scalar(args, "CLIPPING_ACTION")?;
+    optional_u32(args, "CLIPPING_MIN_LENGTH")?;
+    if args.contains_key("CLIPPING_ATTRIBUTE") != args.contains_key("CLIPPING_ACTION") {
+        return Err(
+            "unsupported SamToFastq clipping requires both CLIPPING_ATTRIBUTE and CLIPPING_ACTION"
+                .to_string(),
+        );
+    }
+    if let Some(action) = optional_scalar(args, "CLIPPING_ACTION")? {
+        if !matches!(action.as_str(), "N" | "X") && action.parse::<i32>().is_err() {
+            return Err("unsupported SamToFastq CLIPPING_ACTION".to_string());
+        }
+    }
     optional_bool(args, "INCLUDE_NON_PF_READS")?;
     optional_bool(args, "INCLUDE_NON_PRIMARY_ALIGNMENTS")?;
     optional_bool(args, "CREATE_MD5_FILE")?;
@@ -10221,6 +10881,7 @@ fn run_samtofastq_from_sam_text(
     include_non_primary_alignments: bool,
     compression_level: u32,
     create_md5_file: bool,
+    transform: SamToFastqTransform,
 ) -> Result<(), String> {
     let file = fs::File::open(input).map_err(|error| error.to_string())?;
     let mut reader = BufReader::with_capacity(1024 * 1024, file);
@@ -10237,6 +10898,7 @@ fn run_samtofastq_from_sam_text(
     let mut sequence = Vec::new();
     let mut qualities = Vec::new();
     let mut output = Vec::with_capacity(512);
+    let mut first_seen_mates: HashMap<String, SamFastqRecord> = HashMap::new();
 
     loop {
         line.clear();
@@ -10266,42 +10928,81 @@ fn run_samtofastq_from_sam_text(
             );
         }
 
-        sequence.clear();
-        sequence.extend_from_slice(sam_sequence.as_bytes());
-        qualities.clear();
-        qualities.extend_from_slice(sam_qualities.as_bytes());
-        if re_reverse && flags & 0x10 != 0 {
-            reverse_complement(&mut sequence);
-            qualities.reverse();
-        }
-        output.clear();
-        append_fastq_text_record(
-            &mut output,
-            name.as_bytes(),
-            fastq_name_suffix_from_flags(flags),
-            &sequence,
-            &qualities,
-        );
-
-        if is_paired && flags & 0x80 != 0 && !interleave {
-            second_writer
-                .as_mut()
-                .expect("second writer exists for paired output")
-                .write_all(&output)
-                .map_err(|error| error.to_string())?;
-        } else if !is_paired {
-            match unpaired_writer.as_mut() {
-                Some(writer) => writer
-                    .write_all(&output)
-                    .map_err(|error| error.to_string())?,
-                None => first_writer
-                    .write_all(&output)
-                    .map_err(|error| error.to_string())?,
+        let current_record = SamFastqRecord {
+            name: name.to_string(),
+            flags,
+            sequence: sam_sequence.to_string(),
+            qualities: sam_qualities.to_string(),
+            clip_point: sam_clip_point(line, transform.clipping),
+        };
+        if is_paired {
+            if let Some(first_record) = first_seen_mates.remove(name) {
+                let (read1, read2) = if flags & 0x40 != 0 {
+                    (&current_record, &first_record)
+                } else {
+                    (&first_record, &current_record)
+                };
+                write_sam_fastq_record(
+                    &mut first_writer,
+                    read1,
+                    &transform,
+                    re_reverse,
+                    transform.trim_for_flags(read1.flags),
+                    transform.quality,
+                    transform.max_bases_for_flags(read1.flags),
+                    &mut sequence,
+                    &mut qualities,
+                    &mut output,
+                )?;
+                let writer = if interleave {
+                    &mut first_writer
+                } else {
+                    second_writer
+                        .as_mut()
+                        .expect("second writer exists for paired output")
+                };
+                write_sam_fastq_record(
+                    writer,
+                    read2,
+                    &transform,
+                    re_reverse,
+                    transform.trim_for_flags(read2.flags),
+                    transform.quality,
+                    transform.max_bases_for_flags(read2.flags),
+                    &mut sequence,
+                    &mut qualities,
+                    &mut output,
+                )?;
+            } else {
+                first_seen_mates.insert(name.to_string(), current_record);
             }
         } else {
-            first_writer
-                .write_all(&output)
-                .map_err(|error| error.to_string())?;
+            match unpaired_writer.as_mut() {
+                Some(writer) => write_sam_fastq_record(
+                    writer,
+                    &current_record,
+                    &transform,
+                    re_reverse,
+                    transform.trim_for_flags(current_record.flags),
+                    transform.quality,
+                    transform.max_bases_for_flags(current_record.flags),
+                    &mut sequence,
+                    &mut qualities,
+                    &mut output,
+                )?,
+                None => write_sam_fastq_record(
+                    &mut first_writer,
+                    &current_record,
+                    &transform,
+                    re_reverse,
+                    transform.trim_for_flags(current_record.flags),
+                    transform.quality,
+                    transform.max_bases_for_flags(current_record.flags),
+                    &mut sequence,
+                    &mut qualities,
+                    &mut output,
+                )?,
+            }
         }
     }
 
@@ -10316,6 +11017,146 @@ fn run_samtofastq_from_sam_text(
     drop(second_writer);
     drop(unpaired_writer);
     write_samtofastq_sidecars(fastq, second_end_fastq, unpaired_fastq, create_md5_file)
+}
+
+struct SamFastqRecord {
+    name: String,
+    flags: u16,
+    sequence: String,
+    qualities: String,
+    clip_point: Option<usize>,
+}
+
+#[derive(Clone, Copy)]
+struct SamToFastqTransform {
+    read1_trim: usize,
+    read2_trim: usize,
+    read1_max_bases_to_write: Option<usize>,
+    read2_max_bases_to_write: Option<usize>,
+    quality: Option<u8>,
+    clipping: Option<SamToFastqClipping>,
+}
+
+#[derive(Clone, Copy)]
+struct SamToFastqClipping {
+    tag: [u8; 2],
+    action: SamToFastqClippingAction,
+    minimum_length: usize,
+}
+
+#[derive(Clone, Copy)]
+enum SamToFastqClippingAction {
+    Trim,
+    MaskBase,
+    SetQuality(u8),
+}
+
+impl SamToFastqTransform {
+    fn trim_for(&self, record: &bam::Record) -> usize {
+        if record.is_paired() && record.is_last_in_template() {
+            self.read2_trim
+        } else {
+            self.read1_trim
+        }
+    }
+
+    fn max_bases_for(&self, record: &bam::Record) -> Option<usize> {
+        if record.is_paired() && record.is_last_in_template() {
+            self.read2_max_bases_to_write
+        } else {
+            self.read1_max_bases_to_write
+        }
+    }
+
+    fn trim_for_flags(&self, flags: u16) -> usize {
+        if flags & 0x1 != 0 && flags & 0x80 != 0 {
+            self.read2_trim
+        } else {
+            self.read1_trim
+        }
+    }
+
+    fn max_bases_for_flags(&self, flags: u16) -> Option<usize> {
+        if flags & 0x1 != 0 && flags & 0x80 != 0 {
+            self.read2_max_bases_to_write
+        } else {
+            self.read1_max_bases_to_write
+        }
+    }
+}
+
+fn samtofastq_clipping(
+    args: &BTreeMap<String, Vec<String>>,
+) -> Result<Option<SamToFastqClipping>, String> {
+    let Some(attribute) = optional_scalar(args, "CLIPPING_ATTRIBUTE")? else {
+        return Ok(None);
+    };
+    let action = required_scalar_for(args, "CLIPPING_ACTION", "SamToFastq")?;
+    let tag = sam_tag_bytes(&attribute, "SamToFastq CLIPPING_ATTRIBUTE")?;
+    let action = match action.as_str() {
+        "X" => SamToFastqClippingAction::Trim,
+        "N" => SamToFastqClippingAction::MaskBase,
+        value => {
+            let phred = value
+                .parse::<u8>()
+                .map_err(|_| "unsupported SamToFastq CLIPPING_ACTION".to_string())?;
+            SamToFastqClippingAction::SetQuality(phred.saturating_add(33))
+        }
+    };
+    Ok(Some(SamToFastqClipping {
+        tag,
+        action,
+        minimum_length: optional_u32(args, "CLIPPING_MIN_LENGTH")?.unwrap_or(0) as usize,
+    }))
+}
+
+fn sam_tag_bytes(value: &str, label: &str) -> Result<[u8; 2], String> {
+    let bytes = value.as_bytes();
+    if bytes.len() != 2 {
+        return Err(format!("unsupported {label}: {value}"));
+    }
+    Ok([bytes[0], bytes[1]])
+}
+
+fn write_sam_fastq_record(
+    writer: &mut dyn Write,
+    record: &SamFastqRecord,
+    transform: &SamToFastqTransform,
+    re_reverse: bool,
+    trim: usize,
+    quality: Option<u8>,
+    max_bases_to_write: Option<usize>,
+    sequence: &mut Vec<u8>,
+    qualities: &mut Vec<u8>,
+    output: &mut Vec<u8>,
+) -> Result<(), String> {
+    sequence.clear();
+    sequence.extend_from_slice(record.sequence.as_bytes());
+    qualities.clear();
+    qualities.extend_from_slice(record.qualities.as_bytes());
+    if let Some(clipping) = transform.clipping {
+        apply_samtofastq_clipping(
+            sequence,
+            qualities,
+            record.clip_point,
+            record.flags & 0x10 != 0,
+            clipping,
+        )?;
+    }
+    if re_reverse && record.flags & 0x10 != 0 {
+        reverse_complement(sequence);
+        qualities.reverse();
+    }
+    trim_and_cap_fastq(sequence, qualities, trim, quality, max_bases_to_write)?;
+    output.clear();
+    append_fastq_text_record(
+        output,
+        record.name.as_bytes(),
+        fastq_name_suffix_from_flags(record.flags),
+        sequence,
+        qualities,
+    );
+    writer.write_all(output).map_err(|error| error.to_string())
 }
 
 fn write_samtofastq_sidecars(
@@ -10381,8 +11222,12 @@ fn append_fastq_text_record(
 fn write_fastq_record(
     writer: &mut dyn Write,
     record: &bam::Record,
+    transform: &SamToFastqTransform,
     re_reverse: bool,
     name_suffix: Option<&'static str>,
+    trim: usize,
+    quality: Option<u8>,
+    max_bases_to_write: Option<usize>,
 ) -> Result<(), String> {
     let name = String::from_utf8_lossy(record.qname());
     let mut sequence = record.seq().as_bytes();
@@ -10392,10 +11237,26 @@ fn write_fastq_record(
         .map(|quality| quality.saturating_add(33))
         .collect::<Vec<_>>();
 
+    if let Some(clipping) = transform.clipping {
+        apply_samtofastq_clipping(
+            &mut sequence,
+            &mut qualities,
+            bam_clip_point(record, clipping.tag),
+            record.is_reverse(),
+            clipping,
+        )?;
+    }
     if re_reverse && record.is_reverse() {
         reverse_complement(&mut sequence);
         qualities.reverse();
     }
+    trim_and_cap_fastq(
+        &mut sequence,
+        &mut qualities,
+        trim,
+        quality,
+        max_bases_to_write,
+    )?;
 
     writer
         .write_all(b"@")
@@ -10407,6 +11268,150 @@ fn write_fastq_record(
         .and_then(|_| writer.write_all(&qualities))
         .and_then(|_| writer.write_all(b"\n"))
         .map_err(|error| error.to_string())
+}
+
+fn trim_and_cap_fastq(
+    sequence: &mut Vec<u8>,
+    qualities: &mut Vec<u8>,
+    trim: usize,
+    quality: Option<u8>,
+    max_bases_to_write: Option<usize>,
+) -> Result<(), String> {
+    if trim > sequence.len() || trim > qualities.len() {
+        return Err("SamToFastq trim exceeds read length".to_string());
+    }
+    if trim > 0 {
+        sequence.drain(..trim);
+        qualities.drain(..trim);
+    }
+    if let Some(quality) = quality {
+        let trim_point = find_quality_trim_point(qualities, quality).max(1);
+        if trim_point < qualities.len() {
+            sequence.truncate(trim_point);
+            qualities.truncate(trim_point);
+        }
+    }
+    if let Some(max_bases) = max_bases_to_write {
+        sequence.truncate(max_bases);
+        qualities.truncate(max_bases);
+    }
+    Ok(())
+}
+
+fn apply_samtofastq_clipping(
+    sequence: &mut Vec<u8>,
+    qualities: &mut Vec<u8>,
+    clip_point: Option<usize>,
+    reverse: bool,
+    clipping: SamToFastqClipping,
+) -> Result<(), String> {
+    let Some(mut point) = clip_point else {
+        return Ok(());
+    };
+    if point < clipping.minimum_length {
+        point = sequence.len().min(clipping.minimum_length);
+    }
+    if point == 0 || point > sequence.len() || point > qualities.len() {
+        return Ok(());
+    }
+    let positive_strand = !reverse;
+    match clipping.action {
+        SamToFastqClippingAction::Trim => {
+            clip_fastq_component(sequence, point, None, positive_strand);
+            clip_fastq_component(qualities, point, None, positive_strand);
+        }
+        SamToFastqClippingAction::MaskBase => {
+            clip_fastq_component(sequence, point, Some(b'N'), positive_strand);
+        }
+        SamToFastqClippingAction::SetQuality(quality) => {
+            clip_fastq_component(qualities, point, Some(quality), positive_strand);
+        }
+    }
+    Ok(())
+}
+
+fn clip_fastq_component(
+    component: &mut Vec<u8>,
+    point: usize,
+    replacement: Option<u8>,
+    positive_strand: bool,
+) {
+    let len = component.len();
+    let mut result = if positive_strand {
+        component[..point - 1].to_vec()
+    } else {
+        component[len - point + 1..].to_vec()
+    };
+    if let Some(replacement) = replacement {
+        let replacement_count = len - point + 1;
+        if positive_strand {
+            result.extend(std::iter::repeat(replacement).take(replacement_count));
+        } else {
+            let mut prefixed = vec![replacement; replacement_count];
+            prefixed.extend_from_slice(&result);
+            result = prefixed;
+        }
+    }
+    *component = result;
+}
+
+fn bam_clip_point(record: &bam::Record, tag: [u8; 2]) -> Option<usize> {
+    match record.aux(&tag) {
+        Ok(Aux::I8(value)) => usize::try_from(value).ok(),
+        Ok(Aux::U8(value)) => Some(value as usize),
+        Ok(Aux::I16(value)) => usize::try_from(value).ok(),
+        Ok(Aux::U16(value)) => Some(value as usize),
+        Ok(Aux::I32(value)) => usize::try_from(value).ok(),
+        Ok(Aux::U32(value)) => usize::try_from(value).ok(),
+        _ => None,
+    }
+}
+
+fn sam_clip_point(line: &str, clipping: Option<SamToFastqClipping>) -> Option<usize> {
+    let clipping = clipping?;
+    let tag = std::str::from_utf8(&clipping.tag).ok()?;
+    for field in line.split('\t').skip(11) {
+        let mut parts = field.splitn(3, ':');
+        let Some(field_tag) = parts.next() else {
+            continue;
+        };
+        if field_tag != tag {
+            continue;
+        }
+        let Some(field_type) = parts.next() else {
+            continue;
+        };
+        let Some(value) = parts.next() else {
+            continue;
+        };
+        if !matches!(field_type, "i" | "I" | "c" | "C" | "s" | "S") {
+            return None;
+        }
+        return value.parse::<usize>().ok();
+    }
+    None
+}
+
+fn find_quality_trim_point(qualities: &[u8], trim_quality: u8) -> usize {
+    let length = qualities.len();
+    if trim_quality < 1 || length == 0 {
+        return 0;
+    }
+    let mut score = 0i32;
+    let mut max_score = 0i32;
+    let mut trim_point = length;
+    for index in (0..length).rev() {
+        let phred = qualities[index].saturating_sub(33) as i32;
+        score += trim_quality as i32 - phred;
+        if score < 0 {
+            break;
+        }
+        if score > max_score {
+            max_score = score;
+            trim_point = index;
+        }
+    }
+    trim_point
 }
 
 fn has_sam_extension(path: &str) -> bool {

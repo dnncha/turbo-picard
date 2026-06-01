@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Tests for placeholder chart disclosure checks."""
+"""Tests for chart boundary disclosure checks."""
 
 from __future__ import annotations
 
@@ -23,17 +23,17 @@ class ChartDisclosureTests(unittest.TestCase):
         commands = ["QualityScoreDistribution", "MeanQualityByCycle"]
         readme = """
 ## Supported QualityScoreDistribution and MeanQualityByCycle Surface
-The CHART_OUTPUT / CHART files are placeholder PDF artifacts, not Picard-equivalent rendered plots.
+The CHART_OUTPUT / CHART files are lightweight PDF artifacts, not Picard-equivalent rendered plots.
 """
         matrix = """
 - name: QualityScoreDistribution
-  native_scope: "Quality histogram metrics and placeholder PDF chart artifact."
+  native_scope: "Quality histogram metrics and lightweight PDF chart artifact."
 - name: MeanQualityByCycle
-  native_scope: "Mean quality metrics and placeholder PDF chart artifact."
+  native_scope: "Mean quality metrics and lightweight PDF chart artifact."
 """
 
         errors = verify_chart_disclosures.validate_chart_disclosures(
-            placeholder_commands=commands,
+            chart_commands=commands,
             readme_text=readme,
             matrix_text=matrix,
         )
@@ -42,17 +42,17 @@ The CHART_OUTPUT / CHART files are placeholder PDF artifacts, not Picard-equival
 
     def test_disclosures_report_missing_readme_and_matrix_mentions(self) -> None:
         errors = verify_chart_disclosures.validate_chart_disclosures(
-            placeholder_commands=["CollectInsertSizeMetrics"],
+            chart_commands=["CollectInsertSizeMetrics"],
             readme_text="## Supported CollectInsertSizeMetrics Surface\nCHART_OUTPUT / CHART chart artifact",
             matrix_text='- name: CollectInsertSizeMetrics\n  native_scope: "Insert-size metrics and chart artifact."',
         )
 
         self.assertIn(
-            "README chart disclosure missing placeholder wording for CollectInsertSizeMetrics",
+            "README chart disclosure missing lightweight PDF wording for CollectInsertSizeMetrics",
             errors,
         )
         self.assertIn(
-            "command matrix native_scope missing placeholder wording for CollectInsertSizeMetrics",
+            "command matrix native_scope missing lightweight PDF wording for CollectInsertSizeMetrics",
             errors,
         )
 

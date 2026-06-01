@@ -3,6 +3,7 @@ import argparse
 import os
 import pathlib
 import shutil
+import struct
 import subprocess
 import sys
 import tempfile
@@ -50,13 +51,47 @@ def write_coordinate_sam(path, reads):
             )
 
 
-def idxstats(runner, conda_prefix, bam, index):
-    default_index = bam.with_suffix(".bai")
-    if default_index.exists():
-        default_index.unlink()
-    shutil.copyfile(index, default_index)
-    _, completed = run([runner, "run", "-p", conda_prefix, "samtools", "idxstats", str(bam)])
-    return completed.stdout
+def read_u32(data, offset):
+    return struct.unpack_from("<I", data, offset)[0], offset + 4
+
+
+def read_u64(data, offset):
+    return struct.unpack_from("<Q", data, offset)[0], offset + 8
+
+
+def bai_idxstats_summary(path):
+    data = path.read_bytes()
+    if len(data) < 8 or data[:4] != b"BAI\1":
+        raise SystemExit(f"{path} is not a BAI index")
+    offset = 4
+    reference_count, offset = read_u32(data, offset)
+    references = []
+    for _ in range(reference_count):
+        bin_count, offset = read_u32(data, offset)
+        mapped = None
+        unmapped = None
+        regular_bin_count = 0
+        for _ in range(bin_count):
+            bin_id, offset = read_u32(data, offset)
+            chunk_count, offset = read_u32(data, offset)
+            chunks = []
+            for _ in range(chunk_count):
+                chunk_begin, offset = read_u64(data, offset)
+                chunk_end, offset = read_u64(data, offset)
+                chunks.append((chunk_begin, chunk_end))
+            if bin_id == 37450 and len(chunks) >= 2:
+                mapped, unmapped = chunks[1]
+            elif bin_id != 37450:
+                regular_bin_count += 1
+        linear_count, offset = read_u32(data, offset)
+        for _ in range(linear_count):
+            _, offset = read_u64(data, offset)
+        if regular_bin_count == 0 or linear_count == 0:
+            raise SystemExit(f"{path} has no usable BAI bins for a mapped reference")
+        references.append((mapped, unmapped))
+    trailing = data[offset:]
+    no_coordinate_count = struct.unpack("<Q", trailing[:8])[0] if len(trailing) == 8 else None
+    return reference_count, tuple(references), no_coordinate_count
 
 
 def main():
@@ -65,7 +100,7 @@ def main():
     parser.add_argument(
         "--conda-prefix",
         default=os.environ.get("TURBO_PICARD_CONDA_PREFIX", str(ROOT / ".conda-turbo-picard")),
-        help="conda environment prefix containing Picard and samtools",
+        help="conda environment prefix containing Picard",
     )
     parser.add_argument("--skip-build", action="store_true", help="reuse existing release binary")
     args = parser.parse_args()
@@ -101,9 +136,9 @@ def main():
         turbo_time, _ = run([str(turbo), *common, f"O={turbo_index}"])
         picard_time, _ = run([runner, "run", "-p", args.conda_prefix, "picard", *common, f"O={picard_index}"])
 
-        turbo_stats = idxstats(runner, args.conda_prefix, input_bam, turbo_index)
-        picard_stats = idxstats(runner, args.conda_prefix, input_bam, picard_index)
-        parity = turbo_stats == picard_stats and "\t" in turbo_stats
+        turbo_summary = bai_idxstats_summary(turbo_index)
+        picard_summary = bai_idxstats_summary(picard_index)
+        parity = turbo_summary == picard_summary and turbo_summary[0] > 0
         speedup = picard_time / turbo_time if turbo_time > 0 else float("inf")
         print("command=BuildBamIndex")
         print(f"reads={args.reads}")

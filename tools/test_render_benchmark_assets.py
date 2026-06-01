@@ -23,22 +23,22 @@ class BenchmarkManifestTests(unittest.TestCase):
         data = render_benchmark_assets.build_benchmark_data()
 
         self.assertEqual(data["source_artifact"], "docs/site/assets/bench-suite-output.txt")
-        self.assertEqual(data["date"], "2026-05-30")
-        self.assertEqual(data["parity"], "28/28 PASS")
-        self.assertEqual(data["summary"]["command_count"], 28)
-        self.assertEqual(data["summary"]["parity_pass_count"], 28)
+        self.assertEqual(data["date"], "2026-05-31")
+        self.assertEqual(data["parity"], "32/32 PASS")
+        self.assertEqual(data["summary"]["command_count"], 32)
+        self.assertEqual(data["summary"]["parity_pass_count"], 32)
         self.assertEqual(data["summary"]["top_command"], "UpdateVcfSequenceDictionary")
-        self.assertEqual(data["summary"]["top_speedup"], 104.68)
+        self.assertEqual(data["summary"]["top_speedup"], 112.07)
         self.assertEqual(data["summary"]["floor_command"], "RevertSam")
-        self.assertEqual(data["summary"]["floor_speedup"], 6.69)
+        self.assertEqual(data["summary"]["floor_speedup"], 7.4)
         self.assertEqual(data["summary"]["median_speedup"], 26.24)
-        self.assertEqual(data["summary"]["geometric_mean_speedup"], 28.41)
+        self.assertEqual(data["summary"]["geometric_mean_speedup"], 27.31)
 
         ranks = [row["rank"] for row in data["benchmarks"]]
         speedups = [row["speedup"] for row in data["benchmarks"]]
         parities = {row["parity"] for row in data["benchmarks"]}
 
-        self.assertEqual(ranks, list(range(1, 29)))
+        self.assertEqual(ranks, list(range(1, 33)))
         self.assertEqual(speedups, sorted(speedups, reverse=True))
         self.assertEqual(parities, {"PASS"})
 
@@ -77,6 +77,35 @@ class BenchmarkManifestTests(unittest.TestCase):
             [row["command"] for row in data["benchmarks"]],
             ["BuildBamIndex", "SortSam", "RevertSam"],
         )
+
+    def test_manifest_rejects_malformed_or_duplicate_rows(self) -> None:
+        with self.assertRaisesRegex(ValueError, "duplicate benchmark command: SortSam"):
+            render_benchmark_assets.build_benchmark_data_from_rows(
+                [
+                    {"command": "SortSam", "speedup": 20.0, "parity": "PASS"},
+                    {"command": "SortSam", "speedup": 19.0, "parity": "PASS"},
+                ],
+                source="synthetic suite output",
+                date="2026-05-30",
+            )
+        with self.assertRaisesRegex(ValueError, "benchmark row 0 missing command"):
+            render_benchmark_assets.build_benchmark_data_from_rows(
+                [{"speedup": 20.0, "parity": "PASS"}],
+                source="synthetic suite output",
+                date="2026-05-30",
+            )
+        with self.assertRaisesRegex(ValueError, "benchmark row SortSam has invalid parity"):
+            render_benchmark_assets.build_benchmark_data_from_rows(
+                [{"command": "SortSam", "speedup": 20.0, "parity": "MAYBE"}],
+                source="synthetic suite output",
+                date="2026-05-30",
+            )
+        with self.assertRaisesRegex(ValueError, "benchmark row SortSam speedup must be positive"):
+            render_benchmark_assets.build_benchmark_data_from_rows(
+                [{"command": "SortSam", "speedup": 0.0, "parity": "PASS"}],
+                source="synthetic suite output",
+                date="2026-05-30",
+            )
 
     def test_suite_output_metadata_supplies_date_and_source(self) -> None:
         suite_output = "\n".join(

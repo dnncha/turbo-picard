@@ -24,6 +24,10 @@ This installs two binaries:
 Run a familiar command
 ----------------------
 
+Start with ``turbo-picard`` rather than the ``picard`` shim. That keeps the
+test separate from any existing Picard installation and makes it clear which
+binary produced each output.
+
 .. code-block:: bash
 
    turbo-picard MarkDuplicates \
@@ -39,6 +43,11 @@ The shim accepts the same Picard-style syntax:
 
    picard MarkDuplicates I=input.bam O=marked.bam M=metrics.txt
 
+Use the shim only after you have checked the command surfaces your workflow
+needs. For a first pass, run ``turbo-picard`` and upstream Picard side by side
+on a representative input, then compare the primary output, sidecars, metrics,
+exit code, and runtime.
+
 Use the command-specific help while evaluating:
 
 .. code-block:: bash
@@ -50,8 +59,8 @@ Use the command-specific help while evaluating:
 Good first commands
 -------------------
 
-These commands are useful first tests because they are common in production
-pipelines and easy to compare against upstream Picard output:
+These commands are useful first tests because they are common in real pipelines
+and easy to compare against upstream Picard output:
 
 .. code-block:: bash
 
@@ -62,3 +71,16 @@ pipelines and easy to compare against upstream Picard output:
    picard CollectQualityYieldMetrics I=input.bam O=quality_yield_metrics.txt
 
 For broader coverage, see :doc:`commands`.
+
+Before changing a workflow
+--------------------------
+
+Before putting the ``picard`` shim on ``PATH`` for a workflow:
+
+* check the command in :doc:`commands`;
+* read :doc:`parity` so the comparison boundary is clear;
+* keep upstream Picard configured as fallback for unsupported surfaces;
+* keep the evidence for the exact command, input, Picard version, and
+  ``turbo-picard`` version you tested.
+
+The adoption guide has the fuller rollout path: :doc:`adoption`.

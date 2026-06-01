@@ -10,6 +10,15 @@ import sys
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 SITE = ROOT / "docs" / "site" / "index.html"
+OVERCLAIM_PHRASES = [
+    "drop-in replacement",
+    "production genomics workflows",
+    "validated for all cohorts",
+    "safe for all cohorts",
+    "safe for all production",
+    "proves safe to switch",
+    "complete cohort-scale validation",
+]
 
 
 def normalize(text: str) -> str:
@@ -21,20 +30,51 @@ def normalize(text: str) -> str:
 def validate_site_disclosures(html: str) -> list[str]:
     text = normalize(html)
     errors: list[str] = []
+    head = html.split("</head>", 1)[0].lower()
     if "current boundaries" not in text:
         errors.append("site missing current-boundaries section")
     if "not a full picard suite" not in text:
         errors.append("site missing not-full-Picard-suite disclosure")
-    if "placeholder" not in text or "pdf" not in text or "metrics text" not in text:
-        errors.append("site missing placeholder chart PDF disclosure")
+    if "command-by-command" not in head:
+        errors.append("site metadata missing command-by-command evaluation caveat")
+    if "fallback" not in head or "unsupported picard surfaces" not in head:
+        errors.append("site metadata missing fallback/unsupported-surface caveat")
+    if "production genomics workflows" in head:
+        errors.append("site metadata contains unsupported production-genomics overclaim")
+    for phrase in OVERCLAIM_PHRASES:
+        if phrase in text:
+            errors.append(f"site contains unsupported overclaim: {phrase}")
+    if "lightweight pdf" not in text or "metrics text" not in text:
+        errors.append("site missing lightweight chart PDF disclosure")
+    if "evidence supports a narrow change" not in text:
+        errors.append("site missing narrow evidence-supported switch disclosure")
+    if (
+        "python3 tools/verify_benchmark_thresholds.py" not in text
+        or "5.00x" not in text
+        or "20.00x" not in text
+        or "50.00x" not in text
+    ):
+        errors.append("site missing benchmark threshold release-gate disclosure")
+    if (
+        "citation.cff" not in text
+        or "software citation" not in text
+        or "archived turbo-picard release" not in text
+        or "inputs separately" not in text
+        or "sha-256" not in text
+    ):
+        errors.append("site missing software-vs-input citation disclosure")
     if (
         "bioconda" not in text
         or "tagged release" not in text
+        or "python3 tools/bioconda_release_preflight.py" not in text
         or "sha256" not in text
         or "release-ready verifier" not in text
+        or "cp -r packaging/bioconda/turbo-picard recipes/turbo-picard" not in text
+        or "cp -r packaging/bioconda/turbo-picard-picard-shim recipes/turbo-picard-picard-shim" not in text
+        or "bioconda-utils lint recipes config.yml --packages turbo-picard turbo-picard-picard-shim" not in text
         or "mulled-test" not in text
     ):
-        errors.append("site missing Bioconda tagged-release/sha256 disclosure")
+        errors.append("site missing Bioconda tagged-release/sha256/lint disclosure")
     return errors
 
 

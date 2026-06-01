@@ -21,6 +21,9 @@ SPEC.loader.exec_module(verify_readme_benchmark_evidence)
 class ReadmeBenchmarkEvidenceTests(unittest.TestCase):
     def test_readme_claims_match_benchmark_manifest(self) -> None:
         data = {
+            "date": "2026-05-30",
+            "source": "python3 tools/bench_suite.py --repeats 1 --skip-build",
+            "source_artifact": "docs/site/assets/bench-suite-output.txt",
             "parity": "2/2 PASS",
             "summary": {
                 "top_command": "FastCommand",
@@ -41,6 +44,7 @@ class ReadmeBenchmarkEvidenceTests(unittest.TestCase):
 - `5.67x` floor speedup: `SlowCommand`.
 - `8.90x` median speedup.
 - `8.36x` geometric mean speedup.
+Saved on `2026-05-30` from `python3 tools/bench_suite.py --repeats 1 --skip-build`; raw log: `docs/site/assets/bench-suite-output.txt`.
 
 | Command | Speedup vs Picard | Parity |
 | --- | ---: | --- |
@@ -48,6 +52,17 @@ class ReadmeBenchmarkEvidenceTests(unittest.TestCase):
 | SlowCommand | 5.67x | PASS |
 
 python3 tools/verify_benchmark_log_evidence.py
+python3 tools/verify_benchmark_suite_coverage.py
+python3 tools/verify_benchmark_thresholds.py
+python3 tools/verify_real_data_evidence.py --release-ready
+benchmark exceptions
+IntervalListTools
+LiftoverVcf
+https://turbo-picard.readthedocs.io/en/latest/adoption.html
+https://turbo-picard.readthedocs.io/en/latest/benchmarks.html
+https://turbo-picard.readthedocs.io/en/latest/citation.html
+CITATION.cff
+SHA-256
 """
 
         errors = verify_readme_benchmark_evidence.validate_readme_benchmark_evidence(
@@ -58,6 +73,9 @@ python3 tools/verify_benchmark_log_evidence.py
 
     def test_readme_claim_mismatches_are_reported(self) -> None:
         data = {
+            "date": "2026-05-30",
+            "source": "python3 tools/bench_suite.py --repeats 1 --skip-build",
+            "source_artifact": "docs/site/assets/bench-suite-output.txt",
             "parity": "1/1 PASS",
             "summary": {
                 "top_command": "RealCommand",
@@ -83,6 +101,26 @@ python3 tools/verify_benchmark_log_evidence.py
             "missing README benchmark-log evidence verifier command",
             errors,
         )
+        self.assertIn(
+            "missing README benchmark-suite coverage verifier command",
+            errors,
+        )
+        self.assertIn(
+            "missing README benchmark-threshold verifier command",
+            errors,
+        )
+        self.assertIn(
+            "missing README release-ready real-data verifier command",
+            errors,
+        )
+        self.assertIn("missing README adoption guide link", errors)
+        self.assertIn("missing README benchmark documentation link", errors)
+        self.assertIn("missing README citation documentation link", errors)
+        self.assertIn("missing README software citation pointer", errors)
+        self.assertIn("missing README pinned input SHA-256 guidance", errors)
+        self.assertIn("missing README benchmark date", errors)
+        self.assertIn("missing README benchmark source command", errors)
+        self.assertIn("missing README raw benchmark artifact path", errors)
 
 
 if __name__ == "__main__":

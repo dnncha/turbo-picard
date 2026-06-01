@@ -1,4 +1,5 @@
-use rust_htslib::bam::record::Aux;
+use rust_htslib::bam::header::HeaderRecord;
+use rust_htslib::bam::record::{Aux, Cigar, CigarString};
 use rust_htslib::bam::{self, Read};
 use turbo_picard_core::markdup_config::MarkDuplicatesConfig;
 
@@ -81,7 +82,50 @@ fn marks_duplicate_pairs_and_reports_paired_metrics() {
 
     let metrics_text = std::fs::read_to_string(&metrics).expect("metrics file exists");
     assert!(metrics_text.contains("lib1\t0\t3\t0\t0\t0\t1\t0\t0.333333\t3\n"));
-    assert!(metrics_text.contains("set_size\tall_sets\tnon_optical_sets\n1.0\t1\t1\n2.0\t1\t1\n"));
+    assert!(metrics_text.contains("BIN\tCoverageMult\tall_sets\tnon_optical_sets\n"));
+}
+
+#[test]
+fn mate_unmapped_aligned_reads_are_unpaired_duplicate_candidates() {
+    let tempdir = tempfile::tempdir().expect("tempdir exists");
+    let input = tempdir.path().join("input.bam");
+    let output = tempdir.path().join("output.bam");
+    let metrics = tempdir.path().join("metrics.txt");
+    write_mate_unmapped_duplicate_fixture(&input);
+    let config = MarkDuplicatesConfig {
+        input: input.display().to_string(),
+        inputs: vec![input.display().to_string()],
+        output: output.display().to_string(),
+        metrics_file: metrics.display().to_string(),
+        remove_duplicates: false,
+        remove_sequencing_duplicates: false,
+        assume_sorted: true,
+        assume_sort_order: None,
+        validation_stringency: Some("SILENT".to_string()),
+        quiet: true,
+        create_index: false,
+        create_md5_file: false,
+        add_pg_tag_to_reads: true,
+        tag_duplicate_set_members: false,
+        duplicate_scoring_strategy: None,
+        read_name_regex: Some("null".to_string()),
+        tagging_policy: Some("DontTag".to_string()),
+        barcode_tag: None,
+        read_one_barcode_tag: None,
+        read_two_barcode_tag: None,
+        clear_dt: true,
+        optical_duplicate_pixel_distance: None,
+        compression_level: None,
+    };
+
+    turbo_picard_markdup::run(&config).expect("BAM duplicate marking succeeds");
+
+    assert_eq!(read_flags(&output), vec![73, 1097, 77, 77]);
+    let metrics_text = std::fs::read_to_string(&metrics).expect("metrics file exists");
+    assert!(
+        metrics_text.contains("lib1\t2\t0\t0\t2\t1\t0\t0\t0.5\t\n"),
+        "{metrics_text}"
+    );
 }
 
 #[test]
@@ -241,6 +285,87 @@ fn chooses_duplicate_representative_per_pair_not_per_mate() {
 
     let flags = read_flags(&output);
     assert_eq!(flags, vec![99, 1123, 99, 147, 1171, 147]);
+}
+
+#[test]
+fn duplicate_scoring_ignores_bases_below_q15() {
+    let tempdir = tempfile::tempdir().expect("tempdir exists");
+    let input = tempdir.path().join("input.bam");
+    let output = tempdir.path().join("output.bam");
+    let metrics = tempdir.path().join("metrics.txt");
+    write_q15_scoring_fixture(&input);
+    let config = MarkDuplicatesConfig {
+        input: input.display().to_string(),
+        inputs: vec![input.display().to_string()],
+        output: output.display().to_string(),
+        metrics_file: metrics.display().to_string(),
+        remove_duplicates: false,
+        remove_sequencing_duplicates: false,
+        assume_sorted: true,
+        assume_sort_order: None,
+        validation_stringency: Some("SILENT".to_string()),
+        quiet: true,
+        create_index: false,
+        create_md5_file: false,
+        add_pg_tag_to_reads: true,
+        tag_duplicate_set_members: false,
+        duplicate_scoring_strategy: None,
+        read_name_regex: Some("null".to_string()),
+        tagging_policy: Some("DontTag".to_string()),
+        barcode_tag: None,
+        read_one_barcode_tag: None,
+        read_two_barcode_tag: None,
+        clear_dt: true,
+        optical_duplicate_pixel_distance: None,
+        compression_level: None,
+    };
+
+    turbo_picard_markdup::run(&config).expect("BAM duplicate marking succeeds");
+
+    assert_eq!(read_flags(&output), vec![1123, 1171, 99, 147]);
+}
+
+#[test]
+fn paired_records_without_an_eligible_mate_are_not_marked_as_singleton_duplicates() {
+    let tempdir = tempfile::tempdir().expect("tempdir exists");
+    let input = tempdir.path().join("input.bam");
+    let output = tempdir.path().join("output.bam");
+    let metrics = tempdir.path().join("metrics.txt");
+    write_orphaned_pair_fixture(&input);
+    let config = MarkDuplicatesConfig {
+        input: input.display().to_string(),
+        inputs: vec![input.display().to_string()],
+        output: output.display().to_string(),
+        metrics_file: metrics.display().to_string(),
+        remove_duplicates: false,
+        remove_sequencing_duplicates: false,
+        assume_sorted: true,
+        assume_sort_order: None,
+        validation_stringency: Some("SILENT".to_string()),
+        quiet: true,
+        create_index: false,
+        create_md5_file: false,
+        add_pg_tag_to_reads: true,
+        tag_duplicate_set_members: false,
+        duplicate_scoring_strategy: None,
+        read_name_regex: Some("null".to_string()),
+        tagging_policy: Some("DontTag".to_string()),
+        barcode_tag: None,
+        read_one_barcode_tag: None,
+        read_two_barcode_tag: None,
+        clear_dt: true,
+        optical_duplicate_pixel_distance: None,
+        compression_level: None,
+    };
+
+    turbo_picard_markdup::run(&config).expect("BAM duplicate marking succeeds");
+
+    assert_eq!(read_flags(&output), vec![99, 99]);
+    let metrics_text = std::fs::read_to_string(&metrics).expect("metrics file exists");
+    assert!(
+        metrics_text.contains("lib1\t0\t1\t0\t0\t0\t0\t0\t0\t\n"),
+        "{metrics_text}"
+    );
 }
 
 #[test]
@@ -569,7 +694,7 @@ fn tags_optical_duplicate_pairs_and_reports_metrics() {
     );
     let metrics_text = std::fs::read_to_string(&metrics).expect("metrics file exists");
     assert!(metrics_text.contains("lib1\t0\t2\t0\t0\t0\t1\t1\t0.5\t\n"));
-    assert!(metrics_text.contains("set_size\tall_sets\tnon_optical_sets\n1.0\t0\t1\n2.0\t1\t0\n"));
+    assert!(metrics_text.contains("BIN\tCoverageMult\tall_sets\tnon_optical_sets\n"));
 }
 
 #[test]
@@ -900,6 +1025,156 @@ fn preserves_libraries_from_later_bam_inputs() {
     let metrics_text = std::fs::read_to_string(&metrics).expect("metrics file exists");
     assert!(metrics_text.contains("libA\t0\t1\t0\t0\t0\t0\t0\t0\t\n"));
     assert!(metrics_text.contains("libB\t0\t1\t0\t0\t0\t0\t0\t0\t\n"));
+}
+
+fn write_mate_unmapped_duplicate_fixture(path: &std::path::Path) {
+    let mut header = bam::Header::new();
+    header.push_record(
+        HeaderRecord::new(b"SQ")
+            .push_tag(b"SN", "chr1")
+            .push_tag(b"LN", 1000),
+    );
+    header.push_record(
+        HeaderRecord::new(b"RG")
+            .push_tag(b"ID", "rg1")
+            .push_tag(b"LB", "lib1")
+            .push_tag(b"SM", "sample1"),
+    );
+    let mut writer =
+        bam::Writer::from_path(path, &header, bam::Format::Bam).expect("fixture writer opens");
+    let cigar = CigarString(vec![Cigar::Match(4)]);
+    for (qname, flag, pos, seq) in [
+        (b"frag-a".as_slice(), 0x449, 10_i64, b"ACGT".as_slice()),
+        (b"frag-b".as_slice(), 0x49, 10_i64, b"ACGT".as_slice()),
+        (b"frag-a".as_slice(), 0x4d, -1_i64, b"TGCA".as_slice()),
+        (b"frag-b".as_slice(), 0x4d, -1_i64, b"TGCA".as_slice()),
+    ] {
+        let mut record = bam::Record::new();
+        if flag & 0x4 == 0 {
+            record.set(qname, Some(&cigar), seq, b"FFFF");
+            record.set_tid(0);
+            record.set_pos(pos);
+            record.set_mapq(60);
+        } else {
+            record.set(qname, None, seq, b"FFFF");
+            record.set_tid(-1);
+            record.set_pos(-1);
+            record.set_mapq(0);
+        }
+        record.set_flags(flag);
+        record.set_mtid(-1);
+        record.set_mpos(-1);
+        record.set_insert_size(0);
+        record
+            .push_aux(b"RG", Aux::String("rg1"))
+            .expect("RG tag can be written");
+        writer.write(&record).expect("fixture record writes");
+    }
+}
+
+fn write_q15_scoring_fixture(path: &std::path::Path) {
+    let mut writer = duplicate_fixture_writer(path);
+    for (qname, flag, pos, mate_pos, insert_size, seq, qual) in [
+        (
+            b"low-q-frag".as_slice(),
+            0x63,
+            10_i64,
+            80_i64,
+            74_i64,
+            b"ACGTACGT".as_slice(),
+            b"\x0e\x0e\x0e\x0e\x0e\x0e\x0e\x0e".as_slice(),
+        ),
+        (
+            b"low-q-frag".as_slice(),
+            0x93,
+            80_i64,
+            10_i64,
+            -74_i64,
+            b"TGCATGCA".as_slice(),
+            b"\x0e\x0e\x0e\x0e\x0e\x0e\x0e\x0e".as_slice(),
+        ),
+        (
+            b"q15-frag".as_slice(),
+            0x63,
+            10_i64,
+            80_i64,
+            74_i64,
+            b"ACGTACGT".as_slice(),
+            b"\x0f\x0f\x0f\x0f\0\0\0\0".as_slice(),
+        ),
+        (
+            b"q15-frag".as_slice(),
+            0x93,
+            80_i64,
+            10_i64,
+            -74_i64,
+            b"TGCATGCA".as_slice(),
+            b"\x0f\x0f\x0f\x0f\0\0\0\0".as_slice(),
+        ),
+    ] {
+        write_mapped_pair_record(
+            &mut writer,
+            qname,
+            flag,
+            pos,
+            mate_pos,
+            insert_size,
+            seq,
+            qual,
+        );
+    }
+}
+
+fn write_orphaned_pair_fixture(path: &std::path::Path) {
+    let mut writer = duplicate_fixture_writer(path);
+    for qname in [b"orphan-a".as_slice(), b"orphan-b".as_slice()] {
+        write_mapped_pair_record(&mut writer, qname, 0x63, 10, 80, 74, b"ACGT", b"FFFF");
+    }
+}
+
+fn duplicate_fixture_writer(path: &std::path::Path) -> bam::Writer {
+    let mut header = bam::Header::new();
+    header.push_record(
+        HeaderRecord::new(b"SQ")
+            .push_tag(b"SN", "chr1")
+            .push_tag(b"LN", 1000),
+    );
+    header.push_record(
+        HeaderRecord::new(b"RG")
+            .push_tag(b"ID", "rg1")
+            .push_tag(b"LB", "lib1")
+            .push_tag(b"SM", "sample1"),
+    );
+    bam::Writer::from_path(path, &header, bam::Format::Bam).expect("fixture writer opens")
+}
+
+#[allow(clippy::too_many_arguments)]
+fn write_mapped_pair_record(
+    writer: &mut bam::Writer,
+    qname: &[u8],
+    flag: u16,
+    pos: i64,
+    mate_pos: i64,
+    insert_size: i64,
+    seq: &[u8],
+    qual: &[u8],
+) {
+    let cigar = CigarString(vec![Cigar::Match(
+        u32::try_from(seq.len()).expect("sequence length fits in CIGAR"),
+    )]);
+    let mut record = bam::Record::new();
+    record.set(qname, Some(&cigar), seq, qual);
+    record.set_tid(0);
+    record.set_pos(pos);
+    record.set_mapq(60);
+    record.set_flags(flag);
+    record.set_mtid(0);
+    record.set_mpos(mate_pos);
+    record.set_insert_size(insert_size);
+    record
+        .push_aux(b"RG", Aux::String("rg1"))
+        .expect("RG tag can be written");
+    writer.write(&record).expect("fixture record writes");
 }
 
 fn read_flags(path: &std::path::Path) -> Vec<u16> {

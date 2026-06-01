@@ -52,6 +52,93 @@ cmp "$workdir/picard-r1.fastq.md5" "$workdir/turbo-r1.fastq.md5"
 cmp "$workdir/picard-r2.fastq.md5" "$workdir/turbo-r2.fastq.md5"
 cmp "$workdir/picard-unpaired.fastq.md5" "$workdir/turbo-unpaired.fastq.md5"
 
+cat > "$workdir/trim-input.sam" <<'SAM'
+@HD	VN:1.6	SO:queryname
+@SQ	SN:chr1	LN:1000
+pair-a	77	*	0	0	*	*	0	0	AACCGG	ABCDEF
+pair-a	141	*	0	0	*	*	0	0	TTGGCC	UVWXYZ
+SAM
+
+cargo run -q -p turbo-picard-cli --bin picard -- \
+  SamToFastq \
+  "I=$workdir/trim-input.sam" \
+  "FASTQ=$workdir/turbo-trim-r1.fastq" \
+  "SECOND_END_FASTQ=$workdir/turbo-trim-r2.fastq" \
+  READ1_TRIM=1 \
+  READ1_MAX_BASES_TO_WRITE=3 \
+  READ2_TRIM=2 \
+  READ2_MAX_BASES_TO_WRITE=2 \
+  VALIDATION_STRINGENCY=SILENT \
+  QUIET=true
+
+"${conda_runner[@]}" run -p "$conda_prefix" picard SamToFastq \
+  "I=$workdir/trim-input.sam" \
+  "FASTQ=$workdir/picard-trim-r1.fastq" \
+  "SECOND_END_FASTQ=$workdir/picard-trim-r2.fastq" \
+  READ1_TRIM=1 \
+  READ1_MAX_BASES_TO_WRITE=3 \
+  READ2_TRIM=2 \
+  READ2_MAX_BASES_TO_WRITE=2 \
+  VALIDATION_STRINGENCY=SILENT \
+  QUIET=true
+
+diff -u "$workdir/picard-trim-r1.fastq" "$workdir/turbo-trim-r1.fastq"
+diff -u "$workdir/picard-trim-r2.fastq" "$workdir/turbo-trim-r2.fastq"
+
+cat > "$workdir/quality-input.sam" <<'SAM'
+@HD	VN:1.6	SO:queryname
+@SQ	SN:chr1	LN:1000
+read-a	4	*	0	0	*	*	0	0	ACGTAC	FFF!!!
+read-b	4	*	0	0	*	*	0	0	TGCA	!!!!
+SAM
+
+cargo run -q -p turbo-picard-cli --bin picard -- \
+  SamToFastq \
+  "I=$workdir/quality-input.sam" \
+  "FASTQ=$workdir/turbo-quality.fastq" \
+  Q=20 \
+  VALIDATION_STRINGENCY=SILENT \
+  QUIET=true
+
+"${conda_runner[@]}" run -p "$conda_prefix" picard SamToFastq \
+  "I=$workdir/quality-input.sam" \
+  "FASTQ=$workdir/picard-quality.fastq" \
+  Q=20 \
+  VALIDATION_STRINGENCY=SILENT \
+  QUIET=true
+
+diff -u "$workdir/picard-quality.fastq" "$workdir/turbo-quality.fastq"
+
+cat > "$workdir/clipping-input.sam" <<'SAM'
+@HD	VN:1.6	SO:queryname
+@SQ	SN:chr1	LN:1000
+read-a	4	*	0	0	*	*	0	0	AACCGG	FFFFFF	XT:i:4
+read-b	16	chr1	10	60	6M	*	0	0	AACCGG	ABCDEF	XT:i:4
+SAM
+
+for action in N X 2; do
+  cargo run -q -p turbo-picard-cli --bin picard -- \
+    SamToFastq \
+    "I=$workdir/clipping-input.sam" \
+    "FASTQ=$workdir/turbo-clipping-${action}.fastq" \
+    CLIP_ATTR=XT \
+    "CLIP_ACT=$action" \
+    CLIP_MIN=2 \
+    VALIDATION_STRINGENCY=SILENT \
+    QUIET=true
+
+  "${conda_runner[@]}" run -p "$conda_prefix" picard SamToFastq \
+    "I=$workdir/clipping-input.sam" \
+    "FASTQ=$workdir/picard-clipping-${action}.fastq" \
+    CLIP_ATTR=XT \
+    "CLIP_ACT=$action" \
+    CLIP_MIN=2 \
+    VALIDATION_STRINGENCY=SILENT \
+    QUIET=true
+
+  diff -u "$workdir/picard-clipping-${action}.fastq" "$workdir/turbo-clipping-${action}.fastq"
+done
+
 cat > "$workdir/runtime-input.sam" <<'SAM'
 @HD	VN:1.6	SO:queryname
 @SQ	SN:chr1	LN:1000

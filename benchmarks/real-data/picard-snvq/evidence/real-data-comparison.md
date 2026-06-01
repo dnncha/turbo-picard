@@ -10,10 +10,27 @@ turbo-picard: `picard 0.1.0`
 
 | Command | Status | Comparison | turbo-picard | Picard | Speedup |
 | --- | --- | --- | ---: | ---: | ---: |
-| ViewSam | FAIL | SAM record digest | 0.195s | 1.088s | 5.58x |
-| CleanSam | FAIL | post-command SAM record digest | 1.050s | 1.742s | 1.66x |
-| CollectQualityYieldMetrics | PASS | stable metrics digest | 0.089s | 0.834s | 9.37x |
-| CollectAlignmentSummaryMetrics | FAIL | stable metrics digest | 0.083s | 0.737s | 8.87x |
-| MarkDuplicates | PASS | duplicate-marking semantic digest plus stable metrics digest | 0.597s | 2.107s | 3.53x |
+| ViewSam | PASS | SAM record digest | 0.230s | 1.432s | 6.23x |
+| CleanSam | PASS | post-command SAM record digest | 1.045s | 1.650s | 1.58x |
+| CollectQualityYieldMetrics | PASS | stable metrics digest | 0.095s | 0.681s | 7.14x |
+| CollectAlignmentSummaryMetrics | PASS | stable metrics digest | 0.097s | 0.730s | 7.55x |
+| MarkDuplicates | PASS | duplicate-marking semantic digest plus stable metrics digest | 0.577s | 1.996s | 3.46x |
 
 A PASS means the command-specific stable digest matched Picard on this input. Keep the JSON file with the raw digests when sharing results.
+
+## Comparison details
+
+- `SAM record digest` compares normalized SAM records and ignores headers.
+- `post-command SAM record digest` compares normalized SAM records after a BAM-writing command.
+- `stable metrics digest` compares non-comment, non-blank metrics rows so generated headers do not affect parity.
+- `duplicate-marking semantic digest plus stable metrics digest` compares duplicate flags, duplicate tags, duplicate-set metadata, barcode tags, key coordinates, and duplicate metrics.
+
+## Artifact digests
+
+| Command | turbo-picard artifact | Picard artifact | Digest | Exit codes |
+| --- | --- | --- | --- | --- |
+| ViewSam | `benchmarks/real-data/picard-snvq/evidence/work/ViewSam/turbo.sam` | `benchmarks/real-data/picard-snvq/evidence/work/ViewSam/picard.sam` | `791d618746fb...a4e6aa241e77` | n/a |
+| CleanSam | `benchmarks/real-data/picard-snvq/evidence/work/CleanSam/turbo.bam` | `benchmarks/real-data/picard-snvq/evidence/work/CleanSam/picard.bam` | `791d618746fb...a4e6aa241e77` | n/a |
+| CollectQualityYieldMetrics | `benchmarks/real-data/picard-snvq/evidence/work/CollectQualityYieldMetrics/turbo.metrics.txt` | `benchmarks/real-data/picard-snvq/evidence/work/CollectQualityYieldMetrics/picard.metrics.txt` | `c68330b7a13c...a400783106cd` | n/a |
+| CollectAlignmentSummaryMetrics | `benchmarks/real-data/picard-snvq/evidence/work/CollectAlignmentSummaryMetrics/turbo.metrics.txt` | `benchmarks/real-data/picard-snvq/evidence/work/CollectAlignmentSummaryMetrics/picard.metrics.txt` | `bef3df49f2ab...5c2a6efb6fba` | n/a |
+| MarkDuplicates | `benchmarks/real-data/picard-snvq/evidence/work/MarkDuplicates/turbo.bam` | `benchmarks/real-data/picard-snvq/evidence/work/MarkDuplicates/picard.bam` | `138655065cc2...c9c689f464cc` | n/a |

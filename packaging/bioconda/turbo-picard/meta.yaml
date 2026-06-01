@@ -46,7 +46,10 @@ test:
     - turbo-picard SamToFastq --help
     - turbo-picard AddOrReplaceReadGroups --help
     - turbo-picard CollectAlignmentSummaryMetrics --help
+    - turbo-picard CollectBaseDistributionByCycle --help
+    - turbo-picard CollectGcBiasMetrics --help
     - turbo-picard CollectQualityYieldMetrics --help
+    - turbo-picard CollectWgsMetrics --help
     - turbo-picard QualityScoreDistribution --help
     - turbo-picard MeanQualityByCycle --help
     - turbo-picard CollectInsertSizeMetrics --help
@@ -58,6 +61,7 @@ test:
     - turbo-picard ValidateSamFile --help
     - turbo-picard LiftoverVcf --help
     - turbo-picard CreateSequenceDictionary --help
+    - turbo-picard FastqToSam --help
     - turbo-picard NormalizeFasta --help
     - turbo-picard BedToIntervalList --help
     - turbo-picard ViewSam --help
@@ -69,17 +73,21 @@ test:
 
 about:
   home: https://github.com/dnncha/turbo-picard
+  doc_url: https://turbo-picard.readthedocs.io/
+  dev_url: https://github.com/dnncha/turbo-picard
   license: MIT
   license_file:
     - LICENSE
     - THIRDPARTY.yml
-  summary: Fast Picard-compatible toolkit with native high-impact Picard commands.
+  summary: Picard-compatible Rust toolkit with selected native command surfaces.
   description: |
-    turbo-picard is a Rust implementation of high-impact Picard workflows.
-    The current native engines target high-impact SAM/BAM, metrics, FASTA, and
-    interval workflows. This package installs the non-shadowing turbo-picard
-    command entrypoint only; install turbo-picard-picard-shim to opt into a
-    picard compatibility shim.
+    turbo-picard is a Rust implementation of selected Picard command surfaces.
+    The current native engines cover documented SAM/BAM, metrics, FASTA, VCF,
+    and interval workflows. This package installs the non-shadowing
+    turbo-picard command entrypoint only; install turbo-picard-picard-shim to
+    opt into a picard compatibility shim. See CITATION.cff for the software
+    citation and the documentation for the separate real-data evidence
+    citations.
 
 extra:
   recipe-maintainers:

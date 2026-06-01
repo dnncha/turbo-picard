@@ -161,7 +161,7 @@ pub fn run(config: &MarkDuplicatesConfig) -> Result<MarkDuplicatesSummary, MarkD
             continue;
         }
 
-        if flag & PAIRED_FLAG != 0 {
+        if duplicate_candidate_is_pair(flag) {
             summary.paired_records_examined += 1;
             if flag & FIRST_IN_PAIR_FLAG != 0 {
                 summary.read_pairs_examined += 1;
@@ -175,7 +175,7 @@ pub fn run(config: &MarkDuplicatesConfig) -> Result<MarkDuplicatesSummary, MarkD
         *seen_count += 1;
 
         if duplicate {
-            if flag & PAIRED_FLAG != 0 {
+            if duplicate_candidate_is_pair(flag) {
                 summary.duplicate_pair_records += 1;
             } else {
                 summary.unpaired_duplicate_records += 1;
@@ -359,7 +359,7 @@ fn run_bam(config: &MarkDuplicatesConfig) -> Result<MarkDuplicatesSummary, MarkD
                 continue;
             }
             let flag = records[index].flags();
-            if flag & PAIRED_FLAG != 0 {
+            if duplicate_candidate_is_pair(flag) {
                 summary.duplicate_pair_records += 1;
                 library_registry
                     .summary_mut(record_libraries[index])
@@ -373,6 +373,14 @@ fn run_bam(config: &MarkDuplicatesConfig) -> Result<MarkDuplicatesSummary, MarkD
             records[index].set_flags(flag | DUPLICATE_FLAG);
         }
     }
+    mark_fragment_duplicate_groups(
+        &mut records,
+        &record_libraries,
+        &eligible_indices,
+        config,
+        &mut summary,
+        &mut library_registry,
+    );
 
     {
         if config.inputs.len() > 1 {
@@ -509,7 +517,7 @@ fn try_run_single_bam_no_duplicate_fast_path(
             continue;
         }
 
-        if flag & PAIRED_FLAG != 0 {
+        if duplicate_candidate_is_pair(flag) {
             summary.paired_records_examined += 1;
             library_registry
                 .summary_mut(library_id)
@@ -774,8 +782,11 @@ fn read_bam_records<R: bam::Read>(
     summary: &mut MarkDuplicatesSummary,
 ) -> Result<(), MarkDuplicatesError> {
     for result in reader.records() {
-        let record = result?;
-        let flag = record.flags();
+        let mut record = result?;
+        let flag = record.flags() & !DUPLICATE_FLAG;
+        if record.flags() != flag {
+            record.set_flags(flag);
+        }
         let library_id = record_library_id(&record, library_lookup);
         let record_index = records.len();
 
@@ -796,7 +807,7 @@ fn read_bam_records<R: bam::Read>(
             continue;
         }
 
-        if flag & PAIRED_FLAG != 0 {
+        if duplicate_candidate_is_pair(flag) {
             summary.paired_records_examined += 1;
             library_registry
                 .summary_mut(library_id)
@@ -870,11 +881,11 @@ fn clear_duplicate_type_tag(record: &mut bam::Record) -> Result<(), MarkDuplicat
     Ok(())
 }
 
-fn duplicate_type_tag<'a>(
-    config: &'a MarkDuplicatesConfig,
+fn duplicate_type_tag(
+    config: &MarkDuplicatesConfig,
     flags: u16,
     is_optical_duplicate: bool,
-) -> Option<&'a str> {
+) -> Option<&str> {
     if flags & DUPLICATE_FLAG == 0 {
         return None;
     }
@@ -996,7 +1007,7 @@ fn add_duplicate_set_member_tags(
 ) -> Result<(), MarkDuplicatesError> {
     if !group
         .iter()
-        .any(|index| records[*index].flags() & PAIRED_FLAG != 0)
+        .any(|index| duplicate_candidate_is_pair(records[*index].flags()))
     {
         return Ok(());
     }
@@ -1107,7 +1118,7 @@ fn duplicate_groups(
 
     for index in eligible_indices.iter().copied() {
         let record = &records[index];
-        if record.flags() & PAIRED_FLAG != 0 {
+        if duplicate_candidate_is_pair(record.flags()) {
             if let Some(first_index) = paired_by_name.remove(record.qname()) {
                 let indices = [first_index, index];
                 let barcode = first_barcode(records, &indices, config);
@@ -1121,25 +1132,84 @@ fn duplicate_groups(
             } else {
                 paired_by_name.insert(record.qname().to_vec(), index);
             }
-        } else {
-            duplicate_groups
-                .entry(single_duplicate_key_bam(
-                    record,
-                    record_libraries[index],
-                    &bam_barcode(record, config),
-                ))
-                .or_default()
-                .push(index);
         }
     }
 
-    for index in paired_by_name.into_values() {
+    duplicate_groups
+}
+
+fn mark_fragment_duplicate_groups(
+    records: &mut [bam::Record],
+    record_libraries: &[LibraryId],
+    eligible_indices: &[usize],
+    config: &MarkDuplicatesConfig,
+    summary: &mut MarkDuplicatesSummary,
+    library_registry: &mut LibraryRegistry,
+) {
+    let mut fragment_groups = HashMap::<BamDuplicateKey, Vec<usize>>::default();
+    for index in eligible_indices.iter().copied() {
         let barcode = bam_barcode(&records[index], config);
-        let key = single_duplicate_key_bam(&records[index], record_libraries[index], &barcode);
-        duplicate_groups.entry(key).or_default().push(index);
+        let key = fragment_duplicate_key_bam(&records[index], record_libraries[index], &barcode);
+        fragment_groups.entry(key).or_default().push(index);
     }
 
-    duplicate_groups
+    for group in fragment_groups.values() {
+        if group.len() < 2 || !has_multiple_read_names(group, records) {
+            continue;
+        }
+
+        let contains_complete_pair = group
+            .iter()
+            .any(|index| duplicate_candidate_is_pair(records[*index].flags()));
+        if contains_complete_pair {
+            for index in group.iter().copied() {
+                if duplicate_candidate_is_pair(records[index].flags()) {
+                    continue;
+                }
+                mark_unpaired_duplicate_record(
+                    index,
+                    records,
+                    record_libraries,
+                    summary,
+                    library_registry,
+                );
+            }
+            continue;
+        }
+
+        let representative_index = best_duplicate_representative_index(group, records);
+        let representative_name = records[representative_index].qname().to_vec();
+        for index in group.iter().copied() {
+            if records[index].qname() == representative_name.as_slice() {
+                continue;
+            }
+            mark_unpaired_duplicate_record(
+                index,
+                records,
+                record_libraries,
+                summary,
+                library_registry,
+            );
+        }
+    }
+}
+
+fn mark_unpaired_duplicate_record(
+    index: usize,
+    records: &mut [bam::Record],
+    record_libraries: &[LibraryId],
+    summary: &mut MarkDuplicatesSummary,
+    library_registry: &mut LibraryRegistry,
+) {
+    let flag = records[index].flags();
+    if flag & DUPLICATE_FLAG != 0 {
+        return;
+    }
+    summary.unpaired_duplicate_records += 1;
+    library_registry
+        .summary_mut(record_libraries[index])
+        .unpaired_duplicate_records += 1;
+    records[index].set_flags(flag | DUPLICATE_FLAG);
 }
 
 fn sam_barcode(fields: &[String], config: &MarkDuplicatesConfig) -> Option<Vec<u8>> {
@@ -1242,6 +1312,24 @@ fn single_duplicate_key_bam(
     }
 }
 
+fn fragment_duplicate_key_bam(
+    record: &bam::Record,
+    library_id: LibraryId,
+    barcode: &Option<Vec<u8>>,
+) -> BamDuplicateKey {
+    let reverse_strand = record.flags() & 0x10 != 0;
+    BamDuplicateKey {
+        library_id,
+        reference_id: record.tid(),
+        position: unclipped_record_position(record),
+        mate_reference_id: -1,
+        mate_position: -1,
+        template_length: 0,
+        reverse_strand,
+        barcode: barcode.clone(),
+    }
+}
+
 fn pair_duplicate_key_bam(
     first: &bam::Record,
     second: &bam::Record,
@@ -1262,10 +1350,16 @@ fn pair_duplicate_key_bam(
         position: unclipped_record_position(left),
         mate_reference_id: right.tid(),
         mate_position: unclipped_record_position(right),
-        template_length: first.insert_size().abs().max(second.insert_size().abs()),
+        template_length: pair_orientation_code(left, right),
         reverse_strand: false,
         barcode,
     }
+}
+
+fn pair_orientation_code(left: &bam::Record, right: &bam::Record) -> i64 {
+    let left_reverse = i64::from(left.flags() & 0x10 != 0);
+    let right_reverse = i64::from(right.flags() & 0x10 != 0);
+    (left_reverse << 1) | right_reverse
 }
 
 fn unclipped_record_position(record: &bam::Record) -> i64 {
@@ -1357,6 +1451,7 @@ fn quality_score(record: &bam::Record) -> u64 {
     record
         .qual()
         .iter()
+        .filter(|quality| **quality >= 15)
         .map(|quality| u64::from(*quality))
         .sum()
 }
@@ -1375,7 +1470,7 @@ fn has_multiple_read_names(group: &[usize], records: &[bam::Record]) -> bool {
 fn paired_duplicate_set_size(group: &[usize], records: &[bam::Record]) -> Option<u64> {
     if !group
         .iter()
-        .any(|index| records[*index].flags() & PAIRED_FLAG != 0)
+        .any(|index| duplicate_candidate_is_pair(records[*index].flags()))
     {
         return None;
     }
@@ -1454,11 +1549,38 @@ fn metrics_text_for_libraries<'a>(
     let histogram = combined_duplicate_set_histogram(summaries.iter().copied());
     if !histogram.is_empty() {
         output.push_str("\n## HISTOGRAM\tjava.lang.Double\n");
-        output.push_str("set_size\tall_sets\tnon_optical_sets\n");
-        for (set_size, counts) in histogram {
+        output.push_str("BIN\tCoverageMult\tall_sets\tnon_optical_sets\n");
+        let read_pairs_examined = summaries
+            .iter()
+            .map(|summary| {
+                summary
+                    .effective_read_pairs_examined()
+                    .saturating_sub(summary.read_pair_optical_duplicates)
+            })
+            .sum::<u64>();
+        let read_pair_duplicates = summaries
+            .iter()
+            .map(|summary| summary.read_pair_duplicates())
+            .sum::<u64>();
+        let unique_read_pairs = read_pairs_examined.saturating_sub(read_pair_duplicates);
+        let estimated_library_size = estimate_library_size(read_pairs_examined, unique_read_pairs);
+        let max_set_size = histogram.keys().copied().max().unwrap_or_default().max(100);
+        for set_size in 1..=max_set_size {
+            let counts = histogram.get(&set_size).copied().unwrap_or_default();
+            let coverage_mult = estimated_library_size
+                .map(|library_size| {
+                    estimate_roi(
+                        library_size,
+                        set_size as f64,
+                        read_pairs_examined,
+                        unique_read_pairs,
+                    )
+                })
+                .map(format_metric_float)
+                .unwrap_or_default();
             output.push_str(&format!(
-                "{:.1}\t{}\t{}\n",
-                set_size as f64, counts.all_sets, counts.non_optical_sets
+                "{:.1}\t{}\t{}\t{}\n",
+                set_size as f64, coverage_mult, counts.all_sets, counts.non_optical_sets
             ));
         }
     }
@@ -1565,6 +1687,19 @@ fn estimate_library_size(read_pairs: u64, unique_read_pairs: u64) -> Option<u64>
     Some((unique_read_pairs * (lower + upper) / 2.0) as u64)
 }
 
+fn estimate_roi(
+    estimated_library_size: u64,
+    coverage_multiple: f64,
+    read_pairs: u64,
+    unique_read_pairs: u64,
+) -> f64 {
+    let library_size = estimated_library_size as f64;
+    let read_pairs = read_pairs as f64;
+    let unique_read_pairs = unique_read_pairs as f64;
+    library_size * (1.0 - (-(coverage_multiple * read_pairs) / library_size).exp())
+        / unique_read_pairs
+}
+
 fn estimate_library_size_function(
     library_size: f64,
     unique_read_pairs: f64,
@@ -1574,8 +1709,13 @@ fn estimate_library_size_function(
 }
 
 const PAIRED_FLAG: u16 = 0x1;
+const MATE_UNMAPPED_FLAG: u16 = 0x8;
 const FIRST_IN_PAIR_FLAG: u16 = 0x40;
 const SECONDARY_OR_SUPPLEMENTARY_FLAGS: u16 = 0x100 | 0x800;
+
+fn duplicate_candidate_is_pair(flag: u16) -> bool {
+    flag & PAIRED_FLAG != 0 && flag & MATE_UNMAPPED_FLAG == 0
+}
 
 impl MarkDuplicatesSummary {
     fn read_pair_duplicates(&self) -> u64 {
@@ -1583,8 +1723,11 @@ impl MarkDuplicatesSummary {
     }
 
     fn effective_read_pairs_examined(&self) -> u64 {
-        self.read_pairs_examined
-            .max(self.paired_records_examined / 2)
+        if self.paired_records_examined > 0 {
+            self.paired_records_examined / 2
+        } else {
+            self.read_pairs_examined
+        }
     }
 }
 

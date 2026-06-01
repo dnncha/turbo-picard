@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import re
 import sys
 from pathlib import Path
 from typing import Any
@@ -23,6 +24,7 @@ from render_benchmark_assets import (  # noqa: E402
 SUITE_OUTPUT = ROOT / "docs" / "site" / "assets" / "bench-suite-output.txt"
 BENCHMARK_DATA = ROOT / "docs" / "site" / "assets" / "benchmark-data.json"
 SOURCE_ARTIFACT = "docs/site/assets/bench-suite-output.txt"
+EXPECTED_SOURCE_PREFIX = "python3 tools/bench_suite.py"
 
 
 def format_value(value: Any) -> str:
@@ -52,8 +54,33 @@ def validate_benchmark_log_evidence(
     metadata = parse_suite_metadata(suite_output)
     if "benchmark_date" not in metadata:
         errors.append("raw benchmark log is missing benchmark_date metadata")
+    elif not re.fullmatch(r"\d{4}-\d{2}-\d{2}", metadata["benchmark_date"]):
+        errors.append(
+            f"raw benchmark log has non-ISO benchmark_date: {metadata['benchmark_date']}"
+        )
     if "source" not in metadata:
         errors.append("raw benchmark log is missing source metadata")
+    elif not metadata["source"].startswith(EXPECTED_SOURCE_PREFIX):
+        errors.append(
+            "raw benchmark log source must start with "
+            f"{EXPECTED_SOURCE_PREFIX}: {metadata['source']}"
+        )
+
+    artifact_path = Path(source_artifact)
+    if artifact_path.is_absolute() or ".." in artifact_path.parts:
+        errors.append(
+            f"benchmark source_artifact must be repository-relative: {source_artifact}"
+        )
+    else:
+        try:
+            artifact_path.relative_to("docs/site/assets")
+        except ValueError:
+            errors.append(
+                "benchmark source_artifact must stay under docs/site/assets: "
+                f"{source_artifact}"
+            )
+        if not (ROOT / artifact_path).exists():
+            errors.append(f"benchmark source_artifact is missing: {source_artifact}")
 
     expected = build_benchmark_data_from_suite_output(
         suite_output,
@@ -87,9 +114,23 @@ def validate_benchmark_log_evidence(
             expected=expected_summary[key],
         )
 
-    actual_by_command = {
-        row.get("command"): row for row in manifest.get("benchmarks", []) if "command" in row
-    }
+    actual_by_command: dict[str, dict] = {}
+    benchmark_rows = manifest.get("benchmarks", [])
+    if not isinstance(benchmark_rows, list):
+        errors.append("manifest benchmarks must be a list")
+        benchmark_rows = []
+    for index, row in enumerate(benchmark_rows):
+        if not isinstance(row, dict):
+            errors.append(f"manifest benchmark row {index} must be an object")
+            continue
+        command = row.get("command")
+        if not isinstance(command, str) or not command:
+            errors.append(f"manifest benchmark row {index} missing command")
+            continue
+        if command in actual_by_command:
+            errors.append(f"manifest has duplicate benchmark command: {command}")
+            continue
+        actual_by_command[command] = row
     expected_by_command = {row["command"]: row for row in expected["benchmarks"]}
     for command in sorted(set(actual_by_command) - set(expected_by_command)):
         errors.append(f"manifest has benchmark not present in raw log: {command}")

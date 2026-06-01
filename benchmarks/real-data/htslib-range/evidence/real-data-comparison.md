@@ -17,3 +17,20 @@ turbo-picard: `picard 0.1.0`
 | MarkDuplicates | PASS | duplicate-marking semantic digest plus stable metrics digest | 0.040s | 0.977s | 24.67x |
 
 A PASS means the command-specific stable digest matched Picard on this input. Keep the JSON file with the raw digests when sharing results.
+
+## Comparison details
+
+- `SAM record digest` compares normalized SAM records and ignores headers.
+- `post-command SAM record digest` compares normalized SAM records after a BAM-writing command.
+- `stable metrics digest` compares non-comment, non-blank metrics rows so generated headers do not affect parity.
+- `duplicate-marking semantic digest plus stable metrics digest` compares duplicate flags, duplicate tags, duplicate-set metadata, barcode tags, key coordinates, and duplicate metrics.
+
+## Artifact digests
+
+| Command | turbo-picard artifact | Picard artifact | Digest | Exit codes |
+| --- | --- | --- | --- | --- |
+| ViewSam | `benchmarks/real-data/htslib-range/evidence/work/ViewSam/turbo.sam` | `benchmarks/real-data/htslib-range/evidence/work/ViewSam/picard.sam` | `4c8aa2be4652...1a59ea2be636` | n/a |
+| CleanSam | `benchmarks/real-data/htslib-range/evidence/work/CleanSam/turbo.bam` | `benchmarks/real-data/htslib-range/evidence/work/CleanSam/picard.bam` | `4c8aa2be4652...1a59ea2be636` | n/a |
+| CollectQualityYieldMetrics | `benchmarks/real-data/htslib-range/evidence/work/CollectQualityYieldMetrics/turbo.metrics.txt` | `benchmarks/real-data/htslib-range/evidence/work/CollectQualityYieldMetrics/picard.metrics.txt` | `858bde70d99d...bc7511c9263b` | n/a |
+| CollectAlignmentSummaryMetrics | `benchmarks/real-data/htslib-range/evidence/work/CollectAlignmentSummaryMetrics/turbo.metrics.txt` | `benchmarks/real-data/htslib-range/evidence/work/CollectAlignmentSummaryMetrics/picard.metrics.txt` | `96909a8613c9...fde92e3826a3` | n/a |
+| MarkDuplicates | `benchmarks/real-data/htslib-range/evidence/work/MarkDuplicates/turbo.bam` | `benchmarks/real-data/htslib-range/evidence/work/MarkDuplicates/picard.bam` | `c96cf763a09c...7e53026c656b` | n/a |

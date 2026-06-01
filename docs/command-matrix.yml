@@ -1,9 +1,9 @@
-picard_reference: "3.4.x"
+picard_reference: "3.4.0"
 commands:
   - name: AddOrReplaceReadGroups
     status: native
     parity_script: tools/verify_basic_addorreplacereadgroups_parity.sh
-    native_scope: "SAM/BAM read-group replacement with Picard-style RG fields including key sequence and flow order, per-record RG tag rewrite, .md5 sidecars, BAM indexing when requested, and common Picard runtime option acceptance."
+    native_scope: "SAM/BAM read-group replacement with Picard-style RG fields including key sequence and flow order, per-record RG tag rewrite, .md5 sidecars, BAM indexing when requested, common Picard runtime option acceptance, and GATK NA12878 mitochondrial real-data parity."
     fallback_scope: "No known fallback-only surface in the current documented implementation."
   - name: BedToIntervalList
     status: native
@@ -13,32 +13,32 @@ commands:
   - name: BuildBamIndex
     status: native
     parity_script: tools/verify_basic_buildbamindex_parity.sh
-    native_scope: "BAI generation for coordinate-sorted BAM inputs with default or explicit output paths, plus Picard-compatible CREATE_MD5_FILE acceptance without an index md5 sidecar."
+    native_scope: "BAI generation for coordinate-sorted BAM inputs with default or explicit output paths, Picard-compatible CREATE_MD5_FILE acceptance without an index md5 sidecar, and GATK NA12878 mitochondrial real-data parity."
     fallback_scope: "Non-BAM inputs are delegated when fallback is configured."
   - name: CleanSam
     status: partial-native
     parity_script: tools/verify_basic_cleansam_parity.sh
-    native_scope: "Common SAM/BAM cleanup, including unmapped MAPQ normalization, simple reference-overhang clipping, and terminal deletion/reference-overhang clipping matched to Picard."
+    native_scope: "Common SAM/BAM cleanup, including unmapped MAPQ normalization, simple reference-overhang clipping, terminal deletion/reference-overhang clipping matched to Picard, and release-candidate real-data parity."
     fallback_scope: "Complex reference-edge cases outside the native cleaner should use upstream Picard."
   - name: CollectAlignmentSummaryMetrics
     status: partial-native
     parity_script: tools/verify_basic_alignmentmetrics_parity.sh
-    native_scope: "No-reference ALL_READS, SAMPLE, LIBRARY, and READ_GROUP alignment summary metrics plus read-length histogram."
+    native_scope: "No-reference ALL_READS, SAMPLE, LIBRARY, and READ_GROUP alignment summary metrics plus read-length histogram and release-candidate real-data parity."
     fallback_scope: "Reference-dependent mismatch, error-rate, and adapter-oriented metrics remain upstream Picard surfaces."
   - name: CollectBaseDistributionByCycle
     status: partial-native
     parity_script: tools/verify_basic_collectbasedistributionbycycle_parity.sh
-    native_scope: "Base percentage by cycle metrics and placeholder PDF chart artifact for common SAM/BAM inputs."
+    native_scope: "Base percentage by cycle metrics and lightweight PDF chart artifact for common SAM/BAM inputs."
     fallback_scope: "Advanced charting semantics and unsupported Picard options should use fallback."
   - name: CollectGcBiasMetrics
     status: partial-native
     parity_script: tools/verify_basic_collectgcbiasmetrics_parity.sh
-    native_scope: "GC-bias detail, summary, optional duplicate-filtered metrics, and placeholder PDF chart artifact for reference-backed runs."
+    native_scope: "GC-bias detail, summary, optional duplicate-filtered metrics, and lightweight PDF chart artifact for reference-backed runs."
     fallback_scope: "Bisulfite mode and unsupported accumulation/window options should use upstream Picard."
   - name: CollectQualityYieldMetrics
     status: native
     parity_script: tools/verify_basic_qualityyield_parity.sh
-    native_scope: "Picard-style quality-yield metrics with original-quality handling, STOP_AFTER, and optional non-primary inclusion."
+    native_scope: "Picard-style quality-yield metrics with original-quality handling, STOP_AFTER, optional non-primary inclusion, and release-candidate real-data parity."
     fallback_scope: "No known fallback-only surface in the current documented implementation."
   - name: CollectWgsMetrics
     status: partial-native
@@ -63,7 +63,7 @@ commands:
   - name: MarkDuplicates
     status: partial-native
     parity_script: tools/verify_basic_picard_parity.sh
-    native_scope: "SAM/BAM duplicate marking/removal, metrics, barcode grouping, optical duplicate tagging, sidecars, and multi-BAM input."
+    native_scope: "SAM/BAM duplicate marking/removal, metrics, barcode grouping, optical duplicate tagging, sidecars, multi-BAM input, and release-candidate real-data parity."
     fallback_scope: "CRAM and unsupported Picard MarkDuplicates options should use upstream Picard."
   - name: MergeSamFiles
     status: partial-native
@@ -78,7 +78,7 @@ commands:
   - name: MeanQualityByCycle
     status: partial-native
     parity_script: tools/verify_basic_meanqualitybycycle_parity.sh
-    native_scope: "Mean quality by cycle metrics and placeholder PDF chart artifact, including reverse-strand cycle handling and original qualities."
+    native_scope: "Mean quality by cycle metrics and lightweight PDF chart artifact, including reverse-strand cycle handling and original qualities."
     fallback_scope: "Unsupported Picard charting/options surfaces should use fallback."
   - name: NormalizeFasta
     status: native
@@ -88,7 +88,7 @@ commands:
   - name: QualityScoreDistribution
     status: partial-native
     parity_script: tools/verify_basic_qualityscoredistribution_parity.sh
-    native_scope: "Quality histogram metrics and placeholder PDF chart artifact, including original-quality handling."
+    native_scope: "Quality histogram metrics and lightweight PDF chart artifact, including original-quality handling."
     fallback_scope: "Unsupported Picard charting/options surfaces should use fallback."
   - name: ReplaceSamHeader
     status: partial-native
@@ -98,12 +98,12 @@ commands:
   - name: SamToFastq
     status: partial-native
     parity_script: tools/verify_basic_samtofastq_parity.sh
-    native_scope: "Single-end, paired, unpaired, interleaved, gzipped, and MD5 FASTQ output with Picard-compatible primary/PF filtering and common Picard runtime option acceptance."
-    fallback_scope: "Unsupported clipping/trimming/re-reversal edge surfaces should use upstream Picard."
+    native_scope: "Single-end, paired, unpaired, interleaved, gzipped, and MD5 FASTQ output with Picard-compatible primary/PF filtering, clipping-attribute actions, read-end trimming, quality end-trimming, max-bases output caps, common Picard runtime option acceptance, and GATK NA12878 mitochondrial real-data parity."
+    fallback_scope: "Advanced re-reversal and output-per-read-group edge surfaces should use upstream Picard."
   - name: SortSam
     status: partial-native
     parity_script: tools/verify_basic_sortsam_parity.sh
-    native_scope: "Coordinate and queryname sorting for SAM/BAM, sidecars, and streaming fast path for already-sorted inputs."
+    native_scope: "Coordinate and queryname sorting for SAM/BAM, sidecars, streaming fast path for already-sorted inputs, and GATK NA12878 mitochondrial real-data parity."
     fallback_scope: "Unsupported sort orders, CRAM, and advanced Picard sorting surfaces should use fallback."
   - name: SortVcf
     status: partial-native
@@ -118,13 +118,13 @@ commands:
   - name: ViewSam
     status: partial-native
     parity_script: tools/verify_basic_viewsam_parity.sh
-    native_scope: "SAM/BAM viewing and conversion with header-only, records-only, interval-list, Aligned/Unaligned alignment-status filters, and PF/NonPF status filters."
+    native_scope: "SAM/BAM viewing and conversion with header-only, records-only, interval-list, Aligned/Unaligned alignment-status filters, PF/NonPF status filters, and release-candidate real-data parity."
     fallback_scope: "Unsupported filter combinations and non-SAM/BAM output surfaces should use upstream Picard."
   - name: CollectInsertSizeMetrics
     status: partial-native
     parity_script: tools/verify_basic_collectinsertsizemetrics_parity.sh
-    native_scope: "Insert-size metrics, histogram, placeholder PDF chart artifact, duplicate inclusion, minimum-pct alias, and accumulation by sample/library/RG."
-    fallback_scope: "Unsupported histogram/chart options and unsupported accumulation surfaces should use fallback."
+    native_scope: "Insert-size metrics and histograms, including Picard-style second-of-pair collection, orientation-separated FR/RF/TANDEM rows, minimum-pct filtering, DEVIATIONS-based histogram trimming, lightweight PDF chart artifact, duplicate inclusion, minimum-pct alias, accumulation by sample/library/RG, and GATK NA12878 mitochondrial real-data parity."
+    fallback_scope: "Unsupported histogram/chart options and unsupported accumulation surfaces should use upstream Picard."
   - name: CollectMultipleMetrics
     status: partial-native
     parity_script: tools/verify_basic_collectmultiplemetrics_parity.sh
@@ -148,7 +148,7 @@ commands:
   - name: RevertSam
     status: partial-native
     parity_script: tools/verify_basic_revertsam_parity.sh
-    native_scope: "Alignment reversion, optional alignment retention, secondary/supplementary filtering, hardclip restoration, sidecars, and selected attributes."
+    native_scope: "Alignment reversion, optional alignment retention, secondary/supplementary filtering, hardclip restoration, sidecars, selected attributes, and GATK NA12878 mitochondrial real-data parity."
     fallback_scope: "Unsupported attribute policies and unsupported sort/order combinations should use upstream Picard."
   - name: SetNmMdAndUqTags
     status: partial-native
@@ -158,5 +158,5 @@ commands:
   - name: ValidateSamFile
     status: partial-native
     parity_script: tools/verify_basic_validatesamfile_parity.sh
-    native_scope: "SUMMARY and VERBOSE validation for supported mate, record, and warning issue types with IGNORE filtering and common runtime option acceptance."
+    native_scope: "SUMMARY and VERBOSE validation for supported mate, missing-mate, read-group, missing-platform, record, unmapped-MAPQ, and warning issue types with IGNORE filtering, SKIP_MATE_VALIDATION handling, common runtime option acceptance, and GATK NA12878 mitochondrial real-data parity for summary histogram plus exit code."
     fallback_scope: "Unsupported validation modes, IGNORE values, and full Picard validator issue coverage should use upstream Picard."

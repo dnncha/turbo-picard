@@ -176,9 +176,29 @@ fn normalizes_conflicting_aliases_by_command() {
     assert_eq!(multiple["REFERENCE_SEQUENCE"], vec!["ref.fa"]);
     assert_eq!(multiple["METRIC_ACCUMULATION_LEVEL"], vec!["ALL_READS"]);
 
-    let sam_to_fastq_args = vec!["R=ref.fa".to_string()];
+    let sam_to_fastq_args = vec![
+        "F=r1.fastq".to_string(),
+        "F2=r2.fastq".to_string(),
+        "FU=unpaired.fastq".to_string(),
+        "Q=20".to_string(),
+        "CLIP_ATTR=XT".to_string(),
+        "CLIP_ACT=N".to_string(),
+        "CLIP_MIN=3".to_string(),
+        "R1_MAX_BASES=90".to_string(),
+        "R2_MAX_BASES=80".to_string(),
+        "R=ref.fa".to_string(),
+    ];
     let sam_to_fastq = normalize_picard_args_for_command("SamToFastq", &sam_to_fastq_args)
         .expect("SamToFastq arguments parse");
+    assert_eq!(sam_to_fastq["FASTQ"], vec!["r1.fastq"]);
+    assert_eq!(sam_to_fastq["SECOND_END_FASTQ"], vec!["r2.fastq"]);
+    assert_eq!(sam_to_fastq["UNPAIRED_FASTQ"], vec!["unpaired.fastq"]);
+    assert_eq!(sam_to_fastq["QUALITY"], vec!["20"]);
+    assert_eq!(sam_to_fastq["CLIPPING_ATTRIBUTE"], vec!["XT"]);
+    assert_eq!(sam_to_fastq["CLIPPING_ACTION"], vec!["N"]);
+    assert_eq!(sam_to_fastq["CLIPPING_MIN_LENGTH"], vec!["3"]);
+    assert_eq!(sam_to_fastq["READ1_MAX_BASES_TO_WRITE"], vec!["90"]);
+    assert_eq!(sam_to_fastq["READ2_MAX_BASES_TO_WRITE"], vec!["80"]);
     assert_eq!(sam_to_fastq["REFERENCE_SEQUENCE"], vec!["ref.fa"]);
 
     let fixmate_args = vec!["AS=true".to_string(), "MC=false".to_string()];

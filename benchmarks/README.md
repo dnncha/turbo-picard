@@ -40,6 +40,127 @@ read viewing, BAM cleanup, two metrics commands, and duplicate-marking output on
 a paired alignment fixture with chimeric, indel, soft-clipped, and orphaned
 paired reads.
 
+The second checked-in public smoke bundle uses Picard's own
+`testdata/picard/sam/test.bam` fixture:
+
+- Source citation:
+  `https://github.com/broadinstitute/picard/blob/fc0b08410d38a10afd08e467dab74bf5e2e71310/testdata/picard/sam/test.bam`
+- Source commit:
+  `fc0b08410d38a10afd08e467dab74bf5e2e71310`
+- Local input:
+  `benchmarks/real-data/picard-test-bam/input.bam`
+- SHA-256:
+  `1d499e5683479b88fad373b2de8b49f85cceae68a316e06b3cfdf60491fd7990`
+- Evidence:
+  `benchmarks/real-data/picard-test-bam/evidence/real-data-comparison.md`
+- Manifest entry:
+  `benchmarks/real-data/manifest.json`
+- Scope caveat:
+  `Picard public test BAM; below default release-candidate size threshold.`
+- Release tier:
+  `public_smoke`
+
+Current saved result against Picard 3.4.0:
+
+| Command | Status | Comparison |
+| --- | --- | --- |
+| ViewSam | PASS | SAM record digest |
+| CleanSam | PASS | post-command SAM record digest |
+| CollectQualityYieldMetrics | PASS | stable metrics digest |
+| CollectAlignmentSummaryMetrics | PASS | stable metrics digest |
+| MarkDuplicates | PASS | duplicate-marking semantic digest plus stable metrics digest |
+
+This fixture is valuable because it exercises an unmapped paired BAM from
+Picard's own public test corpus, including adapter-read and bad-cycle behavior
+in `CollectAlignmentSummaryMetrics`. It is still a smoke fixture, not a
+production-scale release-candidate dataset.
+
+## Release-Candidate Real-Data Evidence
+
+The first checked-in release-candidate bundle uses GATK's public NA12878
+mitochondrial test BAM:
+
+- Source citation:
+  `https://github.com/broadinstitute/gatk/blob/e8c49f600b06c658e0fa9bf67256340ebb46bc48/src/test/resources/org/broadinstitute/hellbender/tools/mutect/mito/NA12878.bam`
+- Source commit:
+  `e8c49f600b06c658e0fa9bf67256340ebb46bc48`
+- Local input:
+  `benchmarks/real-data/gatk-na12878-mito/input.bam`
+- SHA-256:
+  `70ea2e429805a75ce6007a32ba176ea7c697a398e0c39a9d58aaaa30e1ed86c3`
+- Evidence:
+  `benchmarks/real-data/gatk-na12878-mito/evidence/real-data-comparison.md`
+- Manifest entry:
+  `benchmarks/real-data/manifest.json`
+- Scope caveat:
+  `GATK public NA12878 mitochondrial test BAM.`
+- Release tier:
+  `release_candidate`
+- Minimum input threshold:
+  `1000000` bytes
+
+Current saved result against Picard 3.4.0:
+
+| Command | Status | Comparison |
+| --- | --- | --- |
+| ViewSam | PASS | SAM record digest |
+| CleanSam | PASS | post-command SAM record digest |
+| CollectQualityYieldMetrics | PASS | stable metrics digest |
+| CollectAlignmentSummaryMetrics | PASS | stable metrics digest |
+| MarkDuplicates | PASS | duplicate-marking semantic digest plus stable metrics digest |
+| AddOrReplaceReadGroups | PASS | SAM record digest plus read-group header digest |
+| BuildBamIndex | PASS | BAI binary digest |
+| RevertSam | PASS | reverted SAM record digest |
+| SortSam | PASS | coordinate-sorted SAM record multiset digest |
+| SamToFastq | PASS | FASTQ trio digest |
+| CollectInsertSizeMetrics | PASS | stable metrics digest with insert-size histogram |
+| ValidateSamFile | PASS | summary validation histogram plus exit code |
+
+This is still a public test BAM, not a substitute for every production cohort,
+but it is large enough for the release gate and it exercises real Picard edge
+cases around duplicate flags, mate-unmapped reads, soft clips, read-group
+rewriting, alignment reversion to unmapped output, FASTQ conversion,
+mitochondrial alignment metrics, coordinate sorting,
+orientation-aware insert-size metrics, and validation-summary behavior for
+missing mates and missing NM tags.
+
+The second checked-in release-candidate bundle uses Picard's public
+`testdata/picard/sam/snvq_metrics_test.bam` fixture:
+
+- Source citation:
+  `https://github.com/broadinstitute/picard/blob/fc0b08410d38a10afd08e467dab74bf5e2e71310/testdata/picard/sam/snvq_metrics_test.bam`
+- Source commit:
+  `fc0b08410d38a10afd08e467dab74bf5e2e71310`
+- Local input:
+  `benchmarks/real-data/picard-snvq/input.bam`
+- SHA-256:
+  `be0daa7cb8e9ce11f2f68ac3db8c229d530736aaf7b80df3669fdb00779c06b3`
+- Evidence:
+  `benchmarks/real-data/picard-snvq/evidence/real-data-comparison.md`
+- Manifest entry:
+  `benchmarks/real-data/manifest.json`
+- Scope caveat:
+  `Picard public SNVQ metrics test BAM.`
+- Release tier:
+  `release_candidate`
+- Minimum input threshold:
+  `1000000` bytes
+
+Current saved result against Picard 3.4.0:
+
+| Command | Status | Comparison |
+| --- | --- | --- |
+| ViewSam | PASS | SAM record digest |
+| CleanSam | PASS | post-command SAM record digest |
+| CollectQualityYieldMetrics | PASS | stable metrics digest |
+| CollectAlignmentSummaryMetrics | PASS | stable metrics digest |
+| MarkDuplicates | PASS | duplicate-marking semantic digest plus stable metrics digest |
+
+This fixture is larger than the NA12878 mitochondrial bundle and comes from
+Picard's own metrics test corpus. It adds coverage for insertion-heavy CIGARs,
+SAM floating-tag representation differences, and alignment-summary standard
+deviation behavior that matters when scientists compare Picard metrics files.
+
 Before a scientist-facing release, repeat `tools/compare_real_data.py` on larger
 public benchmark material such as GIAB/HG001 shards and on representative
 production BAMs from the workflows that would be switched:
@@ -49,11 +170,11 @@ python3 tools/compare_real_data.py \
   --input-bam /data/HG001-or-production-shard.bam \
   --input-source-url https://example.org/datasets/GIAB-HG001-v4.2.1/input.bam \
   --input-source-commit GIAB-HG001-v4.2.1 \
-  --output-dir benchmarks/real-data/HG001-smoke \
+  --output-dir benchmarks/real-data/HG001-smoke/evidence \
   --dataset-id HG001-smoke \
   --scope-caveat "representative HG001 shard" \
   --release-tier release_candidate \
-  --commands ViewSam CollectQualityYieldMetrics CollectAlignmentSummaryMetrics CleanSam MarkDuplicates
+  --commands ViewSam CollectQualityYieldMetrics CollectAlignmentSummaryMetrics CleanSam MarkDuplicates CollectInsertSizeMetrics
 ```
 
 The comparator writes `manifest-entry.json` when `--dataset-id` is supplied. Add
@@ -61,29 +182,42 @@ each reviewed entry to `benchmarks/real-data/manifest.json` with:
 
 ```bash
 python3 tools/update_real_data_manifest.py \
-  --entry benchmarks/real-data/HG001-smoke/manifest-entry.json
+  --entry benchmarks/real-data/HG001-smoke/evidence/manifest-entry.json
 ```
 
 Then run `python3 tools/verify_real_data_evidence.py` so the checked manifest
 proves the source citation, input hash, passing command list, and public
 documentation are still in sync.
 
-For GitHub-hosted fixtures, cite a URL containing `/blob/<commit>/`. For
-accession-hosted data, cite an HTTPS URL that contains the accession or release
-identifier passed as `--input-source-commit`. The verifier rejects raw GitHub
-branch URLs and accession-style citations where the identifier is not visible in
-the URL.
+For GitHub-hosted fixtures, cite a URL containing `/blob/<commit>/` and pass the
+full 40-character Git commit SHA as `--input-source-commit`; do not use a branch
+name or short hash. For accession-hosted data, cite an HTTPS URL that contains
+the accession or release identifier passed as `--input-source-commit`. The
+comparator and verifier reject raw GitHub branch URLs, short GitHub commits, and
+accession-style citations where the identifier is not visible in the URL.
 
 Use `release_tier: public_smoke` for small fixtures like this one. Use
-`release_tier: release_candidate` only for larger public or production-like
-runs that should count toward a scientist-facing release. The stricter command
-`python3 tools/verify_real_data_evidence.py --release-ready` fails until the
-manifest contains at least one pinned release-candidate dataset. Release
-candidates must include `ViewSam`, `CleanSam`, `CollectQualityYieldMetrics`,
-`CollectAlignmentSummaryMetrics`, and `MarkDuplicates`, and the input must be at
-least 1 MB by default. If a deliberately smaller public shard is reviewed, make
-that exception explicit with `minimum_input_bytes` in the manifest rather than
-letting the threshold be implicit.
+`release_tier: release_candidate` only for larger public or workflow-representative
+runs that should count toward a scientist-facing release, and do not turn the
+current checked-in fixtures into cohort-scale switching claims. The stricter
+command `python3 tools/verify_real_data_evidence.py --release-ready` now passes
+for the checked-in release-candidate fixtures, which proves the manifest,
+citations, hashes, evidence files, timing rows, and public documentation are in
+sync. It does not prove every cohort-scale workflow is safe to switch.
+
+Release-candidate datasets must include `ViewSam`, `CleanSam`,
+`CollectQualityYieldMetrics`, `CollectAlignmentSummaryMetrics`, and
+`MarkDuplicates`, and each input must be at least 1 MB by default. The
+release-candidate portfolio must also cover AddOrReplaceReadGroups,
+BuildBamIndex, CleanSam, CollectAlignmentSummaryMetrics,
+CollectInsertSizeMetrics, CollectQualityYieldMetrics, MarkDuplicates,
+RevertSam, SamToFastq, SortSam, ValidateSamFile, ViewSam somewhere in pinned
+release-candidate evidence. The aggregate release-candidate input threshold is
+currently `10000000` bytes across pinned release-candidate inputs, so a single
+tiny fixture cannot satisfy the scientist-facing gate. If a deliberately
+smaller public shard is reviewed, make that exception explicit with
+`minimum_input_bytes` in the manifest rather than letting the threshold be
+implicit.
 
 ## 20x Smoke
 
