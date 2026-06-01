@@ -85,8 +85,8 @@ PARITY_DOCS_BYTES = (
     b"specific input shape\n"
     b"comparison method\n"
     b"does not mean every Picard behavior\n"
-    b"does not prove broad replacement safety\n"
-    b"representative inputs\n"
+    b"does not prove broad switching safety\n"
+    b"representative real-data evidence\n"
     b"input SHA-256\n"
     b"Picard version\n"
     b"turbo-picard version\n"
@@ -275,6 +275,9 @@ build:
             ),
         }
         with tarfile.open(archive, "w:gz") as handle:
+            root_info = tarfile.TarInfo(prefix)
+            root_info.type = tarfile.DIRTYPE
+            handle.addfile(root_info)
             for member_name, data in content_by_name.items():
                 info = tarfile.TarInfo(member_name)
                 info.size = len(data)

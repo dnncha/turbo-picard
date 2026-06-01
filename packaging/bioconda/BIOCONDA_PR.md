@@ -33,7 +33,7 @@ fall back or fail explicitly outside the supported scope.
 - Tagged archive URL:
   `https://github.com/dnncha/turbo-picard/archive/refs/tags/v0.1.0.tar.gz`
 - Archive SHA-256:
-  `<github-v0.1.0-source-archive-sha256>`
+  `95923bebbc7f6ab59e73c436b31d84c8da547939c1e6c63be984747acfbc387c`
 
 The recipe source was prepared from the downloaded GitHub archive with:
 

@@ -162,11 +162,12 @@ def validate_archive_contents(path: pathlib.Path, version: str) -> str | None:
     name_set = set(names)
     if not any(name.startswith(expected_prefix) for name in name_set):
         return f"--archive does not contain expected top-level directory {expected_prefix}"
+    expected_root = expected_prefix.rstrip("/")
     unexpected_prefixes = sorted(
         {
             name.split("/", 1)[0] + "/"
             for name in name_set
-            if name and not name.startswith(expected_prefix)
+            if name and name != expected_root and not name.startswith(expected_prefix)
         }
     )
     if unexpected_prefixes:
@@ -283,8 +284,8 @@ def validate_archive_release_metadata(
             ("specific input shape", "input-specific parity scope"),
             ("comparison method", "named comparison method"),
             ("does not mean every Picard behavior", "not-full-Picard disclosure"),
-            ("does not prove broad replacement safety", "broad replacement caveat"),
-            ("representative inputs", "representative-data guidance"),
+            ("does not prove broad switching safety", "broad switching caveat"),
+            ("representative real-data evidence", "representative-data guidance"),
             ("input SHA-256", "input SHA-256 guidance"),
             ("Picard version", "Picard version evidence guidance"),
             ("turbo-picard version", "turbo-picard version evidence guidance"),
