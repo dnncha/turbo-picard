@@ -24,9 +24,9 @@ fall back or fail explicitly outside the supported scope.
   `cargo-bundle-licenses --format yaml --output THIRDPARTY.yml`; both `LICENSE`
   and `THIRDPARTY.yml` are listed under `license_file`.
 - The shim recipe is separate from the main package, pins the matching
-  `turbo-picard` build with `{{ pin_subpackage('turbo-picard', exact=True) }}`,
-  and declares `picard ==0` in `run_constrained` because it intentionally owns
-  the same command name as upstream Picard.
+  `turbo-picard` build with `turbo-picard =={{ version }}`, and declares
+  `picard ==0` in `run_constrained` because it intentionally owns the same
+  command name as upstream Picard.
 
 ## Source
 

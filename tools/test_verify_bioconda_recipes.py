@@ -24,7 +24,7 @@ SPEC.loader.exec_module(verify_bioconda_recipes)
 def recipe_meta(*, source: str = "", shim: bool = False) -> str:
     package_name = "turbo-picard-picard-shim" if shim else "turbo-picard"
     run_dependency = (
-        "    - {{ pin_subpackage('turbo-picard', exact=True) }}\n" if shim else ""
+        "    - turbo-picard =={{ version }}\n" if shim else ""
     )
     run_constrained = "  run_constrained:\n    - picard ==0\n" if shim else ""
     summary = (
@@ -333,7 +333,7 @@ extra:
         )
 
         self.assertIn(
-            "turbo-picard-picard-shim meta.yaml missing exact turbo-picard pin_subpackage run dependency",
+            "turbo-picard-picard-shim meta.yaml missing exact turbo-picard version run dependency",
             errors,
         )
         self.assertIn(
@@ -360,7 +360,7 @@ extra:
     def test_main_recipe_rejects_shim_only_metadata(self) -> None:
         meta_yaml = (
             recipe_meta()
-            + "\n    - {{ pin_subpackage('turbo-picard', exact=True) }}\n"
+            + "\n    - turbo-picard =={{ version }}\n"
             + "run_constrained:\n"
             + "  - picard ==0\n"
         )
@@ -379,7 +379,7 @@ extra:
         )
 
         self.assertIn(
-            "turbo-picard meta.yaml must not pin itself as a shim dependency",
+            "turbo-picard meta.yaml must not depend on itself as a shim dependency",
             errors,
         )
         self.assertIn(
@@ -655,7 +655,7 @@ source:
                 "cargo-bundle-licenses --format yaml --output THIRDPARTY.yml\n"
                 "license_file\n"
                 "THIRDPARTY.yml\n"
-                "{{ pin_subpackage('turbo-picard', exact=True) }}\n"
+                "turbo-picard =={{ version }}\n"
                 "picard ==0\n"
                 "run_constrained\n"
                 f"{verify_bioconda_recipes.RELEASE_CANDIDATE_PORTFOLIO_COMMAND_TEXT}\n"
@@ -826,7 +826,7 @@ source:
                 "cargo-bundle-licenses --format yaml --output THIRDPARTY.yml\n"
                 "license_file\n"
                 "THIRDPARTY.yml\n"
-                "{{ pin_subpackage('turbo-picard', exact=True) }}\n"
+                "turbo-picard =={{ version }}\n"
                 "picard ==0\n"
                 "run_constrained\n"
                 f"{verify_bioconda_recipes.RELEASE_CANDIDATE_PORTFOLIO_COMMAND_TEXT}\n"

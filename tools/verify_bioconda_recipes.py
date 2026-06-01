@@ -378,9 +378,9 @@ def validate_recipe(
             errors.append(
                 f"{name} meta.yaml description must disclose picard command shadowing"
             )
-        if "{{ pin_subpackage('turbo-picard', exact=True) }}" not in meta_yaml:
+        if "turbo-picard =={{ version }}" not in meta_yaml:
             errors.append(
-                f"{name} meta.yaml missing exact turbo-picard pin_subpackage run dependency"
+                f"{name} meta.yaml missing exact turbo-picard version run dependency"
             )
         if "picard ==0" not in meta_yaml:
             errors.append(f"{name} meta.yaml missing picard ==0 run_constrained conflict")
@@ -396,8 +396,8 @@ def validate_recipe(
             errors.append(f"{name} meta.yaml main package tests must not use picard shim")
         if has_cargo_install_flag(build_sh, r"--bin\s+picard\b"):
             errors.append(f"{name} build.sh must not install picard shim")
-        if "{{ pin_subpackage('turbo-picard', exact=True) }}" in meta_yaml:
-            errors.append(f"{name} meta.yaml must not pin itself as a shim dependency")
+        if "turbo-picard =={{ version }}" in meta_yaml:
+            errors.append(f"{name} meta.yaml must not depend on itself as a shim dependency")
         if "picard ==0" in meta_yaml:
             errors.append(f"{name} meta.yaml must not declare shim-only picard conflict")
         if "non-shadowing turbo-picard" not in normalized_meta:
@@ -633,7 +633,7 @@ def validate_release_evidence(root: pathlib.Path = ROOT) -> list[str]:
                 "cargo-bundle-licenses --format yaml --output THIRDPARTY.yml",
                 "license_file",
                 "THIRDPARTY.yml",
-                "{{ pin_subpackage('turbo-picard', exact=True) }}",
+                "turbo-picard =={{ version }}",
                 "picard ==0",
                 "run_constrained",
             ]

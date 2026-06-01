@@ -43,7 +43,7 @@ matching recipe version and source block metadata before writing the same URL
 and SHA-256 into `packaging/bioconda/BIOCONDA_PR.md`.
 
 Submit this recipe only alongside the main `turbo-picard` recipe, so the exact
-`{{ pin_subpackage('turbo-picard', exact=True) }}` dependency remains valid.
+`turbo-picard =={{ version }}` dependency remains valid.
 Use the same PR body as the main package: cite the archived turbo-picard release
 through `CITATION.cff`, and keep benchmark input citations separate with pinned
 source URLs, commits or accessions, and SHA-256 hashes.
