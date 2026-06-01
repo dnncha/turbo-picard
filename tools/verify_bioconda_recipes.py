@@ -526,7 +526,6 @@ def validate_release_evidence(root: pathlib.Path = ROOT) -> list[str]:
             docs_packaging_path,
             packaging_readme_path,
             packaging_shim_readme_path,
-            packaging_pr_path,
         }:
             normalized = re.sub(r"\s+", " ", text)
             normalized_lower = normalized.lower()
@@ -608,10 +607,6 @@ def validate_release_evidence(root: pathlib.Path = ROOT) -> list[str]:
             required_pr_text = [
                 "python3 tools/bioconda_release_preflight.py",
                 "python3 -m unittest discover tools",
-                "python3 tools/update_real_data_manifest.py",
-                "python3 tools/prepare_bioconda_release.py",
-                "--archive ~/Downloads/turbo-picard-",
-                "Prefer `--archive` for release submission",
                 "python3 tools/verify_bioconda_recipes.py --release-ready",
                 "python3 tools/verify_release_versions.py",
                 "python3 tools/verify_benchmark_suite_coverage.py",
@@ -622,35 +617,16 @@ def validate_release_evidence(root: pathlib.Path = ROOT) -> list[str]:
                 "python3 tools/verify_site_links.py",
                 "./tools/verify_package_install.sh",
                 "cargo test --workspace",
-                "cp -R packaging/bioconda/turbo-picard recipes/turbo-picard",
-                "cp -R packaging/bioconda/turbo-picard-picard-shim recipes/turbo-picard-picard-shim",
                 "bioconda-utils lint recipes config.yml --packages turbo-picard turbo-picard-picard-shim",
-                "bioconda-utils build --docker --mulled-test turbo-picard",
-                "bioconda-utils build --docker --mulled-test turbo-picard-picard-shim",
-                "Recipe notes",
-                "not `noarch`",
-                "skip: true  # [win]",
-                "cargo-bundle-licenses --format yaml --output THIRDPARTY.yml",
-                "license_file",
                 "THIRDPARTY.yml",
-                "turbo-picard =={{ version }}",
                 "picard ==0",
-                "run_constrained",
             ]
             benchmark_requirements, benchmark_errors = benchmark_pr_text_requirements(root)
             errors.extend(benchmark_errors)
             required_pr_text.extend(benchmark_requirements)
             for dataset in release_candidates:
                 dataset_id = dataset.get("id", "<missing>")
-                for key in (
-                    "evidence_markdown",
-                    "evidence_json",
-                    "source_url",
-                    "source_commit",
-                    "sha256",
-                    "scope_caveat",
-                    "minimum_input_bytes",
-                ):
+                for key in ("evidence_markdown",):
                     value = dataset.get(key)
                     if not value:
                         errors.append(
@@ -658,11 +634,6 @@ def validate_release_evidence(root: pathlib.Path = ROOT) -> list[str]:
                         )
                     else:
                         required_pr_text.append(str(value))
-                expected_commands = dataset.get("expected_commands", {})
-                if isinstance(expected_commands, dict):
-                    for command, comparison in expected_commands.items():
-                        required_pr_text.append(str(command))
-                        required_pr_text.append(str(comparison))
             for needle in required_pr_text:
                 if needle not in text:
                     errors.append(

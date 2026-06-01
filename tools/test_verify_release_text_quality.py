@@ -77,16 +77,16 @@ This is a seamless comprehensive solution.
             root,
             Path("packaging/bioconda/BIOCONDA_PR.md"),
             """
-Evidence and scope
-Checks run before copying recipes
-Bioconda checks after copying recipes
+separate optional compatibility shim
+turbo-picard is not a full Picard replacement
+Docker is not installed on this machine
 """,
         )
 
         errors = verify_release_text_quality.validate_release_text(root)
         self.assertIn(
             "packaging/bioconda/BIOCONDA_PR.md missing reader cue: "
-            "The split is intentional",
+            "This PR adds `turbo-picard`",
             errors,
         )
 

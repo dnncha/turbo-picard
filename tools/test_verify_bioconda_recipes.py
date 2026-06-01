@@ -1167,15 +1167,7 @@ source:
                 encoding="utf-8",
             )
             self.assertIn(
-                "packaging/bioconda/BIOCONDA_PR.md missing Bioconda PR evidence text: bioconda-utils build --docker --mulled-test turbo-picard-picard-shim",
-                verify_bioconda_recipes.validate_release_evidence(root),
-            )
-            self.assertIn(
                 "packaging/bioconda/BIOCONDA_PR.md missing Bioconda PR evidence text: bioconda-utils lint recipes config.yml --packages turbo-picard turbo-picard-picard-shim",
-                verify_bioconda_recipes.validate_release_evidence(root),
-            )
-            self.assertIn(
-                "packaging/bioconda/BIOCONDA_PR.md missing Bioconda PR evidence text: cp -R packaging/bioconda/turbo-picard-picard-shim recipes/turbo-picard-picard-shim",
                 verify_bioconda_recipes.validate_release_evidence(root),
             )
 

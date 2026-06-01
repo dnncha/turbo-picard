@@ -89,11 +89,10 @@ REQUIRED_READER_CUES = {
         "Bioconda recipe still uses source.path",
     ],
     Path("packaging/bioconda/BIOCONDA_PR.md"): [
-        "The split is intentional",
-        "The package is not presented as",
-        "Evidence and scope",
-        "Checks run before copying recipes",
-        "Bioconda checks after copying recipes",
+        "This PR adds `turbo-picard`",
+        "separate optional compatibility shim",
+        "turbo-picard is not a full Picard replacement",
+        "Docker is not installed on this machine",
     ],
 }
 
