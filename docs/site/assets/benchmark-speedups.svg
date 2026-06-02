@@ -1,5 +1,5 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1280" height="1398" viewBox="0 0 1280 1398" role="img" aria-labelledby="title desc">
-  <title id="title">turbo-picard benchmark speedups versus Picard</title>
+  <title id="title">Same Picard checks. Less waiting.</title>
   <desc id="desc">Bar chart showing 32 Picard-compatible commands with parity passing and speedups from 7.40x to 112.07x.</desc>
   <defs>
     <linearGradient id="bg" x1="0" x2="1" y1="0" y2="1">
@@ -23,8 +23,8 @@
   </style>
   <rect width="1280" height="1398" rx="28" fill="url(#bg)"/>
   <path d="M1035 62 C1125 94 1165 154 1200 252" fill="none" stroke="#36d7c9" stroke-width="2" opacity="0.34" filter="url(#softGlow)"/>
-  <text x="56" y="54" class="title">32/32 parity passing. Native Rust speed across Picard-shaped workflows.</text>
-  <text x="56" y="82" class="sub">Measured with python3 tools/bench_suite.py --repeats 1 --skip-build on 2026-05-31.</text>
+  <text x="56" y="54" class="title">Same Picard checks. Less waiting.</text>
+  <text x="56" y="82" class="sub">32/32 parity checks passing, from 7.40x to 112.07x in the saved benchmark suite.</text>
   <line x1="449.1" y1="92" x2="449.1" y2="1350" class="grid"/><text x="449.1" y="1376" text-anchor="middle" class="tick">20x</text><line x1="588.3" y1="92" x2="588.3" y2="1350" class="grid"/><text x="588.3" y="1376" text-anchor="middle" class="tick">40x</text><line x1="727.4" y1="92" x2="727.4" y2="1350" class="grid"/><text x="727.4" y="1376" text-anchor="middle" class="tick">60x</text><line x1="866.5" y1="92" x2="866.5" y2="1350" class="grid"/><text x="866.5" y="1376" text-anchor="middle" class="tick">80x</text><line x1="1005.7" y1="92" x2="1005.7" y2="1350" class="grid"/><text x="1005.7" y="1376" text-anchor="middle" class="tick">100x</text>
   
   <text x="292" y="132" text-anchor="end" class="label">UpdateVcfSequenceDictionary</text>

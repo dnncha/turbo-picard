@@ -184,7 +184,7 @@ def render_speedup_chart(data: dict) -> str:
     source = data["source"]
     date = data["date"]
     return f"""<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" viewBox="0 0 {width} {height}" role="img" aria-labelledby="title desc">
-  <title id="title">turbo-picard benchmark speedups versus Picard</title>
+  <title id="title">Same Picard checks. Less waiting.</title>
   <desc id="desc">Bar chart showing {command_count} Picard-compatible commands with parity passing and speedups from {floor_speedup:.2f}x to {top_speedup:.2f}x.</desc>
   <defs>
     <linearGradient id="bg" x1="0" x2="1" y1="0" y2="1">
@@ -208,8 +208,8 @@ def render_speedup_chart(data: dict) -> str:
   </style>
   <rect width="{width}" height="{height}" rx="28" fill="url(#bg)"/>
   <path d="M1035 62 C1125 94 1165 154 1200 252" fill="none" stroke="#36d7c9" stroke-width="2" opacity="0.34" filter="url(#softGlow)"/>
-  <text x="56" y="54" class="title">{pass_count}/{command_count} parity passing. Native Rust speed across Picard-shaped workflows.</text>
-  <text x="56" y="82" class="sub">Measured with {html.escape(source)} on {html.escape(date)}.</text>
+  <text x="56" y="54" class="title">Same Picard checks. Less waiting.</text>
+  <text x="56" y="82" class="sub">{pass_count}/{command_count} parity checks passing, from {floor_speedup:.2f}x to {top_speedup:.2f}x in the saved benchmark suite.</text>
   {"".join(ticks)}
   {"".join(rows)}
 </svg>
