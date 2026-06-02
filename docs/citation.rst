@@ -17,11 +17,11 @@ For a methods section, include:
 * the ``turbo-picard`` version or archived release;
 * the upstream Picard version used for parity checks, currently Picard 3.4.0
   for the checked-in release-candidate evidence;
-* the exact command surfaces you replaced;
-* whether unsupported surfaces used upstream Picard fallback;
+* the exact commands you replaced;
+* whether unsupported commands used upstream Picard fallback;
 * the representative data and evidence reports used to justify the switch;
 * the input source URL, accession or full Git commit, and SHA-256 for each
   benchmark or validation dataset you cite.
 
-For checked-in public real-data evidence, see :doc:`benchmarks`. For safe
-workflow rollout, see :doc:`adoption`.
+For checked-in public real-data evidence, see :doc:`benchmarks`. For practical
+pipeline testing, see :doc:`adoption`.

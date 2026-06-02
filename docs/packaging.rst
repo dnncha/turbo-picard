@@ -73,27 +73,15 @@ the expected wait state while the recipes still use ``source.path``.
 The helper computes the archive SHA-256 and writes it into both recipes and
 ``packaging/bioconda/BIOCONDA_PR.md``. Prefer ``--archive`` for release
 submission because it validates the downloaded GitHub source archive before
-writing the digest. If the digest was computed elsewhere, pass it explicitly
-with ``--sha256`` only when it was computed from the downloaded GitHub source
-archive; that fallback skips archive filename and content validation. When using
-``--archive``, the filename must match the recipe version before it will be
-hashed; for ``0.1.0``, use ``turbo-picard-0.1.0.tar.gz`` or GitHub's
-``v0.1.0.tar.gz``. The helper also checks that the archive opens as a
-GitHub-style source tarball with a ``turbo-picard-0.1.0/`` top-level directory,
-workspace ``Cargo.toml``, ``Cargo.lock``, ``CITATION.cff``, ``docs/command-matrix.yml``,
-``docs/parity.rst``,
-``benchmarks/real-data/manifest.json``,
-``docs/site/assets/benchmark-data.json``,
-``packaging/bioconda/turbo-picard/meta.yaml``, and
-``packaging/bioconda/turbo-picard-picard-shim/meta.yaml``. It rejects unsafe
-paths, duplicate entries, unsupported tar member types, and empty required
-source files before it writes recipe metadata. It also checks archive-internal
-metadata: the workspace version, ``CITATION.cff`` archived-release citation
-fields, the ``picard_reference`` entry for Picard 3.4.0, the ``datasets`` and
-``benchmarks`` JSON evidence sections, and matching recipe version and source
-block metadata.
+writing the digest. The helper also checks that the archive matches the recipe
+version, contains the expected release files, and carries the citation,
+benchmark, and real-data metadata used by the PR body. If the digest was
+computed elsewhere, pass it with ``--sha256`` only when it came from the
+downloaded GitHub source archive. That fallback skips archive filename and
+content validation. For ``0.1.0``, use ``turbo-picard-0.1.0.tar.gz`` or
+GitHub's ``v0.1.0.tar.gz``.
 
-Then run the release gates:
+Then run the release checks:
 
 .. code-block:: bash
 
@@ -115,14 +103,14 @@ records the package split, the intentional shim conflict with upstream Picard,
 the tagged source archive, and the pinned real-data parity evidence reviewers
 need to audit the claim.
 
-The release-candidate evidence used in that PR must cover this command
-portfolio somewhere in pinned ``release_candidate`` data:
+The release evidence used in that PR must cover this command set somewhere in
+pinned release data:
 AddOrReplaceReadGroups, BuildBamIndex, CleanSam,
 CollectAlignmentSummaryMetrics, CollectInsertSizeMetrics,
 CollectQualityYieldMetrics, MarkDuplicates, RevertSam, SamToFastq, SortSam,
 ValidateSamFile, ViewSam.
 
-The benchmark threshold gate requires full saved benchmark parity, at least
+The benchmark threshold check requires full saved benchmark parity, at least
 ``5.00x`` floor speedup, at least ``20.00x`` geometric mean speedup, and at
 least ``50.00x`` top speedup before benchmark numbers are used as release
 evidence.

@@ -1,14 +1,14 @@
 Command coverage
 ================
 
-``turbo-picard`` focuses on common high-value Picard surfaces. Some commands are
-native for the documented scope, and many are partially native with fallback for
-advanced or uncommon surfaces.
+``turbo-picard`` focuses on common, high-value Picard commands. Some commands
+are native for the documented options, and many are partly native with fallback
+for advanced or uncommon behavior.
 
 Common command examples
 -----------------------
 
-These examples include both native and partial-native surfaces. Check the
+These examples include both native and partly native commands. Check the
 machine-readable matrix below before treating any command as fully native for a
 workflow.
 

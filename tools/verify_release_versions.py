@@ -228,17 +228,28 @@ def collect_errors(root: Path = ROOT) -> list[str]:
                     f"{doc} must distinguish software citation from pinned input data"
                 )
         if doc == Path("docs/citation.rst"):
-            for needle, description in [
+            required_needles = [
                 ("archived release", "archived-release citation rule"),
                 ("command-level", "command-level parity evidence rule"),
                 ("Picard 3.4.0", "Picard evidence version"),
-                ("exact command surfaces", "methods command-surface rule"),
-                ("unsupported surfaces", "methods fallback disclosure rule"),
                 ("evidence reports", "methods evidence-report rule"),
                 ("full Git commit", "full Git commit citation rule"),
                 ("does not cite", "CITATION.cff input-data boundary"),
-            ]:
+            ]
+            for needle, description in required_needles:
                 if needle not in prose:
+                    errors.append(f"{doc} must mention {description}")
+            for needles, description in [
+                (
+                    ("exact commands", "exact command surfaces"),
+                    "methods command replacement rule",
+                ),
+                (
+                    ("unsupported commands", "unsupported surfaces"),
+                    "methods fallback disclosure rule",
+                ),
+            ]:
+                if all(needle not in prose for needle in needles):
                     errors.append(f"{doc} must mention {description}")
         if re.search(r"github-v\d+\.\d+\.\d+-source-archive-sha256", text):
             if archive_sha_placeholder not in text:

@@ -3,8 +3,8 @@ Troubleshooting
 
 Start by separating the two entrypoints. If you are debugging a difference,
 run the explicit ``turbo-picard`` binary first and keep the compatibility
-``picard`` shim out of ``PATH`` until you know the command surface behaves the
-way your workflow needs.
+``picard`` shim out of ``PATH`` until you know the command behaves the way your
+workflow needs.
 
 Unsupported command
 -------------------
@@ -28,7 +28,7 @@ bare ``picard`` command when the ``turbo-picard`` shim appears first on
 Output differs from Picard
 --------------------------
 
-Check whether the command surface is documented as native or partially native in
+Check whether the command is documented as native or partly native in
 :doc:`commands`. Then run the closest parity script under ``tools/`` and compare
 the exact files your workflow consumes. For metrics-producing commands, compare
 the metrics text first; chart PDFs are lightweight compatibility sidecars unless
@@ -44,7 +44,7 @@ Index or md5 files are missing
 
 Picard sidecars are controlled by command options such as ``CREATE_INDEX`` and
 ``CREATE_MD5_FILE``. Confirm those options are present and supported for the
-command surface you are using.
+command you are using.
 
 Bioconda recipe still uses source.path
 --------------------------------------

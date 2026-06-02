@@ -30,7 +30,7 @@ Documentation rules of thumb
 
 Write for computational biologists and bioinformaticians first:
 
-* show real Picard-shaped commands;
+* show real Picard-style commands;
 * name file formats directly, such as BAM, SAM, FASTQ, VCF, FASTA, and interval
   lists;
 * separate native coverage from fallback coverage;

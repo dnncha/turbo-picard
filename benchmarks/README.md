@@ -202,24 +202,24 @@ comparator and verifier reject raw GitHub branch URLs, short GitHub commits, and
 accession-style citations where the identifier is not visible in the URL.
 
 Use `release_tier: public_smoke` for small fixtures like this one. Use
-`release_tier: release_candidate` only for larger public or workflow-representative
-runs that should count toward a scientist-facing release, and do not turn the
-current checked-in fixtures into cohort-scale switching claims. The stricter
+`release_tier: release_candidate` only for larger public or representative
+runs that should count toward a scientific release, and do not treat the
+current checked-in fixtures as proof for every dataset a lab might process. The stricter
 command `python3 tools/verify_real_data_evidence.py --release-ready` now passes
 for the checked-in release-candidate fixtures, which proves the manifest,
 citations, hashes, evidence files, timing rows, and public documentation are in
-sync. It does not prove every cohort-scale workflow is safe to switch.
+sync. It does not prove every workflow is safe to switch.
 
 Release-candidate datasets must include `ViewSam`, `CleanSam`,
 `CollectQualityYieldMetrics`, `CollectAlignmentSummaryMetrics`, and
 `MarkDuplicates`, and each input must be at least 1 MB by default. The
-release-candidate portfolio must also cover AddOrReplaceReadGroups,
+release check must also cover AddOrReplaceReadGroups,
 BuildBamIndex, CleanSam, CollectAlignmentSummaryMetrics,
 CollectInsertSizeMetrics, CollectQualityYieldMetrics, MarkDuplicates,
 RevertSam, SamToFastq, SortSam, ValidateSamFile, ViewSam somewhere in pinned
 release-candidate evidence. The aggregate release-candidate input threshold is
 currently `10000000` bytes across pinned release-candidate inputs, so a single
-tiny fixture cannot satisfy the scientist-facing gate. If a deliberately
+tiny fixture cannot satisfy the release check. If a deliberately
 smaller public shard is reviewed, make that exception explicit with
 `minimum_input_bytes` in the manifest rather than letting the threshold be
 implicit.

@@ -11,8 +11,8 @@ users only get that command name when they ask for it. The shim depends on the
 matching `turbo-picard` version and declares `picard ==0` as a run constraint
 because it owns the same command name as the existing Picard package.
 
-turbo-picard is not a full Picard replacement. The supported command surfaces
-are documented, tested against Picard 3.4.0, and kept explicit.
+turbo-picard is not a full Picard replacement. The supported commands are
+documented, tested against Picard 3.4.0, and kept explicit.
 
 ## Recipes
 
@@ -58,8 +58,8 @@ Current benchmark summary:
   CollectMultipleMetrics, and CollectGcBiasMetrics.
 
 The real-data fixtures are public, pinned, and small. They are suitable for this
-packaging release gate, but they should not be read as a claim about every
-Picard workflow.
+package review, but they should not be read as a claim about every Picard
+workflow.
 
 ## Citation
 

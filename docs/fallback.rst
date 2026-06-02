@@ -23,13 +23,13 @@ What delegates
 ``turbo-picard`` delegates:
 
 * unsupported Picard commands;
-* explicitly unsupported native surfaces, such as options or formats that the
+* explicitly unsupported native options or formats that the
   native implementation recognizes as outside its current scope;
 * JVM-style leading options, but only when fallback is configured.
 
 Fallback is a compatibility bridge, not proof that a workflow is ready to
 switch. Use it with the command coverage table and the parity guidance in
-:doc:`parity` so unsupported surfaces remain visible during rollout.
+:doc:`parity` so unsupported commands remain visible while you test.
 
 What does not delegate
 ----------------------

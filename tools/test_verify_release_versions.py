@@ -508,7 +508,7 @@ CITATION.cff software citation is separate from pinned input data with SHA-256.
         self.assertIn("docs/citation.rst must mention archived-release citation rule", errors)
         self.assertIn("docs/citation.rst must mention command-level parity evidence rule", errors)
         self.assertIn("docs/citation.rst must mention Picard evidence version", errors)
-        self.assertIn("docs/citation.rst must mention methods command-surface rule", errors)
+        self.assertIn("docs/citation.rst must mention methods command replacement rule", errors)
         self.assertIn("docs/citation.rst must mention methods fallback disclosure rule", errors)
         self.assertIn("docs/citation.rst must mention methods evidence-report rule", errors)
         self.assertIn("docs/citation.rst must mention full Git commit citation rule", errors)

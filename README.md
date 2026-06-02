@@ -1,6 +1,6 @@
 # turbo-picard
 
-![turbo-picard branded hero](docs/site/assets/turbo-picard-branded-readme.png)
+![Abstract benchmark bars and sequencing-read streams](docs/site/assets/hero-pipeline.svg)
 
 `turbo-picard` is a faster Rust implementation of selected Picard commands.
 It keeps the familiar Picard command names and `KEY=VALUE` arguments, so it can
