@@ -54,7 +54,7 @@ REQUIRED_READER_CUES = {
     Path("README.md"): [
         "The full docs are on Read the Docs",
         "Why Use It",
-        "Do not flip a whole production pipeline at once",
+        "Start with the explicit `turbo-picard` command",
         "Cite the archived",
     ],
     Path("docs/index.rst"): [

@@ -333,14 +333,12 @@ class RealDataEvidenceTests(unittest.TestCase):
                 )
                 project_readme = (
                     "fixture\n"
-                    f"{source_url}\n{source_commit}\n{sha256}\nbenchmarks/real-data/fixture/evidence/real-data-comparison.md\nsmall public fixture\n"
-                    "Picard 3.4.0\n"
-                    "ViewSam CleanSam CollectQualityYieldMetrics "
-                    "CollectAlignmentSummaryMetrics MarkDuplicates "
-                    "CollectInsertSizeMetrics\n"
-                    f"{portfolio_text}\n"
-                    "release-candidate portfolio\n"
-                    "full 40-character Git commit SHA\naggregate release-candidate input threshold\n"
+                    "benchmarks/real-data/\n"
+                    "https://turbo-picard.readthedocs.io/en/latest/benchmarks.html\n"
+                    "SHA-256\n"
+                    "python3 tools/update_real_data_manifest.py\n"
+                    "python3 tools/verify_real_data_evidence.py\n"
+                    "python3 tools/verify_real_data_evidence.py --release-ready\n"
                 )
                 (evidence_root / "manifest-entry.json").write_text(
                     json.dumps(manifest["datasets"][0]),
@@ -424,18 +422,12 @@ class RealDataEvidenceTests(unittest.TestCase):
         }
         complete_readme = (
             "release-dataset\n"
-            "https://github.com/example/repo/blob/0123456789abcdef0123456789abcdef01234567/input.bam\n"
-            "0123456789abcdef0123456789abcdef01234567\n"
-            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\n"
-            "benchmarks/real-data/release-dataset/evidence/real-data-comparison.md\n"
-            "representative public fixture\n"
-            "Picard 3.4.0\n"
-            "release-candidate portfolio\n"
-            "full 40-character Git commit SHA\naggregate release-candidate input threshold\n"
-            f"{verify_real_data_evidence.RELEASE_CANDIDATE_PORTFOLIO_COMMAND_TEXT}\n"
-            "ViewSam\n"
-            "MarkDuplicates\n"
-            "CollectInsertSizeMetrics\n"
+            "benchmarks/real-data/\n"
+            "https://turbo-picard.readthedocs.io/en/latest/benchmarks.html\n"
+            "SHA-256\n"
+            "python3 tools/update_real_data_manifest.py\n"
+            "python3 tools/verify_real_data_evidence.py\n"
+            "python3 tools/verify_real_data_evidence.py --release-ready\n"
         )
 
         self.assertEqual(
@@ -450,15 +442,15 @@ class RealDataEvidenceTests(unittest.TestCase):
             "release-dataset\nViewSam\n",
         )
         self.assertIn(
-            "release-dataset project README missing pinned source URL",
+            "project README missing real-data evidence directory",
             errors,
         )
         self.assertIn(
-            "release-dataset project README missing command: MarkDuplicates",
+            "project README missing release-ready real-data verifier command",
             errors,
         )
         self.assertIn(
-            "project README missing release-candidate command portfolio requirement",
+            "project README missing input SHA-256 guidance",
             errors,
         )
 

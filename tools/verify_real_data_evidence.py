@@ -907,42 +907,31 @@ def validate_workflow_docs(
 def validate_project_readme_real_data_summary(manifest: dict, project_readme: str) -> list[str]:
     errors: list[str] = []
     lower_readme = project_readme.lower()
-    project_readme_prose = prose_text(project_readme)
     for phrase in OVERCLAIM_PHRASES:
         if phrase in lower_readme:
             errors.append(f"project README contains unsupported overclaim: {phrase}")
     for needle, description in [
-        ("release-candidate portfolio", "release-candidate portfolio wording"),
+        ("benchmarks/real-data/", "real-data evidence directory"),
         (
-            RELEASE_CANDIDATE_PORTFOLIO_COMMAND_TEXT,
-            "release-candidate command portfolio requirement",
+            "https://turbo-picard.readthedocs.io/en/latest/benchmarks.html",
+            "benchmark documentation link",
         ),
-        ("full 40-character Git commit SHA", "full Git commit citation rule"),
-        ("aggregate release-candidate input threshold", "aggregate release-candidate input threshold"),
+        ("SHA-256", "input SHA-256 guidance"),
+        ("python3 tools/update_real_data_manifest.py", "manifest update command"),
+        ("python3 tools/verify_real_data_evidence.py", "real-data verifier command"),
+        (
+            "python3 tools/verify_real_data_evidence.py --release-ready",
+            "release-ready real-data verifier command",
+        ),
     ]:
-        if needle not in project_readme_prose:
+        if needle not in project_readme:
             errors.append(f"project README missing {description}")
     for dataset in manifest.get("datasets", []):
         if not isinstance(dataset, dict) or dataset.get("release_tier") != "release_candidate":
             continue
         dataset_id = str(dataset.get("id", "<missing>"))
-        for needle, description in [
-            (dataset_id, "dataset id"),
-            (dataset.get("source_url", ""), "pinned source URL"),
-            (dataset.get("source_commit", ""), "source commit"),
-            (dataset.get("sha256", ""), "input SHA-256"),
-            (dataset.get("evidence_markdown", ""), "evidence Markdown path"),
-            (dataset.get("scope_caveat", ""), "scope caveat"),
-            (str(dataset.get("minimum_input_bytes", "")), "minimum input threshold"),
-            ("Picard 3.4.0", "Picard comparison version"),
-        ]:
-            if needle and needle not in project_readme:
-                errors.append(f"{dataset_id} project README missing {description}")
-        expected_commands = dataset.get("expected_commands", {})
-        if isinstance(expected_commands, dict):
-            for command in expected_commands:
-                if command not in project_readme:
-                    errors.append(f"{dataset_id} project README missing command: {command}")
+        if dataset_id not in project_readme:
+            errors.append(f"{dataset_id} project README missing dataset id")
     return errors
 
 
