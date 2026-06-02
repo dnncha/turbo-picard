@@ -142,10 +142,10 @@ class RealDataEvidenceTests(unittest.TestCase):
                 "release_candidate\n"
                 "manifest-entry.json\n"
                 "/evidence/manifest-entry.json\n"
-                "scientist-facing release\n"
-                "cohort-scale switching claims\n"
+                "scientific release\n"
+                "not proof for every dataset\n"
                 f"{portfolio_text}\n"
-                "full 40-character Git commit SHA\naggregate release-candidate input threshold\n"
+                "full 40-character Git commit SHA\none tiny fixture\n"
             )
             site = (
                 f"{source_url}\n{source_commit}\n{sha256}\nbenchmarks/real-data/fixture/evidence/real-data-comparison.md\nsmall public fixture\n{command}\n"
@@ -156,19 +156,19 @@ class RealDataEvidenceTests(unittest.TestCase):
                 "release_candidate\n"
                 "manifest-entry.json\n"
                 "/evidence/manifest-entry.json\n"
-                "scientist-facing release\n"
-                "cohort-scale switching claims\n"
+                "scientific release\n"
+                "not proof for every dataset\n"
                 f"{portfolio_text}\n"
-                "full 40-character Git commit SHA\naggregate release-candidate input threshold\n"
+                "full 40-character Git commit SHA\none tiny fixture\n"
             )
             benchmark_docs = (
                 "python3 tools/verify_real_data_evidence.py\n"
                 "python3 tools/verify_real_data_evidence.py --release-ready\n"
                 "python3 tools/verify_benchmark_thresholds.py\n"
-                "release-candidate\n"
-                "cohort-scale switching claims\n"
+                "release evidence\n"
+                "not proof for every dataset\n"
                 f"{portfolio_text}\n"
-                "full 40-character Git commit SHA\naggregate release-candidate input threshold\n"
+                "full 40-character Git commit SHA\none tiny fixture\n"
             )
 
             with mock.patch.object(verify_real_data_evidence, "ROOT", root):
@@ -715,15 +715,15 @@ class RealDataEvidenceTests(unittest.TestCase):
             errors,
         )
         self.assertIn(
-            "benchmarks README missing cohort-scale scope caveat",
+            "benchmarks README missing broad-dataset scope caveat",
             errors,
         )
         self.assertIn(
-            "site missing scientist-facing release wording",
+            "site missing scientific release wording",
             errors,
         )
         self.assertIn(
-            "benchmark docs missing cohort-scale scope caveat",
+            "benchmark docs missing broad-dataset scope caveat",
             errors,
         )
 
@@ -736,10 +736,10 @@ class RealDataEvidenceTests(unittest.TestCase):
             "release_candidate\n"
             "manifest-entry.json\n"
             "/evidence/manifest-entry.json\n"
-            "scientist-facing release\n"
-            "cohort-scale switching claims\n"
-            "release-candidate\n"
-            "full 40-character Git commit SHA\naggregate release-candidate input threshold\n"
+            "scientific release\n"
+            "not proof for every dataset\n"
+            "release evidence\n"
+            "full 40-character Git commit SHA\none tiny fixture\n"
         )
         adoption_errors = verify_real_data_evidence.validate_workflow_docs(
             complete_workflow_doc,
@@ -748,11 +748,11 @@ class RealDataEvidenceTests(unittest.TestCase):
             "Use it quickly.",
         )
         self.assertIn(
-            "adoption docs missing command-by-command rollout caveat",
+            "adoption docs missing one-command-at-a-time caveat",
             adoption_errors,
         )
         self.assertIn(
-            "adoption docs missing whole-pipeline switch caveat",
+            "adoption docs missing side-by-side comparison caveat",
             adoption_errors,
         )
 
@@ -766,10 +766,10 @@ class RealDataEvidenceTests(unittest.TestCase):
             "release_candidate\n"
             "manifest-entry.json\n"
             "/evidence/manifest-entry.json\n"
-            "scientist-facing release\n"
-            "cohort-scale switching claims\n"
-            "release-candidate\n"
-            "full 40-character Git commit SHA\naggregate release-candidate input threshold\n"
+            "scientific release\n"
+            "not proof for every dataset\n"
+            "release evidence\n"
+            "full 40-character Git commit SHA\none tiny fixture\n"
         )
 
         errors = verify_real_data_evidence.validate_workflow_docs(
@@ -901,21 +901,21 @@ class RealDataEvidenceTests(unittest.TestCase):
             "release_candidate\n"
             "manifest-entry.json\n"
             "/evidence/manifest-entry.json\n"
-            "scientist-facing release\n"
-            "cohort-scale switching claims\n"
+            "scientific release\n"
+            "not proof for every dataset\n"
             f"{verify_real_data_evidence.RELEASE_CANDIDATE_PORTFOLIO_COMMAND_TEXT}\n"
             "full 40-character Git commit SHA\n"
-            "aggregate release-candidate input threshold\n"
+            "one tiny fixture\n"
         )
         benchmark_docs = (
             "python3 tools/verify_real_data_evidence.py\n"
             "python3 tools/verify_real_data_evidence.py --release-ready\n"
             "python3 tools/verify_benchmark_thresholds.py\n"
-            "release-candidate\n"
-            "cohort-scale switching claims\n"
+            "release evidence\n"
+            "not proof for every dataset\n"
             f"{verify_real_data_evidence.RELEASE_CANDIDATE_PORTFOLIO_COMMAND_TEXT}\n"
             "full 40-character Git commit SHA\n"
-            "aggregate release-candidate input threshold\n"
+            "one tiny fixture\n"
         )
 
         with mock.patch.object(verify_real_data_evidence, "validate_dataset", return_value=[]):
@@ -984,13 +984,13 @@ class RealDataEvidenceTests(unittest.TestCase):
                 "release_candidate\n"
                 "manifest-entry.json\n"
                 "/evidence/manifest-entry.json\n"
-                "scientist-facing release\n"
-                "cohort-scale switching claims\n"
+                "scientific release\n"
+                "not proof for every dataset\n"
                 "CollectInsertSizeMetrics\n"
                 "full 40-character Git commit SHA\n"
-                "aggregate release-candidate input threshold\n"
+                "one tiny fixture\n"
             )
-            benchmark_docs = docs + "release-candidate\n"
+            benchmark_docs = docs + "release evidence\n"
 
             with (
                 mock.patch.object(verify_real_data_evidence, "ROOT", root),
@@ -1054,8 +1054,8 @@ class RealDataEvidenceTests(unittest.TestCase):
             "release_candidate\n"
             "manifest-entry.json\n"
             "/evidence/manifest-entry.json\n"
-            "scientist-facing release\n"
-            "cohort-scale switching claims\n"
+            "scientific release\n"
+            "not proof for every dataset\n"
             "CollectInsertSizeMetrics\n"
             "fails until the manifest contains at least one pinned release-candidate dataset\n"
         )
@@ -1063,8 +1063,8 @@ class RealDataEvidenceTests(unittest.TestCase):
         benchmark_docs = (
             "python3 tools/verify_real_data_evidence.py\n"
             "python3 tools/verify_real_data_evidence.py --release-ready\n"
-            "release-candidate\n"
-            "cohort-scale switching claims\n"
+            "release evidence\n"
+            "not proof for every dataset\n"
             "CollectInsertSizeMetrics\n"
         )
 

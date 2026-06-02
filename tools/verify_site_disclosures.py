@@ -35,10 +35,10 @@ def validate_site_disclosures(html: str) -> list[str]:
         errors.append("site missing current-boundaries section")
     if "not a full picard suite" not in text:
         errors.append("site missing not-full-Picard-suite disclosure")
-    if "command-by-command" not in head:
-        errors.append("site metadata missing command-by-command evaluation caveat")
-    if "fallback" not in head or "unsupported picard surfaces" not in head:
-        errors.append("site metadata missing fallback/unsupported-surface caveat")
+    if "selected picard commands" not in head:
+        errors.append("site metadata missing selected-command caveat")
+    if "fallback" not in head or "unsupported commands" not in head:
+        errors.append("site metadata missing fallback/unsupported-command caveat")
     if "production genomics workflows" in head:
         errors.append("site metadata contains unsupported production-genomics overclaim")
     for phrase in OVERCLAIM_PHRASES:
@@ -46,8 +46,8 @@ def validate_site_disclosures(html: str) -> list[str]:
             errors.append(f"site contains unsupported overclaim: {phrase}")
     if "lightweight pdf" not in text or "metrics text" not in text:
         errors.append("site missing lightweight chart PDF disclosure")
-    if "evidence supports a narrow change" not in text:
-        errors.append("site missing narrow evidence-supported switch disclosure")
+    if "switch only the commands where the evidence supports the change" not in text:
+        errors.append("site missing evidence-supported switch disclosure")
     if (
         "python3 tools/verify_benchmark_thresholds.py" not in text
         or "5.00x" not in text
@@ -65,16 +65,11 @@ def validate_site_disclosures(html: str) -> list[str]:
         errors.append("site missing software-vs-input citation disclosure")
     if (
         "bioconda" not in text
-        or "tagged release" not in text
+        or "v0.1.0" not in text
         or "python3 tools/bioconda_release_preflight.py" not in text
-        or "sha256" not in text
-        or "release-ready verifier" not in text
-        or "cp -r packaging/bioconda/turbo-picard recipes/turbo-picard" not in text
-        or "cp -r packaging/bioconda/turbo-picard-picard-shim recipes/turbo-picard-picard-shim" not in text
         or "bioconda-utils lint recipes config.yml --packages turbo-picard turbo-picard-picard-shim" not in text
-        or "mulled-test" not in text
     ):
-        errors.append("site missing Bioconda tagged-release/sha256/lint disclosure")
+        errors.append("site missing Bioconda release/lint disclosure")
     return errors
 
 

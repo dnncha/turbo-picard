@@ -1,9 +1,8 @@
 turbo-picard documentation
 ==========================
 
-``turbo-picard`` is for teams that already have Picard in real workflows and
-want the slow parts to be less slow without rewriting every WDL, Nextflow
-process, Snakemake rule, shell script, and validation note around it.
+``turbo-picard`` is for teams that already use Picard and want selected commands
+to run faster without changing the command style their pipelines already know.
 
 It keeps the command shape people already know:
 
@@ -11,11 +10,11 @@ It keeps the command shape people already know:
 
    picard MarkDuplicates I=input.bam O=marked.bam M=metrics.txt
 
-Covered command surfaces run natively in Rust. Surfaces that are not ready stay
-visible: they fail clearly, or can delegate to upstream Picard when you
-configure a fallback. The project is meant to be adopted command by command,
-with parity evidence, benchmark logs, real-data comparisons, and citation
-boundaries kept close to the claims they support.
+Supported commands run natively in Rust. Commands that are not ready fail
+clearly, or can run through upstream Picard when you configure a fallback. The
+project is meant to be tried command by command, with output comparisons,
+benchmark logs, real-data checks, and citation guidance kept close to the claims
+they support.
 
 This is not a blanket claim that every Picard behavior has been rebuilt. Use the
 native pieces where the documented scope and your own representative data agree,
@@ -38,14 +37,14 @@ Start here
       :link: adoption
       :link-type: doc
 
-      Evaluate safely with shadow runs, parity checks, real-data comparisons,
-      benchmarks, and fallback behavior.
+      Try it safely with side-by-side runs, output comparisons, benchmarks, and
+      fallback behavior.
 
    .. grid-item-card:: Command lookup
       :link: commands
       :link-type: doc
 
-      See which Picard commands are native, partially native, or fallback-only.
+      See which Picard commands are native, partly native, or fallback-only.
 
    .. grid-item-card:: Packaging
       :link: packaging

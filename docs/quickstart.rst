@@ -13,8 +13,7 @@ From a checkout of the repository:
 This installs two binaries:
 
 ``turbo-picard``
-   The explicit, non-shadowing entrypoint. Use this first when evaluating the
-   tool.
+   The explicit command. Use this first while you are testing the tool.
 
 ``picard``
    A compatibility shim with the same command shape as Picard. Use this only
@@ -43,10 +42,10 @@ The shim accepts the same Picard-style syntax:
 
    picard MarkDuplicates I=input.bam O=marked.bam M=metrics.txt
 
-Use the shim only after you have checked the command surfaces your workflow
-needs. For a first pass, run ``turbo-picard`` and upstream Picard side by side
-on a representative input, then compare the primary output, sidecars, metrics,
-exit code, and runtime.
+Use the shim only after you have checked the commands your workflow needs. For
+a first pass, run ``turbo-picard`` and upstream Picard side by side on a
+representative input, then compare the primary output, sidecars, metrics, exit
+code, and runtime.
 
 Use the command-specific help while evaluating:
 
@@ -79,8 +78,8 @@ Before putting the ``picard`` shim on ``PATH`` for a workflow:
 
 * check the command in :doc:`commands`;
 * read :doc:`parity` so the comparison boundary is clear;
-* keep upstream Picard configured as fallback for unsupported surfaces;
+* keep upstream Picard configured as fallback for unsupported commands;
 * keep the evidence for the exact command, input, Picard version, and
   ``turbo-picard`` version you tested.
 
-The adoption guide has the fuller rollout path: :doc:`adoption`.
+The pipeline guide goes deeper: :doc:`adoption`.

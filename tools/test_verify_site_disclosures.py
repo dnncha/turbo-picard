@@ -22,16 +22,16 @@ class SiteDisclosureTests(unittest.TestCase):
     def test_site_disclosure_accepts_current_boundaries(self) -> None:
         html = """
 <head>
-  <meta name="description" content="command-by-command evaluation with fallback for unsupported Picard surfaces">
+  <meta name="description" content="selected Picard commands with fallback for unsupported commands">
 </head>
 <section>
   <h2>Current boundaries</h2>
   <p>turbo-picard is not a full Picard suite yet.</p>
   <p>Chart outputs are lightweight PDF summaries; metrics text is the parity target.</p>
-  <p>Switch only the workflow surfaces where the evidence supports a narrow change.</p>
+  <p>Switch only the commands where the evidence supports the change.</p>
   <p>The benchmark threshold gate is python3 tools/verify_benchmark_thresholds.py with 5.00x floor speedup, 20.00x geometric mean speedup, and 50.00x top speedup.</p>
   <p>The software citation lives in CITATION.cff. Cite the archived turbo-picard release and cite benchmark inputs separately with SHA-256.</p>
-  <p>Bioconda recipes are prepared, but submission still needs a tagged release, python3 tools/bioconda_release_preflight.py, sha256, release-ready verifier, cp -R packaging/bioconda/turbo-picard recipes/turbo-picard, cp -R packaging/bioconda/turbo-picard-picard-shim recipes/turbo-picard-picard-shim, bioconda-utils lint recipes config.yml --packages turbo-picard turbo-picard-picard-shim, and mulled-test.</p>
+  <p>Bioconda release v0.1.0 uses python3 tools/bioconda_release_preflight.py and bioconda-utils lint recipes config.yml --packages turbo-picard turbo-picard-picard-shim.</p>
 </section>
 """
 
@@ -44,27 +44,27 @@ class SiteDisclosureTests(unittest.TestCase):
 
         self.assertIn("site missing current-boundaries section", errors)
         self.assertIn("site missing not-full-Picard-suite disclosure", errors)
-        self.assertIn("site metadata missing command-by-command evaluation caveat", errors)
-        self.assertIn("site metadata missing fallback/unsupported-surface caveat", errors)
+        self.assertIn("site metadata missing selected-command caveat", errors)
+        self.assertIn("site metadata missing fallback/unsupported-command caveat", errors)
         self.assertIn("site missing lightweight chart PDF disclosure", errors)
-        self.assertIn("site missing narrow evidence-supported switch disclosure", errors)
+        self.assertIn("site missing evidence-supported switch disclosure", errors)
         self.assertIn("site missing benchmark threshold release-gate disclosure", errors)
         self.assertIn("site missing software-vs-input citation disclosure", errors)
-        self.assertIn("site missing Bioconda tagged-release/sha256/lint disclosure", errors)
+        self.assertIn("site missing Bioconda release/lint disclosure", errors)
 
     def test_site_disclosure_reports_metadata_overclaim(self) -> None:
         html = """
 <head>
-  <meta name="description" content="command-by-command evaluation with fallback for unsupported Picard surfaces across production genomics workflows">
+  <meta name="description" content="selected Picard commands with fallback for unsupported commands across production genomics workflows">
 </head>
 <section>
   <h2>Current boundaries</h2>
   <p>turbo-picard is not a full Picard suite yet.</p>
   <p>Chart outputs are lightweight PDF summaries; metrics text is the parity target.</p>
-  <p>Switch only the workflow surfaces where the evidence supports a narrow change.</p>
+  <p>Switch only the commands where the evidence supports the change.</p>
   <p>The benchmark threshold gate is python3 tools/verify_benchmark_thresholds.py with 5.00x floor speedup, 20.00x geometric mean speedup, and 50.00x top speedup.</p>
   <p>The software citation lives in CITATION.cff. Cite the archived turbo-picard release and cite benchmark inputs separately with SHA-256.</p>
-  <p>Bioconda recipes need a tagged release, python3 tools/bioconda_release_preflight.py, sha256, release-ready verifier, bioconda-utils lint recipes config.yml --packages turbo-picard turbo-picard-picard-shim, and mulled-test.</p>
+  <p>Bioconda release v0.1.0 uses python3 tools/bioconda_release_preflight.py and bioconda-utils lint recipes config.yml --packages turbo-picard turbo-picard-picard-shim.</p>
 </section>
 """
 
@@ -73,39 +73,39 @@ class SiteDisclosureTests(unittest.TestCase):
             verify_site_disclosures.validate_site_disclosures(html),
         )
 
-    def test_site_disclosure_requires_bioconda_copy_commands(self) -> None:
+    def test_site_disclosure_requires_bioconda_release_and_lint(self) -> None:
         html = """
 <head>
-  <meta name="description" content="command-by-command evaluation with fallback for unsupported Picard surfaces">
+  <meta name="description" content="selected Picard commands with fallback for unsupported commands">
 </head>
 <section>
   <h2>Current boundaries</h2>
   <p>turbo-picard is not a full Picard suite yet.</p>
   <p>Chart outputs are lightweight PDF summaries; metrics text is the parity target.</p>
-  <p>Switch only the workflow surfaces where the evidence supports a narrow change.</p>
+  <p>Switch only the commands where the evidence supports the change.</p>
   <p>The benchmark threshold gate is python3 tools/verify_benchmark_thresholds.py with 5.00x floor speedup, 20.00x geometric mean speedup, and 50.00x top speedup.</p>
   <p>The software citation lives in CITATION.cff. Cite the archived turbo-picard release and cite benchmark inputs separately with SHA-256.</p>
-  <p>Bioconda recipes need a tagged release, python3 tools/bioconda_release_preflight.py, sha256, release-ready verifier, bioconda-utils lint recipes config.yml --packages turbo-picard turbo-picard-picard-shim, and mulled-test.</p>
+  <p>Bioconda uses python3 tools/bioconda_release_preflight.py.</p>
 </section>
 """
 
         self.assertIn(
-            "site missing Bioconda tagged-release/sha256/lint disclosure",
+            "site missing Bioconda release/lint disclosure",
             verify_site_disclosures.validate_site_disclosures(html),
         )
 
     def test_site_disclosure_requires_citation_boundary(self) -> None:
         html = """
 <head>
-  <meta name="description" content="command-by-command evaluation with fallback for unsupported Picard surfaces">
+  <meta name="description" content="selected Picard commands with fallback for unsupported commands">
 </head>
 <section>
   <h2>Current boundaries</h2>
   <p>turbo-picard is not a full Picard suite yet.</p>
   <p>Chart outputs are lightweight PDF summaries; metrics text is the parity target.</p>
-  <p>Switch only the workflow surfaces where the evidence supports a narrow change.</p>
+  <p>Switch only the commands where the evidence supports the change.</p>
   <p>The benchmark threshold gate is python3 tools/verify_benchmark_thresholds.py with 5.00x floor speedup, 20.00x geometric mean speedup, and 50.00x top speedup.</p>
-  <p>Bioconda recipes are prepared, but submission still needs a tagged release, python3 tools/bioconda_release_preflight.py, sha256, release-ready verifier, cp -R packaging/bioconda/turbo-picard recipes/turbo-picard, cp -R packaging/bioconda/turbo-picard-picard-shim recipes/turbo-picard-picard-shim, bioconda-utils lint recipes config.yml --packages turbo-picard turbo-picard-picard-shim, and mulled-test.</p>
+  <p>Bioconda release v0.1.0 uses python3 tools/bioconda_release_preflight.py and bioconda-utils lint recipes config.yml --packages turbo-picard turbo-picard-picard-shim.</p>
 </section>
 """
 

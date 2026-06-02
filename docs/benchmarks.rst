@@ -40,14 +40,14 @@ When you compare against upstream Picard, record:
 * Picard version;
 * ``turbo-picard`` commit;
 * CPU, memory, storage, and container or conda environment;
-* parity result for the output surface you are measuring.
+* parity result for the output you are measuring.
 
 Do not generalize a benchmark from one command to another. ``MarkDuplicates``,
 ``SortSam``, FASTQ conversion, metrics collectors, and VCF utilities stress
 different parts of the system.
 
 The public benchmark suite currently reports 32 command speedups, so every
-native or partial-native matrix entry has a parity-checked public speedup claim.
+native or partly native matrix entry has a parity-checked public speedup claim.
 Two scopes are deliberately narrow: ``CollectMultipleMetrics`` is benchmarked
 with ``PROGRAM=CollectQualityYieldMetrics``, and chart-producing child programs
 still use the chart-output disclosure below.
@@ -64,8 +64,8 @@ with:
    python3 tools/verify_real_data_evidence.py
    python3 tools/verify_real_data_evidence.py --release-ready
 
-The checked-in release-candidate bundles currently include GATK's public
-NA12878 mitochondrial test BAM and Picard's public SNVQ metrics test BAM.
+The checked-in release evidence currently includes GATK's public NA12878
+mitochondrial test BAM and Picard's public SNVQ metrics test BAM.
 For GitHub-hosted real-data inputs, the evidence must cite a
 ``/blob/<commit>/`` URL and the full 40-character Git commit SHA, not a branch
 name or short hash.
@@ -104,14 +104,14 @@ digest, ``SamToFastq`` with first-end, second-end, and unpaired FASTQ outputs
 matched byte-for-byte, and ``CollectInsertSizeMetrics`` with the stable metrics
 table and insert-size histogram digest matched against Picard. It also passes
 ``ValidateSamFile`` by matching the summary validation histogram and Picard's
-non-zero exit code on that input. The release-candidate portfolio must cover
-this command set somewhere in the pinned release-candidate evidence:
+non-zero exit code on that input. The release check must cover this command set
+somewhere in the pinned evidence:
 AddOrReplaceReadGroups, BuildBamIndex, CleanSam,
 CollectAlignmentSummaryMetrics, CollectInsertSizeMetrics,
 CollectQualityYieldMetrics, MarkDuplicates, RevertSam, SamToFastq, SortSam,
-ValidateSamFile, ViewSam. They are the minimum checked-in release-candidate
-evidence; add larger public shards or workflow-owned representative data before
-making broader ``cohort-scale switching claims``. The aggregate
-release-candidate input threshold is currently ``10000000`` bytes across pinned
-release-candidate inputs, so the release-ready gate cannot pass on one
-token-sized fixture alone.
+ValidateSamFile, ViewSam. These fixtures are useful release evidence, but they
+are still small. They are not proof for every dataset a lab might process. Add
+larger public shards or representative private data before claiming the tool is
+proven for a whole production dataset. The release-ready check also requires
+enough pinned input data that one tiny fixture cannot carry the release by
+itself.

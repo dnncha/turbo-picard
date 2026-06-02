@@ -69,7 +69,7 @@ REQUIRED_READER_CUES = {
         "Before changing a workflow",
     ],
     Path("docs/adoption.rst"): [
-        "Recommended rollout",
+        "Practical path",
         "Representative-data validation protocol",
         "Treat a failure as useful information",
     ],

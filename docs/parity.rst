@@ -2,8 +2,8 @@ What Parity Means
 =================
 
 ``turbo-picard`` uses the word parity narrowly. It means a specific command,
-with a specific input shape and option set, produced the same checked output
-surface as upstream Picard under the comparison method named in the evidence.
+with a specific input shape and option set, produced the same checked output as
+upstream Picard under the comparison method named in the evidence.
 It does not mean every Picard behavior has been reimplemented, and it does not
 mean one small fixture proves safety for every cohort or assay.
 
@@ -46,25 +46,24 @@ does not cover:
 * Picard chart rendering for metrics commands that currently emit lightweight
   PDF sidecars.
 
-Treat the checked-in release-candidate data as a minimum public gate. Before a
-large research workflow switches, run shadow comparisons on representative
-inputs from that workflow and keep the JSON, Markdown, input SHA-256, source
-citation, command line, Picard version, and turbo-picard version with the
-analysis record.
+Treat the checked-in public data as a starting point. Before a large research
+workflow switches, run side-by-side comparisons on representative inputs from
+that workflow and keep the JSON, Markdown, input SHA-256, source citation,
+command line, Picard version, and turbo-picard version with the analysis record.
 
 How To Use The Evidence
 -----------------------
 
-For a production-like rollout:
+For a production-like change:
 
 1. Start with ``turbo-picard`` beside upstream Picard, not the ``picard`` shim.
-2. Compare the exact command surfaces your workflow uses.
+2. Compare the exact commands your workflow uses.
 3. Add representative real-data evidence with ``tools/compare_real_data.py``.
 4. Run ``python3 tools/verify_real_data_evidence.py --release-ready`` before a
-   scientist-facing release or Bioconda submission.
-5. Switch only the proven surfaces, and keep upstream Picard available as
+   scientific release or Bioconda submission.
+5. Switch only the proven commands, and keep upstream Picard available as
    fallback for everything else.
 
-The adoption guide gives a fuller rollout sequence in :doc:`adoption`; the
+The pipeline guide gives a fuller sequence in :doc:`adoption`; the
 current checked-in benchmark and real-data evidence is described in
 :doc:`benchmarks`.

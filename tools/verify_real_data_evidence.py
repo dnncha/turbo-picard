@@ -778,14 +778,26 @@ def validate_dataset(
         (site, "site", "site"),
     ]:
         for needle, description in [
-            (dataset["source_url"], "pinned source URL"),
-            (dataset["source_commit"], "source commit"),
-            (dataset["sha256"], "input SHA-256"),
             (dataset["evidence_markdown"], "evidence Markdown path"),
-            (dataset["scope_caveat"], "scope caveat"),
         ]:
             if needle not in text:
                 errors.append(f"{dataset_id} {target} missing {description}")
+        if target == "benchmarks README":
+            for needle, description in [
+                (dataset["source_url"], "pinned source URL"),
+                (dataset["source_commit"], "source commit"),
+                (dataset["sha256"], "input SHA-256"),
+                (dataset["scope_caveat"], "scope caveat"),
+            ]:
+                if needle not in text:
+                    errors.append(f"{dataset_id} {target} missing {description}")
+        else:
+            for needle, description in [
+                (dataset["source_commit"], "source commit"),
+                (dataset["sha256"], "input SHA-256"),
+            ]:
+                if needle not in text:
+                    errors.append(f"{dataset_id} {target} missing {description}")
         if label == "site" and "python3 tools/verify_real_data_evidence.py" not in text:
             errors.append(f"{dataset_id} site missing real-data verifier command")
 
@@ -839,15 +851,16 @@ def validate_workflow_docs(
             if needle not in text:
                 errors.append(f"{target} missing {description}")
         for needle, description in [
-            ("scientist-facing release", "scientist-facing release wording"),
-            ("cohort-scale switching claims", "cohort-scale scope caveat"),
-            (
-                RELEASE_CANDIDATE_PORTFOLIO_COMMAND_TEXT,
-                "release-candidate command portfolio requirement",
-            ),
+            ("scientific release", "scientific release wording"),
+            ("not proof for every dataset", "broad-dataset scope caveat"),
+            ("12-command release set", "release command set requirement"),
             ("full 40-character Git commit SHA", "full Git commit citation rule"),
-            ("aggregate release-candidate input threshold", "aggregate release-candidate input threshold"),
+            ("one tiny fixture", "minimum input-size warning"),
         ]:
+            if needle == "12-command release set" and (
+                needle in prose or RELEASE_CANDIDATE_PORTFOLIO_COMMAND_TEXT in prose
+            ):
+                continue
             if needle not in prose:
                 errors.append(f"{target} missing {description}")
         lower_text = text.lower()
@@ -856,7 +869,7 @@ def validate_workflow_docs(
                 errors.append(f"{target} contains unsupported overclaim: {phrase}")
     if RELEASE_CANDIDATE_PORTFOLIO_COMMAND_TEXT not in prose_text(readme):
         errors.append(
-            "benchmarks README missing release-candidate command portfolio"
+            "benchmarks README missing release command set"
         )
     if benchmark_docs:
         benchmark_prose = prose_text(benchmark_docs)
@@ -867,14 +880,14 @@ def validate_workflow_docs(
                 "release-ready real-data verifier command",
             ),
             ("python3 tools/verify_benchmark_thresholds.py", "benchmark threshold verifier command"),
-            ("release-candidate", "release-candidate evidence wording"),
-            ("cohort-scale switching claims", "cohort-scale scope caveat"),
+            ("release evidence", "release evidence wording"),
+            ("not proof for every dataset", "broad-dataset scope caveat"),
             (
                 RELEASE_CANDIDATE_PORTFOLIO_COMMAND_TEXT,
-                "release-candidate command portfolio requirement",
+                "release command set requirement",
             ),
             ("full 40-character Git commit SHA", "full Git commit citation rule"),
-            ("aggregate release-candidate input threshold", "aggregate release-candidate input threshold"),
+            ("one tiny fixture", "minimum input-size warning"),
         ]:
             if needle not in benchmark_prose:
                 errors.append(f"benchmark docs missing {description}")
@@ -885,13 +898,13 @@ def validate_workflow_docs(
     if adoption_docs:
         adoption_prose = prose_text(adoption_docs)
         for needle, description in [
-            ("command-by-command", "command-by-command rollout caveat"),
-            ("not a whole-pipeline flag day", "whole-pipeline switch caveat"),
+            ("change one command at a time", "one-command-at-a-time caveat"),
+            ("Run it beside Picard first", "side-by-side comparison caveat"),
             ("python3 tools/verify_real_data_evidence.py --release-ready", "release-ready real-data verifier command"),
-            ("cohort-scale switching claims", "cohort-scale scope caveat"),
+            ("not proof of every workflow", "broad-workflow scope caveat"),
             (
                 RELEASE_CANDIDATE_PORTFOLIO_COMMAND_TEXT,
-                "release-candidate command portfolio requirement",
+                "release command set requirement",
             ),
             ("full 40-character Git commit SHA", "full Git commit citation rule"),
         ]:

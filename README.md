@@ -29,7 +29,7 @@ Good starting points:
 - [Quickstart](https://turbo-picard.readthedocs.io/en/latest/quickstart.html)
   for installation and first commands.
 - [Command coverage](https://turbo-picard.readthedocs.io/en/latest/commands.html)
-  for what is native, partial, or delegated.
+  for what is native, partly native, or delegated.
 - [Fallback behavior](https://turbo-picard.readthedocs.io/en/latest/fallback.html)
   for using upstream Picard beside turbo-picard.
 - [Benchmarks](https://turbo-picard.readthedocs.io/en/latest/benchmarks.html)

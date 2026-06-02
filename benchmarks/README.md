@@ -80,6 +80,9 @@ production-scale release-candidate dataset.
 The first checked-in release-candidate bundle uses GATK's public NA12878
 mitochondrial test BAM:
 
+Together with the SNVQ bundle below, this is the current 12-command release set
+used for the release-ready evidence check.
+
 - Source citation:
   `https://github.com/broadinstitute/gatk/blob/e8c49f600b06c658e0fa9bf67256340ebb46bc48/src/test/resources/org/broadinstitute/hellbender/tools/mutect/mito/NA12878.bam`
 - Source commit:
@@ -116,9 +119,9 @@ Current saved result against Picard 3.4.0:
 | CollectInsertSizeMetrics | PASS | stable metrics digest with insert-size histogram |
 | ValidateSamFile | PASS | summary validation histogram plus exit code |
 
-This is still a public test BAM, not a substitute for every production cohort,
-but it is large enough for the release gate and it exercises real Picard edge
-cases around duplicate flags, mate-unmapped reads, soft clips, read-group
+This is still a public test BAM, not proof for every dataset a lab might
+process, but it is large enough for the release check and it exercises real
+Picard edge cases around duplicate flags, mate-unmapped reads, soft clips, read-group
 rewriting, alignment reversion to unmapped output, FASTQ conversion,
 mitochondrial alignment metrics, coordinate sorting,
 orientation-aware insert-size metrics, and validation-summary behavior for
@@ -161,9 +164,11 @@ Picard's own metrics test corpus. It adds coverage for insertion-heavy CIGARs,
 SAM floating-tag representation differences, and alignment-summary standard
 deviation behavior that matters when scientists compare Picard metrics files.
 
-Before a scientist-facing release, repeat `tools/compare_real_data.py` on larger
+Before a scientific release, repeat `tools/compare_real_data.py` on larger
 public benchmark material such as GIAB/HG001 shards and on representative
-production BAMs from the workflows that would be switched:
+production BAMs from the workflows that would be switched. The release-ready
+check also requires enough pinned input data that one tiny fixture cannot carry
+the release by itself:
 
 ```bash
 python3 tools/compare_real_data.py \
