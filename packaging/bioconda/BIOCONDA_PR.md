@@ -98,9 +98,3 @@ Result: `All checks OK`.
 
 Docker is not installed on this machine, so the Docker/mulled build was left to
 Bioconda CI.
-
-## Current CI note
-
-Lint and ARM passed. The current Linux failure happened before the package build
-started: Docker could not pull the Bioconda build image from Quay and returned a
-504 Gateway Time-out.
