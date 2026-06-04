@@ -23,16 +23,16 @@ class BenchmarkManifestTests(unittest.TestCase):
         data = render_benchmark_assets.build_benchmark_data()
 
         self.assertEqual(data["source_artifact"], "docs/site/assets/bench-suite-output.txt")
-        self.assertEqual(data["date"], "2026-05-31")
+        self.assertEqual(data["date"], "2026-06-04")
         self.assertEqual(data["parity"], "32/32 PASS")
         self.assertEqual(data["summary"]["command_count"], 32)
         self.assertEqual(data["summary"]["parity_pass_count"], 32)
         self.assertEqual(data["summary"]["top_command"], "UpdateVcfSequenceDictionary")
-        self.assertEqual(data["summary"]["top_speedup"], 112.07)
+        self.assertEqual(data["summary"]["top_speedup"], 84.46)
         self.assertEqual(data["summary"]["floor_command"], "RevertSam")
-        self.assertEqual(data["summary"]["floor_speedup"], 7.4)
-        self.assertEqual(data["summary"]["median_speedup"], 26.24)
-        self.assertEqual(data["summary"]["geometric_mean_speedup"], 27.31)
+        self.assertEqual(data["summary"]["floor_speedup"], 8.55)
+        self.assertEqual(data["summary"]["median_speedup"], 26.82)
+        self.assertEqual(data["summary"]["geometric_mean_speedup"], 26.74)
 
         ranks = [row["rank"] for row in data["benchmarks"]]
         speedups = [row["speedup"] for row in data["benchmarks"]]
@@ -136,9 +136,9 @@ class BenchmarkManifestTests(unittest.TestCase):
 
         self.assertIn("TinyFastPath", svg)
         self.assertIn("MassiveFastPath", svg)
-        self.assertIn("2/2 parity passing", svg)
+        self.assertIn("2/2 parity checks passing", svg)
         self.assertIn("from 12.50x to 50.00x", svg)
-        self.assertIn("synthetic suite output on 2026-05-30", svg)
+        self.assertIn("in the saved benchmark suite", svg)
         self.assertNotIn("CollectInsertSizeMetrics", svg)
 
 
