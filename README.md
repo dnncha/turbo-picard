@@ -1,5 +1,7 @@
 # turbo-picard
 
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.20541928.svg)](https://doi.org/10.5281/zenodo.20541928)
+
 ![Abstract benchmark bars and sequencing-read streams](docs/site/assets/hero-pipeline.svg)
 
 `turbo-picard` is a faster Rust implementation of selected Picard commands.
@@ -215,8 +217,9 @@ commits or accessions, and SHA-256 hashes. The
 [citation docs](https://turbo-picard.readthedocs.io/en/latest/citation.html)
 spell out what to record.
 
-Zenodo archiving is enabled for this repository. After the next GitHub release
-is archived there, add the Zenodo DOI badge here and cite that archived release.
+The `v0.1.1` release is archived on Zenodo:
+[10.5281/zenodo.20541928](https://doi.org/10.5281/zenodo.20541928).
+Use the DOI for the archived release you actually used.
 
 ## Bioconda Status
 
