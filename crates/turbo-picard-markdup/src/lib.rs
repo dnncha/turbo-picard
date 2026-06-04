@@ -9,6 +9,7 @@ use std::collections::BTreeMap;
 use std::fmt;
 use std::fs;
 use std::path::Path;
+use turbo_picard_core::bgzf_threads::bgzf_threads;
 use turbo_picard_core::markdup_config::MarkDuplicatesConfig;
 
 const DUPLICATE_FLAG: u16 = 0x400;
@@ -756,20 +757,6 @@ fn fast_single_duplicate_key(record: &FastPairRecord) -> BamDuplicateKey {
         reverse_strand: false,
         barcode: record.barcode.clone(),
     }
-}
-
-fn bgzf_threads() -> Option<usize> {
-    if let Ok(value) = std::env::var("TURBO_PICARD_THREADS") {
-        return value
-            .parse::<usize>()
-            .ok()
-            .and_then(|threads| (threads > 0).then_some(threads));
-    }
-
-    std::thread::available_parallelism()
-        .ok()
-        .map(|parallelism| parallelism.get().saturating_sub(1).min(4))
-        .and_then(|threads| (threads > 0).then_some(threads))
 }
 
 fn read_bam_records<R: bam::Read>(

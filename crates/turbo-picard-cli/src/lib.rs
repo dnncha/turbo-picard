@@ -16,6 +16,7 @@ use std::path::Path;
 use std::process::{self, Command};
 use std::sync::OnceLock;
 use std::time::{SystemTime, UNIX_EPOCH};
+use turbo_picard_core::bgzf_threads::bgzf_threads;
 use turbo_picard_core::markdup_config::MarkDuplicatesConfig;
 use turbo_picard_core::picard_args::normalize_picard_args_for_command;
 
@@ -1337,7 +1338,7 @@ fn run_sortsam(args: &[String]) -> Result<(), String> {
         return run_sortsam_sam_text(&input, &output, sort_order);
     }
 
-    let reader = bam::Reader::from_path(&input).map_err(|error| error.to_string())?;
+    let reader = open_bam_reader(&input).map_err(|error| error.to_string())?;
     let header = sorted_header(reader.header(), sort_order);
     let format = output_format(&output)?;
     if create_index && format != bam::Format::Bam {
@@ -1345,14 +1346,8 @@ fn run_sortsam(args: &[String]) -> Result<(), String> {
     }
 
     if input_is_sorted(&input, sort_order)? {
-        let mut reader = bam::Reader::from_path(&input).map_err(|error| error.to_string())?;
-        let mut writer =
-            bam::Writer::from_path(&output, &header, format).map_err(|error| error.to_string())?;
-        if let Some(level) = compression_level {
-            writer
-                .set_compression_level(bam::CompressionLevel::Level(level))
-                .map_err(|error| error.to_string())?;
-        }
+        let mut reader = open_bam_reader(&input)?;
+        let mut writer = bam_writer_for_path(&output, &header, format, compression_level)?;
         for record in reader.records() {
             let record = record.map_err(|error| error.to_string())?;
             writer.write(&record).map_err(|error| error.to_string())?;
@@ -1362,25 +1357,19 @@ fn run_sortsam(args: &[String]) -> Result<(), String> {
         return Ok(());
     }
 
-    let mut reader = bam::Reader::from_path(&input).map_err(|error| error.to_string())?;
+    let mut reader = open_bam_reader(&input)?;
     let mut records = reader
         .records()
         .collect::<Result<Vec<_>, _>>()
         .map_err(|error| error.to_string())?;
 
     match sort_order {
-        SortOrder::Coordinate => records.sort_by(compare_coordinate),
-        SortOrder::QueryName => records.sort_by(compare_queryname),
+        SortOrder::Coordinate => records.sort_unstable_by(compare_coordinate),
+        SortOrder::QueryName => records.sort_unstable_by(compare_queryname),
         SortOrder::Unsorted => unreachable!("SortSam rejects SORT_ORDER=unsorted"),
     }
 
-    let mut writer =
-        bam::Writer::from_path(&output, &header, format).map_err(|error| error.to_string())?;
-    if let Some(level) = compression_level {
-        writer
-            .set_compression_level(bam::CompressionLevel::Level(level))
-            .map_err(|error| error.to_string())?;
-    }
+    let mut writer = bam_writer_for_path(&output, &header, format, compression_level)?;
     for record in records {
         writer.write(&record).map_err(|error| error.to_string())?;
     }
@@ -1408,7 +1397,7 @@ fn run_cleansam(args: &[String]) -> Result<(), String> {
         return run_cleansam_sam_text(&input, &output);
     }
 
-    let mut reader = bam::Reader::from_path(&input).map_err(|error| error.to_string())?;
+    let mut reader = open_bam_reader(&input)?;
     let header = bam::Header::from_template(reader.header());
     let target_lengths = (0..reader.header().target_count())
         .map(|tid| reader.header().target_len(tid).unwrap_or(0))
@@ -1709,8 +1698,8 @@ fn run_sortsam_sam_text(input: &str, output: &str, sort_order: SortOrder) -> Res
     }
 
     match sort_order {
-        SortOrder::Coordinate => records.sort_by(compare_sam_text_coordinate),
-        SortOrder::QueryName => records.sort_by(compare_sam_text_queryname),
+        SortOrder::Coordinate => records.sort_unstable_by(compare_sam_text_coordinate),
+        SortOrder::QueryName => records.sort_unstable_by(compare_sam_text_queryname),
         SortOrder::Unsorted => unreachable!("SortSam rejects SORT_ORDER=unsorted"),
     }
 
@@ -1914,7 +1903,7 @@ fn run_buildbamindex(args: &[String]) -> Result<(), String> {
         ));
     }
 
-    let reader = bam::Reader::from_path(&input).map_err(|error| error.to_string())?;
+    let reader = open_bam_reader(&input).map_err(|error| error.to_string())?;
     if header_sort_order(reader.header()).as_deref() != Some("coordinate") {
         return Err("BuildBamIndex requires coordinate-sorted BAM input".to_string());
     }
@@ -1969,7 +1958,7 @@ fn run_samtofastq(args: &[String]) -> Result<(), String> {
         );
     }
 
-    let mut reader = bam::Reader::from_path(input).map_err(|error| error.to_string())?;
+    let mut reader = open_bam_reader(input).map_err(|error| error.to_string())?;
     let mut first_writer = fastq_writer(&fastq, compression_level)?;
     let mut second_writer = match second_end_fastq {
         Some(ref path) => Some(fastq_writer(path, compression_level)?),
@@ -2199,7 +2188,7 @@ fn run_addorreplacereadgroups(args: &[String]) -> Result<(), String> {
         return write_requested_sidecars(&output, create_md5_file, false);
     }
 
-    let mut reader = bam::Reader::from_path(&input).map_err(|error| error.to_string())?;
+    let mut reader = open_bam_reader(&input).map_err(|error| error.to_string())?;
     let header = read_group_header(reader.header(), &read_group);
     let format = output_format(&output)?;
     let mut writer =
@@ -2350,7 +2339,7 @@ fn run_collectalignmentsummarymetrics(args: &[String]) -> Result<(), String> {
         return fs::write(output, metrics.to_picard_text()).map_err(|error| error.to_string());
     }
 
-    let mut reader = bam::Reader::from_path(input).map_err(|error| error.to_string())?;
+    let mut reader = open_bam_reader(input).map_err(|error| error.to_string())?;
     let read_groups =
         insert_size_read_groups_from_header(&String::from_utf8_lossy(reader.header().as_bytes()));
     let mut metrics = AlignmentSummaryCollection::new(accumulation);
@@ -2385,7 +2374,7 @@ fn run_collectqualityyieldmetrics(args: &[String]) -> Result<(), String> {
         return fs::write(output, metrics.to_picard_text()).map_err(|error| error.to_string());
     }
 
-    let mut reader = bam::Reader::from_path(input).map_err(|error| error.to_string())?;
+    let mut reader = open_bam_reader(input).map_err(|error| error.to_string())?;
     let mut metrics = QualityYieldSummary::default();
     for record in limited_records(&mut reader, stop_after) {
         let record = record.map_err(|error| error.to_string())?;
@@ -2421,7 +2410,7 @@ fn run_collectinsertsizemetrics(args: &[String]) -> Result<(), String> {
         return write_summary_chart_pdf(&histogram, "CollectInsertSizeMetrics");
     }
 
-    let mut reader = bam::Reader::from_path(input).map_err(|error| error.to_string())?;
+    let mut reader = open_bam_reader(input).map_err(|error| error.to_string())?;
     let read_groups =
         insert_size_read_groups_from_header(&String::from_utf8_lossy(reader.header().as_bytes()));
     let mut metrics = InsertSizeCollection::new(accumulation);
@@ -2447,7 +2436,7 @@ fn run_collectbasedistributionbycycle(args: &[String]) -> Result<(), String> {
     let pf_reads_only = optional_bool(&args, "PF_READS_ONLY")?.unwrap_or(false);
     let stop_after = optional_u32(&args, "STOP_AFTER")?.unwrap_or(0);
 
-    let mut reader = bam::Reader::from_path(input).map_err(|error| error.to_string())?;
+    let mut reader = open_bam_reader(input).map_err(|error| error.to_string())?;
     let mut metrics = BaseDistributionByCycleSummary::default();
     for record in limited_records(&mut reader, stop_after) {
         let record = record.map_err(|error| error.to_string())?;
@@ -2474,7 +2463,7 @@ fn run_collectgcbiasmetrics(args: &[String]) -> Result<(), String> {
     let stop_after = optional_u32(&args, "STOP_AFTER")?.unwrap_or(0);
 
     let references = read_fasta_sequences(&reference, true)?;
-    let mut reader = bam::Reader::from_path(input).map_err(|error| error.to_string())?;
+    let mut reader = open_bam_reader(input).map_err(|error| error.to_string())?;
     let target_names = reader
         .header()
         .target_names()
@@ -2774,7 +2763,7 @@ fn run_collectwgsmetrics(args: &[String]) -> Result<(), String> {
     if stop_after >= 0 {
         summary.limit_included_loci(stop_after as usize);
     }
-    let mut reader = bam::Reader::from_path(&input).map_err(|error| error.to_string())?;
+    let mut reader = open_bam_reader(&input).map_err(|error| error.to_string())?;
     let target_names = reader
         .header()
         .target_names()
@@ -2832,7 +2821,7 @@ fn run_fixmateinformation(args: &[String]) -> Result<(), String> {
         return Err("FixMateInformation CREATE_INDEX=true requires BAM output".to_string());
     }
 
-    let mut reader = bam::Reader::from_path(&input).map_err(|error| error.to_string())?;
+    let mut reader = open_bam_reader(&input).map_err(|error| error.to_string())?;
     if !assume_sorted && header_sort_order(reader.header()).as_deref() != Some("queryname") {
         return Err("unsupported FixMateInformation input must be queryname sorted".to_string());
     }
@@ -2900,7 +2889,7 @@ fn run_qualityscoredistribution(args: &[String]) -> Result<(), String> {
     let include_no_calls = optional_bool(&args, "INCLUDE_NO_CALLS")?.unwrap_or(false);
     let stop_after = optional_u32(&args, "STOP_AFTER")?.unwrap_or(0);
 
-    let mut reader = bam::Reader::from_path(input).map_err(|error| error.to_string())?;
+    let mut reader = open_bam_reader(input).map_err(|error| error.to_string())?;
     let mut metrics = QualityScoreDistributionSummary::default();
     for record in limited_records(&mut reader, stop_after) {
         let record = record.map_err(|error| error.to_string())?;
@@ -2922,7 +2911,7 @@ fn run_meanqualitybycycle(args: &[String]) -> Result<(), String> {
     let pf_reads_only = optional_bool(&args, "PF_READS_ONLY")?.unwrap_or(false);
     let stop_after = optional_u32(&args, "STOP_AFTER")?.unwrap_or(0);
 
-    let mut reader = bam::Reader::from_path(input).map_err(|error| error.to_string())?;
+    let mut reader = open_bam_reader(input).map_err(|error| error.to_string())?;
     let mut metrics = MeanQualityByCycleSummary::default();
     for record in limited_records(&mut reader, stop_after) {
         let record = record.map_err(|error| error.to_string())?;
@@ -3169,6 +3158,294 @@ fn run_intervallisttools(args: &[String]) -> Result<(), String> {
     fs::write(output, text).map_err(|error| error.to_string())
 }
 
+fn revertsam_can_use_sam_text_fast_path(
+    input: &str,
+    output: &str,
+    compression_level: Option<u32>,
+    restore_original_qualities: bool,
+    remove_alignment_information: bool,
+    attributes_to_clear: &[[u8; 2]],
+    attributes_to_reverse: &[[u8; 2]],
+    attributes_to_reverse_complement: &[[u8; 2]],
+) -> bool {
+    has_sam_extension(input)
+        && (has_sam_extension(output) || has_extension(output, "bam"))
+        && compression_level.is_none()
+        && restore_original_qualities
+        && remove_alignment_information
+        && attributes_to_clear.is_empty()
+        && attributes_to_reverse.is_empty()
+        && attributes_to_reverse_complement.is_empty()
+}
+
+#[derive(Debug)]
+struct RevertsamTextRecord {
+    line: String,
+    qname: String,
+    flags: u16,
+    serial: usize,
+}
+
+fn run_revertsam_sam_text(
+    input: &str,
+    output: &str,
+    remove_alignment_information: bool,
+    remove_duplicate_information: bool,
+    restore_hardclips: bool,
+    sort_order: SortOrder,
+) -> Result<(), String> {
+    let file = fs::File::open(input).map_err(|error| error.to_string())?;
+    let mut reader = BufReader::with_capacity(1024 * 1024, file);
+    let mut header_lines = Vec::<String>::new();
+    let mut records = Vec::<RevertsamTextRecord>::new();
+    let mut line = String::new();
+    let mut serial = 0usize;
+
+    loop {
+        line.clear();
+        if reader
+            .read_line(&mut line)
+            .map_err(|error| error.to_string())?
+            == 0
+        {
+            break;
+        }
+        if line.starts_with('@') {
+            header_lines.push(line.clone());
+            continue;
+        }
+        if line.trim().is_empty() {
+            continue;
+        }
+        let flags = line
+            .split('\t')
+            .nth(1)
+            .and_then(|value| value.parse::<u16>().ok())
+            .unwrap_or(0);
+        if flags & 0x100 != 0 || flags & 0x800 != 0 {
+            continue;
+        }
+        let (reverted, qname, flags) = revert_sam_text_record_line(
+            line.trim_end_matches(['\r', '\n']),
+            remove_duplicate_information,
+            restore_hardclips,
+        )?;
+        records.push(RevertsamTextRecord {
+            line: reverted,
+            qname,
+            flags,
+            serial,
+        });
+        serial += 1;
+    }
+
+    if sort_order == SortOrder::QueryName {
+        records.sort_unstable_by(|left, right| {
+            left.qname
+                .as_bytes()
+                .cmp(right.qname.as_bytes())
+                .then_with(|| left.flags.cmp(&right.flags))
+                .then_with(|| left.serial.cmp(&right.serial))
+        });
+    }
+
+    let mut writer = BufWriter::with_capacity(
+        1024 * 1024,
+        fs::File::create(output).map_err(|error| error.to_string())?,
+    );
+    write_revertsam_sam_text_header(
+        &mut writer,
+        &header_lines,
+        sort_order,
+        remove_alignment_information,
+    )?;
+    for record in records {
+        writer
+            .write_all(record.line.as_bytes())
+            .map_err(|error| error.to_string())?;
+        writer.write_all(b"\n").map_err(|error| error.to_string())?;
+    }
+    writer.flush().map_err(|error| error.to_string())
+}
+
+fn write_revertsam_sam_text_header(
+    writer: &mut dyn Write,
+    header_lines: &[String],
+    sort_order: SortOrder,
+    remove_alignment_information: bool,
+) -> Result<(), String> {
+    let sort_value = match sort_order {
+        SortOrder::Coordinate => "coordinate",
+        SortOrder::QueryName => "queryname",
+        SortOrder::Unsorted => "unsorted",
+    };
+    let mut saw_hd = false;
+    for line in header_lines {
+        if remove_alignment_information && (line.starts_with("@SQ\t") || line.starts_with("@PG\t")) {
+            continue;
+        }
+        if line.starts_with("@HD\t") {
+            saw_hd = true;
+            let mut fields = vec!["@HD".to_string()];
+            let mut saw_so = false;
+            for field in line.trim_end_matches(['\r', '\n']).split('\t').skip(1) {
+                if field.starts_with("SO:") {
+                    fields.push(format!("SO:{sort_value}"));
+                    saw_so = true;
+                } else {
+                    fields.push(field.to_string());
+                }
+            }
+            if !saw_so {
+                fields.push(format!("SO:{sort_value}"));
+            }
+            writeln!(writer, "{}", fields.join("\t")).map_err(|error| error.to_string())?;
+            continue;
+        }
+        write!(writer, "{line}").map_err(|error| error.to_string())?;
+        if !line.ends_with('\n') {
+            writeln!(writer).map_err(|error| error.to_string())?;
+        }
+    }
+    if !saw_hd {
+        writeln!(writer, "@HD\tVN:1.6\tSO:{sort_value}")
+            .map_err(|error| error.to_string())?;
+    }
+    Ok(())
+}
+
+fn run_revertsam_sam_text_to_bam(
+    input: &str,
+    output: &str,
+    output_format: bam::Format,
+    compression_level: Option<u32>,
+    remove_duplicate_information: bool,
+    restore_hardclips: bool,
+    sort_order: SortOrder,
+    create_md5_file: bool,
+    create_index: bool,
+) -> Result<(), String> {
+    let temp_sam = temp_revertsam_sam_path(output);
+    run_revertsam_sam_text(
+        input,
+        &temp_sam,
+        true,
+        remove_duplicate_information,
+        restore_hardclips,
+        sort_order,
+    )?;
+    let mut reader = open_bam_reader(&temp_sam)?;
+    let header = reverted_header(reader.header(), true, sort_order);
+    let mut writer = bam_writer_for_path(output, &header, output_format, compression_level)?;
+    for record in reader.records() {
+        let record = record.map_err(|error| error.to_string())?;
+        if record.is_secondary() || record.is_supplementary() {
+            continue;
+        }
+        writer.write(&record).map_err(|error| error.to_string())?;
+    }
+    drop(writer);
+    let _ = fs::remove_file(&temp_sam);
+    write_requested_sidecars(
+        output,
+        create_md5_file,
+        create_index && sort_order == SortOrder::Coordinate,
+    )
+}
+
+fn temp_revertsam_sam_path(output: &str) -> String {
+    format!("{output}.tmp.{}.sam", process::id())
+}
+
+fn revert_sam_text_record_line(
+    line: &str,
+    remove_duplicate_information: bool,
+    restore_hardclips: bool,
+) -> Result<(String, String, u16), String> {
+    let fields = line
+        .split('\t')
+        .collect::<Vec<_>>();
+    if fields.len() < 11 {
+        return Err("malformed RevertSam SAM record".to_string());
+    }
+    let qname = fields[0].to_string();
+    let mut flags = fields[1]
+        .parse::<u16>()
+        .map_err(|_| "malformed RevertSam SAM flag".to_string())?;
+    let mut sequence = fields[9].as_bytes().to_vec();
+    let mut qualities = fields[10].as_bytes().to_vec();
+    let mut kept_aux = Vec::<String>::new();
+    let mut hardclip_bases = None::<Vec<u8>>;
+    let mut hardclip_qualities = None::<Vec<u8>>;
+
+    for tag_field in &fields[11..] {
+        if tag_field.starts_with("OQ:Z:") {
+            qualities = tag_field[5..].as_bytes().to_vec();
+            continue;
+        }
+        if restore_hardclips && tag_field.starts_with("XB:Z:") {
+            hardclip_bases = Some(tag_field[5..].as_bytes().to_vec());
+            continue;
+        }
+        if restore_hardclips && tag_field.starts_with("XQ:Z:") {
+            hardclip_qualities = Some(tag_field[5..].as_bytes().to_vec());
+            continue;
+        }
+        if revertsam_default_removed_alignment_tag_field(tag_field) {
+            continue;
+        }
+        kept_aux.push((*tag_field).to_string());
+    }
+
+    if flags & 0x10 != 0 {
+        reverse_complement(&mut sequence);
+        qualities.reverse();
+    }
+    if let (Some(bases), Some(quals)) = (hardclip_bases, hardclip_qualities) {
+        if bases.len() != quals.len() {
+            return Err("malformed RevertSam XB/XQ lengths differ".to_string());
+        }
+        sequence.extend(bases);
+        qualities.extend(quals);
+    }
+
+    flags |= 0x4;
+    if flags & 0x1 != 0 {
+        flags |= 0x8;
+    } else {
+        flags &= !0x8;
+    }
+    flags &= !(0x2 | 0x10 | 0x20 | 0x100 | 0x800);
+    if remove_duplicate_information {
+        flags &= !0x400;
+    }
+
+    kept_aux.sort();
+    let mut reverted = format!(
+        "{qname}\t{flags}\t*\t0\t0\t*\t*\t0\t0\t{seq}\t{qual}",
+        qname = qname,
+        flags = flags,
+        seq = String::from_utf8(sequence).map_err(|_| "malformed RevertSam sequence".to_string())?,
+        qual = String::from_utf8(qualities).map_err(|_| "malformed RevertSam qualities".to_string())?,
+    );
+    for tag in kept_aux {
+        reverted.push('\t');
+        reverted.push_str(&tag);
+    }
+    Ok((reverted, qname, flags))
+}
+
+fn revertsam_default_removed_alignment_tag_field(tag_field: &str) -> bool {
+    tag_field.starts_with("NM:")
+        || tag_field.starts_with("UQ:")
+        || tag_field.starts_with("PG:")
+        || tag_field.starts_with("MD:")
+        || tag_field.starts_with("MQ:")
+        || tag_field.starts_with("SA:")
+        || tag_field.starts_with("MC:")
+        || tag_field.starts_with("AS:")
+}
+
 fn run_revertsam(args: &[String]) -> Result<(), String> {
     let args =
         normalize_picard_args_for_command("RevertSam", args).map_err(|error| error.to_string())?;
@@ -3206,6 +3483,39 @@ fn run_revertsam(args: &[String]) -> Result<(), String> {
     }
     let attributes_to_clear = attributes_to_clear_for_revertsam(&args)?;
 
+    if revertsam_can_use_sam_text_fast_path(
+        &input,
+        &output,
+        compression_level,
+        restore_original_qualities,
+        remove_alignment_information,
+        &attributes_to_clear,
+        &attributes_to_reverse,
+        &attributes_to_reverse_complement,
+    ) {
+        if has_sam_extension(&output) {
+            return run_revertsam_sam_text(
+                &input,
+                &output,
+                remove_alignment_information,
+                remove_duplicate_information,
+                restore_hardclips,
+                sort_order,
+            );
+        }
+        return run_revertsam_sam_text_to_bam(
+            &input,
+            &output,
+            output_format,
+            compression_level,
+            remove_duplicate_information,
+            restore_hardclips,
+            sort_order,
+            create_md5_file,
+            create_index,
+        );
+    }
+
     if let Some(()) = try_stream_revertsam(
         &input,
         &output,
@@ -3227,7 +3537,7 @@ fn run_revertsam(args: &[String]) -> Result<(), String> {
         );
     }
 
-    let mut reader = bam::Reader::from_path(&input).map_err(|error| error.to_string())?;
+    let mut reader = open_bam_reader(&input)?;
     let header = reverted_header(reader.header(), remove_alignment_information, sort_order);
     let mut records = Vec::new();
     for record in reader.records() {
@@ -3248,7 +3558,7 @@ fn run_revertsam(args: &[String]) -> Result<(), String> {
         records.push(record);
     }
     if sort_order == SortOrder::QueryName && !queryname_records_are_monotonic(&records) {
-        records.sort_by(compare_queryname);
+        records.sort_unstable_by(compare_queryname);
     }
 
     let mut writer = bam_writer_for_path(&output, &header, output_format, compression_level)?;
@@ -3287,7 +3597,12 @@ fn try_stream_revertsam(
     } else {
         output.to_string()
     };
-    let mut reader = bam::Reader::from_path(input).map_err(|error| error.to_string())?;
+    let mut reader = open_bam_reader(input)?;
+    if sort_order == SortOrder::QueryName
+        && header_sort_order(reader.header()).as_deref() == Some("coordinate")
+    {
+        return Ok(None);
+    }
     let header = reverted_header(reader.header(), remove_alignment_information, sort_order);
     let mut writer =
         bam_writer_for_path(&stream_output, &header, output_format, compression_level)?;
@@ -3351,7 +3666,7 @@ fn run_setnmmdanduqtags(args: &[String]) -> Result<(), String> {
     let create_index = optional_bool(&args, "CREATE_INDEX")?.unwrap_or(false);
 
     let reference = reference_sequences_by_name(&reference)?;
-    let mut reader = bam::Reader::from_path(&input).map_err(|error| error.to_string())?;
+    let mut reader = open_bam_reader(&input).map_err(|error| error.to_string())?;
     if header_sort_order(reader.header()).as_deref() != Some("coordinate") {
         return Err("unsupported SetNmMdAndUqTags input must be coordinate sorted".to_string());
     }
@@ -3398,7 +3713,7 @@ fn run_validatesamfile(args: &[String]) -> Result<(), String> {
         })?;
     }
 
-    let mut reader = bam::Reader::from_path(&input).map_err(|error| error.to_string())?;
+    let mut reader = open_bam_reader(&input).map_err(|error| error.to_string())?;
     let mut report = validate_sam_summary(&mut reader, skip_mate_validation)?;
     for key in ignored {
         report.counts.remove(&key);
@@ -3431,7 +3746,7 @@ fn run_viewsam(args: &[String]) -> Result<(), String> {
         optional_scalar(&args, "ALIGNMENT_STATUS")?.unwrap_or_else(|| "All".to_string());
     let pf_status = optional_scalar(&args, "PF_STATUS")?.unwrap_or_else(|| "All".to_string());
 
-    let mut reader = bam::Reader::from_path(&input).map_err(|error| error.to_string())?;
+    let mut reader = open_bam_reader(&input).map_err(|error| error.to_string())?;
     let header = bam::Header::from_template(reader.header());
     let interval_filter = viewsam_interval_filter(args.get("INTERVAL_LIST"), reader.header())?;
     if header_only {
@@ -3587,7 +3902,7 @@ fn run_replacesamheader(args: &[String]) -> Result<(), String> {
     let replacement_sort_order = header_sort_order(header_reader.header());
     drop(header_reader);
 
-    let mut reader = bam::Reader::from_path(&input).map_err(|error| error.to_string())?;
+    let mut reader = open_bam_reader(&input).map_err(|error| error.to_string())?;
     let input_sort_order = header_sort_order(reader.header());
     if input_sort_order != replacement_sort_order {
         return Err(format!(
@@ -11958,6 +12273,21 @@ fn push_merged_cigar(cigars: &mut Vec<Cigar>, cigar: Cigar) {
     cigars.push(cigar);
 }
 
+fn open_bam_reader(path: impl AsRef<Path>) -> Result<bam::Reader, String> {
+    let mut reader = bam::Reader::from_path(path).map_err(|error| error.to_string())?;
+    configure_bam_reader(&mut reader)?;
+    Ok(reader)
+}
+
+fn configure_bam_reader(reader: &mut bam::Reader) -> Result<(), String> {
+    if let Some(threads) = bgzf_threads() {
+        reader
+            .set_threads(threads)
+            .map_err(|error| error.to_string())?;
+    }
+    Ok(())
+}
+
 fn bam_writer_for_path(
     output: &str,
     header: &bam::Header,
@@ -11967,7 +12297,11 @@ fn bam_writer_for_path(
     let mut writer =
         bam::Writer::from_path(output, header, format).map_err(|error| error.to_string())?;
     if format == bam::Format::Bam {
-        writer.set_threads(2).map_err(|error| error.to_string())?;
+        if let Some(threads) = bgzf_threads() {
+            writer
+                .set_threads(threads)
+                .map_err(|error| error.to_string())?;
+        }
     }
     if let Some(level) = compression_level {
         writer
@@ -12083,6 +12417,13 @@ fn revert_record_default_unmapped_fast(
     remove_duplicate_information: bool,
     restore_hardclips: bool,
 ) -> Result<(), String> {
+    if !restore_hardclips
+        && record.aux(b"XB").is_err()
+        && record.aux(b"XQ").is_err()
+    {
+        return revert_record_default_unmapped_in_place(record, remove_duplicate_information);
+    }
+
     let mut restored_qualities = None;
     let mut hardclip_bases = None;
     let mut hardclip_qualities = None;
@@ -12167,6 +12508,59 @@ fn revert_record_default_unmapped_fast(
         push_owned_aux(&mut reverted, tag, value)?;
     }
     *record = reverted;
+    Ok(())
+}
+
+fn revert_record_default_unmapped_in_place(
+    record: &mut bam::Record,
+    remove_duplicate_information: bool,
+) -> Result<(), String> {
+    let mut restored_qualities = None;
+    if let Ok(Aux::String(qualities)) = record.aux(b"OQ") {
+        let restored = qualities
+            .bytes()
+            .map(|quality| quality.saturating_sub(33))
+            .collect::<Vec<_>>();
+        if restored.len() != record.seq_len() {
+            return Err("malformed RevertSam OQ length does not match read length".to_string());
+        }
+        restored_qualities = Some(restored);
+        remove_aux_if_present(record, b"OQ")?;
+    }
+
+    let qname = record.qname().to_vec();
+    let mut sequence = record.seq().as_bytes();
+    let mut qualities = restored_qualities.unwrap_or_else(|| record.qual().to_vec());
+    if record.is_reverse() {
+        reverse_complement(&mut sequence);
+        qualities.reverse();
+    }
+
+    record.set(&qname, None, &sequence, &qualities);
+    record.set_tid(-1);
+    record.set_pos(-1);
+    record.set_mapq(0);
+    record.set_mtid(-1);
+    record.set_mpos(-1);
+    record.set_insert_size(0);
+
+    let mut flags = record.flags();
+    flags |= 0x4;
+    if flags & 0x1 != 0 {
+        flags |= 0x8;
+    } else {
+        flags &= !0x8;
+    }
+    flags &= !(0x2 | 0x10 | 0x20 | 0x100 | 0x800);
+    if remove_duplicate_information {
+        flags &= !0x400;
+    }
+    record.set_flags(flags);
+
+    for tag in [b"NM", b"UQ", b"PG", b"MD", b"MQ", b"SA", b"MC", b"AS"] {
+        remove_aux_if_present(record, tag)?;
+    }
+    sort_aux_tags_lexicographically(record)?;
     Ok(())
 }
 
@@ -12377,7 +12771,9 @@ fn set_nm_md_uq_tags(
     let mut uq = 0i32;
     let mut md = String::with_capacity(read_bases.len());
     let mut matches = 0usize;
-    let has_aux = record.aux_iter().next().is_some();
+    let md_present = record.aux(b"MD").is_ok();
+    let nm_present = record.aux(b"NM").is_ok();
+    let uq_present = record.aux(b"UQ").is_ok();
 
     for cigar in &record.cigar() {
         match *cigar {
@@ -12390,7 +12786,7 @@ fn set_nm_md_uq_tags(
                     let ref_base = *reference.get(ref_offset).ok_or_else(|| {
                         "SetNmMdAndUqTags alignment extends beyond reference".to_string()
                     })?;
-                    if read_base.eq_ignore_ascii_case(&ref_base) {
+                    if dna_bases_equal(read_base, ref_base) {
                         matches += 1;
                     } else {
                         push_usize_decimal(&mut md, matches);
@@ -12432,19 +12828,22 @@ fn set_nm_md_uq_tags(
     push_usize_decimal(&mut md, matches);
 
     if !set_only_uq {
-        if has_aux {
+        if md_present {
             replace_aux_string(record, b"MD", &md)?;
-            replace_aux_i32(record, b"NM", nm)?;
         } else {
             record
                 .push_aux_unchecked(b"MD", Aux::String(&md))
                 .map_err(|error| error.to_string())?;
+        }
+        if nm_present {
+            replace_aux_i32(record, b"NM", nm)?;
+        } else {
             record
                 .push_aux_unchecked(b"NM", Aux::I32(nm))
                 .map_err(|error| error.to_string())?;
         }
     }
-    if has_aux {
+    if uq_present {
         replace_aux_i32(record, b"UQ", uq)?;
     } else {
         record
@@ -12452,6 +12851,20 @@ fn set_nm_md_uq_tags(
             .map_err(|error| error.to_string())?;
     }
     Ok(())
+}
+
+fn dna_bases_equal(read_base: u8, ref_base: u8) -> bool {
+    if read_base == ref_base {
+        return true;
+    }
+    match read_base.to_ascii_uppercase() {
+        b'A' => ref_base.to_ascii_uppercase() == b'A',
+        b'C' => ref_base.to_ascii_uppercase() == b'C',
+        b'G' => ref_base.to_ascii_uppercase() == b'G',
+        b'T' => ref_base.to_ascii_uppercase() == b'T',
+        b'N' => ref_base.to_ascii_uppercase() == b'N',
+        _ => false,
+    }
 }
 
 fn push_usize_decimal(output: &mut String, value: usize) {
@@ -12801,7 +13214,7 @@ fn build_merge_plan(
 
     let mut input_plans = Vec::with_capacity(inputs.len());
     for input in inputs {
-        let mut reader = bam::Reader::from_path(input).map_err(|error| error.to_string())?;
+        let mut reader = open_bam_reader(input).map_err(|error| error.to_string())?;
         let header_text = String::from_utf8_lossy(reader.header().as_bytes()).into_owned();
         if sequence_dictionary_lines(&header_text) != first_sequence_dictionary {
             return Err(
@@ -12826,7 +13239,7 @@ fn build_merge_plan(
 fn collect_merge_records(input_plans: &[MergeInputPlan]) -> Result<Vec<bam::Record>, String> {
     let mut records = Vec::new();
     for input in input_plans {
-        let mut reader = bam::Reader::from_path(&input.path).map_err(|error| error.to_string())?;
+        let mut reader = open_bam_reader(&input.path).map_err(|error| error.to_string())?;
         for record in reader.records() {
             let mut record = record.map_err(|error| error.to_string())?;
             rewrite_record_read_group(&mut record, &input.read_group_renames)?;
@@ -12837,7 +13250,7 @@ fn collect_merge_records(input_plans: &[MergeInputPlan]) -> Result<Vec<bam::Reco
 }
 
 fn input_is_sorted(path: &str, sort_order: SortOrder) -> Result<bool, String> {
-    let mut reader = bam::Reader::from_path(path).map_err(|error| error.to_string())?;
+    let mut reader = open_bam_reader(path).map_err(|error| error.to_string())?;
     input_reader_is_sorted(&mut reader, sort_order)
 }
 
