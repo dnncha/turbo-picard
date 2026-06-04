@@ -253,6 +253,9 @@ python3 tools/verify_bioconda_recipes.py --release-ready
 
 ## Contributing
 
+Bug reports, parity evidence, documentation fixes, and small command-coverage
+improvements are welcome. Please start with [`CONTRIBUTING.md`](CONTRIBUTING.md).
+
 Before adding or widening a native command, check
 [`docs/command-matrix.yml`](docs/command-matrix.yml). Changes should include
 tests, a clear command-coverage update, and documentation that says plainly what
@@ -260,3 +263,5 @@ is supported.
 
 For the development workflow, see the
 [development docs](https://turbo-picard.readthedocs.io/en/latest/development.html).
+Support expectations are in [`SUPPORT.md`](SUPPORT.md), and security reporting
+is in [`SECURITY.md`](SECURITY.md).
