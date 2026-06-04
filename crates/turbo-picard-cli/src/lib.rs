@@ -2436,12 +2436,22 @@ fn run_collectbasedistributionbycycle(args: &[String]) -> Result<(), String> {
     let pf_reads_only = optional_bool(&args, "PF_READS_ONLY")?.unwrap_or(false);
     let stop_after = optional_u32(&args, "STOP_AFTER")?.unwrap_or(0);
 
-    let mut reader = open_bam_reader(input).map_err(|error| error.to_string())?;
-    let mut metrics = BaseDistributionByCycleSummary::default();
-    for record in limited_records(&mut reader, stop_after) {
-        let record = record.map_err(|error| error.to_string())?;
-        metrics.observe(&record, aligned_reads_only, pf_reads_only);
-    }
+    let metrics = if has_sam_extension(&input) {
+        collect_base_distribution_by_cycle_sam_text(
+            &input,
+            aligned_reads_only,
+            pf_reads_only,
+            stop_after,
+        )?
+    } else {
+        let mut reader = open_bam_reader(input).map_err(|error| error.to_string())?;
+        let mut metrics = BaseDistributionByCycleSummary::default();
+        for record in limited_records(&mut reader, stop_after) {
+            let record = record.map_err(|error| error.to_string())?;
+            metrics.observe(&record, aligned_reads_only, pf_reads_only);
+        }
+        metrics
+    };
 
     fs::write(output, metrics.to_picard_text()).map_err(|error| error.to_string())?;
     write_summary_chart_pdf(&chart, "CollectBaseDistributionByCycle")
@@ -2889,12 +2899,23 @@ fn run_qualityscoredistribution(args: &[String]) -> Result<(), String> {
     let include_no_calls = optional_bool(&args, "INCLUDE_NO_CALLS")?.unwrap_or(false);
     let stop_after = optional_u32(&args, "STOP_AFTER")?.unwrap_or(0);
 
-    let mut reader = open_bam_reader(input).map_err(|error| error.to_string())?;
-    let mut metrics = QualityScoreDistributionSummary::default();
-    for record in limited_records(&mut reader, stop_after) {
-        let record = record.map_err(|error| error.to_string())?;
-        metrics.observe(&record, aligned_reads_only, pf_reads_only, include_no_calls);
-    }
+    let metrics = if has_sam_extension(&input) {
+        collect_quality_score_distribution_sam_text(
+            &input,
+            aligned_reads_only,
+            pf_reads_only,
+            include_no_calls,
+            stop_after,
+        )?
+    } else {
+        let mut reader = open_bam_reader(input).map_err(|error| error.to_string())?;
+        let mut metrics = QualityScoreDistributionSummary::default();
+        for record in limited_records(&mut reader, stop_after) {
+            let record = record.map_err(|error| error.to_string())?;
+            metrics.observe(&record, aligned_reads_only, pf_reads_only, include_no_calls);
+        }
+        metrics
+    };
 
     fs::write(output, metrics.to_picard_text()).map_err(|error| error.to_string())?;
     write_summary_chart_pdf(&chart, "QualityScoreDistribution")
@@ -3186,19 +3207,17 @@ struct RevertsamTextRecord {
     serial: usize,
 }
 
-fn run_revertsam_sam_text(
+fn collect_revertsam_sam_text_records(
     input: &str,
-    output: &str,
-    remove_alignment_information: bool,
     remove_duplicate_information: bool,
     restore_hardclips: bool,
     sort_order: SortOrder,
-) -> Result<(), String> {
+) -> Result<(Vec<String>, Vec<RevertsamTextRecord>), String> {
     let file = fs::File::open(input).map_err(|error| error.to_string())?;
     let mut reader = BufReader::with_capacity(1024 * 1024, file);
     let mut header_lines = Vec::<String>::new();
     let mut records = Vec::<RevertsamTextRecord>::new();
-    let mut line = String::new();
+    let mut line = String::with_capacity(512);
     let mut serial = 0usize;
 
     loop {
@@ -3248,6 +3267,24 @@ fn run_revertsam_sam_text(
                 .then_with(|| left.serial.cmp(&right.serial))
         });
     }
+
+    Ok((header_lines, records))
+}
+
+fn run_revertsam_sam_text(
+    input: &str,
+    output: &str,
+    remove_alignment_information: bool,
+    remove_duplicate_information: bool,
+    restore_hardclips: bool,
+    sort_order: SortOrder,
+) -> Result<(), String> {
+    let (header_lines, records) = collect_revertsam_sam_text_records(
+        input,
+        remove_duplicate_information,
+        restore_hardclips,
+        sort_order,
+    )?;
 
     let mut writer = BufWriter::with_capacity(
         1024 * 1024,
@@ -3362,23 +3399,33 @@ fn revert_sam_text_record_line(
     remove_duplicate_information: bool,
     restore_hardclips: bool,
 ) -> Result<(String, String, u16), String> {
-    let fields = line
-        .split('\t')
-        .collect::<Vec<_>>();
-    if fields.len() < 11 {
-        return Err("malformed RevertSam SAM record".to_string());
-    }
-    let qname = fields[0].to_string();
-    let mut flags = fields[1]
+    let mut fields = line.split('\t');
+    let qname = fields
+        .next()
+        .ok_or_else(|| "malformed RevertSam SAM record".to_string())?;
+    let mut flags = fields
+        .next()
+        .ok_or_else(|| "malformed RevertSam SAM record".to_string())?
         .parse::<u16>()
         .map_err(|_| "malformed RevertSam SAM flag".to_string())?;
-    let mut sequence = fields[9].as_bytes().to_vec();
-    let mut qualities = fields[10].as_bytes().to_vec();
-    let mut kept_aux = Vec::<String>::new();
+    for _ in 0..7 {
+        fields
+            .next()
+            .ok_or_else(|| "malformed RevertSam SAM record".to_string())?;
+    }
+    let sequence_field = fields
+        .next()
+        .ok_or_else(|| "malformed RevertSam SAM record".to_string())?;
+    let quality_field = fields
+        .next()
+        .ok_or_else(|| "malformed RevertSam SAM record".to_string())?;
+    let mut sequence = sequence_field.as_bytes().to_vec();
+    let mut qualities = quality_field.as_bytes().to_vec();
+    let mut kept_aux = Vec::<&str>::new();
     let mut hardclip_bases = None::<Vec<u8>>;
     let mut hardclip_qualities = None::<Vec<u8>>;
 
-    for tag_field in &fields[11..] {
+    for tag_field in fields {
         if tag_field.starts_with("OQ:Z:") {
             qualities = tag_field[5..].as_bytes().to_vec();
             continue;
@@ -3394,7 +3441,7 @@ fn revert_sam_text_record_line(
         if revertsam_default_removed_alignment_tag_field(tag_field) {
             continue;
         }
-        kept_aux.push((*tag_field).to_string());
+        kept_aux.push(tag_field);
     }
 
     if flags & 0x10 != 0 {
@@ -3420,19 +3467,26 @@ fn revert_sam_text_record_line(
         flags &= !0x400;
     }
 
-    kept_aux.sort();
-    let mut reverted = format!(
-        "{qname}\t{flags}\t*\t0\t0\t*\t*\t0\t0\t{seq}\t{qual}",
-        qname = qname,
-        flags = flags,
-        seq = String::from_utf8(sequence).map_err(|_| "malformed RevertSam sequence".to_string())?,
-        qual = String::from_utf8(qualities).map_err(|_| "malformed RevertSam qualities".to_string())?,
+    kept_aux.sort_unstable();
+    let seq = String::from_utf8(sequence)
+        .map_err(|_| "malformed RevertSam sequence".to_string())?;
+    let qual = String::from_utf8(qualities)
+        .map_err(|_| "malformed RevertSam qualities".to_string())?;
+    let mut reverted = String::with_capacity(
+        qname.len() + seq.len() + qual.len() + kept_aux.iter().map(|tag| tag.len()).sum::<usize>() + 32,
     );
+    reverted.push_str(qname);
+    reverted.push('\t');
+    reverted.push_str(&flags.to_string());
+    reverted.push_str("\t*\t0\t0\t*\t*\t0\t0\t");
+    reverted.push_str(&seq);
+    reverted.push('\t');
+    reverted.push_str(&qual);
     for tag in kept_aux {
         reverted.push('\t');
-        reverted.push_str(&tag);
+        reverted.push_str(tag);
     }
-    Ok((reverted, qname, flags))
+    Ok((reverted, qname.to_string(), flags))
 }
 
 fn revertsam_default_removed_alignment_tag_field(tag_field: &str) -> bool {
@@ -9159,6 +9213,217 @@ fn het_snp_q(sensitivity_text: &str) -> String {
     ((-10.0 * (1.0 - sensitivity).log10()).round() as u64).to_string()
 }
 
+fn collect_quality_score_distribution_sam_text(
+    input: &str,
+    aligned_reads_only: bool,
+    pf_reads_only: bool,
+    include_no_calls: bool,
+    stop_after: u32,
+) -> Result<QualityScoreDistributionSummary, String> {
+    let file = fs::File::open(input).map_err(|error| error.to_string())?;
+    let mut reader = BufReader::with_capacity(1024 * 1024, file);
+    let mut line = Vec::new();
+    let mut metrics = QualityScoreDistributionSummary::default();
+    let mut observed = 0_u32;
+    loop {
+        line.clear();
+        if reader
+            .read_until(b'\n', &mut line)
+            .map_err(|error| error.to_string())?
+            == 0
+        {
+            break;
+        }
+        if line.starts_with(b"@") || line.iter().all(|byte| byte.is_ascii_whitespace()) {
+            continue;
+        }
+        observe_quality_score_distribution_sam_line(
+            &mut metrics,
+            &line,
+            aligned_reads_only,
+            pf_reads_only,
+            include_no_calls,
+        )?;
+        observed = observed.saturating_add(1);
+        if stop_after > 0 && observed >= stop_after {
+            break;
+        }
+    }
+    Ok(metrics)
+}
+
+fn observe_quality_score_distribution_sam_line(
+    metrics: &mut QualityScoreDistributionSummary,
+    line: &[u8],
+    aligned_reads_only: bool,
+    pf_reads_only: bool,
+    include_no_calls: bool,
+) -> Result<(), String> {
+    let mut line = line;
+    while line.ends_with(b"\n") || line.ends_with(b"\r") {
+        line = &line[..line.len() - 1];
+    }
+    let mut fields = line.split(|byte| *byte == b'\t');
+    fields
+        .next()
+        .ok_or_else(|| "malformed QualityScoreDistribution SAM record".to_string())?;
+    let flags = parse_u16_bytes(
+        fields
+            .next()
+            .ok_or_else(|| "malformed QualityScoreDistribution SAM record".to_string())?,
+    )?;
+    if flags & 0x100 != 0 || flags & 0x800 != 0 {
+        return Ok(());
+    }
+    let rname = fields
+        .next()
+        .ok_or_else(|| "malformed QualityScoreDistribution SAM record".to_string())?;
+    if aligned_reads_only && rname == b"*" {
+        return Ok(());
+    }
+    if pf_reads_only && flags & 0x200 != 0 {
+        return Ok(());
+    }
+    for _ in 0..6 {
+        fields
+            .next()
+            .ok_or_else(|| "malformed QualityScoreDistribution SAM record".to_string())?;
+    }
+    let sequence = fields
+        .next()
+        .ok_or_else(|| "malformed QualityScoreDistribution SAM record".to_string())?;
+    let qualities = fields
+        .next()
+        .ok_or_else(|| "malformed QualityScoreDistribution SAM record".to_string())?;
+    let mut original_qualities = None::<&[u8]>;
+    for field in fields {
+        if let Some(value) = field.strip_prefix(b"OQ:Z:") {
+            original_qualities = Some(value);
+        }
+    }
+    for (index, quality) in qualities.iter().copied().enumerate() {
+        if !include_no_calls && sequence.get(index).is_some_and(|base| *base == b'N') {
+            continue;
+        }
+        *metrics.counts.entry(quality.saturating_sub(33)).or_default() += 1;
+    }
+    if let Some(original_qualities) = original_qualities {
+        for (index, quality) in original_qualities.iter().copied().enumerate() {
+            if !include_no_calls && sequence.get(index).is_some_and(|base| *base == b'N') {
+                continue;
+            }
+            *metrics
+                .original_counts
+                .entry(quality.saturating_sub(33))
+                .or_default() += 1;
+        }
+    }
+    Ok(())
+}
+
+fn collect_base_distribution_by_cycle_sam_text(
+    input: &str,
+    aligned_reads_only: bool,
+    pf_reads_only: bool,
+    stop_after: u32,
+) -> Result<BaseDistributionByCycleSummary, String> {
+    let file = fs::File::open(input).map_err(|error| error.to_string())?;
+    let mut reader = BufReader::with_capacity(1024 * 1024, file);
+    let mut line = Vec::new();
+    let mut metrics = BaseDistributionByCycleSummary::default();
+    let mut observed = 0_u32;
+    loop {
+        line.clear();
+        if reader
+            .read_until(b'\n', &mut line)
+            .map_err(|error| error.to_string())?
+            == 0
+        {
+            break;
+        }
+        if line.starts_with(b"@") || line.iter().all(|byte| byte.is_ascii_whitespace()) {
+            continue;
+        }
+        observe_base_distribution_by_cycle_sam_line(
+            &mut metrics,
+            &line,
+            aligned_reads_only,
+            pf_reads_only,
+        )?;
+        observed = observed.saturating_add(1);
+        if stop_after > 0 && observed >= stop_after {
+            break;
+        }
+    }
+    Ok(metrics)
+}
+
+fn observe_base_distribution_by_cycle_sam_line(
+    metrics: &mut BaseDistributionByCycleSummary,
+    line: &[u8],
+    aligned_reads_only: bool,
+    pf_reads_only: bool,
+) -> Result<(), String> {
+    let mut line = line;
+    while line.ends_with(b"\n") || line.ends_with(b"\r") {
+        line = &line[..line.len() - 1];
+    }
+    let mut fields = line.split(|byte| *byte == b'\t');
+    fields
+        .next()
+        .ok_or_else(|| "malformed CollectBaseDistributionByCycle SAM record".to_string())?;
+    let flags = parse_u16_bytes(
+        fields
+            .next()
+            .ok_or_else(|| "malformed CollectBaseDistributionByCycle SAM record".to_string())?,
+    )?;
+    if flags & 0x100 != 0 || flags & 0x800 != 0 {
+        return Ok(());
+    }
+    let rname = fields
+        .next()
+        .ok_or_else(|| "malformed CollectBaseDistributionByCycle SAM record".to_string())?;
+    if aligned_reads_only && rname == b"*" {
+        return Ok(());
+    }
+    if pf_reads_only && flags & 0x200 != 0 {
+        return Ok(());
+    }
+    for _ in 0..6 {
+        fields
+            .next()
+            .ok_or_else(|| "malformed CollectBaseDistributionByCycle SAM record".to_string())?;
+    }
+    let sequence = fields
+        .next()
+        .ok_or_else(|| "malformed CollectBaseDistributionByCycle SAM record".to_string())?;
+    let is_second_end = flags & 0x1 != 0 && flags & 0x80 != 0;
+    let cycle_offset = if is_second_end { sequence.len() } else { 0 };
+    let cycles = if is_second_end {
+        &mut metrics.second
+    } else {
+        &mut metrics.first
+    };
+    if flags & 0x10 != 0 {
+        for (index, base) in sequence.iter().rev().enumerate() {
+            let cycle = cycle_offset + index;
+            if cycles.len() <= cycle {
+                cycles.resize(cycle + 1, BaseCycleCounts::default());
+            }
+            cycles[cycle].observe(*base);
+        }
+    } else {
+        for (index, base) in sequence.iter().enumerate() {
+            let cycle = cycle_offset + index;
+            if cycles.len() <= cycle {
+                cycles.resize(cycle + 1, BaseCycleCounts::default());
+            }
+            cycles[cycle].observe(*base);
+        }
+    }
+    Ok(())
+}
+
 #[derive(Debug, Default)]
 struct QualityScoreDistributionSummary {
     counts: BTreeMap<u8, u64>,
@@ -9263,17 +9528,22 @@ impl BaseDistributionByCycleSummary {
         } else {
             &mut self.first
         };
-        let iterator: Box<dyn Iterator<Item = u8>> = if record.is_reverse() {
-            Box::new(bases.iter().rev().copied())
-        } else {
-            Box::new(bases.iter().copied())
-        };
-        for (index, base) in iterator.enumerate() {
-            let cycle = cycle_offset + index;
-            if cycles.len() <= cycle {
-                cycles.resize(cycle + 1, BaseCycleCounts::default());
+        if record.is_reverse() {
+            for (index, base) in bases.iter().rev().enumerate() {
+                let cycle = cycle_offset + index;
+                if cycles.len() <= cycle {
+                    cycles.resize(cycle + 1, BaseCycleCounts::default());
+                }
+                cycles[cycle].observe(*base);
             }
-            cycles[cycle].observe(base);
+        } else {
+            for (index, base) in bases.iter().enumerate() {
+                let cycle = cycle_offset + index;
+                if cycles.len() <= cycle {
+                    cycles.resize(cycle + 1, BaseCycleCounts::default());
+                }
+                cycles[cycle].observe(*base);
+            }
         }
     }
 
