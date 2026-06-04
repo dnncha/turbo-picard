@@ -29,7 +29,7 @@ What delegates
 
 Fallback is a compatibility bridge, not proof that a workflow is ready to
 switch. Use it with the command coverage table and the parity guidance in
-:doc:`parity` so unsupported commands remain visible while you test.
+:doc:`parity` so unsupported surfaces remain visible while you test.
 
 What does not delegate
 ----------------------
