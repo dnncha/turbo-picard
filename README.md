@@ -24,7 +24,7 @@ turbo-picard MarkDuplicates I=input.bam O=marked.bam M=metrics.txt
 There is also an optional `picard` shim for environments that already call a
 binary named `picard`.
 
-## Should You Switch?
+## Why Use It
 
 Use `turbo-picard` where the documented native scope matches your command and
 your own comparison data agrees. The easiest path is to start with one expensive
@@ -36,6 +36,9 @@ indexing, VCF housekeeping, and metrics steps where wall-clock time is getting
 in the way of iteration. Do not treat it as a blanket Picard replacement. The
 project is deliberately explicit about what is native, what is partial, and
 what should still go to upstream Picard.
+
+Start with the explicit `turbo-picard` command. Use the `picard` shim only when
+you deliberately want it to stand in for Picard in a particular environment.
 
 ## Documentation
 
