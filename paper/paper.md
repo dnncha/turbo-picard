@@ -10,6 +10,7 @@ tags:
   - Rust
 authors:
   - name: Donncha O'Toole
+    orcid: 0009-0003-5012-7229
     affiliation: 1
 affiliations:
   - name: Independent researcher

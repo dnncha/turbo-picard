@@ -8,6 +8,7 @@ abstract: "A Picard-compatible Rust toolkit with faster implementations of selec
 authors:
   - family-names: "O'Toole"
     given-names: "Donncha"
+    orcid: "https://orcid.org/0009-0003-5012-7229"
 repository-code: "https://github.com/dnncha/turbo-picard"
 url: "https://turbo-picard.readthedocs.io/"
 license: "MIT"
