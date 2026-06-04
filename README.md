@@ -221,7 +221,10 @@ The `v0.1.1` release is archived on Zenodo:
 [10.5281/zenodo.20541928](https://doi.org/10.5281/zenodo.20541928).
 Use the DOI for the archived release you actually used.
 
-A short JOSS-style software paper draft is in [`paper/`](paper/). Check it with:
+A short JOSS-style software paper draft is in [`paper/`](paper/). It is kept in
+the repository so the software is ready to cite properly later, but it should
+not be submitted to JOSS yet: the project needs more public development history
+before it clears the current JOSS pre-review gate. Check the paper with:
 
 ```bash
 python3 tools/verify_joss_paper.py
