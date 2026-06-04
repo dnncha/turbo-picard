@@ -221,6 +221,12 @@ The `v0.1.1` release is archived on Zenodo:
 [10.5281/zenodo.20541928](https://doi.org/10.5281/zenodo.20541928).
 Use the DOI for the archived release you actually used.
 
+A short JOSS-style software paper draft is in [`paper/`](paper/). Check it with:
+
+```bash
+python3 tools/verify_joss_paper.py
+```
+
 ## Bioconda Status
 
 Release `v0.1.1` has been submitted to Bioconda as two recipes:

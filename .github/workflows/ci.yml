@@ -103,6 +103,7 @@ jobs:
             tools/verify_benchmark_thresholds.py \
             tools/verify_chart_disclosures.py \
             tools/verify_ci_coverage.py \
+            tools/verify_joss_paper.py \
             tools/verify_command_matrix.py \
             tools/verify_parity_docs.py \
             tools/verify_readme_benchmark_evidence.py \
@@ -142,6 +143,7 @@ jobs:
           python3 tools/verify_bioconda_recipes.py
           python3 tools/verify_chart_disclosures.py
           python3 tools/verify_ci_coverage.py
+          python3 tools/verify_joss_paper.py
           python3 tools/verify_benchmark_log_evidence.py
           python3 tools/verify_benchmark_suite_coverage.py
           python3 tools/verify_benchmark_thresholds.py
