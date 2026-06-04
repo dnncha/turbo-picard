@@ -385,7 +385,7 @@ keywords:
         self.assertIn("CITATION.cff cff-version must be 1.2.0", errors)
         self.assertIn("CITATION.cff title must be turbo-picard", errors)
         self.assertIn(
-            "CITATION.cff must include turbo-picard contributors author",
+            "CITATION.cff must include a named creator",
             errors,
         )
         self.assertIn(
@@ -506,7 +506,7 @@ CITATION.cff software citation is separate from pinned input data with SHA-256.
         )
         errors = verify_release_versions.collect_errors(root)
         self.assertIn("docs/citation.rst must mention archived-release citation rule", errors)
-        self.assertIn("docs/citation.rst must mention command-level parity evidence rule", errors)
+        self.assertIn("docs/citation.rst must mention parity evidence rule", errors)
         self.assertIn("docs/citation.rst must mention Picard evidence version", errors)
         self.assertIn("docs/citation.rst must mention methods command replacement rule", errors)
         self.assertIn("docs/citation.rst must mention methods fallback disclosure rule", errors)

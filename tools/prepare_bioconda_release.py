@@ -244,10 +244,13 @@ def validate_archive_release_metadata(
         return "--archive CITATION.cff authors must be a non-empty list"
     if not any(
         isinstance(author, dict)
-        and author.get("name") == "turbo-picard contributors"
+        and (
+            author.get("name") == "turbo-picard contributors"
+            or (author.get("family-names") and author.get("given-names"))
+        )
         for author in authors
     ):
-        return "--archive CITATION.cff authors must include turbo-picard contributors"
+        return "--archive CITATION.cff authors must include a named creator"
     keywords = citation_yaml.get("keywords")
     required_keywords = {
         "bioinformatics",

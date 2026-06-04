@@ -1,11 +1,13 @@
 cff-version: 1.2.0
-message: "If turbo-picard helps your work, please cite the archived release you used and include the command-level parity evidence relevant to your workflow."
+message: "If turbo-picard helps your work, please cite the archived release you used and include the parity evidence relevant to your workflow."
 type: software
 title: "turbo-picard"
 version: "0.1.0"
-abstract: "A Picard-shaped Rust toolkit with native implementations for selected high-impact Picard command surfaces, explicit fallback for unsupported behavior, and reproducible parity and benchmark evidence."
+abstract: "A Picard-compatible Rust toolkit with faster implementations of selected SAM/BAM, metrics, FASTA, VCF, and interval commands, explicit fallback for unsupported behavior, and saved parity and benchmark evidence."
 authors:
-  - name: "turbo-picard contributors"
+  - family-names: "O'Toole"
+    given-names: "Donncha"
+    email: "donncha@focalise.ie"
 repository-code: "https://github.com/dnncha/turbo-picard"
 url: "https://turbo-picard.readthedocs.io/"
 license: "MIT"

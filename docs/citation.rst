@@ -2,9 +2,13 @@ Citation
 ========
 
 If ``turbo-picard`` helps your work, cite the archived release you used and
-keep the command-level parity evidence with your analysis notes. The repository
-includes a ``CITATION.cff`` file so GitHub and citation tools can produce a
-standard software citation.
+keep the relevant parity evidence with your analysis notes. The repository
+includes a ``CITATION.cff`` file and Zenodo metadata so GitHub, Zenodo, and
+citation tools can produce a standard software citation.
+
+Zenodo archiving is enabled for the GitHub repository. After the next GitHub
+release is archived there, add the Zenodo DOI badge to the README and cite that
+archived release.
 
 The project citation is for the software. It is separate from the input-data
 citations used by the real-data parity checks. ``CITATION.cff`` does not cite

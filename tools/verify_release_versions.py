@@ -67,6 +67,19 @@ def cff_scalar(text: str, key: str) -> str | None:
     return match.group(1).strip()
 
 
+def has_citation_creator(authors: object) -> bool:
+    if not isinstance(authors, list):
+        return False
+    for author in authors:
+        if not isinstance(author, dict):
+            continue
+        if author.get("name") == "turbo-picard contributors":
+            return True
+        if author.get("family-names") and author.get("given-names"):
+            return True
+    return False
+
+
 def collect_errors(root: Path = ROOT) -> list[str]:
     errors: list[str] = []
     version = workspace_version(root)
@@ -150,12 +163,8 @@ def collect_errors(root: Path = ROOT) -> list[str]:
         authors = citation_yaml.get("authors")
         if not isinstance(authors, list) or not authors:
             errors.append("CITATION.cff authors must be a non-empty list")
-        elif not any(
-            isinstance(author, dict)
-            and author.get("name") == "turbo-picard contributors"
-            for author in authors
-        ):
-            errors.append("CITATION.cff authors must include turbo-picard contributors")
+        elif not has_citation_creator(authors):
+            errors.append("CITATION.cff authors must include a named creator")
         keywords = citation_yaml.get("keywords")
         if not isinstance(keywords, list) or not {
             "bioinformatics",
@@ -185,8 +194,8 @@ def collect_errors(root: Path = ROOT) -> list[str]:
             errors.append("CITATION.cff url must be https://turbo-picard.readthedocs.io/")
         if cff_scalar(citation, "license") != "MIT":
             errors.append("CITATION.cff license must match workspace MIT")
-        if "authors:" not in citation or "turbo-picard contributors" not in citation:
-            errors.append("CITATION.cff must include turbo-picard contributors author")
+        if "authors:" not in citation or not has_citation_creator(authors):
+            errors.append("CITATION.cff must include a named creator")
         if "archived release" not in prose_text(citation):
             errors.append("CITATION.cff message must ask users to cite the archived release")
         required_terms = ["Picard", "parity", "evidence"]
@@ -230,7 +239,7 @@ def collect_errors(root: Path = ROOT) -> list[str]:
         if doc == Path("docs/citation.rst"):
             required_needles = [
                 ("archived release", "archived-release citation rule"),
-                ("command-level", "command-level parity evidence rule"),
+                ("parity evidence", "parity evidence rule"),
                 ("Picard 3.4.0", "Picard evidence version"),
                 ("evidence reports", "methods evidence-report rule"),
                 ("full Git commit", "full Git commit citation rule"),

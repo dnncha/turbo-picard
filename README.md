@@ -215,6 +215,9 @@ commits or accessions, and SHA-256 hashes. The
 [citation docs](https://turbo-picard.readthedocs.io/en/latest/citation.html)
 spell out what to record.
 
+Zenodo archiving is enabled for this repository. After the next GitHub release
+is archived there, add the Zenodo DOI badge here and cite that archived release.
+
 ## Bioconda Status
 
 Release `v0.1.0` has been submitted to Bioconda as two recipes:
