@@ -3206,6 +3206,27 @@ fn run_revertsam(args: &[String]) -> Result<(), String> {
     }
     let attributes_to_clear = attributes_to_clear_for_revertsam(&args)?;
 
+    if let Some(()) = try_stream_revertsam(
+        &input,
+        &output,
+        output_format,
+        compression_level,
+        restore_original_qualities,
+        remove_alignment_information,
+        remove_duplicate_information,
+        restore_hardclips,
+        &attributes_to_clear,
+        &attributes_to_reverse,
+        &attributes_to_reverse_complement,
+        sort_order,
+    )? {
+        return write_requested_sidecars(
+            &output,
+            create_md5_file,
+            create_index && sort_order == SortOrder::Coordinate,
+        );
+    }
+
     let mut reader = bam::Reader::from_path(&input).map_err(|error| error.to_string())?;
     let header = reverted_header(reader.header(), remove_alignment_information, sort_order);
     let mut records = Vec::new();
@@ -3241,6 +3262,79 @@ fn run_revertsam(args: &[String]) -> Result<(), String> {
         create_md5_file,
         create_index && sort_order == SortOrder::Coordinate,
     )
+}
+
+fn try_stream_revertsam(
+    input: &str,
+    output: &str,
+    output_format: bam::Format,
+    compression_level: Option<u32>,
+    restore_original_qualities: bool,
+    remove_alignment_information: bool,
+    remove_duplicate_information: bool,
+    restore_hardclips: bool,
+    attributes_to_clear: &[[u8; 2]],
+    attributes_to_reverse: &[[u8; 2]],
+    attributes_to_reverse_complement: &[[u8; 2]],
+    sort_order: SortOrder,
+) -> Result<Option<()>, String> {
+    if sort_order == SortOrder::Coordinate {
+        return Ok(None);
+    }
+
+    let stream_output = if sort_order == SortOrder::QueryName {
+        temp_revertsam_output_path(output)
+    } else {
+        output.to_string()
+    };
+    let mut reader = bam::Reader::from_path(input).map_err(|error| error.to_string())?;
+    let header = reverted_header(reader.header(), remove_alignment_information, sort_order);
+    let mut writer =
+        bam_writer_for_path(&stream_output, &header, output_format, compression_level)?;
+    let mut last_query_name = Vec::<u8>::new();
+    let mut have_last_query_name = false;
+
+    for record in reader.records() {
+        let mut record = record.map_err(|error| error.to_string())?;
+        if record.is_secondary() || record.is_supplementary() {
+            continue;
+        }
+        revert_record(
+            &mut record,
+            restore_original_qualities,
+            remove_alignment_information,
+            remove_duplicate_information,
+            restore_hardclips,
+            attributes_to_clear,
+            attributes_to_reverse,
+            attributes_to_reverse_complement,
+        )?;
+        if sort_order == SortOrder::QueryName {
+            let qname = record.qname();
+            if have_last_query_name && last_query_name.as_slice() > qname {
+                drop(writer);
+                let _ = fs::remove_file(&stream_output);
+                return Ok(None);
+            }
+            last_query_name.clear();
+            last_query_name.extend_from_slice(qname);
+            have_last_query_name = true;
+        }
+        writer.write(&record).map_err(|error| error.to_string())?;
+    }
+
+    drop(writer);
+    if sort_order == SortOrder::QueryName {
+        if Path::new(output).exists() {
+            fs::remove_file(output).map_err(|error| error.to_string())?;
+        }
+        fs::rename(&stream_output, output).map_err(|error| error.to_string())?;
+    }
+    Ok(Some(()))
+}
+
+fn temp_revertsam_output_path(output: &str) -> String {
+    format!("{output}.tmp.{}.revertsam", process::id())
 }
 
 fn run_setnmmdanduqtags(args: &[String]) -> Result<(), String> {

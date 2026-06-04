@@ -544,8 +544,8 @@
           </div>
           <div class="proof-strip" aria-label="Benchmark summary">
             <div class="proof"><strong>32/32</strong><span>benchmark parity checks passing</span></div>
-            <div class="proof"><strong>112.07x</strong><span>fastest saved speedup</span></div>
-            <div class="proof"><strong>7.40x</strong><span>slowest saved speedup</span></div>
+            <div class="proof"><strong>84.46x</strong><span>fastest saved speedup</span></div>
+            <div class="proof"><strong>8.55x</strong><span>slowest saved speedup</span></div>
             <div class="proof"><strong>Picard</strong><span>familiar arguments, fallback available</span></div>
           </div>
         </div>
@@ -559,7 +559,7 @@
               The chart is rendered from the saved suite output in this repository. Each benchmark
               compares turbo-picard against Picard and reports speed only after the stable output
               comparison passes.
-              The current asset was saved on <code>2026-05-31</code> from
+              The current asset was saved on <code>2026-06-04</code> from
               <code>python3 tools/bench_suite.py --repeats 1 --skip-build</code>; the raw log is
               <code>docs/site/assets/bench-suite-output.txt</code>.
               There are no benchmark exceptions right now: every native or partly native command
@@ -572,9 +572,9 @@
           </div>
           <div class="benchmark-highlights" aria-label="Benchmark highlights">
             <div class="benchmark-highlight"><b>32/32 PASS</b><span>All 32 commands in the saved benchmark suite passed parity checks.</span></div>
-            <div class="benchmark-highlight"><b>112.07x</b><span>UpdateVcfSequenceDictionary led the current local benchmark run.</span></div>
-            <div class="benchmark-highlight"><b>7.40x</b><span>RevertSam is the current floor after its default-unmapped fast path.</span></div>
-            <div class="benchmark-highlight"><b>27.31x</b><span>Geometric mean speedup across the current 32-command suite.</span></div>
+            <div class="benchmark-highlight"><b>84.46x</b><span>UpdateVcfSequenceDictionary led the current local benchmark run.</span></div>
+            <div class="benchmark-highlight"><b>8.55x</b><span>RevertSam is the current floor after its default-unmapped fast path.</span></div>
+            <div class="benchmark-highlight"><b>26.74x</b><span>Geometric mean speedup across the current 32-command suite.</span></div>
             <div class="benchmark-highlight"><b>JSON-backed</b><span>The chart is rendered from benchmark-data.json with rank and summary stats.</span></div>
           </div>
         </div>
@@ -838,7 +838,7 @@ picard SetNmMdAndUqTags I=coordinate.bam O=tagged.bam R=reference.fa</pre>
             <article class="tile">
               <h3>Bioconda path</h3>
               <p>
-                Release <code>v0.1.0</code> has been submitted to Bioconda as
+                Release <code>v0.1.1</code> has been submitted to Bioconda as
                 <code>turbo-picard</code> plus the optional
                 <code>turbo-picard-picard-shim</code>. The main package keeps the
                 <code>turbo-picard</code> command separate; the shim installs

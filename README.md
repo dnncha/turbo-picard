@@ -119,12 +119,12 @@ The benchmark suite compares each command with Picard and checks stable output
 before reporting speed. The saved benchmark run currently reports:
 
 - `32/32` benchmarked commands passed parity checks.
-- `112.07x` top speedup: `UpdateVcfSequenceDictionary`.
-- `7.40x` floor speedup: `RevertSam`.
-- `26.24x` median speedup.
-- `27.31x` geometric mean speedup.
+- `84.46x` top speedup: `UpdateVcfSequenceDictionary`.
+- `8.55x` floor speedup: `RevertSam`.
+- `26.82x` median speedup.
+- `26.74x` geometric mean speedup.
 
-Saved on `2026-05-31` from
+Saved on `2026-06-04` from
 `python3 tools/bench_suite.py --repeats 1 --skip-build`.
 Raw log: `docs/site/assets/bench-suite-output.txt`.
 
@@ -136,38 +136,38 @@ are claimed to be pixel-identical to Picard.
 
 | Command | Speedup | Parity |
 | --- | ---: | --- |
-| UpdateVcfSequenceDictionary | 112.07x | PASS |
-| NormalizeFasta | 88.38x | PASS |
-| CreateSequenceDictionary | 61.41x | PASS |
-| BuildBamIndex | 59.88x | PASS |
-| MergeVcfs | 48.06x | PASS |
-| CollectInsertSizeMetrics | 46.42x | PASS |
-| GatherVcfs | 45.45x | PASS |
-| SamToFastq | 43.91x | PASS |
-| CollectGcBiasMetrics | 39.92x | PASS |
-| CleanSam | 37.49x | PASS |
-| IntervalListTools | 34.07x | PASS |
-| CollectAlignmentSummaryMetrics | 30.23x | PASS |
-| ViewSam | 29.48x | PASS |
-| SortVcf | 27.27x | PASS |
-| CollectQualityYieldMetrics | 26.92x | PASS |
-| SortSam | 26.24x | PASS |
-| AddOrReplaceReadGroups | 25.07x | PASS |
-| BedToIntervalList | 25.00x | PASS |
-| MergeSamFiles | 24.64x | PASS |
-| ValidateSamFile | 23.90x | PASS |
-| CollectWgsMetrics | 22.54x | PASS |
-| MeanQualityByCycle | 21.90x | PASS |
-| CollectMultipleMetrics | 21.41x | PASS |
-| MarkDuplicates | 20.59x | PASS |
-| ReplaceSamHeader | 19.81x | PASS |
-| FastqToSam | 18.12x | PASS |
-| LiftoverVcf | 17.12x | PASS |
-| CollectBaseDistributionByCycle | 13.82x | PASS |
-| FixMateInformation | 11.72x | PASS |
-| SetNmMdAndUqTags | 10.51x | PASS |
-| QualityScoreDistribution | 10.39x | PASS |
-| RevertSam | 7.40x | PASS |
+| UpdateVcfSequenceDictionary | 84.46x | PASS |
+| NormalizeFasta | 68.69x | PASS |
+| GatherVcfs | 63.77x | PASS |
+| MergeVcfs | 56.99x | PASS |
+| CreateSequenceDictionary | 50.86x | PASS |
+| CollectGcBiasMetrics | 50.25x | PASS |
+| SortSam | 47.40x | PASS |
+| CollectInsertSizeMetrics | 46.41x | PASS |
+| BuildBamIndex | 45.49x | PASS |
+| CollectAlignmentSummaryMetrics | 37.50x | PASS |
+| IntervalListTools | 33.01x | PASS |
+| SamToFastq | 30.44x | PASS |
+| ViewSam | 28.64x | PASS |
+| BedToIntervalList | 27.91x | PASS |
+| SortVcf | 27.87x | PASS |
+| CleanSam | 26.82x | PASS |
+| AddOrReplaceReadGroups | 26.17x | PASS |
+| FastqToSam | 24.80x | PASS |
+| CollectQualityYieldMetrics | 24.06x | PASS |
+| MarkDuplicates | 23.19x | PASS |
+| CollectWgsMetrics | 22.42x | PASS |
+| MeanQualityByCycle | 21.66x | PASS |
+| CollectMultipleMetrics | 20.48x | PASS |
+| ValidateSamFile | 19.38x | PASS |
+| LiftoverVcf | 15.13x | PASS |
+| FixMateInformation | 14.54x | PASS |
+| MergeSamFiles | 14.31x | PASS |
+| ReplaceSamHeader | 14.07x | PASS |
+| CollectBaseDistributionByCycle | 12.46x | PASS |
+| QualityScoreDistribution | 11.40x | PASS |
+| SetNmMdAndUqTags | 10.19x | PASS |
+| RevertSam | 8.55x | PASS |
 
 Useful checks:
 
@@ -220,7 +220,7 @@ is archived there, add the Zenodo DOI badge here and cite that archived release.
 
 ## Bioconda Status
 
-Release `v0.1.0` has been submitted to Bioconda as two recipes:
+Release `v0.1.1` has been submitted to Bioconda as two recipes:
 
 - `turbo-picard`
 - `turbo-picard-picard-shim`
@@ -233,7 +233,7 @@ Release checks:
 ```bash
 python3 tools/bioconda_release_preflight.py
 python3 tools/prepare_bioconda_release.py \
-  --archive ~/Downloads/turbo-picard-0.1.0.tar.gz
+  --archive ~/Downloads/turbo-picard-0.1.1.tar.gz
 python3 tools/verify_bioconda_recipes.py --release-ready
 ```
 

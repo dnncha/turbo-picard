@@ -65,7 +65,7 @@ the immutable tagged archive:
 
    python3 tools/bioconda_release_preflight.py
    python3 tools/prepare_bioconda_release.py \
-     --archive ~/Downloads/turbo-picard-0.1.0.tar.gz
+     --archive ~/Downloads/turbo-picard-0.1.1.tar.gz
 
 The preflight command summarizes the checks that are already green and calls out
 the expected wait state while the recipes still use ``source.path``.
@@ -78,8 +78,8 @@ version, contains the expected release files, and carries the citation,
 benchmark, and real-data metadata used by the PR body. If the digest was
 computed elsewhere, pass it with ``--sha256`` only when it came from the
 downloaded GitHub source archive. That fallback skips archive filename and
-content validation. For ``0.1.0``, use ``turbo-picard-0.1.0.tar.gz`` or
-GitHub's ``v0.1.0.tar.gz``.
+content validation. For ``0.1.1``, use ``turbo-picard-0.1.1.tar.gz`` or
+GitHub's ``v0.1.1.tar.gz``.
 
 Then run the release checks:
 
