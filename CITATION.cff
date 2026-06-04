@@ -8,7 +8,6 @@ abstract: "A Picard-compatible Rust toolkit with faster implementations of selec
 authors:
   - family-names: "O'Toole"
     given-names: "Donncha"
-    email: "donncha@focalise.ie"
 repository-code: "https://github.com/dnncha/turbo-picard"
 url: "https://turbo-picard.readthedocs.io/"
 license: "MIT"
