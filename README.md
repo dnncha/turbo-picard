@@ -132,8 +132,8 @@ Raw log: `docs/site/assets/bench-suite-output.txt`.
 
 There are no benchmark exceptions right now. Every native or partly native
 command in `docs/command-matrix.yml` has a saved public speedup claim.
-Chart-producing metrics commands compare metrics text; their PDF
-sidecars are present so Picard-style outputs still exist, not because the plots
+Chart-producing metrics commands compare metrics text. Their lightweight PDF
+sidecars are there so Picard-style outputs still exist, not because the plots
 are claimed to be pixel-identical to Picard.
 
 | Command | Speedup | Parity |

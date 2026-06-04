@@ -31,7 +31,7 @@ class SiteDisclosureTests(unittest.TestCase):
   <p>Switch only the commands where the evidence supports the change.</p>
   <p>The benchmark threshold gate is python3 tools/verify_benchmark_thresholds.py with 5.00x floor speedup, 20.00x geometric mean speedup, and 50.00x top speedup.</p>
   <p>The software citation lives in CITATION.cff. Cite the archived turbo-picard release and cite benchmark inputs separately with SHA-256.</p>
-  <p>Bioconda release v0.1.0 uses python3 tools/bioconda_release_preflight.py and bioconda-utils lint recipes config.yml --packages turbo-picard turbo-picard-picard-shim.</p>
+  <p>Bioconda release v0.1.1 uses python3 tools/bioconda_release_preflight.py and bioconda-utils lint recipes config.yml --packages turbo-picard turbo-picard-picard-shim.</p>
 </section>
 """
 
@@ -64,7 +64,7 @@ class SiteDisclosureTests(unittest.TestCase):
   <p>Switch only the commands where the evidence supports the change.</p>
   <p>The benchmark threshold gate is python3 tools/verify_benchmark_thresholds.py with 5.00x floor speedup, 20.00x geometric mean speedup, and 50.00x top speedup.</p>
   <p>The software citation lives in CITATION.cff. Cite the archived turbo-picard release and cite benchmark inputs separately with SHA-256.</p>
-  <p>Bioconda release v0.1.0 uses python3 tools/bioconda_release_preflight.py and bioconda-utils lint recipes config.yml --packages turbo-picard turbo-picard-picard-shim.</p>
+  <p>Bioconda release v0.1.1 uses python3 tools/bioconda_release_preflight.py and bioconda-utils lint recipes config.yml --packages turbo-picard turbo-picard-picard-shim.</p>
 </section>
 """
 
@@ -105,7 +105,7 @@ class SiteDisclosureTests(unittest.TestCase):
   <p>Chart outputs are lightweight PDF summaries; metrics text is the parity target.</p>
   <p>Switch only the commands where the evidence supports the change.</p>
   <p>The benchmark threshold gate is python3 tools/verify_benchmark_thresholds.py with 5.00x floor speedup, 20.00x geometric mean speedup, and 50.00x top speedup.</p>
-  <p>Bioconda release v0.1.0 uses python3 tools/bioconda_release_preflight.py and bioconda-utils lint recipes config.yml --packages turbo-picard turbo-picard-picard-shim.</p>
+  <p>Bioconda release v0.1.1 uses python3 tools/bioconda_release_preflight.py and bioconda-utils lint recipes config.yml --packages turbo-picard turbo-picard-picard-shim.</p>
 </section>
 """
 
