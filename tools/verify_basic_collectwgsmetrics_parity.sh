@@ -79,10 +79,7 @@ def tables(path):
 turbo, turbo_histogram = tables(turbo_path)
 picard, picard_histogram = tables(picard_path)
 
-excluded = {"HET_SNP_SENSITIVITY", "HET_SNP_Q"}
 for key in picard:
-    if key in excluded:
-        continue
     if turbo.get(key) != picard[key]:
         raise SystemExit(f"CollectWgsMetrics {key} differs: turbo={turbo.get(key)} picard={picard[key]}")
 
@@ -94,6 +91,60 @@ if turbo_histogram != picard_histogram:
     )
 
 print("CollectWgsMetrics stable coverage metrics match Picard")
+PY
+
+cargo run -q -p turbo-picard-cli --bin picard -- \
+  CollectWgsMetrics \
+  "I=$workdir/input.sam" \
+  "O=$workdir/turbo-sample-size.txt" \
+  "R=$workdir/reference.fa" \
+  COUNT_UNPAIRED=true \
+  SAMPLE_SIZE=2 \
+  VALIDATION_STRINGENCY=SILENT \
+  QUIET=true
+
+"${conda_runner[@]}" run -p "$conda_prefix" picard CollectWgsMetrics \
+  "I=$workdir/input.sam" \
+  "O=$workdir/picard-sample-size.txt" \
+  "R=$workdir/reference.fa" \
+  COUNT_UNPAIRED=true \
+  SAMPLE_SIZE=2 \
+  VALIDATION_STRINGENCY=SILENT \
+  QUIET=true
+
+python3 - "$workdir/turbo-sample-size.txt" "$workdir/picard-sample-size.txt" <<'PY'
+import sys
+
+def tables(path):
+    lines = [line.rstrip("\n") for line in open(path, encoding="utf-8")]
+    metrics = None
+    histogram = []
+    for index, line in enumerate(lines):
+        if line.startswith("GENOME_TERRITORY\t"):
+            header = line.split("\t")
+            row = lines[index + 1].split("\t")
+            metrics = dict(zip(header, row))
+        if line.startswith("coverage\thigh_quality_coverage_count"):
+            for raw in lines[index + 1:]:
+                if raw:
+                    histogram.append(raw)
+            break
+    if metrics is None:
+        raise SystemExit(f"no WgsMetrics table in {path}")
+    return metrics, histogram
+
+turbo, turbo_histogram = tables(sys.argv[1])
+picard, picard_histogram = tables(sys.argv[2])
+for key in picard:
+    if turbo.get(key) != picard[key]:
+        raise SystemExit(f"CollectWgsMetrics SAMPLE_SIZE=2 {key} differs: turbo={turbo.get(key)} picard={picard[key]}")
+if turbo_histogram != picard_histogram:
+    raise SystemExit(
+        "CollectWgsMetrics SAMPLE_SIZE=2 coverage histogram differs:\n"
+        f"turbo={turbo_histogram[:8]}\n"
+        f"picard={picard_histogram[:8]}"
+    )
+print("CollectWgsMetrics SAMPLE_SIZE=2 metrics match Picard")
 PY
 
 cargo run -q -p turbo-picard-cli --bin picard -- \
@@ -142,10 +193,7 @@ def tables(path):
 
 turbo, turbo_histogram = tables(sys.argv[1])
 picard, picard_histogram = tables(sys.argv[2])
-excluded = {"HET_SNP_SENSITIVITY", "HET_SNP_Q"}
 for key in picard:
-    if key in excluded:
-        continue
     if turbo.get(key) != picard[key]:
         raise SystemExit(f"CollectWgsMetrics temp options {key} differs: turbo={turbo.get(key)} picard={picard[key]}")
 if turbo_histogram != picard_histogram:
@@ -155,6 +203,62 @@ if turbo_histogram != picard_histogram:
         f"picard={picard_histogram[:8]}"
     )
 print("CollectWgsMetrics temp-option metrics match Picard")
+PY
+
+cargo run -q -p turbo-picard-cli --bin picard -- \
+  CollectWgsMetrics \
+  "I=$workdir/input.sam" \
+  "O=$workdir/turbo-stop-after.txt" \
+  "R=$workdir/reference.fa" \
+  COUNT_UNPAIRED=true \
+  SAMPLE_SIZE=1 \
+  STOP_AFTER=1 \
+  VALIDATION_STRINGENCY=SILENT \
+  QUIET=true
+
+"${conda_runner[@]}" run -p "$conda_prefix" picard CollectWgsMetrics \
+  "I=$workdir/input.sam" \
+  "O=$workdir/picard-stop-after.txt" \
+  "R=$workdir/reference.fa" \
+  COUNT_UNPAIRED=true \
+  SAMPLE_SIZE=1 \
+  STOP_AFTER=1 \
+  VALIDATION_STRINGENCY=SILENT \
+  QUIET=true
+
+python3 - "$workdir/turbo-stop-after.txt" "$workdir/picard-stop-after.txt" <<'PY'
+import sys
+
+def tables(path):
+    lines = [line.rstrip("\n") for line in open(path, encoding="utf-8")]
+    metrics = None
+    histogram = []
+    for index, line in enumerate(lines):
+        if line.startswith("GENOME_TERRITORY\t"):
+            header = line.split("\t")
+            row = lines[index + 1].split("\t")
+            metrics = dict(zip(header, row))
+        if line.startswith("coverage\thigh_quality_coverage_count"):
+            for raw in lines[index + 1:]:
+                if raw:
+                    histogram.append(raw)
+            break
+    if metrics is None:
+        raise SystemExit(f"no WgsMetrics table in {path}")
+    return metrics, histogram
+
+turbo, turbo_histogram = tables(sys.argv[1])
+picard, picard_histogram = tables(sys.argv[2])
+for key in picard:
+    if turbo.get(key) != picard[key]:
+        raise SystemExit(f"CollectWgsMetrics STOP_AFTER {key} differs: turbo={turbo.get(key)} picard={picard[key]}")
+if turbo_histogram != picard_histogram:
+    raise SystemExit(
+        "CollectWgsMetrics STOP_AFTER coverage histogram differs:\n"
+        f"turbo={turbo_histogram[:8]}\n"
+        f"picard={picard_histogram[:8]}"
+    )
+print("CollectWgsMetrics STOP_AFTER metrics match Picard")
 PY
 
 cargo run -q -p turbo-picard-cli --bin picard -- \
@@ -205,10 +309,7 @@ def tables(path):
 
 turbo, turbo_histogram = tables(sys.argv[1])
 picard, picard_histogram = tables(sys.argv[2])
-excluded = {"HET_SNP_SENSITIVITY", "HET_SNP_Q"}
 for key in picard:
-    if key in excluded:
-        continue
     if turbo.get(key) != picard[key]:
         raise SystemExit(f"CollectWgsMetrics aliases {key} differs: turbo={turbo.get(key)} picard={picard[key]}")
 if turbo_histogram != picard_histogram:
@@ -264,10 +365,7 @@ def tables(path):
 
 turbo, turbo_histogram = tables(sys.argv[1])
 picard, picard_histogram = tables(sys.argv[2])
-excluded = {"HET_SNP_SENSITIVITY", "HET_SNP_Q"}
 for key in picard:
-    if key in excluded:
-        continue
     if turbo.get(key) != picard[key]:
         raise SystemExit(f"CollectWgsMetrics INTERVALS {key} differs: turbo={turbo.get(key)} picard={picard[key]}")
 if turbo_histogram != picard_histogram:
@@ -277,6 +375,64 @@ if turbo_histogram != picard_histogram:
         f"picard={picard_histogram[:8]}"
     )
 print("CollectWgsMetrics INTERVALS coverage metrics match Picard")
+PY
+
+cargo run -q -p turbo-picard-cli --bin picard -- \
+  CollectWgsMetrics \
+  "I=$workdir/input.sam" \
+  "O=$workdir/turbo-intervals-stop-after.txt" \
+  "R=$workdir/reference.fa" \
+  "INTERVALS=$workdir/targets.interval_list" \
+  COUNT_UNPAIRED=true \
+  SAMPLE_SIZE=1 \
+  STOP_AFTER=2 \
+  VALIDATION_STRINGENCY=SILENT \
+  QUIET=true
+
+"${conda_runner[@]}" run -p "$conda_prefix" picard CollectWgsMetrics \
+  "I=$workdir/input.sam" \
+  "O=$workdir/picard-intervals-stop-after.txt" \
+  "R=$workdir/reference.fa" \
+  "INTERVALS=$workdir/targets.interval_list" \
+  COUNT_UNPAIRED=true \
+  SAMPLE_SIZE=1 \
+  STOP_AFTER=2 \
+  VALIDATION_STRINGENCY=SILENT \
+  QUIET=true
+
+python3 - "$workdir/turbo-intervals-stop-after.txt" "$workdir/picard-intervals-stop-after.txt" <<'PY'
+import sys
+
+def tables(path):
+    lines = [line.rstrip("\n") for line in open(path, encoding="utf-8")]
+    metrics = None
+    histogram = []
+    for index, line in enumerate(lines):
+        if line.startswith("GENOME_TERRITORY\t"):
+            header = line.split("\t")
+            row = lines[index + 1].split("\t")
+            metrics = dict(zip(header, row))
+        if line.startswith("coverage\thigh_quality_coverage_count"):
+            for raw in lines[index + 1:]:
+                if raw:
+                    histogram.append(raw)
+            break
+    if metrics is None:
+        raise SystemExit(f"no WgsMetrics table in {path}")
+    return metrics, histogram
+
+turbo, turbo_histogram = tables(sys.argv[1])
+picard, picard_histogram = tables(sys.argv[2])
+for key in picard:
+    if turbo.get(key) != picard[key]:
+        raise SystemExit(f"CollectWgsMetrics INTERVALS+STOP_AFTER {key} differs: turbo={turbo.get(key)} picard={picard[key]}")
+if turbo_histogram != picard_histogram:
+    raise SystemExit(
+        "CollectWgsMetrics INTERVALS+STOP_AFTER coverage histogram differs:\n"
+        f"turbo={turbo_histogram[:8]}\n"
+        f"picard={picard_histogram[:8]}"
+    )
+print("CollectWgsMetrics INTERVALS plus STOP_AFTER metrics match Picard")
 PY
 
 cat > "$workdir/bq-input.sam" <<'SAM'
@@ -331,10 +487,7 @@ def tables(path):
 
 turbo, turbo_histogram = tables(sys.argv[1])
 picard, picard_histogram = tables(sys.argv[2])
-excluded = {"HET_SNP_SENSITIVITY", "HET_SNP_Q"}
 for key in picard:
-    if key in excluded:
-        continue
     if turbo.get(key) != picard[key]:
         raise SystemExit(f"CollectWgsMetrics BQ {key} differs: turbo={turbo.get(key)} picard={picard[key]}")
 if turbo_histogram != picard_histogram:

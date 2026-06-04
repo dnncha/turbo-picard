@@ -1,9 +1,8 @@
 turbo-picard documentation
 ==========================
 
-``turbo-picard`` is a Picard-compatible toolkit for bioinformatics teams that
-want faster versions of common Picard commands without rewriting established
-pipelines.
+``turbo-picard`` is for teams that already use Picard and want selected commands
+to run faster without changing the command style their pipelines already know.
 
 It keeps the command shape people already know:
 
@@ -11,10 +10,15 @@ It keeps the command shape people already know:
 
    picard MarkDuplicates I=input.bam O=marked.bam M=metrics.txt
 
-Native Rust implementations handle covered commands first. Surfaces that are
-not yet covered fail clearly, or can delegate to upstream Picard when you
-configure a fallback. That makes it practical to evaluate command by command in
-WDL, Nextflow, Snakemake, shell, and institutional pipeline stacks.
+Supported commands run natively in Rust. Commands that are not ready fail
+clearly, or can run through upstream Picard when you configure a fallback. The
+project is meant to be tried command by command, with output comparisons,
+benchmark logs, real-data checks, and citation guidance kept close to the claims
+they support.
+
+This is not a blanket claim that every Picard behavior has been rebuilt. Use the
+native pieces where the documented scope and your own representative data agree,
+and keep upstream Picard available for the rest.
 
 Start here
 ----------
@@ -33,21 +37,21 @@ Start here
       :link: adoption
       :link-type: doc
 
-      Evaluate safely with shadow runs, parity checks, benchmarks, and fallback
-      behavior.
+      Try it safely with side-by-side runs, output comparisons, benchmarks, and
+      fallback behavior.
 
    .. grid-item-card:: Command lookup
       :link: commands
       :link-type: doc
 
-      See which Picard commands are native, partially native, or fallback-only.
+      See which Picard commands are native, partly native, or fallback-only.
 
    .. grid-item-card:: Packaging
       :link: packaging
       :link-type: doc
 
-      Understand the main package, the optional ``picard`` shim, and conda-style
-      deployment.
+      Understand the main package, the optional ``picard`` shim, citation
+      boundaries, and the Bioconda release path.
 
 .. toctree::
    :maxdepth: 2
@@ -55,9 +59,11 @@ Start here
 
    quickstart
    adoption
+   parity
    fallback
    commands
    benchmarks
+   citation
    packaging
    troubleshooting
 

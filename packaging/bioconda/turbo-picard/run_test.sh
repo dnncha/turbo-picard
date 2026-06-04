@@ -1,6 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+turbo-picard --version
+turbo-picard MarkDuplicates --help
+turbo-picard SortSam --help
+turbo-picard CleanSam --help
+turbo-picard ViewSam --help
+
 cat > input.sam <<'SAM'
 @HD	VN:1.6	SO:coordinate
 @SQ	SN:chr1	LN:1000
@@ -40,6 +46,25 @@ turbo-picard SortSam \
 test -s coordinate.sam
 grep -q $'@HD\tVN:1.6\tSO:coordinate' coordinate.sam
 awk '!/^@/ { print $1 }' coordinate.sam | tr '\n' ' ' | grep -q '^read-a read-b read-c $'
+
+turbo-picard SortSam \
+  I=unsorted.sam \
+  O=coordinate.bam \
+  SORT_ORDER=coordinate \
+  CREATE_INDEX=true \
+  VALIDATION_STRINGENCY=SILENT \
+  QUIET=true
+
+test -s coordinate.bam
+test -s coordinate.bai
+
+turbo-picard BuildBamIndex \
+  I=coordinate.bam \
+  O=explicit.bai \
+  VALIDATION_STRINGENCY=SILENT \
+  QUIET=true
+
+test -s explicit.bai
 
 cat > dirty.sam <<'SAM'
 @HD	VN:1.6	SO:coordinate
@@ -153,6 +178,17 @@ test -s readgroups.sam
 grep -q $'@RG\tID:new\tLB:library-a\tPL:ILLUMINA\tSM:sample-a\tPU:unit-a' readgroups.sam
 grep -q $'RG:Z:new' readgroups.sam
 
+turbo-picard MergeSamFiles \
+  I=coordinate.sam \
+  I=readgroups.sam \
+  O=merged_samfiles.sam \
+  SORT_ORDER=coordinate \
+  VALIDATION_STRINGENCY=SILENT \
+  QUIET=true
+
+test -s merged_samfiles.sam
+grep -q '^read-a' merged_samfiles.sam
+
 turbo-picard CollectAlignmentSummaryMetrics \
   I=input.sam \
   O=alignment_metrics.txt \
@@ -172,6 +208,17 @@ turbo-picard CollectQualityYieldMetrics \
 
 test -s quality_yield_metrics.txt
 grep -q 'CollectQualityYieldMetrics' quality_yield_metrics.txt
+
+turbo-picard CollectBaseDistributionByCycle \
+  I=input.sam \
+  O=base_distribution_by_cycle.txt \
+  CHART=base_distribution_by_cycle.pdf \
+  VALIDATION_STRINGENCY=SILENT \
+  QUIET=true
+
+test -s base_distribution_by_cycle.txt
+test -s base_distribution_by_cycle.pdf
+grep -q $'READ_END\tCYCLE\tPCT_A' base_distribution_by_cycle.txt
 
 turbo-picard QualityScoreDistribution \
   I=input.sam \
@@ -537,9 +584,16 @@ turbo-picard SortVcf \
 test -s sorted.vcf
 awk '!/^#/ { print $2 }' sorted.vcf | tr '\n' ' ' | grep -q '^2 7 $'
 
+cat > merge1.vcf <<'VCF'
+##fileformat=VCFv4.2
+##contig=<ID=chr1,length=8>
+#CHROM	POS	ID	REF	ALT	QUAL	FILTER	INFO
+chr1	2	.	A	C	.	PASS	.
+VCF
+
 turbo-picard MergeVcfs \
   I=shard2.vcf \
-  I=updated.vcf \
+  I=merge1.vcf \
   O=merged.vcf \
   VALIDATION_STRINGENCY=SILENT \
   QUIET=true

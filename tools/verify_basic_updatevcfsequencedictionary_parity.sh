@@ -69,3 +69,62 @@ if records(turbo_path) != records(picard_path):
     raise SystemExit("UpdateVcfSequenceDictionary records differ from Picard")
 print("UpdateVcfSequenceDictionary basic output matches Picard")
 PY
+
+cargo run -q -p turbo-picard-cli --bin picard -- \
+  UpdateVcfSequenceDictionary \
+  "I=$workdir/input.vcf" \
+  "O=$workdir/turbo-indexed.vcf" \
+  "SEQUENCE_DICTIONARY=$workdir/reference.dict" \
+  CREATE_MD5_FILE=true \
+  CREATE_INDEX=true \
+  MAX_RECORDS_IN_RAM=1000 \
+  "TMP_DIR=$workdir" \
+  USE_JDK_DEFLATER=true \
+  USE_JDK_INFLATER=true \
+  VALIDATION_STRINGENCY=SILENT \
+  QUIET=true
+
+"${conda_runner[@]}" run -p "$conda_prefix" picard UpdateVcfSequenceDictionary \
+  "I=$workdir/input.vcf" \
+  "O=$workdir/picard-indexed.vcf" \
+  "SEQUENCE_DICTIONARY=$workdir/reference.dict" \
+  CREATE_MD5_FILE=true \
+  CREATE_INDEX=true \
+  MAX_RECORDS_IN_RAM=1000 \
+  "TMP_DIR=$workdir" \
+  USE_JDK_DEFLATER=true \
+  USE_JDK_INFLATER=true \
+  VALIDATION_STRINGENCY=SILENT \
+  QUIET=true
+
+python3 - "$workdir/turbo-indexed.vcf" "$workdir/picard-indexed.vcf" <<'PY'
+import re
+import sys
+turbo_path, picard_path = sys.argv[1:]
+
+def contig_ids(path):
+    ids = []
+    with open(path, encoding="utf-8") as handle:
+        for line in handle:
+            if line.startswith("##contig=<"):
+                match = re.search(r"ID=([^,>]+)", line)
+                if match:
+                    ids.append(match.group(1))
+    return ids
+
+def records(path):
+    with open(path, encoding="utf-8") as handle:
+        return [line.rstrip("\n") for line in handle if not line.startswith("#")]
+
+if contig_ids(turbo_path) != contig_ids(picard_path):
+    raise SystemExit("UpdateVcfSequenceDictionary indexed contig IDs differ from Picard")
+if records(turbo_path) != records(picard_path):
+    raise SystemExit("UpdateVcfSequenceDictionary indexed records differ from Picard")
+print("UpdateVcfSequenceDictionary indexed output matches Picard")
+PY
+
+test -f "$workdir/turbo-indexed.vcf.idx"
+test -f "$workdir/picard-indexed.vcf.idx"
+test ! -e "$workdir/turbo-indexed.vcf.md5"
+test ! -e "$workdir/picard-indexed.vcf.md5"
+echo "UpdateVcfSequenceDictionary CREATE_INDEX sidecar behavior matches Picard"

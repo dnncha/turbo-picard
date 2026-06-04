@@ -75,8 +75,6 @@ def stable_wgs_metrics(path):
             break
     if metrics is None:
         raise SystemExit(f"no WgsMetrics table in {path}")
-    for key in ("HET_SNP_SENSITIVITY", "HET_SNP_Q"):
-        metrics.pop(key, None)
     return metrics, histogram
 
 

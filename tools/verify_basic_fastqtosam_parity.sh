@@ -94,6 +94,65 @@ echo "FastqToSam MD5 sidecar matches Picard"
 cargo run -q -p turbo-picard-cli --bin picard -- \
   FastqToSam \
   "F1=$workdir/r1.fastq" \
+  "O=$workdir/turbo-runtime.sam" \
+  SM=sample \
+  RG=rg1 \
+  QUALITY_FORMAT=Standard \
+  CREATE_MD5_FILE=true \
+  CREATE_INDEX=true \
+  MAX_RECORDS_IN_RAM=1000 \
+  "TMP_DIR=$workdir" \
+  "R=$workdir/ref.fa" \
+  USE_JDK_DEFLATER=true \
+  USE_JDK_INFLATER=true \
+  VALIDATION_STRINGENCY=SILENT \
+  QUIET=true
+
+"${conda_runner[@]}" run -p "$conda_prefix" picard FastqToSam \
+  "F1=$workdir/r1.fastq" \
+  "O=$workdir/picard-runtime.sam" \
+  SM=sample \
+  RG=rg1 \
+  QUALITY_FORMAT=Standard \
+  CREATE_MD5_FILE=true \
+  CREATE_INDEX=true \
+  MAX_RECORDS_IN_RAM=1000 \
+  "TMP_DIR=$workdir" \
+  "R=$workdir/ref.fa" \
+  USE_JDK_DEFLATER=true \
+  USE_JDK_INFLATER=true \
+  VALIDATION_STRINGENCY=SILENT \
+  QUIET=true
+
+python3 - "$workdir/turbo-runtime.sam" "$workdir/picard-runtime.sam" <<'PY'
+import sys
+
+def stable(path):
+    rows = []
+    for line in open(path, encoding="utf-8"):
+        line = line.rstrip("\n")
+        if line.startswith("@HD") or line.startswith("@RG") or not line.startswith("@"):
+            rows.append(line)
+    return rows
+
+turbo = stable(sys.argv[1])
+picard = stable(sys.argv[2])
+if turbo != picard:
+    raise SystemExit(f"FastqToSam runtime stable SAM differs:\nturbo={turbo}\npicard={picard}")
+print("FastqToSam runtime option stable SAM matches Picard")
+PY
+
+test -f "$workdir/turbo-runtime.sam.md5"
+test -f "$workdir/picard-runtime.sam.md5"
+test ! -e "$workdir/turbo-runtime.sam.bai"
+test ! -e "$workdir/turbo-runtime.bai"
+test ! -e "$workdir/picard-runtime.sam.bai"
+test ! -e "$workdir/picard-runtime.bai"
+echo "FastqToSam runtime sidecar compatibility matches Picard"
+
+cargo run -q -p turbo-picard-cli --bin picard -- \
+  FastqToSam \
+  "F1=$workdir/r1.fastq" \
   "O=$workdir/turbo-unsorted.sam" \
   SM=sample \
   RG=rg1 \

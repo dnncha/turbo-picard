@@ -1,184 +1,208 @@
 {
   "source": "python3 tools/bench_suite.py --repeats 1 --skip-build",
-  "date": "2026-05-30",
-  "parity": "28/28 PASS",
+  "date": "2026-06-04",
+  "parity": "32/32 PASS",
   "summary": {
-    "command_count": 28,
-    "parity_pass_count": 28,
-    "top_speedup": 104.68,
+    "command_count": 32,
+    "parity_pass_count": 32,
+    "top_speedup": 84.46,
     "top_command": "UpdateVcfSequenceDictionary",
-    "floor_speedup": 6.69,
+    "floor_speedup": 8.55,
     "floor_command": "RevertSam",
-    "median_speedup": 26.24,
-    "geometric_mean_speedup": 28.41
+    "median_speedup": 26.82,
+    "geometric_mean_speedup": 26.74
   },
   "benchmarks": [
     {
       "rank": 1,
       "command": "UpdateVcfSequenceDictionary",
-      "speedup": 104.68,
+      "speedup": 84.46,
       "parity": "PASS"
     },
     {
       "rank": 2,
-      "command": "CollectInsertSizeMetrics",
-      "speedup": 84.96,
+      "command": "NormalizeFasta",
+      "speedup": 68.69,
       "parity": "PASS"
     },
     {
       "rank": 3,
-      "command": "NormalizeFasta",
-      "speedup": 83.49,
+      "command": "GatherVcfs",
+      "speedup": 63.77,
       "parity": "PASS"
     },
     {
       "rank": 4,
-      "command": "BuildBamIndex",
-      "speedup": 60.15,
+      "command": "MergeVcfs",
+      "speedup": 56.99,
       "parity": "PASS"
     },
     {
       "rank": 5,
-      "command": "GatherVcfs",
-      "speedup": 57.84,
+      "command": "CreateSequenceDictionary",
+      "speedup": 50.86,
       "parity": "PASS"
     },
     {
       "rank": 6,
-      "command": "CreateSequenceDictionary",
-      "speedup": 53.5,
+      "command": "CollectGcBiasMetrics",
+      "speedup": 50.25,
       "parity": "PASS"
     },
     {
       "rank": 7,
-      "command": "MergeVcfs",
-      "speedup": 49.67,
+      "command": "SortSam",
+      "speedup": 47.4,
       "parity": "PASS"
     },
     {
       "rank": 8,
-      "command": "SamToFastq",
-      "speedup": 48.34,
+      "command": "CollectInsertSizeMetrics",
+      "speedup": 46.41,
       "parity": "PASS"
     },
     {
       "rank": 9,
-      "command": "MeanQualityByCycle",
-      "speedup": 38.72,
+      "command": "BuildBamIndex",
+      "speedup": 45.49,
       "parity": "PASS"
     },
     {
       "rank": 10,
       "command": "CollectAlignmentSummaryMetrics",
-      "speedup": 38.41,
+      "speedup": 37.5,
       "parity": "PASS"
     },
     {
       "rank": 11,
-      "command": "AddOrReplaceReadGroups",
-      "speedup": 30.68,
+      "command": "IntervalListTools",
+      "speedup": 33.01,
       "parity": "PASS"
     },
     {
       "rank": 12,
-      "command": "CleanSam",
-      "speedup": 30.15,
+      "command": "SamToFastq",
+      "speedup": 30.44,
       "parity": "PASS"
     },
     {
       "rank": 13,
-      "command": "FastqToSam",
-      "speedup": 26.51,
+      "command": "ViewSam",
+      "speedup": 28.64,
       "parity": "PASS"
     },
     {
       "rank": 14,
-      "command": "SortVcf",
-      "speedup": 26.24,
+      "command": "BedToIntervalList",
+      "speedup": 27.91,
       "parity": "PASS"
     },
     {
       "rank": 15,
-      "command": "CollectBaseDistributionByCycle",
-      "speedup": 23.85,
+      "command": "SortVcf",
+      "speedup": 27.87,
       "parity": "PASS"
     },
     {
       "rank": 16,
-      "command": "ViewSam",
-      "speedup": 22.4,
+      "command": "CleanSam",
+      "speedup": 26.82,
       "parity": "PASS"
     },
     {
       "rank": 17,
-      "command": "MergeSamFiles",
-      "speedup": 22.27,
+      "command": "AddOrReplaceReadGroups",
+      "speedup": 26.17,
       "parity": "PASS"
     },
     {
       "rank": 18,
-      "command": "SortSam",
-      "speedup": 21.6,
+      "command": "FastqToSam",
+      "speedup": 24.8,
       "parity": "PASS"
     },
     {
       "rank": 19,
-      "command": "ValidateSamFile",
-      "speedup": 20.39,
+      "command": "CollectQualityYieldMetrics",
+      "speedup": 24.06,
       "parity": "PASS"
     },
     {
       "rank": 20,
-      "command": "CollectQualityYieldMetrics",
-      "speedup": 20.17,
+      "command": "MarkDuplicates",
+      "speedup": 23.19,
       "parity": "PASS"
     },
     {
       "rank": 21,
-      "command": "BedToIntervalList",
-      "speedup": 19.79,
+      "command": "CollectWgsMetrics",
+      "speedup": 22.42,
       "parity": "PASS"
     },
     {
       "rank": 22,
-      "command": "CollectWgsMetrics",
-      "speedup": 19.73,
+      "command": "MeanQualityByCycle",
+      "speedup": 21.66,
       "parity": "PASS"
     },
     {
       "rank": 23,
-      "command": "MarkDuplicates",
-      "speedup": 19.3,
+      "command": "CollectMultipleMetrics",
+      "speedup": 20.48,
       "parity": "PASS"
     },
     {
       "rank": 24,
-      "command": "ReplaceSamHeader",
-      "speedup": 18.71,
+      "command": "ValidateSamFile",
+      "speedup": 19.38,
       "parity": "PASS"
     },
     {
       "rank": 25,
-      "command": "QualityScoreDistribution",
-      "speedup": 17.62,
+      "command": "LiftoverVcf",
+      "speedup": 15.13,
       "parity": "PASS"
     },
     {
       "rank": 26,
       "command": "FixMateInformation",
-      "speedup": 10.03,
+      "speedup": 14.54,
       "parity": "PASS"
     },
     {
       "rank": 27,
-      "command": "SetNmMdAndUqTags",
-      "speedup": 8.88,
+      "command": "MergeSamFiles",
+      "speedup": 14.31,
       "parity": "PASS"
     },
     {
       "rank": 28,
+      "command": "ReplaceSamHeader",
+      "speedup": 14.07,
+      "parity": "PASS"
+    },
+    {
+      "rank": 29,
+      "command": "CollectBaseDistributionByCycle",
+      "speedup": 12.46,
+      "parity": "PASS"
+    },
+    {
+      "rank": 30,
+      "command": "QualityScoreDistribution",
+      "speedup": 11.4,
+      "parity": "PASS"
+    },
+    {
+      "rank": 31,
+      "command": "SetNmMdAndUqTags",
+      "speedup": 10.19,
+      "parity": "PASS"
+    },
+    {
+      "rank": 32,
       "command": "RevertSam",
-      "speedup": 6.69,
+      "speedup": 8.55,
       "parity": "PASS"
     }
   ],

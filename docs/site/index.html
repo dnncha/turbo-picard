@@ -3,18 +3,18 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>turbo-picard | Picard-compatible speed for bioinformatics pipelines</title>
+    <title>turbo-picard | faster Picard commands, checked against Picard</title>
     <meta
       name="description"
-      content="turbo-picard is a Picard-shaped Rust toolkit with parity-tested native commands and benchmarked speedups for production genomics workflows."
+      content="turbo-picard is a Rust implementation of selected Picard commands, with familiar arguments, saved benchmark evidence, real-data checks, and upstream Picard fallback."
     />
-    <meta property="og:title" content="turbo-picard | Picard-compatible speed for bioinformatics pipelines" />
+    <meta property="og:title" content="turbo-picard | faster Picard commands, checked against Picard" />
     <meta
       property="og:description"
-      content="Parity-tested Picard command compatibility with benchmarked Rust speedups across production genomics workflows."
+      content="Selected Picard commands in Rust, with benchmarked speedups, real-data evidence, and fallback for unsupported commands."
     />
-    <meta property="og:image" content="assets/hero-generated.png" />
-    <link rel="preload" href="assets/hero-generated.png" as="image" />
+    <meta property="og:image" content="assets/hero-pipeline.svg" />
+    <link rel="preload" href="assets/hero-pipeline.svg" as="image" />
     <style>
       :root {
         color-scheme: dark;
@@ -73,7 +73,7 @@
             rgba(7, 16, 19, 0.3) 68%,
             rgba(7, 16, 19, 0.12)
           ),
-          url("assets/hero-generated.png") center right / cover no-repeat;
+          url("assets/hero-pipeline.svg") center right / cover no-repeat;
       }
 
       .hero::after {
@@ -300,7 +300,7 @@
 
       .grid {
         display: grid;
-        grid-template-columns: repeat(3, minmax(0, 1fr));
+        grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
         gap: 16px;
       }
 
@@ -425,7 +425,7 @@
         border: 1px solid var(--line);
         background:
           linear-gradient(180deg, rgba(7, 16, 19, 0.06), rgba(7, 16, 19, 0.68)),
-          url("assets/hero-generated.png") center / cover no-repeat;
+          url("assets/hero-pipeline.svg") center / cover no-repeat;
       }
 
       .takeover-copy {
@@ -522,29 +522,31 @@
           <div class="nav-links">
             <a href="#benchmarks">Benchmarks</a>
             <a href="#parity">Parity</a>
-            <a href="#adopt">Adopt</a>
+            <a href="#adopt">Try it</a>
           </div>
         </nav>
         <div class="hero-inner">
           <div class="hero-copy">
-            <h1>Picard-shaped pipelines. Rust-speed execution.</h1>
+            <h1>turbo-picard</h1>
             <p class="lead">
-              Native accelerators for the Picard commands that keep sequencing workflows moving:
-              parity-tested output, drop-in command shape, and benchmarked wins across BAM, FASTQ,
-              metrics, and VCF plumbing.
+              A Rust implementation of selected Picard commands that tend to cost real time in
+              sequencing workflows. Keep the arguments your pipelines already know, compare each
+              command against Picard, and change only the parts you have checked.
             </p>
             <div class="actions">
               <a class="button primary" href="#benchmarks">View benchmark evidence</a>
-              <a class="button secondary" href="../../README.md">Read implementation notes</a>
+              <a class="button secondary" href="../../README.md">Read the README</a>
+              <a class="button secondary" href="https://turbo-picard.readthedocs.io/en/latest/">Open the docs</a>
+              <a class="button secondary" href="https://turbo-picard.readthedocs.io/en/latest/parity.html">What parity means</a>
               <a class="button secondary" href="assets/benchmark-data.json">Open evidence JSON</a>
               <a class="button secondary" href="assets/bench-suite-output.txt">Open raw suite log</a>
             </div>
           </div>
           <div class="proof-strip" aria-label="Benchmark summary">
-            <div class="proof"><strong>28/28</strong><span>benchmark parity checks passing</span></div>
-            <div class="proof"><strong>104.68x</strong><span>top measured speedup</span></div>
-            <div class="proof"><strong>6.69x</strong><span>current lowest suite speedup</span></div>
-            <div class="proof"><strong>Picard</strong><span>compatible command shape and fallback mode</span></div>
+            <div class="proof"><strong>32/32</strong><span>benchmark parity checks passing</span></div>
+            <div class="proof"><strong>84.46x</strong><span>fastest saved speedup</span></div>
+            <div class="proof"><strong>8.55x</strong><span>slowest saved speedup</span></div>
+            <div class="proof"><strong>Picard</strong><span>familiar arguments, fallback available</span></div>
           </div>
         </div>
       </section>
@@ -552,20 +554,27 @@
       <section id="benchmarks">
         <div class="section-inner">
           <div class="section-heading">
-            <h2>Benchmark claims that come with parity checks.</h2>
+            <h2>Fast, but still checked.</h2>
             <p>
-              The chart is generated from the latest local suite output. Each benchmark compares
-              turbo-picard against Picard and fails if stable output parity does not pass.
+              The chart is rendered from the saved suite output in this repository. Each benchmark
+              compares turbo-picard against Picard and reports speed only after the stable output
+              comparison passes.
+              The current asset was saved on <code>2026-06-04</code> from
+              <code>python3 tools/bench_suite.py --repeats 1 --skip-build</code>; the raw log is
+              <code>docs/site/assets/bench-suite-output.txt</code>.
+              There are no benchmark exceptions right now: every native or partly native command
+              in the command matrix has a public speedup claim. Chart-producing commands compare
+              metrics text; the PDF plots are sidecars, not a pixel-for-pixel Picard claim.
             </p>
           </div>
           <div class="chart-shell">
-            <img src="assets/benchmark-speedups.svg" alt="turbo-picard speedups versus Picard" />
+            <img src="assets/benchmark-speedups.svg" alt="Same Picard checks, less waiting" />
           </div>
           <div class="benchmark-highlights" aria-label="Benchmark highlights">
-            <div class="benchmark-highlight"><b>28 commands</b><span>All benchmarked native paths passed parity checks in the latest suite.</span></div>
-            <div class="benchmark-highlight"><b>104.68x</b><span>UpdateVcfSequenceDictionary led the current local benchmark run.</span></div>
-            <div class="benchmark-highlight"><b>6.69x</b><span>RevertSam is the current floor after its default-unmapped fast path.</span></div>
-            <div class="benchmark-highlight"><b>28.41x</b><span>Geometric mean speedup across the current 28-command suite.</span></div>
+            <div class="benchmark-highlight"><b>32/32 PASS</b><span>All 32 commands in the saved benchmark suite passed parity checks.</span></div>
+            <div class="benchmark-highlight"><b>84.46x</b><span>UpdateVcfSequenceDictionary led the current local benchmark run.</span></div>
+            <div class="benchmark-highlight"><b>8.55x</b><span>RevertSam is the current floor after its default-unmapped fast path.</span></div>
+            <div class="benchmark-highlight"><b>26.74x</b><span>Geometric mean speedup across the current 32-command suite.</span></div>
             <div class="benchmark-highlight"><b>JSON-backed</b><span>The chart is rendered from benchmark-data.json with rank and summary stats.</span></div>
           </div>
         </div>
@@ -574,18 +583,19 @@
       <section id="parity">
         <div class="section-inner">
           <div class="section-heading">
-            <h2>Built for cautious replacement, not wishful migration.</h2>
+            <h2>Designed for careful switching, not blind trust.</h2>
             <p>
-              turbo-picard keeps the Picard command surface familiar while making unsupported
-              areas explicit and delegable through a fallback command.
+              turbo-picard keeps Picard-style command lines familiar. Unsupported commands are not
+              guessed; they fail clearly or run through upstream Picard when fallback is configured.
             </p>
           </div>
           <div class="grid">
             <article class="tile">
-              <h3>Drop-in command shape</h3>
+              <h3>Familiar command shape</h3>
               <p>
-                The optional shim installs a `picard` command for workflow managers. Native
-                commands accept Picard-style `KEY=VALUE` arguments and common aliases.
+                The optional shim installs a <code>picard</code> command for existing workflow
+                managers. Native commands accept Picard-style <code>KEY=VALUE</code> arguments and
+                common aliases.
               </p>
             </article>
             <article class="tile">
@@ -596,12 +606,92 @@
               </p>
             </article>
             <article class="tile">
+              <h3>Real-data comparison runs</h3>
+              <p>
+                A separate comparator runs Picard and turbo-picard on public or lab BAMs, then
+                writes JSON, Markdown, and a manifest entry with input SHA-256, versions, stable
+                digests, artifact paths, citation fields, and wall times.
+              </p>
+            </article>
+            <article class="tile">
               <h3>Fallback without masking native errors</h3>
               <p>
                 Unsupported commands can delegate to upstream Picard. Native I/O and malformed
                 native inputs still fail directly, so real errors remain visible.
               </p>
             </article>
+          </div>
+        </div>
+      </section>
+
+      <section id="real-data">
+        <div class="section-inner">
+          <div class="section-heading">
+            <h2>Real data, pinned and repeatable.</h2>
+            <p>
+              Synthetic cases are useful, but they are not enough for a tool people might place in
+              front of large biological studies. The checked-in public runs use fixtures from
+              HTSlib, Picard itself, and GATK's NA12878 mitochondrial test data. Each input is
+              pinned to a source commit and verified by SHA-256, so the saved parity evidence can
+              be rerun and audited instead of taken on trust. GitHub-hosted public inputs must use
+              a <code>/blob/&lt;commit&gt;/</code> URL and the full 40-character Git commit SHA, not a
+              branch name or short hash.
+              For a scientific release, this is release evidence, not proof for every dataset a
+              lab might process; the 12-command release set still needs enough pinned input data
+              that one tiny fixture cannot carry the claim.
+            </p>
+          </div>
+          <div class="gate-table" aria-label="Pinned real-data evidence">
+            <div class="gate-row">
+              <strong>HTSlib input source</strong>
+              <code>https://github.com/samtools/htslib/blob/5cded8325aca2f84f6c18641664893b900638086/test/range.bam</code>
+              <span>Commit <code>5cded8325aca2f84f6c18641664893b900638086</code>; local SHA-256 <code>e15d14e3994027d433431c960bf1c5f2d6939f26b5094cd5a86bc6229a5b2661</code>.</span>
+            </div>
+            <div class="gate-row">
+              <strong>HTSlib passing commands</strong>
+              <code>ViewSam, CleanSam, CollectQualityYieldMetrics, CollectAlignmentSummaryMetrics, MarkDuplicates</code>
+              <span>All five pass against Picard 3.4.0 in <code>benchmarks/real-data/htslib-range/evidence/real-data-comparison.md</code>. Scope caveat: <code>small public fixture</code>.</span>
+            </div>
+            <div class="gate-row">
+              <strong>Picard input source</strong>
+              <code>https://github.com/broadinstitute/picard/blob/fc0b08410d38a10afd08e467dab74bf5e2e71310/testdata/picard/sam/test.bam</code>
+              <span>Commit <code>fc0b08410d38a10afd08e467dab74bf5e2e71310</code>; local SHA-256 <code>1d499e5683479b88fad373b2de8b49f85cceae68a316e06b3cfdf60491fd7990</code>.</span>
+            </div>
+            <div class="gate-row">
+              <strong>Picard passing commands</strong>
+              <code>ViewSam, CleanSam, CollectQualityYieldMetrics, CollectAlignmentSummaryMetrics, MarkDuplicates</code>
+              <span>All five pass against Picard 3.4.0 in <code>benchmarks/real-data/picard-test-bam/evidence/real-data-comparison.md</code>. Note: this public Picard test BAM is below the default release input-size threshold.</span>
+            </div>
+            <div class="gate-row">
+              <strong>GATK NA12878 input source</strong>
+              <code>https://github.com/broadinstitute/gatk/blob/e8c49f600b06c658e0fa9bf67256340ebb46bc48/src/test/resources/org/broadinstitute/hellbender/tools/mutect/mito/NA12878.bam</code>
+              <span>Commit <code>e8c49f600b06c658e0fa9bf67256340ebb46bc48</code>; local SHA-256 <code>70ea2e429805a75ce6007a32ba176ea7c697a398e0c39a9d58aaaa30e1ed86c3</code>.</span>
+            </div>
+            <div class="gate-row">
+              <strong>GATK NA12878 passing commands</strong>
+              <code>ViewSam, CleanSam, CollectQualityYieldMetrics, CollectAlignmentSummaryMetrics, MarkDuplicates, AddOrReplaceReadGroups, BuildBamIndex, RevertSam, SortSam, SamToFastq, CollectInsertSizeMetrics, ValidateSamFile</code>
+              <span>All twelve pass against Picard 3.4.0 in <code>benchmarks/real-data/gatk-na12878-mito/evidence/real-data-comparison.md</code>. AddOrReplaceReadGroups compares normalized SAM records plus sorted <code>@RG</code> header fields; BuildBamIndex compares the exact BAI binary digest; RevertSam compares normalized reverted SAM records; SamToFastq compares first-end, second-end, and unpaired FASTQ outputs byte-for-byte; ValidateSamFile compares the summary histogram and non-zero exit code. Scope caveat: <code>GATK public NA12878 mitochondrial test BAM.</code> Release tier: <code>release_candidate</code>. Minimum input threshold: <code>1000000</code> bytes.</span>
+            </div>
+            <div class="gate-row">
+              <strong>Picard SNVQ input source</strong>
+              <code>https://github.com/broadinstitute/picard/blob/fc0b08410d38a10afd08e467dab74bf5e2e71310/testdata/picard/sam/snvq_metrics_test.bam</code>
+              <span>Commit <code>fc0b08410d38a10afd08e467dab74bf5e2e71310</code>; local SHA-256 <code>be0daa7cb8e9ce11f2f68ac3db8c229d530736aaf7b80df3669fdb00779c06b3</code>.</span>
+            </div>
+            <div class="gate-row">
+              <strong>Picard SNVQ passing commands</strong>
+              <code>ViewSam, CleanSam, CollectQualityYieldMetrics, CollectAlignmentSummaryMetrics, MarkDuplicates</code>
+              <span>All five pass against Picard 3.4.0 in <code>benchmarks/real-data/picard-snvq/evidence/real-data-comparison.md</code>. Scope caveat: <code>Picard public SNVQ metrics test BAM.</code> Release tier: <code>release_candidate</code>. Minimum input threshold: <code>1000000</code> bytes.</span>
+            </div>
+            <div class="gate-row">
+              <strong>Citation check</strong>
+              <code>python3 tools/verify_real_data_evidence.py</code>
+              <span>Reads <code>benchmarks/real-data/manifest.json</code> and fails if any listed source URL, commit, input hash, command list, README summary, or site copy drifts from the saved evidence.</span>
+            </div>
+            <div class="gate-row">
+              <strong>Release check</strong>
+              <code>python3 tools/verify_real_data_evidence.py --release-ready</code>
+              <span>Requires pinned release evidence with minimum input-size coverage, the 12-command release set, and matching README and site citations.</span>
+            </div>
           </div>
         </div>
       </section>
@@ -619,16 +709,20 @@ picard SetNmMdAndUqTags I=coordinate.bam O=tagged.bam R=reference.fa</pre>
           </div>
           <div class="evidence-list">
             <div class="evidence">
-              <b>Fast paths where pipelines spend real wall time.</b>
+              <b>Fast paths for work that tends to hurt.</b>
               <p>MarkDuplicates, SortSam, RevertSam, SetNmMdAndUqTags, and metrics collectors are covered by dedicated benchmark scripts.</p>
             </div>
             <div class="evidence">
-              <b>Adoption path that does not require a big-bang rewrite.</b>
+              <b>Try it without a big rewrite.</b>
               <p>Install the non-shadowing command first, then add the shim and fallback once native coverage matches your workflow.</p>
             </div>
             <div class="evidence">
               <b>Evidence stays reproducible.</b>
               <p>Save the suite output, then rebuild the graph and benchmark-data.json summary from that exact log.</p>
+            </div>
+            <div class="evidence">
+              <b>Real BAMs before real switching.</b>
+              <p>Run compare_real_data.py on GIAB, 1000 Genomes, or workflow-representative shards and keep the JSON/Markdown evidence with the input SHA-256.</p>
             </div>
           </div>
         </div>
@@ -637,17 +731,18 @@ picard SetNmMdAndUqTags I=coordinate.bam O=tagged.bam R=reference.fa</pre>
       <section>
         <div class="section-inner">
           <div class="section-heading">
-            <h2>CI gates that make the replacement boring.</h2>
+            <h2>Checks that keep the claims honest.</h2>
             <p>
-              The practical path is to turn Picard replacement into a checked artifact:
-              route coverage, parity, benchmark logs, and rendered public evidence.
+              Speed claims are only useful when the evidence is easy to inspect: command coverage,
+              parity checks, benchmark logs, real-data comparisons, and the public files built
+              from them.
             </p>
           </div>
           <div class="gate-table" aria-label="Recommended CI gates">
             <div class="gate-row">
               <strong>Command matrix</strong>
               <code>python3 tools/verify_command_matrix.py</code>
-              <span>Confirms native, partial, unsupported, and fallback behavior remains explicit.</span>
+              <span>Confirms native, partial, unsupported, and fallback behavior stays documented.</span>
             </div>
             <div class="gate-row">
               <strong>Targeted parity</strong>
@@ -660,9 +755,39 @@ picard SetNmMdAndUqTags I=coordinate.bam O=tagged.bam R=reference.fa</pre>
               <span>Regenerates speedup evidence while preserving the dated raw parity-checked suite log.</span>
             </div>
             <div class="gate-row">
+              <strong>Benchmark coverage</strong>
+              <code>python3 tools/verify_benchmark_suite_coverage.py</code>
+              <span>Requires every native or partly native command to have a public benchmark or a documented exception.</span>
+            </div>
+            <div class="gate-row">
+              <strong>Benchmark threshold</strong>
+              <code>python3 tools/verify_benchmark_thresholds.py</code>
+              <span>Requires the saved public benchmark set to keep full parity, at least <code>5.00x</code> floor speedup, at least <code>20.00x</code> geometric mean speedup, and at least <code>50.00x</code> top speedup before those numbers are used as release evidence.</span>
+            </div>
+            <div class="gate-row">
+              <strong>Real-data evidence</strong>
+              <code>python3 tools/compare_real_data.py --input-bam /data/representative.bam --input-source-url &lt;https-source-containing-accession-or-commit&gt; --input-source-commit &lt;accession-or-commit&gt; --output-dir benchmarks/real-data/run-001/evidence --dataset-id run-001 --release-tier release_candidate</code>
+              <span>Compares Picard and turbo-picard on public or workflow-representative BAMs and writes reviewable JSON/Markdown plus a manifest entry with input identity, citation, versions, digests, and artifact paths.</span>
+            </div>
+            <div class="gate-row">
+              <strong>Manifest update</strong>
+              <code>python3 tools/update_real_data_manifest.py --entry benchmarks/real-data/run-001/evidence/manifest-entry.json</code>
+              <span>Adds the reviewed entry to the checked manifest and refuses duplicate dataset IDs unless replacement of the entry is explicit.</span>
+            </div>
+            <div class="gate-row">
+              <strong>Real-data citation</strong>
+              <code>python3 tools/verify_real_data_evidence.py</code>
+              <span>Locks the checked-in public evidence to its pinned source URL, full 40-character Git commit SHA for GitHub fixtures, input SHA-256, command list, README summary, and site copy.</span>
+            </div>
+            <div class="gate-row">
+              <strong>Release-grade evidence</strong>
+              <code>python3 tools/verify_real_data_evidence.py --release-ready</code>
+              <span>Requires pinned release evidence covering AddOrReplaceReadGroups, BuildBamIndex, CleanSam, CollectAlignmentSummaryMetrics, CollectInsertSizeMetrics, CollectQualityYieldMetrics, MarkDuplicates, RevertSam, SamToFastq, SortSam, ValidateSamFile, and ViewSam. Treat this as a packaging and release check, not proof for every dataset a lab might process.</span>
+            </div>
+            <div class="gate-row">
               <strong>Published proof</strong>
               <code>python3 tools/render_benchmark_assets.py --suite-output docs/site/assets/bench-suite-output.txt</code>
-              <span>Rebuilds the static graph and JSON behind the adoption page from the saved suite output.</span>
+              <span>Rebuilds the static graph and JSON from the saved suite output.</span>
             </div>
             <div class="gate-row">
               <strong>Evidence freshness</strong>
@@ -677,17 +802,70 @@ picard SetNmMdAndUqTags I=coordinate.bam O=tagged.bam R=reference.fa</pre>
         <div class="section-inner takeover">
           <div class="takeover-visual" role="img" aria-label="Accelerated genomic data streams flowing into benchmark evidence"></div>
           <div class="takeover-copy">
-            <h2>The replacement path is evidence-first.</h2>
+            <h2>Change one command at a time.</h2>
             <p>
               turbo-picard is designed for pipeline owners who need speed without accepting
-              mystery behavior. Start by shadow-running native commands, compare stable output
-              against Picard, then let the fallback command keep unsupported surfaces boring.
+              mystery behavior. Start by running turbo-picard beside Picard, compare stable output,
+              then let fallback handle commands that are not native yet.
             </p>
             <div class="adoption-steps">
-              <div class="step"><b>1. Shadow</b><span>Run native commands beside Picard on representative pipeline shards.</span></div>
-              <div class="step"><b>2. Prove</b><span>Use parity scripts and benchmark logs as release-gate evidence.</span></div>
-              <div class="step"><b>3. Switch</b><span>Enable the shim where the native surface is covered, with fallback still available.</span></div>
+              <div class="step"><b>1. Compare</b><span>Run turbo-picard beside Picard on representative inputs.</span></div>
+              <div class="step"><b>2. Check</b><span>Keep the output comparisons and benchmark logs.</span></div>
+              <div class="step"><b>3. Switch</b><span>Use the shim only where the command is covered, with fallback still available.</span></div>
             </div>
+          </div>
+        </div>
+      </section>
+
+      <section>
+        <div class="section-inner">
+          <div class="section-heading">
+            <h2>Current boundaries.</h2>
+            <p>
+              turbo-picard is not a full Picard suite yet. Supported commands are documented one
+              by one, and fallback is still part of the product for workflows that need more.
+            </p>
+          </div>
+          <div class="grid">
+            <article class="tile">
+              <h3>Metrics before plots</h3>
+              <p>
+                Metrics text is the native parity target. Chart outputs are lightweight PDF
+                summaries, so workflows that require Picard-equivalent rendered plots should use
+                upstream Picard through fallback.
+              </p>
+            </article>
+            <article class="tile">
+              <h3>Bioconda path</h3>
+              <p>
+                Release <code>v0.1.1</code> has been submitted to Bioconda as
+                <code>turbo-picard</code> plus the optional
+                <code>turbo-picard-picard-shim</code>. The main package keeps the
+                <code>turbo-picard</code> command separate; the shim installs
+                <code>picard</code> only for users who want that command name.
+                Release checks include
+                <code>python3 tools/bioconda_release_preflight.py</code> and
+                <code>bioconda-utils lint recipes config.yml --packages turbo-picard turbo-picard-picard-shim</code>.
+              </p>
+            </article>
+            <article class="tile">
+              <h3>Shim deliberately</h3>
+              <p>
+                The main package keeps the <code>turbo-picard</code> command separate. The
+                optional shim owns <code>picard</code> and should be installed only when that
+                command-name shadowing is intended.
+              </p>
+            </article>
+            <article class="tile">
+              <h3>Cite software and data separately</h3>
+              <p>
+                The software citation lives in <a href="../../CITATION.cff"><code>CITATION.cff</code></a>.
+                Cite the archived turbo-picard release you used, then cite benchmark and validation
+                inputs separately with immutable source URLs, commits or accessions, and input
+                SHA-256 hashes. That keeps the tool citation distinct from the evidence used to
+                justify a workflow switch.
+              </p>
+            </article>
           </div>
         </div>
       </section>
@@ -695,10 +873,10 @@ picard SetNmMdAndUqTags I=coordinate.bam O=tagged.bam R=reference.fa</pre>
       <section class="cta">
         <div class="section-inner cta-panel">
           <div>
-            <h2>Make Picard-heavy pipelines feel modern.</h2>
+            <h2>Make Picard-heavy pipelines feel less stuck.</h2>
             <p class="lead">
               Start with the commands already accelerated, keep upstream Picard as fallback, and
-              let the parity suite decide when each workflow is ready to switch.
+              switch only the commands where the evidence supports the change.
             </p>
           </div>
           <a class="button primary" href="../../README.md">Open README</a>
@@ -706,7 +884,7 @@ picard SetNmMdAndUqTags I=coordinate.bam O=tagged.bam R=reference.fa</pre>
       </section>
     </main>
     <footer>
-      <div class="section-inner">Generated from benchmark evidence in this repository.</div>
+      <div class="section-inner">Built from benchmark evidence, real-data comparisons, and the docs in this repository.</div>
     </footer>
   </body>
 </html>

@@ -1074,7 +1074,7 @@ dependencies = [
 
 [[package]]
 name = "turbo-picard-cli"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "assert_cmd",
  "flate2",
@@ -1088,11 +1088,11 @@ dependencies = [
 
 [[package]]
 name = "turbo-picard-core"
-version = "0.1.0"
+version = "0.1.1"
 
 [[package]]
 name = "turbo-picard-markdup"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "md5 0.8.0",
  "rust-htslib",

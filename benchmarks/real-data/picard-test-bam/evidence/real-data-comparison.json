@@ -1,0 +1,76 @@
+{
+  "commands": [
+    {
+      "command": "ViewSam",
+      "comparison": "SAM record digest",
+      "picard_artifact": "benchmarks/real-data/picard-test-bam/evidence/work/ViewSam/picard.sam",
+      "picard_digest": "cb95309b0b050bf7d6e622f719ff843282053481f1a6cf770fa480e29cd6748c",
+      "picard_seconds": 0.6871957500000001,
+      "speedup": 1.878229121383582,
+      "status": "PASS",
+      "turbo_artifact": "benchmarks/real-data/picard-test-bam/evidence/work/ViewSam/turbo.sam",
+      "turbo_digest": "cb95309b0b050bf7d6e622f719ff843282053481f1a6cf770fa480e29cd6748c",
+      "turbo_seconds": 0.365874292
+    },
+    {
+      "command": "CleanSam",
+      "comparison": "post-command SAM record digest",
+      "picard_artifact": "benchmarks/real-data/picard-test-bam/evidence/work/CleanSam/picard.bam",
+      "picard_digest": "cb95309b0b050bf7d6e622f719ff843282053481f1a6cf770fa480e29cd6748c",
+      "picard_seconds": 0.4994040420000001,
+      "speedup": 8.104007259599856,
+      "status": "PASS",
+      "turbo_artifact": "benchmarks/real-data/picard-test-bam/evidence/work/CleanSam/turbo.bam",
+      "turbo_digest": "cb95309b0b050bf7d6e622f719ff843282053481f1a6cf770fa480e29cd6748c",
+      "turbo_seconds": 0.06162433300000014
+    },
+    {
+      "command": "CollectQualityYieldMetrics",
+      "comparison": "stable metrics digest",
+      "picard_artifact": "benchmarks/real-data/picard-test-bam/evidence/work/CollectQualityYieldMetrics/picard.metrics.txt",
+      "picard_digest": "1bf7b224da8cb3b27d1438dcbde0e7200e27027e3877d8b5c587672bc471c391",
+      "picard_seconds": 0.4297141250000003,
+      "speedup": 37.43303739818191,
+      "status": "PASS",
+      "turbo_artifact": "benchmarks/real-data/picard-test-bam/evidence/work/CollectQualityYieldMetrics/turbo.metrics.txt",
+      "turbo_digest": "1bf7b224da8cb3b27d1438dcbde0e7200e27027e3877d8b5c587672bc471c391",
+      "turbo_seconds": 0.01147954200000001
+    },
+    {
+      "command": "CollectAlignmentSummaryMetrics",
+      "comparison": "stable metrics digest",
+      "picard_artifact": "benchmarks/real-data/picard-test-bam/evidence/work/CollectAlignmentSummaryMetrics/picard.metrics.txt",
+      "picard_digest": "f9c53dc9ead5a28aa857574eb54ce1f6c9ee2dbc2e5dfbd734b13887efa3c0e3",
+      "picard_seconds": 0.45481466699999995,
+      "speedup": 28.991785606921958,
+      "status": "PASS",
+      "turbo_artifact": "benchmarks/real-data/picard-test-bam/evidence/work/CollectAlignmentSummaryMetrics/turbo.metrics.txt",
+      "turbo_digest": "f9c53dc9ead5a28aa857574eb54ce1f6c9ee2dbc2e5dfbd734b13887efa3c0e3",
+      "turbo_seconds": 0.01568770800000019
+    },
+    {
+      "command": "MarkDuplicates",
+      "comparison": "duplicate-marking semantic digest plus stable metrics digest",
+      "picard_artifact": "benchmarks/real-data/picard-test-bam/evidence/work/MarkDuplicates/picard.bam",
+      "picard_digest": "df9941d245b967f56f91dea5066150661997b1216f6af77cbbfc9537c3799759;metrics=c50d60bcca888e09a059cf25f3c09d4fd01911d40b66bcba1f87a08d9d555c44",
+      "picard_seconds": 0.5693625829999998,
+      "speedup": 16.100573921096565,
+      "status": "PASS",
+      "turbo_artifact": "benchmarks/real-data/picard-test-bam/evidence/work/MarkDuplicates/turbo.bam",
+      "turbo_digest": "df9941d245b967f56f91dea5066150661997b1216f6af77cbbfc9537c3799759;metrics=c50d60bcca888e09a059cf25f3c09d4fd01911d40b66bcba1f87a08d9d555c44",
+      "turbo_seconds": 0.03536287500000013
+    }
+  ],
+  "input": {
+    "path": "benchmarks/real-data/picard-test-bam/input.bam",
+    "sha256": "1d499e5683479b88fad373b2de8b49f85cceae68a316e06b3cfdf60491fd7990",
+    "size_bytes": 940749,
+    "source_commit": "fc0b08410d38a10afd08e467dab74bf5e2e71310",
+    "source_url": "https://github.com/broadinstitute/picard/blob/fc0b08410d38a10afd08e467dab74bf5e2e71310/testdata/picard/sam/test.bam"
+  },
+  "parity": "PASS",
+  "picard_command": "/opt/homebrew/bin/mamba run -p /Users/donncha/Documents/GitHub/turbo-picard/.conda-turbo-picard picard",
+  "picard_version": "Version:3.4.0",
+  "turbo_picard_command": "/Users/donncha/Documents/GitHub/turbo-picard/target/release/picard",
+  "turbo_picard_version": "picard 0.1.0"
+}

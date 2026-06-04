@@ -36,6 +36,66 @@ programs=(
 cargo run -q -p turbo-picard-cli --bin picard -- \
   CollectMultipleMetrics \
   "I=$workdir/input.sam" \
+  "O=$workdir/turbo-runtime" \
+  PROGRAM=null \
+  PROGRAM=CollectQualityYieldMetrics \
+  CREATE_INDEX=true \
+  CREATE_MD5_FILE=true \
+  "TMP_DIR=$workdir" \
+  MAX_RECORDS_IN_RAM=500 \
+  COMPRESSION_LEVEL=5 \
+  USE_JDK_DEFLATER=true \
+  USE_JDK_INFLATER=true \
+  VALIDATION_STRINGENCY=SILENT \
+  QUIET=true
+
+"${conda_runner[@]}" run -p "$conda_prefix" picard CollectMultipleMetrics \
+  "I=$workdir/input.sam" \
+  "O=$workdir/picard-runtime" \
+  PROGRAM=null \
+  PROGRAM=CollectQualityYieldMetrics \
+  CREATE_INDEX=true \
+  CREATE_MD5_FILE=true \
+  "TMP_DIR=$workdir" \
+  MAX_RECORDS_IN_RAM=500 \
+  COMPRESSION_LEVEL=5 \
+  USE_JDK_DEFLATER=true \
+  USE_JDK_INFLATER=true \
+  VALIDATION_STRINGENCY=SILENT \
+  QUIET=true
+
+python3 - "$workdir" <<'PY'
+import pathlib
+import sys
+
+workdir = pathlib.Path(sys.argv[1])
+expected = [
+    "turbo-runtime.quality_yield_metrics",
+    "picard-runtime.quality_yield_metrics",
+]
+missing = [name for name in expected if not (workdir / name).exists()]
+if missing:
+    raise SystemExit(f"missing CollectMultipleMetrics runtime output: {missing}")
+unexpected = [
+    "turbo-runtime.quality_yield_metrics.md5",
+    "picard-runtime.quality_yield_metrics.md5",
+    "turbo-runtime.quality_yield_metrics.idx",
+    "picard-runtime.quality_yield_metrics.idx",
+]
+present = [name for name in unexpected if (workdir / name).exists()]
+if present:
+    raise SystemExit(f"unexpected CollectMultipleMetrics runtime sidecar: {present}")
+print("CollectMultipleMetrics runtime option side effects match Picard")
+PY
+
+if ! command -v Rscript >/dev/null 2>&1; then
+  echo "Skipping chart-producing CollectMultipleMetrics parity checks because upstream Picard requires Rscript for those child programs" >&2
+  exit 0
+fi
+
+cargo run -q -p turbo-picard-cli --bin picard -- \
+  CollectMultipleMetrics \
+  "I=$workdir/input.sam" \
   "O=$workdir/turbo" \
   "${programs[@]}" \
   VALIDATION_STRINGENCY=SILENT \

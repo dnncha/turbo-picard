@@ -4,7 +4,8 @@ Fallback behavior
 By default, unsupported Picard commands fail clearly. This is intentional: a
 pipeline should not silently change behavior.
 
-For drop-in environments, configure an upstream Picard command prefix:
+For workflows that already call a ``picard`` command, configure an upstream
+Picard command prefix before testing the shim:
 
 .. code-block:: bash
 
@@ -22,9 +23,13 @@ What delegates
 ``turbo-picard`` delegates:
 
 * unsupported Picard commands;
-* explicitly unsupported native surfaces, such as options or formats that the
+* explicitly unsupported native options or formats that the
   native implementation recognizes as outside its current scope;
 * JVM-style leading options, but only when fallback is configured.
+
+Fallback is a compatibility bridge, not proof that a workflow is ready to
+switch. Use it with the command coverage table and the parity guidance in
+:doc:`parity` so unsupported surfaces remain visible while you test.
 
 What does not delegate
 ----------------------

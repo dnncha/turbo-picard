@@ -53,6 +53,11 @@ def write_sam(path, reads):
             )
 
 
+def write_fake_rscript(path):
+    path.write_text("#!/usr/bin/env sh\nexit 0\n", encoding="utf-8")
+    path.chmod(0o755)
+
+
 def stable_histogram(path):
     rows = []
     capture = False
@@ -96,7 +101,9 @@ def main():
         picard_out = workdir / "picard.txt"
         turbo_chart = workdir / "turbo.pdf"
         picard_chart = workdir / "picard.pdf"
+        fake_rscript = workdir / "Rscript"
         write_sam(input_sam, args.reads)
+        write_fake_rscript(fake_rscript)
 
         common = [
             "MeanQualityByCycle",
@@ -111,6 +118,8 @@ def main():
                 "run",
                 "-p",
                 args.conda_prefix,
+                "env",
+                f"PATH={workdir}:{args.conda_prefix}/bin:{os.environ.get('PATH', '')}",
                 "picard",
                 *common,
                 f"O={picard_out}",

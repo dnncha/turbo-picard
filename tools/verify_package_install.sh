@@ -10,6 +10,90 @@ shim_install_root="${tempdir}/shim-install"
 output_bam="${tempdir}/marked.bam"
 metrics="${tempdir}/metrics.txt"
 
+for release_artifact in \
+  "CITATION.cff" \
+  "docs/command-matrix.yml" \
+  "docs/parity.rst" \
+  "benchmarks/real-data/manifest.json" \
+  "docs/site/assets/benchmark-data.json" \
+  "packaging/bioconda/turbo-picard/meta.yaml" \
+  "packaging/bioconda/turbo-picard-picard-shim/meta.yaml"
+do
+  test -s "${repo_root}/${release_artifact}"
+done
+
+grep -q 'repository-code: "https://github.com/dnncha/turbo-picard"' "${repo_root}/CITATION.cff"
+grep -q '^cff-version: 1.2.0$' "${repo_root}/CITATION.cff"
+grep -q '^type: software$' "${repo_root}/CITATION.cff"
+grep -q 'archived release' "${repo_root}/CITATION.cff"
+grep -q '^commands:' "${repo_root}/docs/command-matrix.yml"
+grep -q '^picard_reference: "3.4.0"$' "${repo_root}/docs/command-matrix.yml"
+grep -q 'What Parity Means' "${repo_root}/docs/parity.rst"
+grep -q 'specific command' "${repo_root}/docs/parity.rst"
+grep -q 'does not prove broad switching safety' "${repo_root}/docs/parity.rst"
+grep -q 'python3 tools/verify_real_data_evidence.py --release-ready' "${repo_root}/docs/parity.rst"
+grep -q '"datasets"' "${repo_root}/benchmarks/real-data/manifest.json"
+grep -q '"release_tier": "release_candidate"' "${repo_root}/benchmarks/real-data/manifest.json"
+grep -q '"gatk-na12878-mito"' "${repo_root}/benchmarks/real-data/manifest.json"
+grep -q '"benchmarks"' "${repo_root}/docs/site/assets/benchmark-data.json"
+grep -q '"parity": "32/32 PASS"' "${repo_root}/docs/site/assets/benchmark-data.json"
+grep -q '"geometric_mean_speedup"' "${repo_root}/docs/site/assets/benchmark-data.json"
+
+python3 - "${repo_root}" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+repo = Path(sys.argv[1])
+required_portfolio = {
+    "AddOrReplaceReadGroups",
+    "BuildBamIndex",
+    "CleanSam",
+    "CollectAlignmentSummaryMetrics",
+    "CollectInsertSizeMetrics",
+    "CollectQualityYieldMetrics",
+    "MarkDuplicates",
+    "RevertSam",
+    "SamToFastq",
+    "SortSam",
+    "ValidateSamFile",
+    "ViewSam",
+}
+
+manifest = json.loads((repo / "benchmarks/real-data/manifest.json").read_text())
+datasets = manifest.get("datasets")
+if not isinstance(datasets, list):
+    raise SystemExit("real-data manifest datasets must be a list")
+release_commands = set()
+for dataset in datasets:
+    if not isinstance(dataset, dict):
+        continue
+    if dataset.get("release_tier") != "release_candidate":
+        continue
+    expected_commands = dataset.get("expected_commands", {})
+    if isinstance(expected_commands, dict):
+        release_commands.update(expected_commands)
+missing = sorted(required_portfolio - release_commands)
+if missing:
+    raise SystemExit(
+        "release_candidate manifest missing package-smoke command evidence: "
+        + ", ".join(missing)
+    )
+
+benchmark_data = json.loads((repo / "docs/site/assets/benchmark-data.json").read_text())
+summary = benchmark_data.get("summary")
+if benchmark_data.get("parity") != "32/32 PASS":
+    raise SystemExit("benchmark-data parity must be 32/32 PASS")
+if not isinstance(summary, dict):
+    raise SystemExit("benchmark-data summary must be an object")
+for key in ("command_count", "parity_pass_count", "floor_speedup", "geometric_mean_speedup", "top_speedup"):
+    value = summary.get(key)
+    if not isinstance(value, (int, float)):
+        raise SystemExit(f"benchmark-data summary missing numeric {key}")
+if summary["command_count"] != summary["parity_pass_count"]:
+    raise SystemExit("benchmark-data command_count and parity_pass_count differ")
+PY
+
 cargo install \
   --locked \
   --no-track \
@@ -19,6 +103,38 @@ cargo install \
 
 "${install_root}/bin/turbo-picard" --version
 test ! -e "${install_root}/bin/picard"
+
+"${install_root}/bin/turbo-picard" --help > "${tempdir}/turbo-picard-help.txt"
+python3 - "${repo_root}/docs/command-matrix.yml" "${tempdir}/turbo-picard-help.txt" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+matrix = Path(sys.argv[1]).read_text(encoding="utf-8")
+help_text = Path(sys.argv[2]).read_text(encoding="utf-8")
+commands = []
+current = None
+for line in matrix.splitlines():
+    name = re.match(r"\s*-\s+name:\s+(\S+)", line)
+    if name:
+        current = name.group(1)
+        continue
+    status = re.match(r"\s+status:\s+(native|partial-native)\s*$", line)
+    if status and current:
+        commands.append(current)
+        current = None
+missing = [command for command in commands if command not in help_text]
+if missing:
+    raise SystemExit("installed turbo-picard help missing commands: " + ", ".join(missing))
+PY
+
+recipe_smoke_dir="${tempdir}/recipe-smoke"
+mkdir -p "${recipe_smoke_dir}"
+(
+  cd "${recipe_smoke_dir}"
+  PATH="${install_root}/bin:/usr/bin:/bin" \
+    bash "${repo_root}/packaging/bioconda/turbo-picard/run_test.sh"
+)
 
 "${install_root}/bin/turbo-picard" MarkDuplicates \
   "I=${repo_root}/fixtures/markduplicates/basic/input.bam" \
@@ -668,3 +784,67 @@ cargo install \
 
 "${shim_install_root}/bin/picard" --version
 "${shim_install_root}/bin/picard" MarkDuplicates --help
+"${shim_install_root}/bin/picard" --help > "${tempdir}/picard-shim-help.txt"
+python3 - "${repo_root}/docs/command-matrix.yml" "${tempdir}/picard-shim-help.txt" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+matrix = Path(sys.argv[1]).read_text(encoding="utf-8")
+help_text = Path(sys.argv[2]).read_text(encoding="utf-8")
+commands = []
+current = None
+for line in matrix.splitlines():
+    name = re.match(r"\s*-\s+name:\s+(\S+)", line)
+    if name:
+        current = name.group(1)
+        continue
+    status = re.match(r"\s+status:\s+(native|partial-native)\s*$", line)
+    if status and current:
+        commands.append(current)
+        current = None
+missing = [command for command in commands if command not in help_text]
+if missing:
+    raise SystemExit("installed picard shim help missing commands: " + ", ".join(missing))
+PY
+
+shim_input="${tempdir}/shim-input.sam"
+shim_marked="${tempdir}/shim-marked.sam"
+shim_metrics="${tempdir}/shim-metrics.txt"
+shim_view="${tempdir}/shim-view.sam"
+cat > "${shim_input}" <<'SAM'
+@HD	VN:1.6	SO:coordinate
+@SQ	SN:chr1	LN:1000
+read-a	0	chr1	1	60	8M	*	0	0	ACGTACGT	FFFFFFFF
+read-b	0	chr1	1	60	8M	*	0	0	ACGTACGT	FFFFFFFF
+SAM
+
+PATH="${shim_install_root}/bin:/usr/bin:/bin" \
+  picard MarkDuplicates \
+    "I=${shim_input}" \
+    "O=${shim_marked}" \
+    "M=${shim_metrics}" \
+    VALIDATION_STRINGENCY=SILENT \
+    QUIET=true
+
+test -s "${shim_marked}"
+test -s "${shim_metrics}"
+grep -q 'UNPAIRED_READ_DUPLICATES' "${shim_metrics}"
+
+PATH="${shim_install_root}/bin:/usr/bin:/bin" \
+  picard ViewSam \
+    "I=${shim_marked}" \
+    "O=${shim_view}" \
+    VALIDATION_STRINGENCY=SILENT \
+    QUIET=true
+
+test -s "${shim_view}"
+grep -q '^read-a' "${shim_view}"
+
+shim_recipe_smoke_dir="${tempdir}/shim-recipe-smoke"
+mkdir -p "${shim_recipe_smoke_dir}"
+(
+  cd "${shim_recipe_smoke_dir}"
+  PATH="${shim_install_root}/bin:/usr/bin:/bin" \
+    bash "${repo_root}/packaging/bioconda/turbo-picard-picard-shim/run_test.sh"
+)

@@ -15,6 +15,16 @@ else
   exit 127
 fi
 
+cat > "$workdir/Rscript" <<'SH'
+#!/usr/bin/env bash
+exit 0
+SH
+chmod +x "$workdir/Rscript"
+
+run_picard() {
+  "${conda_runner[@]}" run -p "$conda_prefix" env "PATH=$workdir:$conda_prefix/bin:$PATH" picard "$@"
+}
+
 cat > "$workdir/ref.fa" <<'FA'
 >low
 AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
@@ -42,7 +52,7 @@ cargo run -q -p turbo-picard-cli --bin picard -- \
   VALIDATION_STRINGENCY=SILENT \
   QUIET=true
 
-"${conda_runner[@]}" run -p "$conda_prefix" picard CollectGcBiasMetrics \
+run_picard CollectGcBiasMetrics \
   "I=$workdir/input.sam" \
   "O=$workdir/picard.detail.txt" \
   "S=$workdir/picard.summary.txt" \
@@ -87,6 +97,67 @@ PY
 
 test -s "$workdir/turbo.pdf"
 
+cargo run -q -p turbo-picard-cli --bin picard -- \
+  CollectGcBiasMetrics \
+  "I=$workdir/input.sam" \
+  "O=$workdir/turbo-stop-after.detail.txt" \
+  "S=$workdir/turbo-stop-after.summary.txt" \
+  "CHART=$workdir/turbo-stop-after.pdf" \
+  "R=$workdir/ref.fa" \
+  SCAN_WINDOW_SIZE=20 \
+  MINIMUM_GENOME_FRACTION=0 \
+  STOP_AFTER=1 \
+  AS=true \
+  VALIDATION_STRINGENCY=SILENT \
+  QUIET=true
+
+run_picard CollectGcBiasMetrics \
+  "I=$workdir/input.sam" \
+  "O=$workdir/picard-stop-after.detail.txt" \
+  "S=$workdir/picard-stop-after.summary.txt" \
+  "CHART=$workdir/picard-stop-after.pdf" \
+  "R=$workdir/ref.fa" \
+  SCAN_WINDOW_SIZE=20 \
+  MINIMUM_GENOME_FRACTION=0 \
+  STOP_AFTER=1 \
+  AS=true \
+  VALIDATION_STRINGENCY=SILENT \
+  QUIET=true
+
+python3 - "$workdir/turbo-stop-after.detail.txt" "$workdir/picard-stop-after.detail.txt" "$workdir/turbo-stop-after.summary.txt" "$workdir/picard-stop-after.summary.txt" <<'PY'
+import sys
+
+def table(path, header):
+    lines = [line.rstrip("\n") for line in open(path, encoding="utf-8")]
+    for index, line in enumerate(lines):
+        if line == header:
+            rows = []
+            cursor = index
+            while cursor < len(lines) and lines[cursor]:
+                rows.append(lines[cursor])
+                cursor += 1
+            return rows
+    raise SystemExit(f"missing table {header!r} in {path}")
+
+detail_header = "ACCUMULATION_LEVEL\tREADS_USED\tGC\tWINDOWS\tREAD_STARTS\tMEAN_BASE_QUALITY\tNORMALIZED_COVERAGE\tERROR_BAR_WIDTH\tSAMPLE\tLIBRARY\tREAD_GROUP"
+summary_header = "ACCUMULATION_LEVEL\tREADS_USED\tWINDOW_SIZE\tTOTAL_CLUSTERS\tALIGNED_READS\tAT_DROPOUT\tGC_DROPOUT\tGC_NC_0_19\tGC_NC_20_39\tGC_NC_40_59\tGC_NC_60_79\tGC_NC_80_100\tSAMPLE\tLIBRARY\tREAD_GROUP"
+
+checks = [
+    (sys.argv[1], sys.argv[2], detail_header, "CollectGcBiasMetrics STOP_AFTER/AS detail"),
+    (sys.argv[3], sys.argv[4], summary_header, "CollectGcBiasMetrics STOP_AFTER/AS summary"),
+]
+
+for turbo_path, picard_path, header, label in checks:
+    turbo = table(turbo_path, header)
+    picard = table(picard_path, header)
+    if turbo != picard:
+        raise SystemExit(f"{label} stable table differs:\nturbo={turbo}\npicard={picard}")
+
+print("CollectGcBiasMetrics STOP_AFTER/AS metric tables match Picard")
+PY
+
+test -s "$workdir/turbo-stop-after.pdf"
+
 cat > "$workdir/duplicate-input.sam" <<'SAM'
 @HD	VN:1.6	SO:coordinate
 @SQ	SN:low	LN:40
@@ -109,7 +180,7 @@ cargo run -q -p turbo-picard-cli --bin picard -- \
   VALIDATION_STRINGENCY=SILENT \
   QUIET=true
 
-"${conda_runner[@]}" run -p "$conda_prefix" picard CollectGcBiasMetrics \
+run_picard CollectGcBiasMetrics \
   "I=$workdir/duplicate-input.sam" \
   "O=$workdir/picard-duplicates.detail.txt" \
   "S=$workdir/picard-duplicates.summary.txt" \

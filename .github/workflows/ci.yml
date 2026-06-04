@@ -14,9 +14,13 @@ jobs:
         os: [ubuntu-latest, macos-14]
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - uses: dtolnay/rust-toolchain@stable
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
 
       - name: Install native dependencies
         if: runner.os == 'Linux'
@@ -32,28 +36,53 @@ jobs:
 
       - name: Test Python tooling
         run: |
+          python3 -m pip install PyYAML==6.0.3
           python3 -m unittest tools/test_compare_markduplicates.py
+          python3 -m unittest tools/test_bioconda_release_preflight.py
+          python3 -m unittest tools/test_compare_real_data.py
+          python3 -m unittest tools/test_prepare_bioconda_release.py
           python3 -m unittest tools/test_render_benchmark_assets.py
+          python3 -m unittest tools/test_update_real_data_manifest.py
           python3 -m unittest tools/test_verify_benchmark_log_evidence.py
           python3 -m unittest tools/test_verify_benchmark_suite_coverage.py
           python3 -m unittest tools/test_verify_benchmark_thresholds.py
+          python3 -m unittest tools/test_verify_bioconda_recipes.py
+          python3 -m unittest tools/test_verify_chart_disclosures.py
+          python3 -m unittest tools/test_verify_ci_coverage.py
+          python3 -m unittest tools/test_verify_command_matrix.py
+          python3 -m unittest tools/test_verify_parity_docs.py
           python3 -m unittest tools/test_verify_readme_benchmark_evidence.py
+          python3 -m unittest tools/test_verify_readme_links.py
+          python3 -m unittest tools/test_verify_real_data_ci_coverage.py
+          python3 -m unittest tools/test_verify_real_data_evidence.py
+          python3 -m unittest tools/test_verify_release_text_quality.py
+          python3 -m unittest tools/test_verify_release_versions.py
+          python3 -m unittest tools/test_verify_site_disclosures.py
           python3 -m unittest tools/test_verify_site_benchmark_evidence.py
+          python3 -m unittest tools/test_verify_site_links.py
           python3 -m py_compile \
             tools/compare_markduplicates.py \
+            tools/bioconda_release_preflight.py \
+            tools/compare_real_data.py \
+            tools/prepare_bioconda_release.py \
             tools/bench_addorreplacereadgroups.py \
+            tools/bench_alignmentmetrics.py \
             tools/bench_bedtointervallist.py \
             tools/bench_markduplicates.py \
             tools/bench_markduplicates_synthetic.py \
             tools/bench_buildbamindex.py \
             tools/bench_cleansam.py \
             tools/bench_collectbasedistributionbycycle.py \
+            tools/bench_collectgcbiasmetrics.py \
+            tools/bench_collectmultiplemetrics.py \
             tools/bench_collectwgsmetrics.py \
             tools/bench_createdict.py \
             tools/bench_fastqtosam.py \
             tools/bench_fixmateinformation.py \
             tools/bench_gathervcfs.py \
             tools/bench_insertsize.py \
+            tools/bench_intervallisttools.py \
+            tools/bench_liftovervcf.py \
             tools/bench_meanqualitybycycle.py \
             tools/bench_mergesamfiles.py \
             tools/bench_mergevcfs.py \
@@ -71,25 +100,72 @@ jobs:
             tools/bench_validatesamfile.py \
             tools/bench_viewsam.py \
             tools/render_benchmark_assets.py \
+            tools/update_real_data_manifest.py \
+            tools/verify_bioconda_recipes.py \
             tools/verify_benchmark_log_evidence.py \
             tools/verify_benchmark_suite_coverage.py \
             tools/verify_benchmark_thresholds.py \
+            tools/verify_chart_disclosures.py \
+            tools/verify_ci_coverage.py \
+            tools/verify_joss_paper.py \
             tools/verify_command_matrix.py \
+            tools/verify_parity_docs.py \
             tools/verify_readme_benchmark_evidence.py \
+            tools/verify_readme_links.py \
+            tools/verify_real_data_ci_coverage.py \
+            tools/verify_real_data_evidence.py \
+            tools/verify_release_text_quality.py \
+            tools/verify_release_versions.py \
+            tools/verify_site_disclosures.py \
             tools/verify_site_benchmark_evidence.py \
+            tools/verify_site_links.py \
             tools/test_compare_markduplicates.py \
+            tools/test_bioconda_release_preflight.py \
+            tools/test_compare_real_data.py \
+            tools/test_prepare_bioconda_release.py \
             tools/test_render_benchmark_assets.py \
+            tools/test_update_real_data_manifest.py \
             tools/test_verify_benchmark_log_evidence.py \
             tools/test_verify_benchmark_suite_coverage.py \
             tools/test_verify_benchmark_thresholds.py \
+            tools/test_verify_bioconda_recipes.py \
+            tools/test_verify_chart_disclosures.py \
+            tools/test_verify_ci_coverage.py \
+            tools/test_verify_command_matrix.py \
+            tools/test_verify_parity_docs.py \
             tools/test_verify_readme_benchmark_evidence.py \
-            tools/test_verify_site_benchmark_evidence.py
+            tools/test_verify_readme_links.py \
+            tools/test_verify_real_data_ci_coverage.py \
+            tools/test_verify_real_data_evidence.py \
+            tools/test_verify_release_text_quality.py \
+            tools/test_verify_release_versions.py \
+            tools/test_verify_site_disclosures.py \
+            tools/test_verify_site_benchmark_evidence.py \
+            tools/test_verify_site_links.py
           python3 tools/verify_command_matrix.py
+          python3 tools/verify_parity_docs.py
+          python3 tools/verify_bioconda_recipes.py
+          python3 tools/verify_chart_disclosures.py
+          python3 tools/verify_ci_coverage.py
+          python3 tools/verify_joss_paper.py
           python3 tools/verify_benchmark_log_evidence.py
           python3 tools/verify_benchmark_suite_coverage.py
           python3 tools/verify_benchmark_thresholds.py
           python3 tools/verify_readme_benchmark_evidence.py
+          python3 tools/verify_readme_links.py
+          python3 tools/verify_real_data_ci_coverage.py
+          python3 tools/verify_real_data_evidence.py
+          python3 tools/verify_real_data_evidence.py --release-ready
+          python3 tools/verify_release_text_quality.py
+          python3 tools/verify_release_versions.py
+          set +e
+          python3 tools/prepare_bioconda_release.py --sha256 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef --check
+          release_helper_check_status=$?
+          set -e
+          test "$release_helper_check_status" -eq 1
+          python3 tools/verify_site_disclosures.py
           python3 tools/verify_site_benchmark_evidence.py
+          python3 tools/verify_site_links.py
 
       - name: Verify benchmark evidence assets are current
         run: |
@@ -99,6 +175,11 @@ jobs:
             docs/site/assets/benchmark-speedups.svg \
             docs/site/assets/hero-pipeline.svg
 
+      - name: Build Sphinx docs
+        run: |
+          python3 -m pip install -r docs/requirements.txt
+          python3 -m sphinx -W -b html docs docs/_build/html
+
       - name: Smoke package install
         run: ./tools/verify_package_install.sh
 
@@ -107,7 +188,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - uses: dtolnay/rust-toolchain@stable
 

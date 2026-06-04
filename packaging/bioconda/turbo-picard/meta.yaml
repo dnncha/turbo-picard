@@ -1,27 +1,29 @@
 {% set name = "turbo-picard" %}
-{% set version = "0.1.0" %}
+{% set version = "0.1.1" %}
 
 package:
   name: {{ name|lower }}
   version: {{ version }}
 
 source:
-  path: ../../..
-
+  url: https://github.com/dnncha/turbo-picard/archive/refs/tags/v0.1.1.tar.gz
+  sha256: a662137ff6e9bf278dfac59d4355b34b8d669755b64984c84b194c5c69b9e49a
 build:
   number: 0
   skip: true  # [win]
-  script_env:
-    - CARGO_NET_GIT_FETCH_WITH_CLI=true
+  run_exports:
+    - {{ pin_subpackage('turbo-picard', max_pin="x.x") }}
 
 requirements:
   build:
     - {{ compiler('c') }}
     - {{ compiler('rust') }}
+    - {{ stdlib('c') }}
     - cargo-bundle-licenses
     - clangdev
     - make
     - pkg-config
+    - python
   host:
     - bzip2
     - curl
@@ -46,7 +48,10 @@ test:
     - turbo-picard SamToFastq --help
     - turbo-picard AddOrReplaceReadGroups --help
     - turbo-picard CollectAlignmentSummaryMetrics --help
+    - turbo-picard CollectBaseDistributionByCycle --help
+    - turbo-picard CollectGcBiasMetrics --help
     - turbo-picard CollectQualityYieldMetrics --help
+    - turbo-picard CollectWgsMetrics --help
     - turbo-picard QualityScoreDistribution --help
     - turbo-picard MeanQualityByCycle --help
     - turbo-picard CollectInsertSizeMetrics --help
@@ -58,6 +63,7 @@ test:
     - turbo-picard ValidateSamFile --help
     - turbo-picard LiftoverVcf --help
     - turbo-picard CreateSequenceDictionary --help
+    - turbo-picard FastqToSam --help
     - turbo-picard NormalizeFasta --help
     - turbo-picard BedToIntervalList --help
     - turbo-picard ViewSam --help
@@ -69,18 +75,22 @@ test:
 
 about:
   home: https://github.com/dnncha/turbo-picard
+  doc_url: https://turbo-picard.readthedocs.io/
+  dev_url: https://github.com/dnncha/turbo-picard
   license: MIT
   license_file:
     - LICENSE
     - THIRDPARTY.yml
-  summary: Fast Picard-compatible toolkit with native high-impact Picard commands.
+  summary: Picard-compatible Rust toolkit with selected faster commands.
   description: |
-    turbo-picard is a Rust implementation of high-impact Picard workflows.
-    The current native engines target high-impact SAM/BAM, metrics, FASTA, and
-    interval workflows. This package installs the non-shadowing turbo-picard
-    command entrypoint only; install turbo-picard-picard-shim to opt into a
-    picard compatibility shim.
+    turbo-picard provides faster Rust implementations of selected Picard
+    commands while keeping Picard-style KEY=VALUE arguments. This package
+    installs only the non-shadowing turbo-picard command, so it can live beside
+    the existing Bioconda picard package. Install turbo-picard-picard-shim only
+    if you want an optional picard command shim. See CITATION.cff for the
+    software citation; benchmark and validation inputs have separate real-data
+    evidence citations in the documentation.
 
 extra:
   recipe-maintainers:
-    - replace-with-bioconda-maintainer
+    - dnncha

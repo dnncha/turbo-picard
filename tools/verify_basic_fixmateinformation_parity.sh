@@ -99,6 +99,53 @@ if turbo != picard:
 print("FixMateInformation temp-option SAM output matches Picard")
 PY
 
+cat > "$workdir/mate-cigar-input.sam" <<'SAM'
+@HD	VN:1.6	SO:queryname
+@SQ	SN:chr1	LN:1000
+pair1	99	chr1	10	60	4M	*	0	0	ACGT	FFFF	MC:Z:stale
+pair1	147	chr1	30	60	4M	*	0	0	TGCA	FFFF	MC:Z:stale
+SAM
+
+cargo run -q -p turbo-picard-cli --bin picard -- \
+  FixMateInformation \
+  "I=$workdir/mate-cigar-input.sam" \
+  "O=$workdir/turbo-mc-false.sam" \
+  AS=true \
+  SORT_ORDER=queryname \
+  MC=false \
+  VALIDATION_STRINGENCY=SILENT \
+  QUIET=true
+
+"${conda_runner[@]}" run -p "$conda_prefix" picard FixMateInformation \
+  "I=$workdir/mate-cigar-input.sam" \
+  "O=$workdir/picard-mc-false.sam" \
+  AS=true \
+  SORT_ORDER=queryname \
+  MC=false \
+  VALIDATION_STRINGENCY=SILENT \
+  QUIET=true
+
+python3 - "$workdir/turbo-mc-false.sam" "$workdir/picard-mc-false.sam" <<'PY'
+import sys
+
+def stable_records(path):
+    records = []
+    for line in open(path, encoding="utf-8"):
+        line = line.rstrip("\n")
+        if not line or line.startswith("@PG"):
+            continue
+        records.append(line)
+    return records
+
+turbo = stable_records(sys.argv[1])
+picard = stable_records(sys.argv[2])
+if turbo != picard:
+    raise SystemExit(f"FixMateInformation MC=false SAM output differs:\nturbo={turbo}\npicard={picard}")
+if any("\tMC:Z:" in record for record in turbo):
+    raise SystemExit(f"FixMateInformation MC=false retained MC tag: {turbo}")
+print("FixMateInformation MC=false alias output matches Picard")
+PY
+
 cargo run -q -p turbo-picard-cli --bin picard -- \
   FixMateInformation \
   "I=$workdir/input.sam" \

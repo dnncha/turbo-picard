@@ -9,6 +9,12 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
+TOOL_DIR = Path(__file__).resolve().parent
+if str(TOOL_DIR) not in sys.path:
+    sys.path.insert(0, str(TOOL_DIR))
+
+from verify_benchmark_suite_coverage import BENCHMARK_EXEMPTIONS  # noqa: E402
+
 SITE = ROOT / "docs" / "site" / "index.html"
 BENCHMARK_DATA = ROOT / "docs" / "site" / "assets" / "benchmark-data.json"
 
@@ -27,6 +33,9 @@ def validate_site_benchmark_evidence(site: str, data: dict) -> list[str]:
     geometric_mean = format_speedup(summary["geometric_mean_speedup"])
     top_command = summary["top_command"]
     floor_command = summary["floor_command"]
+    date = data.get("date")
+    source = data.get("source")
+    source_artifact = data.get("source_artifact")
 
     checks = [
         (parity_count, f"missing site parity claim: {parity_count}"),
@@ -42,10 +51,38 @@ def validate_site_benchmark_evidence(site: str, data: dict) -> list[str]:
             "python3 tools/verify_benchmark_log_evidence.py",
             "missing site benchmark-log evidence verifier command",
         ),
+        (
+            "python3 tools/verify_benchmark_suite_coverage.py",
+            "missing site benchmark-suite coverage verifier command",
+        ),
+        (
+            "python3 tools/verify_benchmark_thresholds.py",
+            "missing site benchmark-threshold verifier command",
+        ),
+        (
+            "python3 tools/verify_real_data_evidence.py --release-ready",
+            "missing site release-ready real-data verifier command",
+        ),
+        ("benchmark exceptions", "missing site benchmark exception disclosure"),
+        ("#adopt", "missing site adoption section link"),
+        ("../../CITATION.cff", "missing site CITATION.cff link"),
+        ("input SHA-256", "missing site pinned input SHA-256 guidance"),
+        ("archived turbo-picard release you used", "missing site archived-release citation guidance"),
+        ("12-command release set", "missing site release command-set guidance"),
     ]
     for needle, message in checks:
         if needle not in site:
             errors.append(message)
+    for value, message in [
+        (date, f"missing site benchmark date: {date}"),
+        (source, f"missing site benchmark source command: {source}"),
+        (source_artifact, f"missing site benchmark source artifact: {source_artifact}"),
+    ]:
+        if not isinstance(value, str) or not value or value not in site:
+            errors.append(message)
+    for command in sorted(BENCHMARK_EXEMPTIONS):
+        if command not in site:
+            errors.append(f"missing site benchmark exception: {command}")
 
     return errors
 

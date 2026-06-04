@@ -58,6 +58,11 @@ def write_sam(path, pairs):
             )
 
 
+def write_fake_rscript(path):
+    path.write_text("#!/usr/bin/env sh\nexit 0\n", encoding="utf-8")
+    path.chmod(0o755)
+
+
 def stable_sections(path):
     lines = [line.rstrip("\n") for line in open(path, encoding="utf-8")]
     metrics = None
@@ -106,7 +111,9 @@ def main():
         turbo_pdf = workdir / "turbo.pdf"
         picard_out = workdir / "picard.txt"
         picard_pdf = workdir / "picard.pdf"
+        fake_rscript = workdir / "Rscript"
         write_sam(input_sam, pairs)
+        write_fake_rscript(fake_rscript)
 
         common = [
             "CollectInsertSizeMetrics",
@@ -121,6 +128,8 @@ def main():
                 "run",
                 "-p",
                 args.conda_prefix,
+                "env",
+                f"PATH={workdir}:{args.conda_prefix}/bin:{os.environ.get('PATH', '')}",
                 "picard",
                 *common,
                 f"O={picard_out}",

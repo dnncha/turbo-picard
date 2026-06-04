@@ -34,8 +34,17 @@ cp "$workdir/input.bai" "$workdir/turbo.bai"
   "I=$workdir/input.bam" "O=$workdir/picard.bai" \
   VALIDATION_STRINGENCY=SILENT QUIET=true
 
-"${conda_runner[@]}" run -p "$conda_prefix" samtools idxstats \
-  "$workdir/input.bam" > "$workdir/idxstats.txt"
+cargo run -q -p turbo-picard-cli --bin picard -- \
+  BuildBamIndex "I=$workdir/input.bam" "O=$workdir/turbo-md5.bai" \
+  CREATE_MD5_FILE=true VALIDATION_STRINGENCY=SILENT QUIET=true
+
+"${conda_runner[@]}" run -p "$conda_prefix" picard BuildBamIndex \
+  "I=$workdir/input.bam" "O=$workdir/picard-md5.bai" \
+  CREATE_MD5_FILE=true VALIDATION_STRINGENCY=SILENT QUIET=true
+
 test -s "$workdir/turbo.bai"
 test -s "$workdir/picard.bai"
-grep -q '^chr1' "$workdir/idxstats.txt"
+test -s "$workdir/turbo-md5.bai"
+test -s "$workdir/picard-md5.bai"
+test ! -e "$workdir/turbo-md5.bai.md5"
+test ! -e "$workdir/picard-md5.bai.md5"
