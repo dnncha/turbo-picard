@@ -3186,19 +3186,17 @@ struct RevertsamTextRecord {
     serial: usize,
 }
 
-fn run_revertsam_sam_text(
+fn collect_revertsam_sam_text_records(
     input: &str,
-    output: &str,
-    remove_alignment_information: bool,
     remove_duplicate_information: bool,
     restore_hardclips: bool,
     sort_order: SortOrder,
-) -> Result<(), String> {
+) -> Result<(Vec<String>, Vec<RevertsamTextRecord>), String> {
     let file = fs::File::open(input).map_err(|error| error.to_string())?;
     let mut reader = BufReader::with_capacity(1024 * 1024, file);
     let mut header_lines = Vec::<String>::new();
     let mut records = Vec::<RevertsamTextRecord>::new();
-    let mut line = String::new();
+    let mut line = String::with_capacity(512);
     let mut serial = 0usize;
 
     loop {
@@ -3248,6 +3246,24 @@ fn run_revertsam_sam_text(
                 .then_with(|| left.serial.cmp(&right.serial))
         });
     }
+
+    Ok((header_lines, records))
+}
+
+fn run_revertsam_sam_text(
+    input: &str,
+    output: &str,
+    remove_alignment_information: bool,
+    remove_duplicate_information: bool,
+    restore_hardclips: bool,
+    sort_order: SortOrder,
+) -> Result<(), String> {
+    let (header_lines, records) = collect_revertsam_sam_text_records(
+        input,
+        remove_duplicate_information,
+        restore_hardclips,
+        sort_order,
+    )?;
 
     let mut writer = BufWriter::with_capacity(
         1024 * 1024,
@@ -3325,27 +3341,22 @@ fn run_revertsam_sam_text_to_bam(
     create_md5_file: bool,
     create_index: bool,
 ) -> Result<(), String> {
-    let temp_sam = temp_revertsam_sam_path(output);
-    run_revertsam_sam_text(
+    let header_reader = open_bam_reader(input)?;
+    let header = reverted_header(header_reader.header(), true, sort_order);
+    let (_header_lines, records) = collect_revertsam_sam_text_records(
         input,
-        &temp_sam,
-        true,
         remove_duplicate_information,
         restore_hardclips,
         sort_order,
     )?;
-    let mut reader = open_bam_reader(&temp_sam)?;
-    let header = reverted_header(reader.header(), true, sort_order);
+    let header_view = bam::HeaderView::from_header(&header);
     let mut writer = bam_writer_for_path(output, &header, output_format, compression_level)?;
-    for record in reader.records() {
-        let record = record.map_err(|error| error.to_string())?;
-        if record.is_secondary() || record.is_supplementary() {
-            continue;
-        }
+    for text_record in records {
+        let record = bam::Record::from_sam(&header_view, text_record.line.as_bytes())
+            .map_err(|error| error.to_string())?;
         writer.write(&record).map_err(|error| error.to_string())?;
     }
     drop(writer);
-    let _ = fs::remove_file(&temp_sam);
     write_requested_sidecars(
         output,
         create_md5_file,
@@ -3353,32 +3364,38 @@ fn run_revertsam_sam_text_to_bam(
     )
 }
 
-fn temp_revertsam_sam_path(output: &str) -> String {
-    format!("{output}.tmp.{}.sam", process::id())
-}
-
 fn revert_sam_text_record_line(
     line: &str,
     remove_duplicate_information: bool,
     restore_hardclips: bool,
 ) -> Result<(String, String, u16), String> {
-    let fields = line
-        .split('\t')
-        .collect::<Vec<_>>();
-    if fields.len() < 11 {
-        return Err("malformed RevertSam SAM record".to_string());
-    }
-    let qname = fields[0].to_string();
-    let mut flags = fields[1]
+    let mut fields = line.split('\t');
+    let qname = fields
+        .next()
+        .ok_or_else(|| "malformed RevertSam SAM record".to_string())?;
+    let mut flags = fields
+        .next()
+        .ok_or_else(|| "malformed RevertSam SAM record".to_string())?
         .parse::<u16>()
         .map_err(|_| "malformed RevertSam SAM flag".to_string())?;
-    let mut sequence = fields[9].as_bytes().to_vec();
-    let mut qualities = fields[10].as_bytes().to_vec();
-    let mut kept_aux = Vec::<String>::new();
+    for _ in 0..7 {
+        fields
+            .next()
+            .ok_or_else(|| "malformed RevertSam SAM record".to_string())?;
+    }
+    let sequence_field = fields
+        .next()
+        .ok_or_else(|| "malformed RevertSam SAM record".to_string())?;
+    let quality_field = fields
+        .next()
+        .ok_or_else(|| "malformed RevertSam SAM record".to_string())?;
+    let mut sequence = sequence_field.as_bytes().to_vec();
+    let mut qualities = quality_field.as_bytes().to_vec();
+    let mut kept_aux = Vec::<&str>::new();
     let mut hardclip_bases = None::<Vec<u8>>;
     let mut hardclip_qualities = None::<Vec<u8>>;
 
-    for tag_field in &fields[11..] {
+    for tag_field in fields {
         if tag_field.starts_with("OQ:Z:") {
             qualities = tag_field[5..].as_bytes().to_vec();
             continue;
@@ -3394,7 +3411,7 @@ fn revert_sam_text_record_line(
         if revertsam_default_removed_alignment_tag_field(tag_field) {
             continue;
         }
-        kept_aux.push((*tag_field).to_string());
+        kept_aux.push(tag_field);
     }
 
     if flags & 0x10 != 0 {
@@ -3420,19 +3437,26 @@ fn revert_sam_text_record_line(
         flags &= !0x400;
     }
 
-    kept_aux.sort();
-    let mut reverted = format!(
-        "{qname}\t{flags}\t*\t0\t0\t*\t*\t0\t0\t{seq}\t{qual}",
-        qname = qname,
-        flags = flags,
-        seq = String::from_utf8(sequence).map_err(|_| "malformed RevertSam sequence".to_string())?,
-        qual = String::from_utf8(qualities).map_err(|_| "malformed RevertSam qualities".to_string())?,
+    kept_aux.sort_unstable();
+    let seq = String::from_utf8(sequence)
+        .map_err(|_| "malformed RevertSam sequence".to_string())?;
+    let qual = String::from_utf8(qualities)
+        .map_err(|_| "malformed RevertSam qualities".to_string())?;
+    let mut reverted = String::with_capacity(
+        qname.len() + seq.len() + qual.len() + kept_aux.iter().map(|tag| tag.len()).sum::<usize>() + 32,
     );
+    reverted.push_str(qname);
+    reverted.push('\t');
+    reverted.push_str(&flags.to_string());
+    reverted.push_str("\t*\t0\t0\t*\t*\t0\t0\t");
+    reverted.push_str(&seq);
+    reverted.push('\t');
+    reverted.push_str(&qual);
     for tag in kept_aux {
         reverted.push('\t');
-        reverted.push_str(&tag);
+        reverted.push_str(tag);
     }
-    Ok((reverted, qname, flags))
+    Ok((reverted, qname.to_string(), flags))
 }
 
 fn revertsam_default_removed_alignment_tag_field(tag_field: &str) -> bool {
@@ -12763,7 +12787,7 @@ fn set_nm_md_uq_tags(
         .copied()
         .flatten()
         .ok_or_else(|| format!("SetNmMdAndUqTags reference missing target {}", record.tid()))?;
-    let read_bases = record.seq();
+    let read_bases = record.seq().as_bytes();
     let qualities = record.qual();
     let mut read_offset = 0usize;
     let mut ref_offset = record.pos() as usize;
@@ -12778,23 +12802,25 @@ fn set_nm_md_uq_tags(
     for cigar in &record.cigar() {
         match *cigar {
             Cigar::Match(length) | Cigar::Equal(length) | Cigar::Diff(length) => {
-                for _ in 0..length {
+                let end_read = read_offset.saturating_add(length as usize);
+                while read_offset < end_read {
                     if read_offset >= read_bases.len() {
                         return Err("SetNmMdAndUqTags read sequence shorter than CIGAR".to_string());
                     }
-                    let read_base = read_bases[read_offset];
                     let ref_base = *reference.get(ref_offset).ok_or_else(|| {
                         "SetNmMdAndUqTags alignment extends beyond reference".to_string()
                     })?;
-                    if dna_bases_equal(read_base, ref_base) {
+                    if dna_bases_equal(read_bases[read_offset], ref_base) {
                         matches += 1;
-                    } else {
-                        push_usize_decimal(&mut md, matches);
-                        md.push(ref_base as char);
-                        matches = 0;
-                        nm += 1;
-                        uq += qualities.get(read_offset).copied().unwrap_or(0) as i32;
+                        read_offset += 1;
+                        ref_offset += 1;
+                        continue;
                     }
+                    push_usize_decimal(&mut md, matches);
+                    md.push(ref_base as char);
+                    matches = 0;
+                    nm += 1;
+                    uq += qualities.get(read_offset).copied().unwrap_or(0) as i32;
                     read_offset += 1;
                     ref_offset += 1;
                 }
