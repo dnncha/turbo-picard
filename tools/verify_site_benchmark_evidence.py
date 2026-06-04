@@ -67,7 +67,7 @@ def validate_site_benchmark_evidence(site: str, data: dict) -> list[str]:
         ("#adopt", "missing site adoption section link"),
         ("../../CITATION.cff", "missing site CITATION.cff link"),
         ("input SHA-256", "missing site pinned input SHA-256 guidance"),
-        ("archived turbo-picard release", "missing site archived-release citation guidance"),
+        ("archived turbo-picard release you used", "missing site archived-release citation guidance"),
         ("12-command release set", "missing site release command-set guidance"),
     ]
     for needle, message in checks:

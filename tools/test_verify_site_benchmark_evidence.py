@@ -57,8 +57,8 @@ LiftoverVcf
 <a href="#adopt">Adoption</a>
 <a href="../../CITATION.cff">CITATION.cff</a>
 input SHA-256
-archived-release citation
-12-command release portfolio
+archived turbo-picard release you used
+12-command release set
 """
 
         errors = verify_site_benchmark_evidence.validate_site_benchmark_evidence(
@@ -109,7 +109,7 @@ archived-release citation
         self.assertIn("missing site CITATION.cff link", errors)
         self.assertIn("missing site pinned input SHA-256 guidance", errors)
         self.assertIn("missing site archived-release citation guidance", errors)
-        self.assertIn("missing site release-candidate portfolio guidance", errors)
+        self.assertIn("missing site release command-set guidance", errors)
         self.assertIn("missing site benchmark date: 2026-05-30", errors)
         self.assertIn(
             "missing site benchmark source command: python3 tools/bench_suite.py --repeats 1 --skip-build",
