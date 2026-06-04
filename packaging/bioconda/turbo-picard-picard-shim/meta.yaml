@@ -7,9 +7,7 @@ package:
 
 source:
   url: https://github.com/dnncha/turbo-picard/archive/refs/tags/v0.1.1.tar.gz
-  sha256: <github-v0.1.1-source-archive-sha256>
-  patches:
-    - rust-htslib-static.patch
+  sha256: a662137ff6e9bf278dfac59d4355b34b8d669755b64984c84b194c5c69b9e49a
 build:
   number: 0
   skip: true  # [win]

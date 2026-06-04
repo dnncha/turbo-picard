@@ -26,7 +26,7 @@ documented, tested against Picard 3.4.0, and kept explicit.
 
 - URL: `https://github.com/dnncha/turbo-picard/archive/refs/tags/v0.1.1.tar.gz`
 Archive SHA-256:
-`<github-v0.1.1-source-archive-sha256>`
+`a662137ff6e9bf278dfac59d4355b34b8d669755b64984c84b194c5c69b9e49a`
 
 ## Evidence
 
@@ -48,12 +48,12 @@ Benchmark evidence:
 
 Current benchmark summary:
 
-- Date: 2026-05-31.
+- Date: 2026-06-04.
 - Parity: 32/32 PASS.
-- Geometric mean speedup: 27.31x.
-- Median speedup: 26.24x.
-- Slowest saved speedup: 7.40x on RevertSam.
-- Fastest saved speedup: 112.07x on UpdateVcfSequenceDictionary.
+- Geometric mean speedup: 26.74x.
+- Median speedup: 26.82x.
+- Slowest saved speedup: 8.55x on RevertSam.
+- Fastest saved speedup: 84.46x on UpdateVcfSequenceDictionary.
 - Recently promoted benchmarks include IntervalListTools, LiftoverVcf,
   CollectMultipleMetrics, and CollectGcBiasMetrics.
 
