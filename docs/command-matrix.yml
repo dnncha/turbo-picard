@@ -98,7 +98,7 @@ commands:
   - name: SamToFastq
     status: partial-native
     parity_script: tools/verify_basic_samtofastq_parity.sh
-    native_scope: "Single-end, paired, unpaired, interleaved, gzipped, and MD5 FASTQ output with Picard-compatible primary/PF filtering, clipping-attribute actions, read-end trimming, quality end-trimming, max-bases output caps, common Picard runtime option acceptance, and GATK NA12878 mitochondrial real-data parity."
+    native_scope: "Single-end, paired, dedicated unpaired FASTQ, interleaved, gzipped, and MD5 FASTQ output with Picard-compatible primary/PF filtering, clipping-attribute actions, read-end trimming, quality end-trimming, max-bases output caps, common Picard runtime option acceptance, and GATK NA12878 mitochondrial real-data parity."
     fallback_scope: "Advanced re-reversal and output-per-read-group edge cases should use upstream Picard."
   - name: SortSam
     status: partial-native

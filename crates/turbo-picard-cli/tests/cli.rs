@@ -1274,6 +1274,52 @@ fn samtofastq_rejects_paired_reads_without_second_output() {
 }
 
 #[test]
+fn samtofastq_writes_unpaired_fastq_without_second_end_fastq() {
+    let tempdir = tempfile::tempdir().expect("tempdir exists");
+    let input = tempdir.path().join("input.sam");
+    let first_fastq = tempdir.path().join("reads.fastq");
+    let unpaired_fastq = tempdir.path().join("unpaired.fastq");
+    fs::write(
+        &input,
+        concat!(
+            "@HD\tVN:1.6\tSO:queryname\n",
+            "@SQ\tSN:chr1\tLN:100\n",
+            "read-a\t4\t*\t0\t0\t*\t*\t0\t0\tAAAA\tFFFF\n",
+            "read-b\t16\tchr1\t10\t60\t4M\t*\t0\t0\tAACG\tABCD\n",
+        ),
+    )
+    .expect("input SAM is written");
+
+    Command::cargo_bin("picard")
+        .expect("binary exists")
+        .args([
+            "SamToFastq",
+            &format!("I={}", input.display()),
+            &format!("FASTQ={}", first_fastq.display()),
+            &format!("UNPAIRED_FASTQ={}", unpaired_fastq.display()),
+            "VALIDATION_STRINGENCY=SILENT",
+            "QUIET=true",
+        ])
+        .assert()
+        .success();
+
+    assert_eq!(fs::read_to_string(&first_fastq).expect("FASTQ exists"), "");
+    assert_eq!(
+        fs::read_to_string(&unpaired_fastq).expect("unpaired FASTQ exists"),
+        concat!(
+            "@read-a\n",
+            "AAAA\n",
+            "+\n",
+            "FFFF\n",
+            "@read-b\n",
+            "CGTT\n",
+            "+\n",
+            "DCBA\n",
+        )
+    );
+}
+
+#[test]
 fn samtofastq_rejects_picard_invalid_option_combinations() {
     let tempdir = tempfile::tempdir().expect("tempdir exists");
     let input = tempdir.path().join("input.sam");
@@ -1286,25 +1332,6 @@ fn samtofastq_rejects_picard_invalid_option_combinations() {
         ),
     )
     .expect("input SAM is written");
-
-    Command::cargo_bin("picard")
-        .expect("binary exists")
-        .args([
-            "SamToFastq",
-            &format!("I={}", input.display()),
-            &format!("FASTQ={}", tempdir.path().join("reads.fastq").display()),
-            &format!(
-                "UNPAIRED_FASTQ={}",
-                tempdir.path().join("unpaired.fastq").display()
-            ),
-            "VALIDATION_STRINGENCY=SILENT",
-            "QUIET=true",
-        ])
-        .assert()
-        .failure()
-        .stderr(predicate::str::contains(
-            "unsupported SamToFastq UNPAIRED_FASTQ without SECOND_END_FASTQ",
-        ));
 
     Command::cargo_bin("picard")
         .expect("binary exists")

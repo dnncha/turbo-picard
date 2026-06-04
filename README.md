@@ -4,10 +4,14 @@
 
 ![Abstract benchmark bars and sequencing-read streams](docs/site/assets/hero-pipeline.svg)
 
-`turbo-picard` is a faster Rust implementation of selected Picard commands.
-It keeps the familiar Picard command names and `KEY=VALUE` arguments, so it can
-fit into existing WDL, Nextflow, Snakemake, and shell-scripted work without
-making people learn a new command style.
+`turbo-picard` is a faster Rust implementation of selected Picard commands. It
+is for people who already have Picard wired into WDL, Nextflow, Snakemake, or
+plain shell workflows and do not want a new interface just to make a slow step
+faster.
+
+The command shape stays familiar: Picard command names, Picard-style
+`KEY=VALUE` arguments, and the same habit of replacing one pipeline step at a
+time.
 
 It is not a full Picard replacement. The commands that are implemented natively
 are documented and tested against Picard 3.4.0. Unsupported commands fail
@@ -19,6 +23,19 @@ turbo-picard MarkDuplicates I=input.bam O=marked.bam M=metrics.txt
 
 There is also an optional `picard` shim for environments that already call a
 binary named `picard`.
+
+## Should You Switch?
+
+Use `turbo-picard` where the documented native scope matches your command and
+your own comparison data agrees. The easiest path is to start with one expensive
+step, run it side by side with Picard, compare the outputs that matter for that
+command, and keep upstream Picard available as fallback.
+
+Good candidates are repeated sorting, duplicate marking, FASTQ conversion,
+indexing, VCF housekeeping, and metrics steps where wall-clock time is getting
+in the way of iteration. Do not treat it as a blanket Picard replacement. The
+project is deliberately explicit about what is native, what is partial, and
+what should still go to upstream Picard.
 
 ## Documentation
 
@@ -46,22 +63,6 @@ Good starting points:
   for the main package, shim package, and Bioconda notes.
 
 The docs source is in [`docs/`](docs/).
-
-## Why Use It
-
-Picard is everywhere in sequencing pipelines. That is the point of this project:
-keep the parts people rely on, make selected commands much faster, and be clear
-about what has and has not been rebuilt.
-
-Use `turbo-picard` when you want to:
-
-- speed up Picard-heavy steps without changing argument style;
-- test one command at a time against your own data;
-- keep upstream Picard available for commands that are not native yet;
-- make performance claims traceable to saved benchmark and parity evidence.
-
-Start with the explicit `turbo-picard` command. Use the `picard` shim only when
-you deliberately want it to stand in for Picard in a particular environment.
 
 ## Install From Source
 

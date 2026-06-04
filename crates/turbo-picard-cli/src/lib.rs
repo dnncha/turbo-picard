@@ -10850,9 +10850,6 @@ fn reject_unsupported_samtofastq_args(
     {
         return Err("unsupported SamToFastq OUTPUT_PER_RG".to_string());
     }
-    if args.contains_key("UNPAIRED_FASTQ") && !args.contains_key("SECOND_END_FASTQ") {
-        return Err("unsupported SamToFastq UNPAIRED_FASTQ without SECOND_END_FASTQ".to_string());
-    }
     optional_u32(args, "READ1_TRIM")?;
     optional_u32(args, "READ2_TRIM")?;
     optional_u32(args, "READ1_MAX_BASES_TO_WRITE")?;
