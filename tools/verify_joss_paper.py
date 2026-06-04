@@ -11,6 +11,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 PAPER = ROOT / "paper" / "paper.md"
 BIB = ROOT / "paper" / "paper.bib"
+CHECKLIST = ROOT / "docs" / "joss-submission.md"
+README = ROOT / "README.md"
+WORKFLOW = ROOT / ".github" / "workflows" / "joss-paper.yml"
 
 REQUIRED_SECTIONS = [
     "Summary",
@@ -55,9 +58,15 @@ def validate() -> list[str]:
         return [f"missing {PAPER.relative_to(ROOT)}"]
     if not BIB.exists():
         return [f"missing {BIB.relative_to(ROOT)}"]
+    for path in [CHECKLIST, README, WORKFLOW]:
+        if not path.exists():
+            errors.append(f"missing {path.relative_to(ROOT)}")
 
     paper = PAPER.read_text(encoding="utf-8")
     bib = BIB.read_text(encoding="utf-8")
+    checklist = CHECKLIST.read_text(encoding="utf-8") if CHECKLIST.exists() else ""
+    readme = README.read_text(encoding="utf-8") if README.exists() else ""
+    workflow = WORKFLOW.read_text(encoding="utf-8") if WORKFLOW.exists() else ""
 
     if not paper.startswith("---\n"):
         errors.append("paper must start with YAML metadata")
@@ -86,6 +95,18 @@ def validate() -> list[str]:
         errors.append("paper must include a clear AI usage disclosure")
     if "No external funding" not in paper:
         errors.append("paper must include funding acknowledgement")
+    if "docs/joss-submission.md" not in readme:
+        errors.append("README must link to the JOSS submission checklist")
+    for needle in [
+        "python3 tools/verify_joss_paper.py",
+        "paper/paper.md",
+        "10.5281/zenodo.20541928",
+    ]:
+        if needle not in checklist:
+            errors.append(f"JOSS submission checklist missing {needle}")
+    for needle in ["openjournals/inara", "paper/paper.pdf", "actions/upload-artifact"]:
+        if needle not in workflow:
+            errors.append(f"JOSS paper workflow missing {needle}")
 
     return errors
 

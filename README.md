@@ -227,6 +227,8 @@ A short JOSS-style software paper draft is in [`paper/`](paper/). Check it with:
 python3 tools/verify_joss_paper.py
 ```
 
+The submission checklist is in [`docs/joss-submission.md`](docs/joss-submission.md).
+
 ## Bioconda Status
 
 Release `v0.1.1` has been submitted to Bioconda as two recipes:
