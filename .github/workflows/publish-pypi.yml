@@ -26,7 +26,6 @@ jobs:
       matrix:
         target:
           - x86_64
-          - aarch64
 
     steps:
       - uses: actions/checkout@v5
@@ -37,7 +36,7 @@ jobs:
           target: ${{ matrix.target }}
           manylinux: "2014"
           args: --release --locked --compatibility pypi --out dist
-          before-script-linux: yum install -y clang-devel make pkgconfig
+          before-script-linux: yum install -y clang-devel make pkgconfig perl-IPC-Cmd
 
       - name: Upload wheel
         uses: actions/upload-artifact@v4
