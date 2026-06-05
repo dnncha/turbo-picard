@@ -113,6 +113,11 @@ def load_pyproject(root: Path = ROOT) -> dict:
                 "manifest-path": string_value(text, "tool.maturin", "manifest-path"),
                 "bindings": string_value(text, "tool.maturin", "bindings"),
                 "strip": bool_value(text, "tool.maturin", "strip"),
+                "include": [
+                    {"path": "LICENSE", "format": "sdist"}
+                    if 'include = [{ path = "LICENSE", format = "sdist" }]' in text
+                    else {}
+                ],
             }
         },
     }
@@ -177,6 +182,14 @@ def validate_pyproject(root: Path = ROOT) -> list[str]:
         errors.append("pyproject.toml tool.maturin.bindings must be bin")
     if maturin.get("strip") is not True:
         errors.append("pyproject.toml tool.maturin.strip must be true")
+    include = maturin.get("include", [])
+    if not any(
+        isinstance(item, dict)
+        and item.get("path") == "LICENSE"
+        and item.get("format") == "sdist"
+        for item in include
+    ):
+        errors.append("pyproject.toml tool.maturin.include must put LICENSE in the sdist")
     return errors
 
 
@@ -219,6 +232,7 @@ def validate_publish_workflow(root: Path = ROOT) -> list[str]:
         ("PyO3/maturin-action@v1", "PyPI workflow must build with maturin-action"),
         ("--compatibility pypi", "PyPI workflow must run maturin's PyPI compatibility check"),
         ("pypa/gh-action-pypi-publish@release/v1", "PyPI workflow must publish with the PyPA action"),
+        ("skip-existing: true", "PyPI workflow must skip already-uploaded files"),
         ("id-token: write", "PyPI workflow must allow Trusted Publishing OIDC"),
         ("environment: pypi", "PyPI workflow must use the pypi environment"),
     ]

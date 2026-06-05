@@ -69,6 +69,7 @@ class VerifyPyPiPackageTests(unittest.TestCase):
                 manifest-path = "crates/turbo-picard-cli/Cargo.toml"
                 bindings = "bin"
                 strip = true
+                include = [{ path = "LICENSE", format = "sdist" }]
                 """
             ).strip()
             + "\n",
@@ -89,7 +90,7 @@ class VerifyPyPiPackageTests(unittest.TestCase):
         (root / ".github" / "workflows" / "publish-pypi.yml").write_text(
             "release:\nworkflow_dispatch:\nPyO3/maturin-action@v1\n"
             "--compatibility pypi\npypa/gh-action-pypi-publish@release/v1\n"
-            "id-token: write\nenvironment: pypi\n",
+            "skip-existing: true\nid-token: write\nenvironment: pypi\n",
             encoding="utf-8",
         )
 

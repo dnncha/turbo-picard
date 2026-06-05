@@ -43,3 +43,4 @@ Changelog = "https://github.com/dnncha/turbo-picard/releases"
 manifest-path = "crates/turbo-picard-cli/Cargo.toml"
 bindings = "bin"
 strip = true
+include = [{ path = "LICENSE", format = "sdist" }]
