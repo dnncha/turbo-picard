@@ -3,12 +3,12 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>turbo-picard | faster Picard commands, checked against Picard</title>
+    <title>turbo-picard | faster Picard commands for real pipelines</title>
     <meta
       name="description"
-      content="turbo-picard is a Rust implementation of selected Picard commands, with familiar arguments, saved benchmark evidence, real-data checks, and upstream Picard fallback."
+      content="turbo-picard is a Rust implementation of selected Picard commands, with familiar arguments, saved benchmark evidence, real-data checks, and fallback for unsupported commands."
     />
-    <meta property="og:title" content="turbo-picard | faster Picard commands, checked against Picard" />
+    <meta property="og:title" content="turbo-picard | faster Picard commands for real pipelines" />
     <meta
       property="og:description"
       content="Selected Picard commands in Rust, with benchmarked speedups, real-data evidence, and fallback for unsupported commands."
@@ -298,6 +298,108 @@
         line-height: 1.4;
       }
 
+      .audience-grid {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 12px;
+      }
+
+      .audience-card {
+        padding: 20px;
+        border-radius: 8px;
+        border: 1px solid var(--line);
+        background: rgba(255, 255, 255, 0.045);
+      }
+
+      .audience-card h3 {
+        font-size: 20px;
+        line-height: 1.15;
+      }
+
+      .audience-card p {
+        margin-top: 10px;
+        color: var(--muted);
+        line-height: 1.5;
+      }
+
+      .install-grid {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 12px;
+        margin-top: 18px;
+      }
+
+      .install-card {
+        padding: 18px;
+        border-radius: 8px;
+        border: 1px solid var(--line);
+        background: rgba(255, 255, 255, 0.045);
+      }
+
+      .install-card b {
+        display: block;
+        color: var(--cyan);
+        font-size: 18px;
+      }
+
+      .install-card span {
+        display: block;
+        margin-top: 8px;
+        color: var(--muted);
+        line-height: 1.45;
+      }
+
+      .command-grid {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 12px;
+      }
+
+      .command-card {
+        padding: 18px;
+        border-radius: 8px;
+        border: 1px solid var(--line);
+        background: rgba(255, 255, 255, 0.045);
+      }
+
+      .command-card b {
+        display: block;
+        color: var(--cyan);
+        font-size: 18px;
+      }
+
+      .command-card span {
+        display: block;
+        margin-top: 8px;
+        color: var(--muted);
+        line-height: 1.45;
+      }
+
+      .example-grid {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 12px;
+      }
+
+      .example-card {
+        overflow: hidden;
+        border-radius: 8px;
+        border: 1px solid var(--line);
+        background: var(--panel);
+      }
+
+      .example-card header {
+        padding: 16px 18px;
+        border-bottom: 1px solid var(--line);
+        font-weight: 800;
+      }
+
+      .example-card pre {
+        padding: 18px;
+        font-size: 13px;
+        line-height: 1.55;
+      }
+
       .grid {
         display: grid;
         grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
@@ -490,6 +592,10 @@
         }
 
         .proof-strip,
+        .audience-grid,
+        .install-grid,
+        .command-grid,
+        .example-grid,
         .grid,
         .pipeline,
         .cta-panel,
@@ -529,24 +635,26 @@
           <div class="hero-copy">
             <h1>turbo-picard</h1>
             <p class="lead">
-              A Rust implementation of selected Picard commands that tend to cost real time in
-              sequencing workflows. Keep the arguments your pipelines already know, compare each
-              command against Picard, and change only the parts you have checked.
+              Picard-style commands, much less waiting. Use it where Picard is already in the
+              pipeline, compare output beside upstream Picard, and switch only the commands where
+              the evidence supports the change.
             </p>
             <div class="actions">
-              <a class="button primary" href="#benchmarks">View benchmark evidence</a>
+              <a class="button primary" href="#adopt">Start with one command</a>
               <a class="button secondary" href="../../README.md">Read the README</a>
               <a class="button secondary" href="https://turbo-picard.readthedocs.io/en/latest/">Open the docs</a>
+              <a class="button secondary" href="https://turbo-picard.readthedocs.io/en/latest/evaluation-playbook.html">Open evaluation playbook</a>
+              <a class="button secondary" href="https://pypi.org/project/turbo-picard/">Open PyPI</a>
               <a class="button secondary" href="https://turbo-picard.readthedocs.io/en/latest/parity.html">What parity means</a>
-              <a class="button secondary" href="assets/benchmark-data.json">Open evidence JSON</a>
+              <a class="button secondary" href="assets/benchmark-data.json">Open benchmark JSON</a>
               <a class="button secondary" href="assets/bench-suite-output.txt">Open raw suite log</a>
             </div>
           </div>
           <div class="proof-strip" aria-label="Benchmark summary">
             <div class="proof"><strong>32/32</strong><span>benchmark parity checks passing</span></div>
+            <div class="proof"><strong>26.74x</strong><span>geometric mean speedup in the saved suite</span></div>
             <div class="proof"><strong>84.46x</strong><span>fastest saved speedup</span></div>
-            <div class="proof"><strong>8.55x</strong><span>slowest saved speedup</span></div>
-            <div class="proof"><strong>Picard</strong><span>familiar arguments, fallback available</span></div>
+            <div class="proof"><strong>Picard</strong><span>same command style, fallback available</span></div>
           </div>
         </div>
       </section>
@@ -554,7 +662,7 @@
       <section id="benchmarks">
         <div class="section-inner">
           <div class="section-heading">
-            <h2>Fast, but still checked.</h2>
+            <h2>Fast, with proof close at hand.</h2>
             <p>
               The chart is rendered from the saved suite output in this repository. Each benchmark
               compares turbo-picard against Picard and reports speed only after the stable output
@@ -562,9 +670,11 @@
               The current asset was saved on <code>2026-06-04</code> from
               <code>python3 tools/bench_suite.py --repeats 1 --skip-build</code>; the raw log is
               <code>docs/site/assets/bench-suite-output.txt</code>.
-              There are no benchmark exceptions right now: every native or partly native command
-              in the command matrix has a public speedup claim. Chart-producing commands compare
-              metrics text; the PDF plots are sidecars, not a pixel-for-pixel Picard claim.
+              Benchmark note: <code>AccelerationStatus</code> appears under benchmark exceptions
+              because it is a status/preflight command with no Picard data-processing runtime to
+              benchmark. Every native or partly native data-processing command in the matrix has a
+              public speedup claim. Chart-producing commands compare metrics text; the PDF plots
+              are sidecars, not a pixel-for-pixel Picard claim.
             </p>
           </div>
           <div class="chart-shell">
@@ -572,10 +682,10 @@
           </div>
           <div class="benchmark-highlights" aria-label="Benchmark highlights">
             <div class="benchmark-highlight"><b>32/32 PASS</b><span>All 32 commands in the saved benchmark suite passed parity checks.</span></div>
-            <div class="benchmark-highlight"><b>84.46x</b><span>UpdateVcfSequenceDictionary led the current local benchmark run.</span></div>
-            <div class="benchmark-highlight"><b>8.55x</b><span>RevertSam is the current floor after its default-unmapped fast path.</span></div>
             <div class="benchmark-highlight"><b>26.74x</b><span>Geometric mean speedup across the current 32-command suite.</span></div>
-            <div class="benchmark-highlight"><b>JSON-backed</b><span>The chart is rendered from benchmark-data.json with rank and summary stats.</span></div>
+            <div class="benchmark-highlight"><b>84.46x</b><span>UpdateVcfSequenceDictionary is the current top saved speedup.</span></div>
+            <div class="benchmark-highlight"><b>8.55x floor</b><span>Even the slowest saved command is still well ahead of Picard.</span></div>
+            <div class="benchmark-highlight"><b>Rebuildable</b><span>The chart is rendered from benchmark-data.json with rank and summary stats.</span></div>
           </div>
         </div>
       </section>
@@ -583,10 +693,11 @@
       <section id="parity">
         <div class="section-inner">
           <div class="section-heading">
-            <h2>Designed for careful switching, not blind trust.</h2>
+            <h2>Built for people who already know Picard.</h2>
             <p>
-              turbo-picard keeps Picard-style command lines familiar. Unsupported commands are not
-              guessed; they fail clearly or run through upstream Picard when fallback is configured.
+              The point is not to invent a new workflow language. The point is to keep Picard-style
+              command lines familiar, speed up the commands that matter, and leave unsupported work
+              with upstream Picard when needed.
             </p>
           </div>
           <div class="grid">
@@ -609,8 +720,8 @@
               <h3>Real-data comparison runs</h3>
               <p>
                 A separate comparator runs Picard and turbo-picard on public or lab BAMs, then
-                writes JSON, Markdown, and a manifest entry with input SHA-256, versions, stable
-                digests, artifact paths, citation fields, and wall times.
+                writes JSON and Markdown reports with input SHA-256, versions, output digests,
+                file paths, citation fields, and wall times.
               </p>
             </article>
             <article class="tile">
@@ -620,6 +731,209 @@
                 native inputs still fail directly, so real errors remain visible.
               </p>
             </article>
+          </div>
+          <div class="benchmark-highlights" aria-label="Comparison links">
+            <div class="benchmark-highlight"><b>Plain comparison</b><span>Read <a href="https://turbo-picard.readthedocs.io/en/latest/picard-vs-turbo-picard.html">Picard vs turbo-picard</a> for the short evaluator-facing version.</span></div>
+            <div class="benchmark-highlight"><b>Exact evidence boundary</b><span>Read <a href="https://turbo-picard.readthedocs.io/en/latest/parity.html">What parity means</a> if you need the exact comparison rules.</span></div>
+          </div>
+        </div>
+      </section>
+
+      <section>
+        <div class="section-inner">
+          <div class="section-heading">
+            <h2>Built for the way people already run Picard.</h2>
+            <p>
+              The package is easiest to adopt when it drops into an existing workflow slot instead
+              of asking a team to learn a new tool model first.
+            </p>
+          </div>
+          <div class="audience-grid">
+            <article class="audience-card">
+              <h3>WDL and Cromwell</h3>
+              <p>
+                Keep the task interface familiar, prove one command on representative inputs, then
+                swap that task without redesigning the rest of the workflow.
+              </p>
+            </article>
+            <article class="audience-card">
+              <h3>Nextflow and nf-core</h3>
+              <p>
+                Use the explicit binary or a pinned container when you want a faster Picard-shaped
+                step without changing the broader process contract.
+              </p>
+            </article>
+            <article class="audience-card">
+              <h3>Snakemake and shell pipelines</h3>
+              <p>
+                Test the hot command first, keep Picard available as fallback, and only move the
+                shim into place after the output comparison is boring.
+              </p>
+            </article>
+          </div>
+          <div class="benchmark-highlights" aria-label="Audience guide links">
+            <div class="benchmark-highlight"><b>Use cases</b><span>Read the <a href="https://turbo-picard.readthedocs.io/en/latest/use-cases.html">use-cases guide</a> for WDL, Nextflow, Snakemake, and platform-team adoption paths.</span></div>
+            <div class="benchmark-highlight"><b>Fit guide</b><span>Use the <a href="https://turbo-picard.readthedocs.io/en/latest/is-this-for-you.html">fit guide</a> if the main question is whether this package deserves attention at all.</span></div>
+          </div>
+        </div>
+      </section>
+
+      <section>
+        <div class="section-inner">
+          <div class="section-heading">
+            <h2>Know quickly whether it is worth your time.</h2>
+            <p>
+              The package is worth evaluating when Picard is a real bottleneck and you can switch
+              one command at a time. It is not worth forcing into a workflow that needs an instant
+              full-suite replacement.
+            </p>
+          </div>
+          <div class="grid">
+            <article class="tile">
+              <h3>Good fit</h3>
+              <p>
+                You already run Picard, one or two steps clearly hurt, the workflow boundary is
+                stable, and you can compare outputs on representative data before changing anything
+                wider.
+              </p>
+            </article>
+            <article class="tile">
+              <h3>Not a fit yet</h3>
+              <p>
+                You need every Picard command immediately, cannot do side-by-side checks, or the
+                workflow depends on exact Picard-rendered plot PDFs rather than metrics text.
+              </p>
+            </article>
+            <article class="tile">
+              <h3>Public fit guide</h3>
+              <p>
+                Read the <a href="https://turbo-picard.readthedocs.io/en/latest/is-this-for-you.html">fit guide</a>
+                if the main question is whether this package deserves a real evaluation in your
+                environment.
+              </p>
+            </article>
+          </div>
+        </div>
+      </section>
+
+      <section>
+        <div class="section-inner">
+          <div class="section-heading">
+            <h2>Pick the first command on purpose.</h2>
+            <p>
+              Most evaluation friction comes from choosing the wrong first step. Start where the
+              runtime matters and the output comparison is easy to defend.
+            </p>
+          </div>
+          <div class="command-grid">
+            <div class="command-card"><b>MarkDuplicates</b><span>Best when duplicate marking is a clear wall-time problem and you want BAM plus metrics output that is easy to compare.</span></div>
+            <div class="command-card"><b>SortSam</b><span>Best when repeated BAM or CRAM reordering keeps showing up across many shards or samples.</span></div>
+            <div class="command-card"><b>SamToFastq</b><span>Best when FASTQ export still sits in a remap or realignment path and plain FASTQ output is easy to check.</span></div>
+            <div class="command-card"><b>BuildBamIndex</b><span>Best when the team wants the smallest low-risk substitution before trying a heavier command.</span></div>
+          </div>
+          <div class="benchmark-highlights" aria-label="First command links">
+            <div class="benchmark-highlight"><b>Chooser page</b><span>See the public <a href="https://turbo-picard.readthedocs.io/en/latest/first-command.html">first-command guide</a> for the short version.</span></div>
+            <div class="benchmark-highlight"><b>Workflow starters</b><span>Use <code>packaging/workflows/</code> after choosing the command so you can drop into WDL, Nextflow, or Snakemake quickly.</span></div>
+            <div class="benchmark-highlight"><b>Full trial path</b><span>Use the <a href="https://turbo-picard.readthedocs.io/en/latest/evaluation-playbook.html">evaluation playbook</a> when you want the whole flow from install to team review.</span></div>
+          </div>
+        </div>
+      </section>
+
+      <section>
+        <div class="section-inner">
+          <div class="section-heading">
+            <h2>Pick the install path that matches the job.</h2>
+            <p>
+              Different environments want different tradeoffs. The main thing is to start with the
+              path that gets you to a trustworthy first comparison quickly.
+            </p>
+          </div>
+          <div class="install-grid">
+            <div class="install-card"><b>PyPI</b><span>Best for a quick local try. Current release ships a macOS Apple Silicon wheel and a source distribution.</span></div>
+            <div class="install-card"><b>Source</b><span>Best when you want the current checkout, local development, or explicit control over the binaries.</span></div>
+            <div class="install-card"><b>Container</b><span>Best for pinned runtime behavior in cloud jobs, workflow profiles, and reproducible side-by-side tests.</span></div>
+            <div class="install-card"><b>Bioconda</b><span>Best long-term fit for Linux clusters and shared scientific environments once the submitted recipe is accepted.</span></div>
+          </div>
+        </div>
+      </section>
+
+      <section>
+        <div class="section-inner">
+          <div class="section-heading">
+            <h2>Follow one path from first look to real trial.</h2>
+            <p>
+              The fastest way to evaluate the package is not to read the whole repo. Use the
+              playbook, choose one command, run one representative trial, then write down the
+              result and share it.
+            </p>
+          </div>
+          <div class="benchmark-highlights" aria-label="Evaluation playbook links">
+            <div class="benchmark-highlight"><b>Playbook</b><span>Start with the evaluation playbook on Read the Docs for the shortest path from interest to trial.</span></div>
+            <div class="benchmark-highlight"><b>Command choice</b><span>Use <code>choose-your-first-command.md</code> when the right first Picard step is still unclear.</span></div>
+            <div class="benchmark-highlight"><b>Trial flow</b><span>Use <code>one-command-trial.md</code> plus the tiny <code>trial.wdl</code> or <code>trial.nf</code> workflow for a minimal honest evaluation.</span></div>
+            <div class="benchmark-highlight"><b>Share it</b><span>Use the outreach kit after a good trial when you need to brief a team, open a PR, or post more widely.</span></div>
+          </div>
+        </div>
+      </section>
+
+      <section>
+        <div class="section-inner">
+          <div class="section-heading">
+            <h2>After one good trial, make the next step explicit.</h2>
+            <p>
+              A successful command-level test is only useful if the result gets recorded, scoped,
+              and shared carefully. The follow-through path is documented too.
+            </p>
+          </div>
+          <div class="benchmark-highlights" aria-label="Post-trial links">
+            <div class="benchmark-highlight"><b>After a trial</b><span>Use the Read the Docs follow-through page to turn one good result into a careful rollout plan.</span></div>
+            <div class="benchmark-highlight"><b>Review record</b><span>Use <code>team-review-template.md</code> to capture what was tested, what matched, and what should happen next.</span></div>
+            <div class="benchmark-highlight"><b>FAQ</b><span>Use the <a href="https://turbo-picard.readthedocs.io/en/latest/faq.html">public FAQ</a> when the same evaluation questions keep circling in review.</span></div>
+            <div class="benchmark-highlight"><b>Share it</b><span>Use <a href="https://turbo-picard.readthedocs.io/en/latest/share-results.html">share-results</a>, <a href="https://turbo-picard.readthedocs.io/en/latest/message-examples.html">message-examples</a>, <a href="https://turbo-picard.readthedocs.io/en/latest/channel-specific-examples.html">channel-specific examples</a>, <a href="https://turbo-picard.readthedocs.io/en/latest/propose-it-in-a-workflow-repo.html">workflow-repo proposal guidance</a>, the <a href="https://turbo-picard.readthedocs.io/en/latest/workflow-maintainer-checklist.html">maintainer checklist</a>, <a href="https://turbo-picard.readthedocs.io/en/latest/community-channels.html">community-channels</a>, <a href="https://turbo-picard.readthedocs.io/en/latest/community-targets.html">community-targets</a>, the <a href="https://turbo-picard.readthedocs.io/en/latest/launch-bundle.html">launch bundle</a>, and the <a href="https://turbo-picard.readthedocs.io/en/latest/first-target-shortlist.html">first target shortlist</a> when a narrow success is ready to be written up without overclaiming.</span></div>
+          </div>
+        </div>
+      </section>
+
+      <section>
+        <div class="section-inner">
+          <div class="section-heading">
+            <h2>It fits where Picard already lives.</h2>
+            <p>
+              These examples are intentionally small. The point is to show how the command usually
+              drops into an existing workflow boundary with minimal churn.
+            </p>
+          </div>
+          <div class="example-grid">
+            <article class="example-card">
+              <header>WDL / Cromwell</header>
+              <pre>command &lt;&lt;&lt;
+  turbo-picard MarkDuplicates \
+    I=~{input_bam} \
+    O=~{sample_id}.marked.bam \
+    M=~{sample_id}.metrics.txt
+&gt;&gt;&gt;</pre>
+            </article>
+            <article class="example-card">
+              <header>Nextflow / nf-core</header>
+              <pre>def picard = params.use_turbo_picard ? 'turbo-picard' : 'picard'
+"""
+${picard} SortSam \
+  I=${bam} \
+  O=${meta.id}.sorted.bam \
+  SORT_ORDER=coordinate
+"""</pre>
+            </article>
+            <article class="example-card">
+              <header>Snakemake</header>
+              <pre>shell:
+    "turbo-picard BuildBamIndex \
+      I={input.bam} \
+      O={output.bai}"</pre>
+            </article>
+          </div>
+          <div class="benchmark-highlights" aria-label="Workflow starter links">
+            <div class="benchmark-highlight"><b>Repo starters</b><span>See <code>packaging/workflows/</code> for starter files you can lift into a workflow repo.</span></div>
+            <div class="benchmark-highlight"><b>nf-core note</b><span>See <code>packaging/nf-core/README.md</code> for a module-style Nextflow example and rollout notes.</span></div>
           </div>
         </div>
       </section>
@@ -633,12 +947,11 @@
               front of large biological studies. The checked-in public runs use fixtures from
               HTSlib, Picard itself, and GATK's NA12878 mitochondrial test data. Each input is
               pinned to a source commit and verified by SHA-256, so the saved parity evidence can
-              be rerun and audited instead of taken on trust. GitHub-hosted public inputs must use
-              a <code>/blob/&lt;commit&gt;/</code> URL and the full 40-character Git commit SHA, not a
-              branch name or short hash.
-              For a scientific release, this is release evidence, not proof for every dataset a
-              lab might process; the 12-command release set still needs enough pinned input data
-              that one tiny fixture cannot carry the claim.
+              be rerun instead of taken on trust. GitHub-hosted public inputs must use a
+              <code>/blob/&lt;commit&gt;/</code> URL and the full 40-character Git commit SHA, not a
+              branch name or short hash. For a scientific release, this is evidence for the tested
+              commands, not proof for every dataset a lab might process. The release checks require
+              enough pinned input data that one tiny fixture cannot carry the claim.
             </p>
           </div>
           <div class="gate-table" aria-label="Pinned real-data evidence">
@@ -650,7 +963,7 @@
             <div class="gate-row">
               <strong>HTSlib passing commands</strong>
               <code>ViewSam, CleanSam, CollectQualityYieldMetrics, CollectAlignmentSummaryMetrics, MarkDuplicates</code>
-              <span>All five pass against Picard 3.4.0 in <code>benchmarks/real-data/htslib-range/evidence/real-data-comparison.md</code>. Scope caveat: <code>small public fixture</code>.</span>
+              <span>All five pass against Picard 3.4.0 in <code>benchmarks/real-data/htslib-range/evidence/real-data-comparison.md</code>. This is a small public fixture, useful for smoke coverage rather than release-sized evidence.</span>
             </div>
             <div class="gate-row">
               <strong>Picard input source</strong>
@@ -670,7 +983,17 @@
             <div class="gate-row">
               <strong>GATK NA12878 passing commands</strong>
               <code>ViewSam, CleanSam, CollectQualityYieldMetrics, CollectAlignmentSummaryMetrics, MarkDuplicates, AddOrReplaceReadGroups, BuildBamIndex, RevertSam, SortSam, SamToFastq, CollectInsertSizeMetrics, ValidateSamFile</code>
-              <span>All twelve pass against Picard 3.4.0 in <code>benchmarks/real-data/gatk-na12878-mito/evidence/real-data-comparison.md</code>. AddOrReplaceReadGroups compares normalized SAM records plus sorted <code>@RG</code> header fields; BuildBamIndex compares the exact BAI binary digest; RevertSam compares normalized reverted SAM records; SamToFastq compares first-end, second-end, and unpaired FASTQ outputs byte-for-byte; ValidateSamFile compares the summary histogram and non-zero exit code. Scope caveat: <code>GATK public NA12878 mitochondrial test BAM.</code> Release tier: <code>release_candidate</code>. Minimum input threshold: <code>1000000</code> bytes.</span>
+              <span>All twelve pass against Picard 3.4.0 in <code>benchmarks/real-data/gatk-na12878-mito/evidence/real-data-comparison.md</code>. The checks cover normalized SAM records, read-group headers, exact BAI digest, reverted SAM records, FASTQ outputs, metrics tables, validation summary, and non-zero validation exit behavior. This is a public NA12878 mitochondrial BAM shard, large enough for the release evidence threshold. Evidence record: <code>release_candidate</code>; minimum input threshold: <code>1000000</code> bytes.</span>
+            </div>
+            <div class="gate-row">
+              <strong>GATK NA12878 CRAM input source</strong>
+              <code>https://github.com/broadinstitute/gatk/blob/e8c49f600b06c658e0fa9bf67256340ebb46bc48/src/test/resources/org/broadinstitute/hellbender/tools/mutect/mito/NA12878.bam</code>
+              <span>Commit <code>e8c49f600b06c658e0fa9bf67256340ebb46bc48</code>; local SHA-256 <code>68931e7cea6e9a35029cfed3638d0d8ea2c4bb662b4d83232968da247b68f7bc</code>.</span>
+            </div>
+            <div class="gate-row">
+              <strong>GATK NA12878 CRAM passing commands</strong>
+              <code>CleanSam, CollectQualityYieldMetrics, CollectInsertSizeMetrics, MarkDuplicates, SortSam, AddOrReplaceReadGroups</code>
+              <span>All six pass against Picard 3.4.0 in <code>benchmarks/real-data/gatk-na12878-mito-cram/evidence/real-data-comparison.md</code>. This is the same public NA12878 mitochondrial shard converted to CRAM with the assembly38 mitochondrial reference, so CRAM behavior is checked against a real reference-backed input. Evidence record: <code>release_candidate</code>; minimum input threshold: <code>910668</code> bytes.</span>
             </div>
             <div class="gate-row">
               <strong>Picard SNVQ input source</strong>
@@ -680,7 +1003,7 @@
             <div class="gate-row">
               <strong>Picard SNVQ passing commands</strong>
               <code>ViewSam, CleanSam, CollectQualityYieldMetrics, CollectAlignmentSummaryMetrics, MarkDuplicates</code>
-              <span>All five pass against Picard 3.4.0 in <code>benchmarks/real-data/picard-snvq/evidence/real-data-comparison.md</code>. Scope caveat: <code>Picard public SNVQ metrics test BAM.</code> Release tier: <code>release_candidate</code>. Minimum input threshold: <code>1000000</code> bytes.</span>
+              <span>All five pass against Picard 3.4.0 in <code>benchmarks/real-data/picard-snvq/evidence/real-data-comparison.md</code>. This uses Picard's public SNVQ metrics test BAM, large enough for the release evidence threshold. Evidence record: <code>release_candidate</code>; minimum input threshold: <code>1000000</code> bytes.</span>
             </div>
             <div class="gate-row">
               <strong>Citation check</strong>
@@ -699,30 +1022,36 @@
       <section id="adopt">
         <div class="section-inner pipeline">
           <div class="terminal">
-            <pre>cargo install --locked --path crates/turbo-picard-cli --bin turbo-picard --bin picard
+            <pre>python3 -m pip install turbo-picard
+
+turbo-picard MarkDuplicates I=input.bam O=turbo.bam M=turbo.metrics.txt
 
 export TURBO_PICARD_FALLBACK_COMMAND='mamba run -p /opt/conda/envs/picard picard'
 
 picard SortSam I=input.bam O=coordinate.bam SORT_ORDER=coordinate
-picard RevertSam I=aligned.bam O=unmapped.bam
-picard SetNmMdAndUqTags I=coordinate.bam O=tagged.bam R=reference.fa</pre>
+picard MarkDuplicates I=input.bam O=marked.bam M=metrics.txt
+picard RevertSam I=aligned.bam O=unmapped.bam</pre>
           </div>
           <div class="evidence-list">
             <div class="evidence">
-              <b>Fast paths for work that tends to hurt.</b>
-              <p>MarkDuplicates, SortSam, RevertSam, SetNmMdAndUqTags, and metrics collectors are covered by dedicated benchmark scripts.</p>
+              <b>Start small and get a real answer quickly.</b>
+              <p>Pick one Picard step that burns wall time in your pipeline, run it beside Picard, and compare the output before you touch anything broader.</p>
             </div>
             <div class="evidence">
-              <b>Try it without a big rewrite.</b>
-              <p>Install the non-shadowing command first, then add the shim and fallback once native coverage matches your workflow.</p>
+              <b>Try it without a rewrite.</b>
+              <p>Install the explicit command first, then add the shim and fallback once native coverage matches the commands your workflow actually needs.</p>
             </div>
             <div class="evidence">
-              <b>Evidence stays reproducible.</b>
+              <b>Evidence stays reviewable.</b>
               <p>Save the suite output, then rebuild the graph and benchmark-data.json summary from that exact log.</p>
             </div>
             <div class="evidence">
               <b>Real BAMs before real switching.</b>
-              <p>Run compare_real_data.py on GIAB, 1000 Genomes, or workflow-representative shards and keep the JSON/Markdown evidence with the input SHA-256.</p>
+              <p>Run compare_real_data.py on GIAB, 1000 Genomes, or pipeline-representative shards and keep the reports with the input SHA-256.</p>
+            </div>
+            <div class="evidence">
+              <b>Start with the commands most people actually feel.</b>
+              <p>MarkDuplicates, SortSam, SamToFastq, BuildBamIndex, and common metrics commands are usually the fastest way to decide whether the package earns a place in your workflow.</p>
             </div>
           </div>
         </div>
@@ -747,7 +1076,7 @@ picard SetNmMdAndUqTags I=coordinate.bam O=tagged.bam R=reference.fa</pre>
             <div class="gate-row">
               <strong>Targeted parity</strong>
               <code>./tools/verify_basic_&lt;command&gt;_parity.sh</code>
-              <span>Compares stable outputs and sidecars for the commands your workflow uses.</span>
+              <span>Compares stable outputs and sidecars for the commands your pipeline uses.</span>
             </div>
             <div class="gate-row">
               <strong>Benchmark suite</strong>
@@ -766,8 +1095,8 @@ picard SetNmMdAndUqTags I=coordinate.bam O=tagged.bam R=reference.fa</pre>
             </div>
             <div class="gate-row">
               <strong>Real-data evidence</strong>
-              <code>python3 tools/compare_real_data.py --input-bam /data/representative.bam --input-source-url &lt;https-source-containing-accession-or-commit&gt; --input-source-commit &lt;accession-or-commit&gt; --output-dir benchmarks/real-data/run-001/evidence --dataset-id run-001 --release-tier release_candidate</code>
-              <span>Compares Picard and turbo-picard on public or workflow-representative BAMs and writes reviewable JSON/Markdown plus a manifest entry with input identity, citation, versions, digests, and artifact paths.</span>
+              <code>python3 tools/compare_real_data.py --input-bam /data/representative.bam --input-source-url &lt;https-source-containing-accession-or-commit&gt; --input-source-commit &lt;accession-or-commit&gt; --output-dir benchmarks/real-data/run-001/evidence --dataset-id run-001</code>
+              <span>Compares Picard and turbo-picard on public or pipeline-representative BAMs and writes reviewable JSON and Markdown with input identity, citation, versions, and output digests.</span>
             </div>
             <div class="gate-row">
               <strong>Manifest update</strong>
@@ -782,7 +1111,7 @@ picard SetNmMdAndUqTags I=coordinate.bam O=tagged.bam R=reference.fa</pre>
             <div class="gate-row">
               <strong>Release-grade evidence</strong>
               <code>python3 tools/verify_real_data_evidence.py --release-ready</code>
-              <span>Requires pinned release evidence covering AddOrReplaceReadGroups, BuildBamIndex, CleanSam, CollectAlignmentSummaryMetrics, CollectInsertSizeMetrics, CollectQualityYieldMetrics, MarkDuplicates, RevertSam, SamToFastq, SortSam, ValidateSamFile, and ViewSam. Treat this as a packaging and release check, not proof for every dataset a lab might process.</span>
+              <span>Requires pinned evidence covering AddOrReplaceReadGroups, BuildBamIndex, CleanSam, CollectAlignmentSummaryMetrics, CollectInsertSizeMetrics, CollectQualityYieldMetrics, MarkDuplicates, RevertSam, SamToFastq, SortSam, ValidateSamFile, and ViewSam. Treat this as a packaging check for the published claim, not proof for every dataset a lab might process.</span>
             </div>
             <div class="gate-row">
               <strong>Published proof</strong>
@@ -804,13 +1133,13 @@ picard SetNmMdAndUqTags I=coordinate.bam O=tagged.bam R=reference.fa</pre>
           <div class="takeover-copy">
             <h2>Change one command at a time.</h2>
             <p>
-              turbo-picard is designed for pipeline owners who need speed without accepting
-              mystery behavior. Start by running turbo-picard beside Picard, compare stable output,
-              then let fallback handle commands that are not native yet.
+              turbo-picard is for pipeline owners who want speed without mystery behavior. Start
+              by running turbo-picard beside Picard, compare stable output, then let fallback
+              handle commands that are not native yet.
             </p>
             <div class="adoption-steps">
               <div class="step"><b>1. Compare</b><span>Run turbo-picard beside Picard on representative inputs.</span></div>
-              <div class="step"><b>2. Check</b><span>Keep the output comparisons and benchmark logs.</span></div>
+              <div class="step"><b>2. Check</b><span>Keep the output comparisons, timings, and benchmark logs.</span></div>
               <div class="step"><b>3. Switch</b><span>Use the shim only where the command is covered, with fallback still available.</span></div>
             </div>
           </div>

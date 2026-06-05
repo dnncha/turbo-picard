@@ -16,7 +16,7 @@ use std::path::Path;
 use std::process::{self, Command};
 use std::sync::OnceLock;
 use std::time::{SystemTime, UNIX_EPOCH};
-use turbo_picard_core::bgzf_threads::bgzf_threads;
+use turbo_picard_core::hts_io;
 use turbo_picard_core::markdup_config::MarkDuplicatesConfig;
 use turbo_picard_core::picard_args::normalize_picard_args_for_command;
 
@@ -43,6 +43,21 @@ pub fn run_cli(program_name: &str, raw_args: impl IntoIterator<Item = String>) -
         }
         Some("--version" | "version") => {
             println!("{program_name} {}", env!("CARGO_PKG_VERSION"));
+            0
+        }
+        Some("AccelerationStatus") => {
+            let command_args = args.cloned().collect::<Vec<_>>();
+            if command_args
+                .iter()
+                .any(|arg| arg == "--help" || arg == "-h")
+            {
+                print_accelerationstatus_help();
+                return 0;
+            }
+            if let Err(error) = run_acceleration_status() {
+                eprintln!("{error}");
+                return 2;
+            }
             0
         }
         Some("MarkDuplicates") => {
@@ -405,6 +420,9 @@ pub fn run_cli(program_name: &str, raw_args: impl IntoIterator<Item = String>) -
                     return exit_code;
                 }
                 eprintln!("{error}");
+                if error == "ValidateSamFile found validation issues" {
+                    return 3;
+                }
                 return 2;
             }
             0
@@ -650,11 +668,13 @@ Usage: {program_name} <PicardCommand> [KEY=VALUE ...]
 
 Available commands:
   AddOrReplaceReadGroups
-                    Adds or replaces a single read group in SAM or BAM files
+                    Adds or replaces a single read group in SAM/BAM/CRAM files
+  AccelerationStatus
+                    Reports the active CPU/GPU acceleration policy
   BedToIntervalList Converts BED files to Picard interval_list files
-  CleanSam          Cleans common SAM/BAM alignment issues
+  CleanSam          Cleans common SAM/BAM/CRAM alignment issues
   CollectAlignmentSummaryMetrics
-                    Writes basic alignment summary metrics for SAM or BAM files
+                    Writes basic alignment summary metrics for SAM/BAM/CRAM files
   CollectBaseDistributionByCycle
                     Writes nucleotide distribution by sequencing cycle
   CollectGcBiasMetrics
@@ -666,45 +686,121 @@ Available commands:
   CollectQualityYieldMetrics
                     Writes Picard-style read/base quality yield metrics
   CollectWgsMetrics
-                    Writes whole-genome coverage metrics for SAM or BAM files
+                    Writes whole-genome coverage metrics for SAM/BAM/CRAM files
   CreateSequenceDictionary
                     Creates a Picard sequence dictionary from a FASTA file
   FixMateInformation
-                    Fixes paired-read mate fields for queryname grouped SAM/BAM
+                    Fixes paired-read mate fields for queryname grouped SAM/BAM/CRAM
   GatherVcfs        Concatenates block-sorted VCF shards
   BuildBamIndex     Builds a BAI index for a coordinate-sorted BAM file
   IntervalListTools Concatenates, sorts, and uniques interval_list files
   LiftoverVcf      Lifts simple positive-strand VCF records through UCSC chains
-  MarkDuplicates    Identifies duplicate reads in SAM or BAM files
+  MarkDuplicates    Identifies duplicate reads in SAM/BAM/CRAM files
   MeanQualityByCycle
                     Writes mean base quality by sequencing cycle
   MergeVcfs         Merges compatible VCF files by coordinate
-  MergeSamFiles     Merges SAM or BAM files with optional output sorting
+  MergeSamFiles     Merges SAM/BAM/CRAM files with optional output sorting
   NormalizeFasta    Rewrites FASTA records with fixed-width sequence lines
   QualityScoreDistribution
                     Writes base quality score distribution metrics
-  ReplaceSamHeader  Replaces a SAM/BAM header while streaming records
-  RevertSam         Reverts aligned SAM/BAM records to unmapped queryname output
-  SamToFastq        Converts SAM or BAM records to FASTQ
+  ReplaceSamHeader  Replaces a SAM/BAM/CRAM header while streaming records
+  RevertSam         Reverts aligned SAM/BAM/CRAM records to unmapped queryname output
+  SamToFastq        Converts SAM/BAM/CRAM records to FASTQ
   FastqToSam        Converts FASTQ records to unmapped SAM or BAM
   SetNmMdAndUqTags  Computes NM, MD, and UQ tags from a reference FASTA
-  SortSam           Sorts SAM or BAM files by coordinate or query name
+  SortSam           Sorts SAM/BAM/CRAM files by coordinate or query name
   SortVcf           Sorts VCF records by sequence dictionary and position
   UpdateVcfSequenceDictionary
                     Replaces VCF contig headers from a Picard dictionary
-  ValidateSamFile   Validates common SAM/BAM structural issues in summary mode
-  ViewSam           Converts SAM/BAM output format or writes SAM to stdout"
+  ValidateSamFile   Validates common SAM/BAM/CRAM structural issues in summary mode
+  ViewSam           Views SAM/BAM/CRAM records or writes SAM to stdout"
     );
+}
+
+fn print_accelerationstatus_help() {
+    println!(
+        "\
+Usage: picard AccelerationStatus
+
+Reports turbo-picard's effective acceleration policy.
+
+Output fields:
+  backend                 Active execution backend for this build
+  policy                  TURBO_PICARD_ACCELERATOR setting after validation
+  htslib_worker_threads   Worker threads used for BGZF/CRAM I/O
+  gpu_runtime             Detected GPU runtime, if visible
+  gpu_acceleration        Whether production GPU acceleration is enabled"
+    );
+}
+
+fn run_acceleration_status() -> Result<(), String> {
+    let policy = accelerator_policy()?;
+    let workers = turbo_picard_core::bgzf_threads::htslib_worker_threads();
+    let gpu_runtime = detect_gpu_runtime();
+
+    println!("backend=cpu");
+    println!("policy={policy}");
+    println!("htslib_worker_threads={workers}");
+    println!("gpu_runtime={}", gpu_runtime.as_deref().unwrap_or("none"));
+    println!("gpu_acceleration=not-enabled");
+
+    if policy == "gpu-required" {
+        return Err(
+            "TURBO_PICARD_ACCELERATOR=gpu-required was set, but this build has no production GPU backend"
+                .to_string(),
+        );
+    }
+
+    Ok(())
+}
+
+fn accelerator_policy() -> Result<String, String> {
+    match env::var("TURBO_PICARD_ACCELERATOR") {
+        Ok(value) => {
+            let normalized = value.trim().to_ascii_lowercase();
+            match normalized.as_str() {
+                "" => Ok("auto".to_string()),
+                "auto" | "cpu" | "off" | "gpu-required" => Ok(normalized),
+                _ => Err(format!(
+                    "unsupported TURBO_PICARD_ACCELERATOR={value}; use auto, cpu, off, or gpu-required"
+                )),
+            }
+        }
+        Err(env::VarError::NotPresent) => Ok("auto".to_string()),
+        Err(env::VarError::NotUnicode(_)) => {
+            Err("TURBO_PICARD_ACCELERATOR must be valid UTF-8".to_string())
+        }
+    }
+}
+
+fn detect_gpu_runtime() -> Option<&'static str> {
+    if command_exists("nvidia-smi") {
+        Some("cuda")
+    } else if command_exists("rocminfo") || command_exists("rocm-smi") {
+        Some("rocm")
+    } else if cfg!(target_os = "macos") {
+        Some("metal")
+    } else {
+        None
+    }
+}
+
+fn command_exists(program: &str) -> bool {
+    Command::new(program)
+        .arg("--help")
+        .output()
+        .map(|output| output.status.success() || output.status.code().is_some())
+        .unwrap_or(false)
 }
 
 fn print_markduplicates_help() {
     println!(
         "\
-Usage: picard MarkDuplicates I=<input.bam> O=<output.bam> M=<metrics.txt> [options]
+Usage: picard MarkDuplicates I=<input.bam|input.cram> O=<output.bam|output.cram> M=<metrics.txt> [options]
 
 Required arguments:
-  INPUT / I             Input SAM or BAM file; may be repeated for BAM
-  OUTPUT / O            Output SAM or BAM file
+  INPUT / I             Input SAM, BAM, or CRAM file; may be repeated
+  OUTPUT / O            Output SAM, BAM, or CRAM file
   METRICS_FILE / M      Duplication metrics file
 
 Common options:
@@ -722,11 +818,11 @@ Common options:
 fn print_sortsam_help() {
     println!(
         "\
-Usage: picard SortSam I=<input.bam> O=<output.bam> SORT_ORDER=<coordinate|queryname>
+Usage: picard SortSam I=<input.bam|input.cram> O=<output.bam|output.cram> SORT_ORDER=<coordinate|queryname>
 
 Required arguments:
-  INPUT / I             Input SAM or BAM file
-  OUTPUT / O            Output SAM or BAM file
+  INPUT / I             Input SAM, BAM, or CRAM file
+  OUTPUT / O            Output SAM, BAM, or CRAM file
   SORT_ORDER / SO       coordinate or queryname"
     );
 }
@@ -734,11 +830,11 @@ Required arguments:
 fn print_cleansam_help() {
     println!(
         "\
-Usage: picard CleanSam I=<input.bam> O=<output.bam> [options]
+Usage: picard CleanSam I=<input.bam|input.cram> O=<output.bam|output.cram> [options]
 
 Required arguments:
-  INPUT / I             Input SAM or BAM file
-  OUTPUT / O            Output SAM or BAM file
+  INPUT / I             Input SAM, BAM, or CRAM file
+  OUTPUT / O            Output SAM, BAM, or CRAM file
 
 Common options:
   CREATE_INDEX
@@ -751,11 +847,11 @@ Common options:
 fn print_mergesamfiles_help() {
     println!(
         "\
-Usage: picard MergeSamFiles I=<input.bam> [I=<input2.bam> ...] O=<output.bam> [options]
+Usage: picard MergeSamFiles I=<input.bam|input.cram> [I=<input2.bam|input2.cram> ...] O=<output.bam|output.cram> [options]
 
 Required arguments:
-  INPUT / I             Input SAM or BAM file; may be repeated
-  OUTPUT / O            Output SAM or BAM file
+  INPUT / I             Input SAM, BAM, or CRAM file; may be repeated
+  OUTPUT / O            Output SAM, BAM, or CRAM file
 
 Common options:
   SORT_ORDER / SO       coordinate, queryname, or unsorted; defaults to coordinate
@@ -763,7 +859,8 @@ Common options:
   COMMENT / CO          Add one or more @CO header comments
   CREATE_INDEX
   CREATE_MD5_FILE
-  MERGE_SEQUENCE_DICTIONARIES"
+  MERGE_SEQUENCE_DICTIONARIES
+                        Accepted when input dictionaries already match"
     );
 }
 
@@ -785,10 +882,10 @@ Common options:
 fn print_samtofastq_help() {
     println!(
         "\
-Usage: picard SamToFastq I=<input.bam> FASTQ=<reads.fastq> [options]
+Usage: picard SamToFastq I=<input.bam|input.cram> FASTQ=<reads.fastq> [options]
 
 Required arguments:
-  INPUT / I             Input SAM or BAM file
+  INPUT / I             Input SAM, BAM, or CRAM file
   FASTQ                 Output FASTQ file
 
 Common options:
@@ -832,7 +929,10 @@ Common options:
   LIBRARY_NAME / LB
   PLATFORM / PL
   PLATFORM_UNIT / PU
-  QUALITY_FORMAT        Standard or Illumina
+  QUALITY_FORMAT        Auto, Standard, or Illumina
+  MIN_Q / MAX_Q         Validate decoded input qualities
+  ALLOW_AND_IGNORE_EMPTY_LINES
+  ALLOW_EMPTY_FASTQ
   SORT_ORDER            queryname, coordinate, or unsorted
   COMMENT               Add @CO header line; may be repeated
   CREATE_MD5_FILE       Write Picard-style .md5 sidecar for OUTPUT
@@ -848,11 +948,11 @@ Common options:
 fn print_addorreplacereadgroups_help() {
     println!(
         "\
-Usage: picard AddOrReplaceReadGroups I=<input.bam> O=<output.bam> RGLB=<library> RGPL=<platform> RGPU=<unit> RGSM=<sample> [options]
+Usage: picard AddOrReplaceReadGroups I=<input.bam|input.cram> O=<output.bam|output.cram> RGLB=<library> RGPL=<platform> RGPU=<unit> RGSM=<sample> [options]
 
 Required arguments:
-  INPUT / I             Input SAM or BAM file
-  OUTPUT / O            Output SAM or BAM file
+  INPUT / I             Input SAM, BAM, or CRAM file
+  OUTPUT / O            Output SAM, BAM, or CRAM file
   RGLB                  Read-group library
   RGPL                  Read-group platform
   RGPU                  Read-group platform unit
@@ -882,10 +982,10 @@ Common options:
 fn print_collectalignmentsummarymetrics_help() {
     println!(
         "\
-Usage: picard CollectAlignmentSummaryMetrics I=<input.bam> O=<metrics.txt> [options]
+Usage: picard CollectAlignmentSummaryMetrics I=<input.bam|input.cram> O=<metrics.txt> [options]
 
 Required arguments:
-  INPUT / I             Input SAM or BAM file
+  INPUT / I             Input SAM, BAM, or CRAM file
   OUTPUT / O            Alignment summary metrics file
 
 Supported options:
@@ -898,10 +998,10 @@ Supported options:
 fn print_collectbasedistributionbycycle_help() {
     println!(
         "\
-Usage: picard CollectBaseDistributionByCycle I=<input.bam> O=<metrics.txt> CHART=<chart.pdf> [options]
+Usage: picard CollectBaseDistributionByCycle I=<input.bam|input.cram> O=<metrics.txt> CHART=<chart.pdf> [options]
 
 Required arguments:
-  INPUT / I             Input SAM or BAM file
+  INPUT / I             Input SAM, BAM, or CRAM file
   OUTPUT / O            Base distribution metrics file
   CHART_OUTPUT / CHART  Chart artifact path"
     );
@@ -910,10 +1010,10 @@ Required arguments:
 fn print_collectgcbiasmetrics_help() {
     println!(
         "\
-Usage: picard CollectGcBiasMetrics I=<input.bam> O=<detail.txt> S=<summary.txt> CHART=<chart.pdf> R=<reference.fa> [options]
+Usage: picard CollectGcBiasMetrics I=<input.bam|input.cram> O=<detail.txt> S=<summary.txt> CHART=<chart.pdf> R=<reference.fa> [options]
 
 Required arguments:
-  INPUT / I             Input SAM or BAM file
+  INPUT / I             Input SAM, BAM, or CRAM file
   OUTPUT / O            GC-bias detail metrics file
   SUMMARY_OUTPUT / S    GC-bias summary metrics file
   CHART_OUTPUT / CHART  Chart artifact path
@@ -931,10 +1031,10 @@ Implemented options:
 fn print_collectqualityyieldmetrics_help() {
     println!(
         "\
-Usage: picard CollectQualityYieldMetrics I=<input.bam> O=<metrics.txt> [options]
+Usage: picard CollectQualityYieldMetrics I=<input.bam|input.cram> O=<metrics.txt> [options]
 
 Required arguments:
-  INPUT / I             Input SAM or BAM file
+  INPUT / I             Input SAM, BAM, or CRAM file
   OUTPUT / O            Quality yield metrics file
 
 Common options:
@@ -948,10 +1048,10 @@ Common options:
 fn print_collectinsertsizemetrics_help() {
     println!(
         "\
-Usage: picard CollectInsertSizeMetrics I=<input.bam> O=<metrics.txt> H=<histogram.pdf> [options]
+Usage: picard CollectInsertSizeMetrics I=<input.bam|input.cram> O=<metrics.txt> H=<histogram.pdf> [options]
 
 Required arguments:
-  INPUT / I             Input SAM or BAM file
+  INPUT / I             Input SAM, BAM, or CRAM file
   OUTPUT / O            Insert size metrics file
   HISTOGRAM_FILE / H    Histogram artifact path
 
@@ -966,10 +1066,10 @@ Supported options:
 fn print_collectmultiplemetrics_help() {
     println!(
         "\
-Usage: picard CollectMultipleMetrics I=<input.bam> O=<output-prefix> PROGRAM=null PROGRAM=<collector> [options]
+Usage: picard CollectMultipleMetrics I=<input.bam|input.cram> O=<output-prefix> PROGRAM=null PROGRAM=<collector> [options]
 
 Required arguments:
-  INPUT / I             Input SAM or BAM file
+  INPUT / I             Input SAM, BAM, or CRAM file
   OUTPUT / O            Base output prefix
 
 Supported PROGRAM values:
@@ -990,10 +1090,10 @@ Common options:
 fn print_collectwgsmetrics_help() {
     println!(
         "\
-Usage: picard CollectWgsMetrics I=<input.bam> O=<metrics.txt> R=<reference.fa> [options]
+Usage: picard CollectWgsMetrics I=<input.bam|input.cram> O=<metrics.txt> R=<reference.fa> [options]
 
 Required arguments:
-  INPUT / I             Coordinate-sorted SAM or BAM file
+  INPUT / I             Coordinate-sorted SAM, BAM, or CRAM file
   OUTPUT / O            Whole-genome metrics file
   REFERENCE_SEQUENCE / R Reference FASTA file
 
@@ -1014,11 +1114,11 @@ Supported options:
 fn print_fixmateinformation_help() {
     println!(
         "\
-Usage: picard FixMateInformation I=<input.bam> O=<output.bam> [options]
+Usage: picard FixMateInformation I=<input.bam|input.cram> O=<output.bam|output.cram> [options]
 
 Required arguments:
-  INPUT / I             Queryname-sorted SAM or BAM input file
-  OUTPUT / O            Output SAM or BAM file
+  INPUT / I             Queryname-sorted SAM, BAM, or CRAM input file; may be repeated
+  OUTPUT / O            Output SAM, BAM, or CRAM file
 
 Supported options:
   ADD_MATE_CIGAR / MC
@@ -1057,11 +1157,11 @@ Supported options:
 fn print_revertsam_help() {
     println!(
         "\
-Usage: picard RevertSam I=<input.bam> O=<output.bam> [options]
+Usage: picard RevertSam I=<input.bam|input.cram> O=<output.bam|output.cram> [options]
 
 Required arguments:
-  INPUT / I             Input SAM or BAM file
-  OUTPUT / O            Output SAM or BAM file
+  INPUT / I             Input SAM, BAM, or CRAM file
+  OUTPUT / O            Output SAM, BAM, or CRAM file
 
 Supported options:
   REMOVE_ALIGNMENT_INFORMATION=true
@@ -1085,11 +1185,11 @@ Supported options:
 fn print_setnmmdanduqtags_help() {
     println!(
         "\
-Usage: picard SetNmMdAndUqTags I=<input.bam> O=<output.bam> R=<reference.fa> [options]
+Usage: picard SetNmMdAndUqTags I=<input.bam|input.cram> O=<output.bam|output.cram> R=<reference.fa> [options]
 
 Required arguments:
-  INPUT / I             Coordinate-sorted SAM or BAM input file
-  OUTPUT / O            Output SAM or BAM file
+  INPUT / I             Coordinate-sorted SAM, BAM, or CRAM input file
+  OUTPUT / O            Output SAM, BAM, or CRAM file
   REFERENCE_SEQUENCE / R Reference FASTA file
 
 Supported options:
@@ -1103,10 +1203,10 @@ Supported options:
 fn print_validatesamfile_help() {
     println!(
         "\
-Usage: picard ValidateSamFile I=<input.sam|input.bam> [O=<summary.txt>] [MODE=SUMMARY]
+Usage: picard ValidateSamFile I=<input.sam|input.bam|input.cram> [O=<summary.txt>] [MODE=SUMMARY]
 
 Supported options:
-  INPUT / I             Input SAM or BAM file
+  INPUT / I             Input SAM, BAM, or CRAM file
   OUTPUT / O            Optional summary output; defaults to stdout
   MODE / M              SUMMARY only
   SKIP_MATE_VALIDATION / SMV
@@ -1136,10 +1236,10 @@ Supported options:
 fn print_qualityscoredistribution_help() {
     println!(
         "\
-Usage: picard QualityScoreDistribution I=<input.bam> O=<metrics.txt> CHART=<chart.pdf> [options]
+Usage: picard QualityScoreDistribution I=<input.bam|input.cram> O=<metrics.txt> CHART=<chart.pdf> [options]
 
 Required arguments:
-  INPUT / I             Input SAM or BAM file
+  INPUT / I             Input SAM, BAM, or CRAM file
   OUTPUT / O            Quality score distribution metrics file
   CHART_OUTPUT / CHART  Chart artifact path
 
@@ -1155,10 +1255,10 @@ Supported options:
 fn print_meanqualitybycycle_help() {
     println!(
         "\
-Usage: picard MeanQualityByCycle I=<input.bam> O=<metrics.txt> CHART=<chart.pdf> [options]
+Usage: picard MeanQualityByCycle I=<input.bam|input.cram> O=<metrics.txt> CHART=<chart.pdf> [options]
 
 Required arguments:
-  INPUT / I             Input SAM or BAM file
+  INPUT / I             Input SAM, BAM, or CRAM file
   OUTPUT / O            Mean quality by cycle metrics file
   CHART_OUTPUT / CHART  Chart artifact path
 
@@ -1207,11 +1307,11 @@ Required arguments:
 fn print_viewsam_help() {
     println!(
         "\
-Usage: picard ViewSam I=<input.sam|input.bam> [O=<output.sam|output.bam>]
+Usage: picard ViewSam I=<input.sam|input.bam|input.cram> [O=<output.sam|output.bam|output.cram>]
 
 Supported options:
-  INPUT / I             Input SAM or BAM file
-  OUTPUT / O            Output SAM or BAM file; defaults to SAM on stdout
+  INPUT / I             Input SAM, BAM, or CRAM file
+  OUTPUT / O            Output SAM, BAM, or CRAM file; defaults to SAM on stdout
   INTERVAL_LIST         Restrict output to records overlapping intervals
   ALIGNMENT_STATUS      All, Aligned, or Unaligned
   PF_STATUS             All, PF, or NonPF
@@ -1226,12 +1326,12 @@ Supported options:
 fn print_replacesamheader_help() {
     println!(
         "\
-Usage: picard ReplaceSamHeader I=<input.sam|input.bam> O=<output.sam|output.bam> HEADER=<header.sam|header.bam>
+Usage: picard ReplaceSamHeader I=<input.sam|input.bam|input.cram> O=<output.sam|output.bam|output.cram> HEADER=<header.sam|header.bam|header.cram>
 
 Supported options:
-  INPUT / I             Input SAM or BAM file
-  OUTPUT / O            Output SAM or BAM file
-  HEADER / H            SAM/BAM file whose header replaces the input header
+  INPUT / I             Input SAM, BAM, or CRAM file
+  OUTPUT / O            Output SAM, BAM, or CRAM file
+  HEADER / H            SAM/BAM/CRAM file whose header replaces the input header
   CREATE_MD5_FILE       Write Picard-style .md5 sidecar for OUTPUT
   COMPRESSION_LEVEL     0-9 for BAM output
   VALIDATION_STRINGENCY
@@ -1338,16 +1438,24 @@ fn run_sortsam(args: &[String]) -> Result<(), String> {
         return run_sortsam_sam_text(&input, &output, sort_order);
     }
 
-    let reader = open_bam_reader(&input).map_err(|error| error.to_string())?;
+    let reference = picard_reference(&args)?;
+    let reader = open_bam_reader_with_reference(&input, reference.as_deref())
+        .map_err(|error| error.to_string())?;
     let header = sorted_header(reader.header(), sort_order);
     let format = output_format(&output)?;
     if create_index && format != bam::Format::Bam {
         return Err("SortSam CREATE_INDEX=true requires BAM output".to_string());
     }
 
-    if input_is_sorted(&input, sort_order)? {
-        let mut reader = open_bam_reader(&input)?;
-        let mut writer = bam_writer_for_path(&output, &header, format, compression_level)?;
+    if input_is_sorted(&input, sort_order, reference.as_deref())? {
+        let mut reader = open_bam_reader_with_reference(&input, reference.as_deref())?;
+        let mut writer = bam_writer_for_path_with_reference(
+            &output,
+            &header,
+            format,
+            reference.as_deref(),
+            compression_level,
+        )?;
         for record in reader.records() {
             let record = record.map_err(|error| error.to_string())?;
             writer.write(&record).map_err(|error| error.to_string())?;
@@ -1357,7 +1465,7 @@ fn run_sortsam(args: &[String]) -> Result<(), String> {
         return Ok(());
     }
 
-    let mut reader = open_bam_reader(&input)?;
+    let mut reader = open_bam_reader_with_reference(&input, reference.as_deref())?;
     let mut records = reader
         .records()
         .collect::<Result<Vec<_>, _>>()
@@ -1369,7 +1477,13 @@ fn run_sortsam(args: &[String]) -> Result<(), String> {
         SortOrder::Unsorted => unreachable!("SortSam rejects SORT_ORDER=unsorted"),
     }
 
-    let mut writer = bam_writer_for_path(&output, &header, format, compression_level)?;
+    let mut writer = bam_writer_for_path_with_reference(
+        &output,
+        &header,
+        format,
+        reference.as_deref(),
+        compression_level,
+    )?;
     for record in records {
         writer.write(&record).map_err(|error| error.to_string())?;
     }
@@ -1397,7 +1511,8 @@ fn run_cleansam(args: &[String]) -> Result<(), String> {
         return run_cleansam_sam_text(&input, &output);
     }
 
-    let mut reader = open_bam_reader(&input)?;
+    let reference = picard_reference(&args)?;
+    let mut reader = open_bam_reader_with_reference(&input, reference.as_deref())?;
     let header = bam::Header::from_template(reader.header());
     let target_lengths = (0..reader.header().target_count())
         .map(|tid| reader.header().target_len(tid).unwrap_or(0))
@@ -1406,7 +1521,13 @@ fn run_cleansam(args: &[String]) -> Result<(), String> {
     if create_index && format != bam::Format::Bam {
         return Err("CleanSam CREATE_INDEX=true requires BAM output".to_string());
     }
-    let mut writer = bam_writer_for_path(&output, &header, format, compression_level)?;
+    let mut writer = bam_writer_for_path_with_reference(
+        &output,
+        &header,
+        format,
+        reference.as_deref(),
+        compression_level,
+    )?;
     for record in reader.records() {
         let mut record = record.map_err(|error| error.to_string())?;
         clean_sam_record(&mut record, &target_lengths)?;
@@ -1858,25 +1979,37 @@ fn run_mergesamfiles(args: &[String]) -> Result<(), String> {
         return Err("MergeSamFiles CREATE_INDEX=true requires BAM output".to_string());
     }
 
-    let merge_plan = build_merge_plan(&inputs, sort_order, assume_sorted)?;
+    let reference = picard_reference(&args)?;
+    let merge_plan = build_merge_plan(&inputs, sort_order, assume_sorted, reference.as_deref())?;
+    let interval_filter = merge_interval_filter(args.get("INTERVALS"), &merge_plan.target_names)?;
     let all_inputs_sorted = merge_plan.inputs.iter().all(|input| input.is_sorted);
     let mut header_builder = merge_plan.header_builder;
     for comment in args.get("COMMENT").into_iter().flatten() {
         header_builder.push_comment(comment);
     }
     let header = header_builder.into_header();
-    let mut writer =
-        bam::Writer::from_path(&output, &header, format).map_err(|error| error.to_string())?;
-    if let Some(level) = compression_level {
-        writer
-            .set_compression_level(bam::CompressionLevel::Level(level))
-            .map_err(|error| error.to_string())?;
-    }
+    let mut writer = bam_writer_for_path_with_reference(
+        &output,
+        &header,
+        format,
+        reference.as_deref(),
+        compression_level,
+    )?;
 
     if sort_order != SortOrder::Unsorted && all_inputs_sorted {
-        write_kway_merged_records(&mut writer, &merge_plan.inputs, sort_order)?;
+        write_kway_merged_records(
+            &mut writer,
+            &merge_plan.inputs,
+            sort_order,
+            reference.as_deref(),
+            interval_filter.as_ref(),
+        )?;
     } else {
-        let mut records = collect_merge_records(&merge_plan.inputs)?;
+        let mut records = collect_merge_records(
+            &merge_plan.inputs,
+            reference.as_deref(),
+            interval_filter.as_ref(),
+        )?;
         match sort_order {
             SortOrder::Coordinate => records.sort_by(compare_coordinate),
             SortOrder::QueryName => records.sort_by(compare_queryname),
@@ -1909,7 +2042,13 @@ fn run_buildbamindex(args: &[String]) -> Result<(), String> {
     }
     drop(reader);
 
-    index::build(&input, Some(&output), index::Type::Bai, 1).map_err(|error| error.to_string())
+    index::build(
+        &input,
+        Some(&output),
+        index::Type::Bai,
+        turbo_picard_core::bgzf_threads::htslib_worker_threads(),
+    )
+    .map_err(|error| error.to_string())
 }
 
 fn run_samtofastq(args: &[String]) -> Result<(), String> {
@@ -1958,7 +2097,9 @@ fn run_samtofastq(args: &[String]) -> Result<(), String> {
         );
     }
 
-    let mut reader = open_bam_reader(input).map_err(|error| error.to_string())?;
+    let reference = picard_reference(&args)?;
+    let mut reader = open_bam_reader_with_reference(input, reference.as_deref())
+        .map_err(|error| error.to_string())?;
     let mut first_writer = fastq_writer(&fastq, compression_level)?;
     let mut second_writer = match second_end_fastq {
         Some(ref path) => Some(fastq_writer(path, compression_level)?),
@@ -2082,22 +2223,47 @@ fn run_fastqtosam(args: &[String]) -> Result<(), String> {
             .unwrap_or_else(|| "queryname".to_string()),
         comments: args.get("COMMENT").cloned().unwrap_or_default(),
     };
-    let quality_format =
-        optional_scalar(&args, "QUALITY_FORMAT")?.unwrap_or_else(|| "Standard".to_string());
-    let quality_offset = match quality_format.as_str() {
-        "Standard" => 33_u8,
-        "Illumina" => 64_u8,
-        _ => {
+    let allow_and_ignore_empty_lines =
+        optional_bool(&args, "ALLOW_AND_IGNORE_EMPTY_LINES")?.unwrap_or(false);
+    let allow_empty_fastq = optional_bool(&args, "ALLOW_EMPTY_FASTQ")?.unwrap_or(false);
+    let quality_format = optional_scalar(&args, "QUALITY_FORMAT")?;
+    let quality_offset = match quality_format.as_deref() {
+        Some("Standard") => 33_u8,
+        Some("Illumina") => 64_u8,
+        Some("Auto") | None => detect_fastqtosam_quality_offset(
+            &fastq,
+            fastq2.as_deref(),
+            allow_and_ignore_empty_lines,
+        )?,
+        Some(quality_format) => {
             return Err(format!(
                 "unsupported FastqToSam QUALITY_FORMAT={quality_format}"
             ));
         }
     };
+    let min_q = optional_u32(&args, "MIN_Q")?.unwrap_or(0);
+    let max_q = optional_u32(&args, "MAX_Q")?.unwrap_or(93);
+    if min_q > u8::MAX as u32 {
+        return Err(format!("unsupported FastqToSam MIN_Q: {min_q}"));
+    }
+    if max_q > u8::MAX as u32 {
+        return Err(format!("unsupported FastqToSam MAX_Q: {max_q}"));
+    }
+    let options = FastqToSamOptions {
+        quality_offset,
+        min_q: min_q as u8,
+        max_q: max_q as u8,
+        allow_and_ignore_empty_lines,
+        allow_empty_fastq,
+    };
+    if options.min_q > options.max_q {
+        return Err("FastqToSam MIN_Q must be less than or equal to MAX_Q".to_string());
+    }
     let compression_level = optional_u32(&args, "COMPRESSION_LEVEL")?.unwrap_or(5);
     let create_md5_file = optional_bool(&args, "CREATE_MD5_FILE")?.unwrap_or(false);
     let output_format = output_format_for(&output, "FastqToSam")?;
     if matches!(output_format, bam::Format::Sam) && quality_offset == 33 {
-        run_fastqtosam_standard_sam(&fastq, fastq2.as_deref(), &output, &read_group)?;
+        run_fastqtosam_standard_sam(&fastq, fastq2.as_deref(), &output, &read_group, options)?;
         return write_requested_sidecars(&output, create_md5_file, false);
     }
     let mut writer = if matches!(output_format, bam::Format::Sam) {
@@ -2106,24 +2272,26 @@ fn run_fastqtosam(args: &[String]) -> Result<(), String> {
             fs::File::create(&output).map_err(|error| error.to_string())?,
         ))
     } else {
-        let mut writer =
-            bam::Writer::from_path(&output, &fastqtosam_header(&read_group), output_format)
-                .map_err(|error| error.to_string())?;
-        writer
-            .set_compression_level(bam::CompressionLevel::Level(compression_level))
-            .map_err(|error| error.to_string())?;
+        let writer = hts_io::open_writer(
+            &output,
+            &fastqtosam_header(&read_group),
+            output_format,
+            None,
+            Some(compression_level),
+        )?;
         FastqToSamWriter::Bam(writer)
     };
     writer.write_header(&read_group)?;
 
-    let mut first_reader = FastqReader::from_path(&fastq)?;
+    let mut first_reader = FastqReader::from_path(&fastq, options)?;
     let mut second_reader = match fastq2 {
-        Some(path) => Some(FastqReader::from_path(&path)?),
+        Some(path) => Some(FastqReader::from_path(&path, options)?),
         None => None,
     };
 
     let mut first_record = FastqRecord::default();
     let mut second_record = FastqRecord::default();
+    let mut records_written = 0_u64;
     loop {
         if !first_reader.next_record_into(&mut first_record)? {
             if let Some(reader) = second_reader.as_mut() {
@@ -2147,9 +2315,14 @@ fn run_fastqtosam(args: &[String]) -> Result<(), String> {
             }
             writer.write_record(&first_record, 77, &read_group.id, quality_offset)?;
             writer.write_record(&second_record, 141, &read_group.id, quality_offset)?;
+            records_written += 2;
         } else {
             writer.write_record(&first_record, 4, &read_group.id, quality_offset)?;
+            records_written += 1;
         }
+    }
+    if records_written == 0 && !options.allow_empty_fastq {
+        return Err("malformed FastqToSam empty FASTQ input".to_string());
     }
 
     drop(writer);
@@ -2188,16 +2361,19 @@ fn run_addorreplacereadgroups(args: &[String]) -> Result<(), String> {
         return write_requested_sidecars(&output, create_md5_file, false);
     }
 
-    let mut reader = open_bam_reader(&input).map_err(|error| error.to_string())?;
+    let reference = picard_reference(&args)?;
+    let compression_level = optional_u32(&args, "COMPRESSION_LEVEL")?;
+    let mut reader = open_bam_reader_with_reference(&input, reference.as_deref())
+        .map_err(|error| error.to_string())?;
     let header = read_group_header(reader.header(), &read_group);
     let format = output_format(&output)?;
-    let mut writer =
-        bam::Writer::from_path(&output, &header, format).map_err(|error| error.to_string())?;
-    if let Some(level) = optional_u32(&args, "COMPRESSION_LEVEL")? {
-        writer
-            .set_compression_level(bam::CompressionLevel::Level(level))
-            .map_err(|error| error.to_string())?;
-    }
+    let mut writer = bam_writer_for_path_with_reference(
+        &output,
+        &header,
+        format,
+        reference.as_deref(),
+        compression_level,
+    )?;
 
     for record in reader.records() {
         let mut record = record.map_err(|error| error.to_string())?;
@@ -2339,7 +2515,7 @@ fn run_collectalignmentsummarymetrics(args: &[String]) -> Result<(), String> {
         return fs::write(output, metrics.to_picard_text()).map_err(|error| error.to_string());
     }
 
-    let mut reader = open_bam_reader(input).map_err(|error| error.to_string())?;
+    let mut reader = open_bam_reader_for_args(&input, &args).map_err(|error| error.to_string())?;
     let read_groups =
         insert_size_read_groups_from_header(&String::from_utf8_lossy(reader.header().as_bytes()));
     let mut metrics = AlignmentSummaryCollection::new(accumulation);
@@ -2374,7 +2550,7 @@ fn run_collectqualityyieldmetrics(args: &[String]) -> Result<(), String> {
         return fs::write(output, metrics.to_picard_text()).map_err(|error| error.to_string());
     }
 
-    let mut reader = open_bam_reader(input).map_err(|error| error.to_string())?;
+    let mut reader = open_bam_reader_for_args(&input, &args).map_err(|error| error.to_string())?;
     let mut metrics = QualityYieldSummary::default();
     for record in limited_records(&mut reader, stop_after) {
         let record = record.map_err(|error| error.to_string())?;
@@ -2410,7 +2586,7 @@ fn run_collectinsertsizemetrics(args: &[String]) -> Result<(), String> {
         return write_summary_chart_pdf(&histogram, "CollectInsertSizeMetrics");
     }
 
-    let mut reader = open_bam_reader(input).map_err(|error| error.to_string())?;
+    let mut reader = open_bam_reader_for_args(&input, &args).map_err(|error| error.to_string())?;
     let read_groups =
         insert_size_read_groups_from_header(&String::from_utf8_lossy(reader.header().as_bytes()));
     let mut metrics = InsertSizeCollection::new(accumulation);
@@ -2436,12 +2612,23 @@ fn run_collectbasedistributionbycycle(args: &[String]) -> Result<(), String> {
     let pf_reads_only = optional_bool(&args, "PF_READS_ONLY")?.unwrap_or(false);
     let stop_after = optional_u32(&args, "STOP_AFTER")?.unwrap_or(0);
 
-    let mut reader = open_bam_reader(input).map_err(|error| error.to_string())?;
-    let mut metrics = BaseDistributionByCycleSummary::default();
-    for record in limited_records(&mut reader, stop_after) {
-        let record = record.map_err(|error| error.to_string())?;
-        metrics.observe(&record, aligned_reads_only, pf_reads_only);
-    }
+    let metrics = if has_sam_extension(&input) {
+        collect_base_distribution_by_cycle_sam_text(
+            &input,
+            aligned_reads_only,
+            pf_reads_only,
+            stop_after,
+        )?
+    } else {
+        let mut reader =
+            open_bam_reader_for_args(&input, &args).map_err(|error| error.to_string())?;
+        let mut metrics = BaseDistributionByCycleSummary::default();
+        for record in limited_records(&mut reader, stop_after) {
+            let record = record.map_err(|error| error.to_string())?;
+            metrics.observe(&record, aligned_reads_only, pf_reads_only);
+        }
+        metrics
+    };
 
     fs::write(output, metrics.to_picard_text()).map_err(|error| error.to_string())?;
     write_summary_chart_pdf(&chart, "CollectBaseDistributionByCycle")
@@ -2463,7 +2650,7 @@ fn run_collectgcbiasmetrics(args: &[String]) -> Result<(), String> {
     let stop_after = optional_u32(&args, "STOP_AFTER")?.unwrap_or(0);
 
     let references = read_fasta_sequences(&reference, true)?;
-    let mut reader = open_bam_reader(input).map_err(|error| error.to_string())?;
+    let mut reader = open_bam_reader_for_args(&input, &args).map_err(|error| error.to_string())?;
     let target_names = reader
         .header()
         .target_names()
@@ -2763,7 +2950,7 @@ fn run_collectwgsmetrics(args: &[String]) -> Result<(), String> {
     if stop_after >= 0 {
         summary.limit_included_loci(stop_after as usize);
     }
-    let mut reader = open_bam_reader(&input).map_err(|error| error.to_string())?;
+    let mut reader = open_bam_reader_for_args(&input, &args).map_err(|error| error.to_string())?;
     let target_names = reader
         .header()
         .target_names()
@@ -2793,7 +2980,7 @@ fn run_fixmateinformation(args: &[String]) -> Result<(), String> {
     let args = normalize_picard_args_for_command("FixMateInformation", args)
         .map_err(|error| error.to_string())?;
     reject_unsupported_fixmateinformation_args(&args)?;
-    let input = required_scalar_for(&args, "INPUT", "FixMateInformation")?;
+    let inputs = required_values_for(&args, "INPUT", "FixMateInformation")?;
     let Some(output) = optional_scalar(&args, "OUTPUT")? else {
         return Err("unsupported FixMateInformation missing OUTPUT".to_string());
     };
@@ -2821,38 +3008,54 @@ fn run_fixmateinformation(args: &[String]) -> Result<(), String> {
         return Err("FixMateInformation CREATE_INDEX=true requires BAM output".to_string());
     }
 
-    let mut reader = open_bam_reader(&input).map_err(|error| error.to_string())?;
+    let reference = picard_reference(&args)?;
+    let compression_level = optional_u32(&args, "COMPRESSION_LEVEL")?;
+    let mut reader = open_bam_reader_with_reference(&inputs[0], reference.as_deref())
+        .map_err(|error| error.to_string())?;
     if !assume_sorted && header_sort_order(reader.header()).as_deref() != Some("queryname") {
         return Err("unsupported FixMateInformation input must be queryname sorted".to_string());
     }
-    let header = sorted_header(reader.header(), sort_order);
-    let compression_level = optional_u32(&args, "COMPRESSION_LEVEL")?;
-    let mut writer = bam_writer_for_path(&output, &header, output_format, compression_level)?;
+    let header = sorted_header_with_group_order(
+        reader.header(),
+        sort_order,
+        (inputs.len() > 1).then_some("none"),
+    );
+    let mut writer = bam_writer_for_path_with_reference(
+        &output,
+        &header,
+        output_format,
+        reference.as_deref(),
+        compression_level,
+    )?;
     let mut pending = Vec::<bam::Record>::new();
     let mut fixed_records = Vec::<bam::Record>::new();
 
-    for record in reader.records() {
-        let record = record.map_err(|error| error.to_string())?;
-        if pending
-            .first()
-            .is_some_and(|first| first.qname() != record.qname())
-        {
-            if sort_order == SortOrder::Coordinate {
-                fixed_records.extend(drain_fixed_mate_group(
-                    &mut pending,
-                    add_mate_cigar,
-                    ignore_missing_mates,
-                )?);
-            } else {
-                write_fixed_mate_group(
-                    &mut writer,
-                    &mut pending,
-                    add_mate_cigar,
-                    ignore_missing_mates,
-                )?;
-            }
+    process_fixmate_reader(
+        &mut reader,
+        &mut writer,
+        &mut pending,
+        &mut fixed_records,
+        sort_order,
+        add_mate_cigar,
+        ignore_missing_mates,
+    )?;
+    for input in inputs.iter().skip(1) {
+        let mut reader = open_bam_reader_with_reference(input, reference.as_deref())
+            .map_err(|error| error.to_string())?;
+        if !assume_sorted && header_sort_order(reader.header()).as_deref() != Some("queryname") {
+            return Err(
+                "unsupported FixMateInformation input must be queryname sorted".to_string(),
+            );
         }
-        pending.push(record);
+        process_fixmate_reader(
+            &mut reader,
+            &mut writer,
+            &mut pending,
+            &mut fixed_records,
+            sort_order,
+            add_mate_cigar,
+            ignore_missing_mates,
+        )?;
     }
     if sort_order == SortOrder::Coordinate {
         fixed_records.extend(drain_fixed_mate_group(
@@ -2877,6 +3080,36 @@ fn run_fixmateinformation(args: &[String]) -> Result<(), String> {
     write_requested_sidecars(&output, create_md5_file, create_index)
 }
 
+fn process_fixmate_reader(
+    reader: &mut bam::Reader,
+    writer: &mut bam::Writer,
+    pending: &mut Vec<bam::Record>,
+    fixed_records: &mut Vec<bam::Record>,
+    sort_order: SortOrder,
+    add_mate_cigar: bool,
+    ignore_missing_mates: bool,
+) -> Result<(), String> {
+    for record in reader.records() {
+        let record = record.map_err(|error| error.to_string())?;
+        if pending
+            .first()
+            .is_some_and(|first| first.qname() != record.qname())
+        {
+            if sort_order == SortOrder::Coordinate {
+                fixed_records.extend(drain_fixed_mate_group(
+                    pending,
+                    add_mate_cigar,
+                    ignore_missing_mates,
+                )?);
+            } else {
+                write_fixed_mate_group(writer, pending, add_mate_cigar, ignore_missing_mates)?;
+            }
+        }
+        pending.push(record);
+    }
+    Ok(())
+}
+
 fn run_qualityscoredistribution(args: &[String]) -> Result<(), String> {
     let args = normalize_picard_args_for_command("QualityScoreDistribution", args)
         .map_err(|error| error.to_string())?;
@@ -2889,12 +3122,24 @@ fn run_qualityscoredistribution(args: &[String]) -> Result<(), String> {
     let include_no_calls = optional_bool(&args, "INCLUDE_NO_CALLS")?.unwrap_or(false);
     let stop_after = optional_u32(&args, "STOP_AFTER")?.unwrap_or(0);
 
-    let mut reader = open_bam_reader(input).map_err(|error| error.to_string())?;
-    let mut metrics = QualityScoreDistributionSummary::default();
-    for record in limited_records(&mut reader, stop_after) {
-        let record = record.map_err(|error| error.to_string())?;
-        metrics.observe(&record, aligned_reads_only, pf_reads_only, include_no_calls);
-    }
+    let metrics = if has_sam_extension(&input) {
+        collect_quality_score_distribution_sam_text(
+            &input,
+            aligned_reads_only,
+            pf_reads_only,
+            include_no_calls,
+            stop_after,
+        )?
+    } else {
+        let mut reader =
+            open_bam_reader_for_args(&input, &args).map_err(|error| error.to_string())?;
+        let mut metrics = QualityScoreDistributionSummary::default();
+        for record in limited_records(&mut reader, stop_after) {
+            let record = record.map_err(|error| error.to_string())?;
+            metrics.observe(&record, aligned_reads_only, pf_reads_only, include_no_calls);
+        }
+        metrics
+    };
 
     fs::write(output, metrics.to_picard_text()).map_err(|error| error.to_string())?;
     write_summary_chart_pdf(&chart, "QualityScoreDistribution")
@@ -2911,12 +3156,23 @@ fn run_meanqualitybycycle(args: &[String]) -> Result<(), String> {
     let pf_reads_only = optional_bool(&args, "PF_READS_ONLY")?.unwrap_or(false);
     let stop_after = optional_u32(&args, "STOP_AFTER")?.unwrap_or(0);
 
-    let mut reader = open_bam_reader(input).map_err(|error| error.to_string())?;
-    let mut metrics = MeanQualityByCycleSummary::default();
-    for record in limited_records(&mut reader, stop_after) {
-        let record = record.map_err(|error| error.to_string())?;
-        metrics.observe(&record, aligned_reads_only, pf_reads_only);
-    }
+    let metrics = if has_sam_extension(&input) {
+        collect_mean_quality_by_cycle_sam_text(
+            &input,
+            aligned_reads_only,
+            pf_reads_only,
+            stop_after,
+        )?
+    } else {
+        let mut reader =
+            open_bam_reader_for_args(&input, &args).map_err(|error| error.to_string())?;
+        let mut metrics = MeanQualityByCycleSummary::default();
+        for record in limited_records(&mut reader, stop_after) {
+            let record = record.map_err(|error| error.to_string())?;
+            metrics.observe(&record, aligned_reads_only, pf_reads_only);
+        }
+        metrics
+    };
 
     fs::write(output, metrics.to_picard_text()).map_err(|error| error.to_string())?;
     write_summary_chart_pdf(&chart, "MeanQualityByCycle")
@@ -3186,19 +3442,17 @@ struct RevertsamTextRecord {
     serial: usize,
 }
 
-fn run_revertsam_sam_text(
+fn collect_revertsam_sam_text_records(
     input: &str,
-    output: &str,
-    remove_alignment_information: bool,
     remove_duplicate_information: bool,
     restore_hardclips: bool,
     sort_order: SortOrder,
-) -> Result<(), String> {
+) -> Result<(Vec<String>, Vec<RevertsamTextRecord>), String> {
     let file = fs::File::open(input).map_err(|error| error.to_string())?;
     let mut reader = BufReader::with_capacity(1024 * 1024, file);
     let mut header_lines = Vec::<String>::new();
     let mut records = Vec::<RevertsamTextRecord>::new();
-    let mut line = String::new();
+    let mut line = String::with_capacity(512);
     let mut serial = 0usize;
 
     loop {
@@ -3249,6 +3503,24 @@ fn run_revertsam_sam_text(
         });
     }
 
+    Ok((header_lines, records))
+}
+
+fn run_revertsam_sam_text(
+    input: &str,
+    output: &str,
+    remove_alignment_information: bool,
+    remove_duplicate_information: bool,
+    restore_hardclips: bool,
+    sort_order: SortOrder,
+) -> Result<(), String> {
+    let (header_lines, records) = collect_revertsam_sam_text_records(
+        input,
+        remove_duplicate_information,
+        restore_hardclips,
+        sort_order,
+    )?;
+
     let mut writer = BufWriter::with_capacity(
         1024 * 1024,
         fs::File::create(output).map_err(|error| error.to_string())?,
@@ -3281,7 +3553,8 @@ fn write_revertsam_sam_text_header(
     };
     let mut saw_hd = false;
     for line in header_lines {
-        if remove_alignment_information && (line.starts_with("@SQ\t") || line.starts_with("@PG\t")) {
+        if remove_alignment_information && (line.starts_with("@SQ\t") || line.starts_with("@PG\t"))
+        {
             continue;
         }
         if line.starts_with("@HD\t") {
@@ -3308,8 +3581,7 @@ fn write_revertsam_sam_text_header(
         }
     }
     if !saw_hd {
-        writeln!(writer, "@HD\tVN:1.6\tSO:{sort_value}")
-            .map_err(|error| error.to_string())?;
+        writeln!(writer, "@HD\tVN:1.6\tSO:{sort_value}").map_err(|error| error.to_string())?;
     }
     Ok(())
 }
@@ -3319,6 +3591,7 @@ fn run_revertsam_sam_text_to_bam(
     output: &str,
     output_format: bam::Format,
     compression_level: Option<u32>,
+    reference: Option<&str>,
     remove_duplicate_information: bool,
     restore_hardclips: bool,
     sort_order: SortOrder,
@@ -3326,17 +3599,35 @@ fn run_revertsam_sam_text_to_bam(
     create_index: bool,
 ) -> Result<(), String> {
     let temp_sam = temp_revertsam_sam_path(output);
-    run_revertsam_sam_text(
+    let (header_lines, records) = collect_revertsam_sam_text_records(
         input,
-        &temp_sam,
-        true,
         remove_duplicate_information,
         restore_hardclips,
         sort_order,
     )?;
+    let mut temp_writer = BufWriter::with_capacity(
+        1024 * 1024,
+        fs::File::create(&temp_sam).map_err(|error| error.to_string())?,
+    );
+    write_revertsam_sam_text_header(&mut temp_writer, &header_lines, sort_order, true)?;
+    for record in records {
+        temp_writer
+            .write_all(record.line.as_bytes())
+            .map_err(|error| error.to_string())?;
+        temp_writer
+            .write_all(b"\n")
+            .map_err(|error| error.to_string())?;
+    }
+    temp_writer.flush().map_err(|error| error.to_string())?;
     let mut reader = open_bam_reader(&temp_sam)?;
     let header = reverted_header(reader.header(), true, sort_order);
-    let mut writer = bam_writer_for_path(output, &header, output_format, compression_level)?;
+    let mut writer = bam_writer_for_path_with_reference(
+        output,
+        &header,
+        output_format,
+        reference,
+        compression_level,
+    )?;
     for record in reader.records() {
         let record = record.map_err(|error| error.to_string())?;
         if record.is_secondary() || record.is_supplementary() {
@@ -3362,9 +3653,7 @@ fn revert_sam_text_record_line(
     remove_duplicate_information: bool,
     restore_hardclips: bool,
 ) -> Result<(String, String, u16), String> {
-    let fields = line
-        .split('\t')
-        .collect::<Vec<_>>();
+    let fields = line.split('\t').collect::<Vec<_>>();
     if fields.len() < 11 {
         return Err("malformed RevertSam SAM record".to_string());
     }
@@ -3426,7 +3715,8 @@ fn revert_sam_text_record_line(
         qname = qname,
         flags = flags,
         seq = String::from_utf8(sequence).map_err(|_| "malformed RevertSam sequence".to_string())?,
-        qual = String::from_utf8(qualities).map_err(|_| "malformed RevertSam qualities".to_string())?,
+        qual =
+            String::from_utf8(qualities).map_err(|_| "malformed RevertSam qualities".to_string())?,
     );
     for tag in kept_aux {
         reverted.push('\t');
@@ -3482,6 +3772,7 @@ fn run_revertsam(args: &[String]) -> Result<(), String> {
         return Err("RevertSam CREATE_INDEX=true requires BAM output".to_string());
     }
     let attributes_to_clear = attributes_to_clear_for_revertsam(&args)?;
+    let reference = picard_reference(&args)?;
 
     if revertsam_can_use_sam_text_fast_path(
         &input,
@@ -3508,6 +3799,7 @@ fn run_revertsam(args: &[String]) -> Result<(), String> {
             &output,
             output_format,
             compression_level,
+            reference.as_deref(),
             remove_duplicate_information,
             restore_hardclips,
             sort_order,
@@ -3521,6 +3813,7 @@ fn run_revertsam(args: &[String]) -> Result<(), String> {
         &output,
         output_format,
         compression_level,
+        reference.as_deref(),
         restore_original_qualities,
         remove_alignment_information,
         remove_duplicate_information,
@@ -3537,7 +3830,7 @@ fn run_revertsam(args: &[String]) -> Result<(), String> {
         );
     }
 
-    let mut reader = open_bam_reader(&input)?;
+    let mut reader = open_bam_reader_with_reference(&input, reference.as_deref())?;
     let header = reverted_header(reader.header(), remove_alignment_information, sort_order);
     let mut records = Vec::new();
     for record in reader.records() {
@@ -3561,7 +3854,13 @@ fn run_revertsam(args: &[String]) -> Result<(), String> {
         records.sort_unstable_by(compare_queryname);
     }
 
-    let mut writer = bam_writer_for_path(&output, &header, output_format, compression_level)?;
+    let mut writer = bam_writer_for_path_with_reference(
+        &output,
+        &header,
+        output_format,
+        reference.as_deref(),
+        compression_level,
+    )?;
     for record in records {
         writer.write(&record).map_err(|error| error.to_string())?;
     }
@@ -3579,6 +3878,7 @@ fn try_stream_revertsam(
     output: &str,
     output_format: bam::Format,
     compression_level: Option<u32>,
+    reference: Option<&str>,
     restore_original_qualities: bool,
     remove_alignment_information: bool,
     remove_duplicate_information: bool,
@@ -3597,15 +3897,20 @@ fn try_stream_revertsam(
     } else {
         output.to_string()
     };
-    let mut reader = open_bam_reader(input)?;
+    let mut reader = open_bam_reader_with_reference(input, reference)?;
     if sort_order == SortOrder::QueryName
         && header_sort_order(reader.header()).as_deref() == Some("coordinate")
     {
         return Ok(None);
     }
     let header = reverted_header(reader.header(), remove_alignment_information, sort_order);
-    let mut writer =
-        bam_writer_for_path(&stream_output, &header, output_format, compression_level)?;
+    let mut writer = bam_writer_for_path_with_reference(
+        &stream_output,
+        &header,
+        output_format,
+        reference,
+        compression_level,
+    )?;
     let mut last_query_name = Vec::<u8>::new();
     let mut have_last_query_name = false;
 
@@ -3658,15 +3963,16 @@ fn run_setnmmdanduqtags(args: &[String]) -> Result<(), String> {
     reject_unsupported_setnmmdanduqtags_args(&args)?;
     let input = required_scalar_for(&args, "INPUT", "SetNmMdAndUqTags")?;
     let output = required_scalar_for(&args, "OUTPUT", "SetNmMdAndUqTags")?;
-    let reference = required_scalar_for(&args, "REFERENCE_SEQUENCE", "SetNmMdAndUqTags")?;
+    let reference_fasta = required_scalar_for(&args, "REFERENCE_SEQUENCE", "SetNmMdAndUqTags")?;
     let output_format = output_format_for(&output, "SetNmMdAndUqTags")?;
     let compression_level = optional_u32(&args, "COMPRESSION_LEVEL")?;
     let set_only_uq = optional_bool(&args, "SET_ONLY_UQ")?.unwrap_or(false);
     let create_md5_file = optional_bool(&args, "CREATE_MD5_FILE")?.unwrap_or(false);
     let create_index = optional_bool(&args, "CREATE_INDEX")?.unwrap_or(false);
 
-    let reference = reference_sequences_by_name(&reference)?;
-    let mut reader = open_bam_reader(&input).map_err(|error| error.to_string())?;
+    let reference = reference_sequences_by_name(&reference_fasta)?;
+    let mut reader = open_bam_reader_with_reference(&input, Some(reference_fasta.as_str()))
+        .map_err(|error| error.to_string())?;
     if header_sort_order(reader.header()).as_deref() != Some("coordinate") {
         return Err("unsupported SetNmMdAndUqTags input must be coordinate sorted".to_string());
     }
@@ -3681,7 +3987,13 @@ fn run_setnmmdanduqtags(args: &[String]) -> Result<(), String> {
         .iter()
         .map(|name| reference.get(name).map(Vec::as_slice))
         .collect::<Vec<_>>();
-    let mut writer = bam_writer_for_path(&output, &header, output_format, compression_level)?;
+    let mut writer = bam_writer_for_path_with_reference(
+        &output,
+        &header,
+        output_format,
+        Some(reference_fasta.as_str()),
+        compression_level,
+    )?;
 
     for record in reader.records() {
         let mut record = record.map_err(|error| error.to_string())?;
@@ -3707,14 +4019,29 @@ fn run_validatesamfile(args: &[String]) -> Result<(), String> {
     let ignored = validate_sam_ignored_summary_keys(&args)?;
     let mode = validate_sam_mode(&args)?;
     let max_output = optional_u32(&args, "MAX_OUTPUT")?;
-    if let Some(reference) = optional_scalar(&args, "REFERENCE_SEQUENCE")? {
-        fs::metadata(&reference).map_err(|_| {
-            format!("ValidateSamFile reference sequence {reference} does not exist")
+    let reference = picard_reference(&args)?;
+    if let Some(reference_path) = reference.as_deref() {
+        fs::metadata(reference_path).map_err(|_| {
+            format!("ValidateSamFile reference sequence {reference_path} does not exist")
         })?;
     }
 
-    let mut reader = open_bam_reader(&input).map_err(|error| error.to_string())?;
-    let mut report = validate_sam_summary(&mut reader, skip_mate_validation)?;
+    let reference_by_name = match reference.as_deref() {
+        Some(reference_path) => Some(reference_sequences_by_name(reference_path)?),
+        None => None,
+    };
+
+    let mut report = if has_sam_extension(&input) && mode == ValidateSamMode::Summary {
+        validate_sam_summary_sam_text(&input, skip_mate_validation)?
+    } else {
+        let mut reader = open_bam_reader_with_reference(&input, reference.as_deref())
+            .map_err(|error| error.to_string())?;
+        validate_sam_summary(
+            &mut reader,
+            skip_mate_validation,
+            reference_by_name.as_ref(),
+        )?
+    };
     for key in ignored {
         report.counts.remove(&key);
         report.details.retain(|detail| detail.key != key);
@@ -3746,7 +4073,9 @@ fn run_viewsam(args: &[String]) -> Result<(), String> {
         optional_scalar(&args, "ALIGNMENT_STATUS")?.unwrap_or_else(|| "All".to_string());
     let pf_status = optional_scalar(&args, "PF_STATUS")?.unwrap_or_else(|| "All".to_string());
 
-    let mut reader = open_bam_reader(&input).map_err(|error| error.to_string())?;
+    let reference = picard_reference(&args)?;
+    let mut reader = open_bam_reader_with_reference(&input, reference.as_deref())
+        .map_err(|error| error.to_string())?;
     let header = bam::Header::from_template(reader.header());
     let interval_filter = viewsam_interval_filter(args.get("INTERVAL_LIST"), reader.header())?;
     if header_only {
@@ -3775,7 +4104,13 @@ fn run_viewsam(args: &[String]) -> Result<(), String> {
     match output {
         Some(output) => {
             let format = output_format_for(&output, "ViewSam")?;
-            let mut writer = bam_writer_for_path(&output, &header, format, compression_level)?;
+            let mut writer = bam_writer_for_path_with_reference(
+                &output,
+                &header,
+                format,
+                reference.as_deref(),
+                compression_level,
+            )?;
             for record in reader.records() {
                 let record = record.map_err(|error| error.to_string())?;
                 if viewsam_record_matches(
@@ -3896,13 +4231,16 @@ fn run_replacesamheader(args: &[String]) -> Result<(), String> {
     let header_input = required_scalar_for(&args, "HEADER", "ReplaceSamHeader")?;
     let compression_level = optional_u32(&args, "COMPRESSION_LEVEL")?;
     let create_md5_file = optional_bool(&args, "CREATE_MD5_FILE")?.unwrap_or(false);
+    let reference = picard_reference(&args)?;
 
-    let header_reader = bam::Reader::from_path(&header_input).map_err(|error| error.to_string())?;
+    let header_reader = open_bam_reader_with_reference(&header_input, reference.as_deref())
+        .map_err(|error| error.to_string())?;
     let header = bam::Header::from_template(header_reader.header());
     let replacement_sort_order = header_sort_order(header_reader.header());
     drop(header_reader);
 
-    let mut reader = open_bam_reader(&input).map_err(|error| error.to_string())?;
+    let mut reader = open_bam_reader_with_reference(&input, reference.as_deref())
+        .map_err(|error| error.to_string())?;
     let input_sort_order = header_sort_order(reader.header());
     if input_sort_order != replacement_sort_order {
         return Err(format!(
@@ -3912,7 +4250,13 @@ fn run_replacesamheader(args: &[String]) -> Result<(), String> {
         ));
     }
     let format = output_format_for(&output, "ReplaceSamHeader")?;
-    let mut writer = bam_writer_for_path(&output, &header, format, compression_level)?;
+    let mut writer = bam_writer_for_path_with_reference(
+        &output,
+        &header,
+        format,
+        reference.as_deref(),
+        compression_level,
+    )?;
     for record in reader.records() {
         let record = record.map_err(|error| error.to_string())?;
         writer.write(&record).map_err(|error| error.to_string())?;
@@ -4250,9 +4594,7 @@ fn viewsam_record_matches(
         "NonPF" => record.is_quality_check_failed(),
         value => return Err(format!("unsupported ViewSam PF_STATUS={value}")),
     };
-    Ok(alignment_matches
-        && pf_matches
-        && viewsam_record_overlaps_intervals(record, interval_filter))
+    Ok(alignment_matches && pf_matches && record_overlaps_intervals(record, interval_filter))
 }
 
 fn viewsam_interval_filter(
@@ -4281,7 +4623,32 @@ fn viewsam_interval_filter(
     Ok(Some(intervals_by_tid))
 }
 
-fn viewsam_record_overlaps_intervals(
+fn merge_interval_filter(
+    interval_paths: Option<&Vec<String>>,
+    target_names: &[String],
+) -> Result<Option<BTreeMap<i32, Vec<(u64, u64)>>>, String> {
+    let Some(interval_paths) = interval_paths else {
+        return Ok(None);
+    };
+    let contig_order = target_names
+        .iter()
+        .enumerate()
+        .map(|(index, name)| (name.clone(), index))
+        .collect::<BTreeMap<_, _>>();
+    let mut intervals_by_tid = BTreeMap::<i32, Vec<(u64, u64)>>::new();
+    for interval_path in interval_paths {
+        let text = read_text_or_gzip(interval_path)?;
+        for interval in read_interval_list_intervals(&text, &contig_order)? {
+            intervals_by_tid
+                .entry(interval.contig_index as i32)
+                .or_default()
+                .push((interval.start, interval.end));
+        }
+    }
+    Ok(Some(intervals_by_tid))
+}
+
+fn record_overlaps_intervals(
     record: &bam::Record,
     interval_filter: Option<&BTreeMap<i32, Vec<(u64, u64)>>>,
 ) -> bool {
@@ -5249,6 +5616,7 @@ fn reject_unsupported_revertsam_args(args: &BTreeMap<String, Vec<String>>) -> Re
     let supported = [
         "INPUT",
         "OUTPUT",
+        "REFERENCE_SEQUENCE",
         "REMOVE_ALIGNMENT_INFORMATION",
         "REMOVE_DUPLICATE_INFORMATION",
         "RESTORE_ORIGINAL_QUALITIES",
@@ -5273,6 +5641,7 @@ fn reject_unsupported_revertsam_args(args: &BTreeMap<String, Vec<String>>) -> Re
             return Err(format!("unsupported RevertSam argument: {key}"));
         }
     }
+    optional_scalar(args, "REFERENCE_SEQUENCE")?;
     let remove_alignment_information =
         optional_bool(args, "REMOVE_ALIGNMENT_INFORMATION")?.unwrap_or(true);
     let restore_hardclips = optional_bool(args, "RESTORE_HARDCLIPS")?.unwrap_or(true);
@@ -5506,10 +5875,23 @@ enum ValidateSamMode {
 fn validate_sam_summary(
     reader: &mut bam::Reader,
     skip_mate_validation: bool,
+    reference_by_name: Option<&BTreeMap<String, Vec<u8>>>,
 ) -> Result<ValidateSamReport, String> {
     let header_text = String::from_utf8_lossy(reader.header().as_bytes()).to_string();
     let read_groups = read_group_platforms(&header_text);
     let target_count = reader.header().target_count();
+    let target_names = reader
+        .header()
+        .target_names()
+        .iter()
+        .map(|name| String::from_utf8_lossy(name).into_owned())
+        .collect::<Vec<_>>();
+    let references_by_tid = reference_by_name.map(|references| {
+        target_names
+            .iter()
+            .map(|name| references.get(name).map(Vec::as_slice))
+            .collect::<Vec<_>>()
+    });
     let mut report = ValidateSamReport::default();
     let mut pending_mates = BTreeMap::<Vec<u8>, ValidateSamMate>::new();
 
@@ -5550,6 +5932,7 @@ fn validate_sam_summary(
             record_number,
             target_count,
             &read_groups,
+            references_by_tid.as_deref(),
             &mut report,
         )?;
     }
@@ -5562,6 +5945,267 @@ fn validate_sam_summary(
     }
 
     Ok(report)
+}
+
+fn validate_sam_summary_sam_text(
+    input: &str,
+    skip_mate_validation: bool,
+) -> Result<ValidateSamReport, String> {
+    let file = fs::File::open(input).map_err(|error| error.to_string())?;
+    let mut reader = BufReader::with_capacity(1024 * 1024, file);
+    let mut line = Vec::new();
+    let mut target_count = 0_u32;
+    let mut report = ValidateSamReport::default();
+    let mut pending_mates = BTreeMap::<Vec<u8>, ValidateSamMate>::new();
+    let mut read_groups = BTreeMap::<String, bool>::new();
+    let mut record_number = 0_u64;
+
+    loop {
+        line.clear();
+        if reader
+            .read_until(b'\n', &mut line)
+            .map_err(|error| error.to_string())?
+            == 0
+        {
+            break;
+        }
+        if line.starts_with(b"@") {
+            let text = String::from_utf8_lossy(&line);
+            if line.starts_with(b"@SQ\t") {
+                target_count += 1;
+            }
+            if line.starts_with(b"@RG\t") {
+                if let Some(id) = read_group_id(&text) {
+                    let has_platform = text.split('\t').any(|field| field.starts_with("PL:"));
+                    read_groups.insert(id, has_platform);
+                }
+            }
+            continue;
+        }
+        if line.iter().all(|byte| byte.is_ascii_whitespace()) {
+            continue;
+        }
+
+        record_number += 1;
+        validate_sam_record_summary_sam_line(
+            &line,
+            record_number,
+            target_count,
+            &read_groups,
+            &mut report,
+        )?;
+        if !skip_mate_validation {
+            validate_sam_mate_summary_sam_line(&line, &mut pending_mates, &mut report)?;
+        }
+    }
+
+    if target_count == 0 {
+        add_validate_issue(
+            &mut report,
+            "ERROR:MISSING_SEQUENCE_DICTIONARY",
+            "ERROR::MISSING_SEQUENCE_DICTIONARY:Sequence dictionary is empty".to_string(),
+        );
+    }
+    if read_groups.is_empty() {
+        add_validate_issue(
+            &mut report,
+            "ERROR:MISSING_READ_GROUP",
+            "ERROR::MISSING_READ_GROUP:Read groups is empty".to_string(),
+        );
+    } else {
+        for has_platform in read_groups.values() {
+            if !has_platform {
+                add_validate_issue(
+                    &mut report,
+                    "ERROR:MISSING_PLATFORM_VALUE",
+                    "ERROR::MISSING_PLATFORM_VALUE:A platform value is missing".to_string(),
+                );
+            }
+        }
+    }
+    for _ in pending_mates.values() {
+        add_validate_issue(
+            &mut report,
+            "ERROR:MATE_NOT_FOUND",
+            "ERROR::MATE_NOT_FOUND:Mate not found for paired read".to_string(),
+        );
+    }
+
+    Ok(report)
+}
+
+fn validate_sam_record_summary_sam_line(
+    line: &[u8],
+    record_number: u64,
+    target_count: u32,
+    read_groups: &BTreeMap<String, bool>,
+    report: &mut ValidateSamReport,
+) -> Result<(), String> {
+    let mut line = line;
+    while line.ends_with(b"\n") || line.ends_with(b"\r") {
+        line = &line[..line.len() - 1];
+    }
+    let mut fields = line.split(|byte| *byte == b'\t');
+    let qname = fields
+        .next()
+        .ok_or_else(|| "malformed ValidateSamFile SAM record".to_string())?;
+    let read_name = String::from_utf8_lossy(qname).into_owned();
+    let flags = parse_u16_bytes(
+        fields
+            .next()
+            .ok_or_else(|| "malformed ValidateSamFile SAM record".to_string())?,
+    )?;
+    let rname = fields
+        .next()
+        .ok_or_else(|| "malformed ValidateSamFile SAM record".to_string())?;
+    let _pos = fields.next();
+    let mapq = fields
+        .next()
+        .ok_or_else(|| "malformed ValidateSamFile SAM record".to_string())?;
+    for _ in 0..5 {
+        fields
+            .next()
+            .ok_or_else(|| "malformed ValidateSamFile SAM record".to_string())?;
+    }
+    let mut read_group = None::<&[u8]>;
+    let mut has_nm = false;
+    for field in fields {
+        if let Some(value) = field.strip_prefix(b"RG:Z:") {
+            read_group = Some(value);
+        }
+        if field.starts_with(b"NM:") {
+            has_nm = true;
+        }
+    }
+    match read_group {
+        Some(read_group) => {
+            let read_group = String::from_utf8_lossy(read_group);
+            if !read_groups.contains_key(read_group.as_ref()) {
+                add_validate_issue(
+                    report,
+                    "ERROR:READ_GROUP_NOT_FOUND",
+                    format!(
+                        "ERROR::READ_GROUP_NOT_FOUND:Read name {read_name}, RG ID on record not found in header"
+                    ),
+                );
+            }
+        }
+        None => add_validate_issue(
+            report,
+            "WARNING:RECORD_MISSING_READ_GROUP",
+            format!(
+                "WARNING::RECORD_MISSING_READ_GROUP:Read name {read_name}, A record is missing a read group"
+            ),
+        ),
+    }
+
+    if rname != b"*" {
+        if target_count == 0 {
+            add_validate_issue(
+                report,
+                "ERROR:MISSING_SEQUENCE_DICTIONARY",
+                format!(
+                    "ERROR::MISSING_SEQUENCE_DICTIONARY:Read name {read_name}, Reference sequence is missing from the sequence dictionary"
+                ),
+            );
+        }
+        if !has_nm {
+            add_validate_issue(
+                report,
+                "WARNING:MISSING_TAG_NM",
+                format!(
+                    "WARNING::MISSING_TAG_NM:Record {record_number}, Read name {read_name}, NM tag (nucleotide differences) is missing"
+                ),
+            );
+        }
+    } else if mapq != b"0" {
+        add_validate_issue(
+            report,
+            "ERROR:INVALID_MAPPING_QUALITY",
+            format!(
+                "ERROR::INVALID_MAPPING_QUALITY:Record {record_number}, Read name {read_name}, MAPQ should be 0 for unmapped read"
+            ),
+        );
+    }
+    let _ = flags;
+    Ok(())
+}
+
+fn validate_sam_mate_summary_sam_line(
+    line: &[u8],
+    pending_mates: &mut BTreeMap<Vec<u8>, ValidateSamMate>,
+    report: &mut ValidateSamReport,
+) -> Result<(), String> {
+    let mut line = line;
+    while line.ends_with(b"\n") || line.ends_with(b"\r") {
+        line = &line[..line.len() - 1];
+    }
+    let mut fields = line.split(|byte| *byte == b'\t');
+    let qname = fields
+        .next()
+        .ok_or_else(|| "malformed ValidateSamFile SAM record".to_string())?
+        .to_vec();
+    let flags = parse_u16_bytes(
+        fields
+            .next()
+            .ok_or_else(|| "malformed ValidateSamFile SAM record".to_string())?,
+    )?;
+    if flags & 0x100 != 0 || flags & 0x800 != 0 {
+        return Ok(());
+    }
+    if flags & 0x1 == 0 {
+        return Ok(());
+    }
+    let rname = fields
+        .next()
+        .ok_or_else(|| "malformed ValidateSamFile SAM record".to_string())?;
+    let pos = parse_i64_bytes(
+        fields
+            .next()
+            .ok_or_else(|| "malformed ValidateSamFile SAM record".to_string())?,
+    )?;
+    let pos = pos.saturating_sub(1);
+    for _ in 0..2 {
+        fields
+            .next()
+            .ok_or_else(|| "malformed ValidateSamFile SAM record".to_string())?;
+    }
+    let rnext = fields
+        .next()
+        .ok_or_else(|| "malformed ValidateSamFile SAM record".to_string())?;
+    let pnext = parse_i64_bytes(
+        fields
+            .next()
+            .ok_or_else(|| "malformed ValidateSamFile SAM record".to_string())?,
+    )?;
+    let pnext = pnext.saturating_sub(1);
+    let tid = if rname == b"*" { -1 } else { 0 };
+    let mtid = if rnext == b"*" || rnext == b"=" {
+        tid
+    } else {
+        0
+    };
+    let mate = ValidateSamMate {
+        tid,
+        pos,
+        mtid,
+        mpos: pnext,
+    };
+    if let Some(pending) = pending_mates.remove(&qname) {
+        if !pending.is_reciprocal_with(&mate) {
+            add_validate_issue(
+                report,
+                "ERROR:MATE_NOT_FOUND",
+                format!(
+                    "ERROR::MATE_NOT_FOUND:Read name {}, Mate not found for paired read",
+                    String::from_utf8_lossy(&qname)
+                ),
+            );
+        }
+    } else {
+        pending_mates.insert(qname, mate);
+    }
+    Ok(())
 }
 
 #[derive(Clone)]
@@ -5621,6 +6265,7 @@ fn validate_sam_record_summary(
     record_number: u64,
     target_count: u32,
     read_groups: &BTreeMap<String, bool>,
+    references_by_tid: Option<&[Option<&[u8]>]>,
     report: &mut ValidateSamReport,
 ) -> Result<(), String> {
     let read_name = validate_qname(record);
@@ -5660,14 +6305,33 @@ fn validate_sam_record_summary(
                 ),
             );
         }
-        if record.aux(b"NM").is_err() {
-            add_validate_issue(
-                report,
-                "WARNING:MISSING_TAG_NM",
-                format!(
-                    "WARNING::MISSING_TAG_NM:Record {record_number}, Read name {read_name}, NM tag (nucleotide differences) is missing"
-                ),
-            );
+        match record.aux(b"NM") {
+            Ok(aux) => {
+                if let Some(references_by_tid) = references_by_tid {
+                    if let Some(actual_nm) = aux_i32(aux) {
+                        if let Some(expected_nm) = expected_record_nm(record, references_by_tid)? {
+                            if actual_nm != expected_nm {
+                                add_validate_issue(
+                                    report,
+                                    "ERROR:INVALID_TAG_NM",
+                                    format!(
+                                        "ERROR::INVALID_TAG_NM:Record {record_number}, Read name {read_name}, NM tag is incorrect"
+                                    ),
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+            Err(_) => {
+                add_validate_issue(
+                    report,
+                    "WARNING:MISSING_TAG_NM",
+                    format!(
+                        "WARNING::MISSING_TAG_NM:Record {record_number}, Read name {read_name}, NM tag (nucleotide differences) is missing"
+                    ),
+                );
+            }
         }
     } else if record.mapq() != 0 {
         add_validate_issue(
@@ -5681,6 +6345,78 @@ fn validate_sam_record_summary(
     Ok(())
 }
 
+fn aux_i32(value: Aux<'_>) -> Option<i32> {
+    match value {
+        Aux::I8(value) => Some(value as i32),
+        Aux::U8(value) => Some(value as i32),
+        Aux::I16(value) => Some(value as i32),
+        Aux::U16(value) => Some(value as i32),
+        Aux::I32(value) => Some(value),
+        Aux::U32(value) => i32::try_from(value).ok(),
+        _ => None,
+    }
+}
+
+fn expected_record_nm(
+    record: &bam::Record,
+    references_by_tid: &[Option<&[u8]>],
+) -> Result<Option<i32>, String> {
+    if record.is_unmapped() || record.is_secondary() || record.is_supplementary() {
+        return Ok(None);
+    }
+    if record.tid() < 0 || record.pos() < 0 {
+        return Ok(None);
+    }
+    let Some(reference) = references_by_tid
+        .get(record.tid() as usize)
+        .copied()
+        .flatten()
+    else {
+        return Ok(None);
+    };
+    let read_bases = record.seq();
+    let mut read_offset = 0usize;
+    let mut ref_offset = record.pos() as usize;
+    let mut nm = 0i32;
+
+    for cigar in &record.cigar() {
+        match *cigar {
+            Cigar::Match(length) | Cigar::Equal(length) | Cigar::Diff(length) => {
+                for _ in 0..length {
+                    if read_offset >= read_bases.len() {
+                        return Err("ValidateSamFile read sequence shorter than CIGAR".to_string());
+                    }
+                    let Some(ref_base) = reference.get(ref_offset).copied() else {
+                        return Ok(None);
+                    };
+                    if !dna_bases_equal(read_bases[read_offset], ref_base) {
+                        nm += 1;
+                    }
+                    read_offset += 1;
+                    ref_offset += 1;
+                }
+            }
+            Cigar::Ins(length) => {
+                read_offset += length as usize;
+                nm += length as i32;
+            }
+            Cigar::Del(length) => {
+                ref_offset += length as usize;
+                nm += length as i32;
+            }
+            Cigar::SoftClip(length) => {
+                read_offset += length as usize;
+            }
+            Cigar::HardClip(_) | Cigar::Pad(_) => {}
+            Cigar::RefSkip(length) => {
+                ref_offset += length as usize;
+            }
+        }
+    }
+
+    Ok(Some(nm))
+}
+
 fn validate_sam_ignored_summary_keys(
     args: &BTreeMap<String, Vec<String>>,
 ) -> Result<BTreeSet<String>, String> {
@@ -5691,6 +6427,7 @@ fn validate_sam_ignored_summary_keys(
             "MISSING_READ_GROUP" => "ERROR:MISSING_READ_GROUP",
             "MISSING_PLATFORM_VALUE" => "ERROR:MISSING_PLATFORM_VALUE",
             "MISSING_TAG_NM" => "WARNING:MISSING_TAG_NM",
+            "INVALID_TAG_NM" => "ERROR:INVALID_TAG_NM",
             "READ_GROUP_NOT_FOUND" => "ERROR:READ_GROUP_NOT_FOUND",
             "INVALID_TAG_TYPE" => "ERROR:INVALID_TAG_TYPE",
             "INVALID_MAPPING_QUALITY" => "ERROR:INVALID_MAPPING_QUALITY",
@@ -6258,6 +6995,7 @@ fn reject_unsupported_collectalignment_args(
     let supported = [
         "INPUT",
         "OUTPUT",
+        "REFERENCE_SEQUENCE",
         "VALIDATION_STRINGENCY",
         "QUIET",
         "VERBOSITY",
@@ -6278,6 +7016,7 @@ fn reject_unsupported_collectalignment_args(
         }
     }
 
+    optional_scalar(args, "REFERENCE_SEQUENCE")?;
     optional_scalar(args, "VALIDATION_STRINGENCY")?;
     optional_scalar(args, "VERBOSITY")?;
     optional_bool(args, "QUIET")?;
@@ -6362,6 +7101,7 @@ fn reject_unsupported_collectinsertsize_args(
         "INPUT",
         "OUTPUT",
         "HISTOGRAM_FILE",
+        "REFERENCE_SEQUENCE",
         "METRIC_ACCUMULATION_LEVEL",
         "INCLUDE_DUPLICATES",
         "ASSUME_SORTED",
@@ -6382,6 +7122,7 @@ fn reject_unsupported_collectinsertsize_args(
             ));
         }
     }
+    optional_scalar(args, "REFERENCE_SEQUENCE")?;
     optional_scalar(args, "HISTOGRAM_FILE")?;
     if let Some(level) = optional_scalar(args, "METRIC_ACCUMULATION_LEVEL")? {
         if level != "ALL_READS" && level != "SAMPLE" && level != "LIBRARY" && level != "READ_GROUP"
@@ -6607,6 +7348,7 @@ fn reject_unsupported_collectbasedistributionbycycle_args(
         "INPUT",
         "OUTPUT",
         "CHART_OUTPUT",
+        "REFERENCE_SEQUENCE",
         "ALIGNED_READS_ONLY",
         "PF_READS_ONLY",
         "ASSUME_SORTED",
@@ -6625,6 +7367,7 @@ fn reject_unsupported_collectbasedistributionbycycle_args(
             ));
         }
     }
+    optional_scalar(args, "REFERENCE_SEQUENCE")?;
     optional_scalar(args, "CHART_OUTPUT")?;
     optional_bool(args, "ALIGNED_READS_ONLY")?;
     optional_bool(args, "PF_READS_ONLY")?;
@@ -6793,9 +7536,7 @@ fn reject_unsupported_fixmateinformation_args(
             return Err(format!("unsupported FixMateInformation argument: {key}"));
         }
     }
-    if args.get("INPUT").map_or(0, Vec::len) != 1 {
-        return Err("unsupported FixMateInformation multiple INPUT values".to_string());
-    }
+    required_values_for(args, "INPUT", "FixMateInformation")?;
     if let Some(sort_order) = optional_scalar(args, "SORT_ORDER")? {
         if sort_order != "queryname" && sort_order != "coordinate" && sort_order != "unsorted" {
             return Err(format!(
@@ -6831,6 +7572,7 @@ fn reject_unsupported_qualityscoredistribution_args(
         "INPUT",
         "OUTPUT",
         "CHART_OUTPUT",
+        "REFERENCE_SEQUENCE",
         "ALIGNED_READS_ONLY",
         "PF_READS_ONLY",
         "INCLUDE_NO_CALLS",
@@ -6852,6 +7594,7 @@ fn reject_unsupported_qualityscoredistribution_args(
         }
     }
 
+    optional_scalar(args, "REFERENCE_SEQUENCE")?;
     optional_scalar(args, "CHART_OUTPUT")?;
     optional_bool(args, "ALIGNED_READS_ONLY")?;
     optional_bool(args, "PF_READS_ONLY")?;
@@ -6879,6 +7622,7 @@ fn reject_unsupported_meanqualitybycycle_args(
         "INPUT",
         "OUTPUT",
         "CHART_OUTPUT",
+        "REFERENCE_SEQUENCE",
         "ALIGNED_READS_ONLY",
         "PF_READS_ONLY",
         "ASSUME_SORTED",
@@ -6897,6 +7641,7 @@ fn reject_unsupported_meanqualitybycycle_args(
         }
     }
 
+    optional_scalar(args, "REFERENCE_SEQUENCE")?;
     optional_scalar(args, "CHART_OUTPUT")?;
     optional_bool(args, "ALIGNED_READS_ONLY")?;
     optional_bool(args, "PF_READS_ONLY")?;
@@ -7454,9 +8199,13 @@ impl AlignmentSummary {
     }
 
     fn observe_bad_cycle_bases(&mut self, bases: &[u8]) {
+        if bases.is_empty() {
+            return;
+        }
+        let last = bases.len() - 1;
+        ensure_histogram_len(&mut self.cycle_bases, last);
+        ensure_histogram_len(&mut self.cycle_no_calls, last);
         for (index, base) in bases.iter().enumerate() {
-            ensure_histogram_len(&mut self.cycle_bases, index);
-            ensure_histogram_len(&mut self.cycle_no_calls, index);
             self.cycle_bases[index] += 1;
             if base.eq_ignore_ascii_case(&b'N') {
                 self.cycle_no_calls[index] += 1;
@@ -7954,14 +8703,22 @@ fn observe_alignment_sam_line(
         qualities
     };
     cigar_summary.q20_match_bases = q20_match_bases_from_sam(cigar, qualities)?;
-    let tags = fields.collect::<Vec<_>>();
-    let read_group = insert_size_read_group_for_sam_tags(tags.iter().copied(), read_groups);
+    let mut read_group = None;
+    let mut has_sa = false;
+    for tag in fields {
+        if !has_sa && tag.starts_with(b"SA:") {
+            has_sa = true;
+        }
+        if read_group.is_none() {
+            read_group = insert_size_read_group_for_sam_tags(std::iter::once(tag), read_groups);
+        }
+    }
     let chimeric = is_chimeric_sam_record(
         flags,
         reference_name,
         mate_reference_name,
         template_length,
-        tags.iter().any(|tag| tag.starts_with(b"SA:")),
+        has_sa,
     );
     metrics.observe_sam_parts(
         flags,
@@ -9159,10 +9916,220 @@ fn het_snp_q(sensitivity_text: &str) -> String {
     ((-10.0 * (1.0 - sensitivity).log10()).round() as u64).to_string()
 }
 
-#[derive(Debug, Default)]
+fn collect_quality_score_distribution_sam_text(
+    input: &str,
+    aligned_reads_only: bool,
+    pf_reads_only: bool,
+    include_no_calls: bool,
+    stop_after: u32,
+) -> Result<QualityScoreDistributionSummary, String> {
+    let file = fs::File::open(input).map_err(|error| error.to_string())?;
+    let mut reader = BufReader::with_capacity(1024 * 1024, file);
+    let mut line = Vec::new();
+    let mut metrics = QualityScoreDistributionSummary::default();
+    let mut observed = 0_u32;
+    loop {
+        line.clear();
+        if reader
+            .read_until(b'\n', &mut line)
+            .map_err(|error| error.to_string())?
+            == 0
+        {
+            break;
+        }
+        if line.starts_with(b"@") || line.iter().all(|byte| byte.is_ascii_whitespace()) {
+            continue;
+        }
+        observe_quality_score_distribution_sam_line(
+            &mut metrics,
+            &line,
+            aligned_reads_only,
+            pf_reads_only,
+            include_no_calls,
+        )?;
+        observed = observed.saturating_add(1);
+        if stop_after > 0 && observed >= stop_after {
+            break;
+        }
+    }
+    Ok(metrics)
+}
+
+fn observe_quality_score_distribution_sam_line(
+    metrics: &mut QualityScoreDistributionSummary,
+    line: &[u8],
+    aligned_reads_only: bool,
+    pf_reads_only: bool,
+    include_no_calls: bool,
+) -> Result<(), String> {
+    let mut line = line;
+    while line.ends_with(b"\n") || line.ends_with(b"\r") {
+        line = &line[..line.len() - 1];
+    }
+    let mut fields = line.split(|byte| *byte == b'\t');
+    fields
+        .next()
+        .ok_or_else(|| "malformed QualityScoreDistribution SAM record".to_string())?;
+    let flags = parse_u16_bytes(
+        fields
+            .next()
+            .ok_or_else(|| "malformed QualityScoreDistribution SAM record".to_string())?,
+    )?;
+    if flags & 0x100 != 0 || flags & 0x800 != 0 {
+        return Ok(());
+    }
+    let rname = fields
+        .next()
+        .ok_or_else(|| "malformed QualityScoreDistribution SAM record".to_string())?;
+    if aligned_reads_only && rname == b"*" {
+        return Ok(());
+    }
+    if pf_reads_only && flags & 0x200 != 0 {
+        return Ok(());
+    }
+    for _ in 0..6 {
+        fields
+            .next()
+            .ok_or_else(|| "malformed QualityScoreDistribution SAM record".to_string())?;
+    }
+    let sequence = fields
+        .next()
+        .ok_or_else(|| "malformed QualityScoreDistribution SAM record".to_string())?;
+    let qualities = fields
+        .next()
+        .ok_or_else(|| "malformed QualityScoreDistribution SAM record".to_string())?;
+    let original_qualities = fields
+        .find(|field| field.starts_with(b"OQ:Z:"))
+        .map(|field| &field[5..]);
+    for (index, quality) in qualities.iter().copied().enumerate() {
+        if !include_no_calls && sequence.get(index).is_some_and(|base| *base == b'N') {
+            continue;
+        }
+        metrics.counts[quality.saturating_sub(33) as usize] += 1;
+    }
+    if let Some(original_qualities) = original_qualities {
+        metrics.has_original = true;
+        for (index, quality) in original_qualities.iter().copied().enumerate() {
+            if !include_no_calls && sequence.get(index).is_some_and(|base| *base == b'N') {
+                continue;
+            }
+            metrics.original_counts[quality.saturating_sub(33) as usize] += 1;
+        }
+    }
+    Ok(())
+}
+
+fn collect_base_distribution_by_cycle_sam_text(
+    input: &str,
+    aligned_reads_only: bool,
+    pf_reads_only: bool,
+    stop_after: u32,
+) -> Result<BaseDistributionByCycleSummary, String> {
+    let file = fs::File::open(input).map_err(|error| error.to_string())?;
+    let mut reader = BufReader::with_capacity(1024 * 1024, file);
+    let mut line = Vec::new();
+    let mut metrics = BaseDistributionByCycleSummary::default();
+    let mut observed = 0_u32;
+    loop {
+        line.clear();
+        if reader
+            .read_until(b'\n', &mut line)
+            .map_err(|error| error.to_string())?
+            == 0
+        {
+            break;
+        }
+        if line.starts_with(b"@") || line.iter().all(|byte| byte.is_ascii_whitespace()) {
+            continue;
+        }
+        observe_base_distribution_by_cycle_sam_line(
+            &mut metrics,
+            &line,
+            aligned_reads_only,
+            pf_reads_only,
+        )?;
+        observed = observed.saturating_add(1);
+        if stop_after > 0 && observed >= stop_after {
+            break;
+        }
+    }
+    Ok(metrics)
+}
+
+fn observe_base_distribution_by_cycle_sam_line(
+    metrics: &mut BaseDistributionByCycleSummary,
+    line: &[u8],
+    aligned_reads_only: bool,
+    pf_reads_only: bool,
+) -> Result<(), String> {
+    let mut line = line;
+    while line.ends_with(b"\n") || line.ends_with(b"\r") {
+        line = &line[..line.len() - 1];
+    }
+    let mut fields = line.split(|byte| *byte == b'\t');
+    fields
+        .next()
+        .ok_or_else(|| "malformed CollectBaseDistributionByCycle SAM record".to_string())?;
+    let flags = parse_u16_bytes(
+        fields
+            .next()
+            .ok_or_else(|| "malformed CollectBaseDistributionByCycle SAM record".to_string())?,
+    )?;
+    if flags & 0x100 != 0 || flags & 0x800 != 0 {
+        return Ok(());
+    }
+    let rname = fields
+        .next()
+        .ok_or_else(|| "malformed CollectBaseDistributionByCycle SAM record".to_string())?;
+    if aligned_reads_only && rname == b"*" {
+        return Ok(());
+    }
+    if pf_reads_only && flags & 0x200 != 0 {
+        return Ok(());
+    }
+    for _ in 0..6 {
+        fields
+            .next()
+            .ok_or_else(|| "malformed CollectBaseDistributionByCycle SAM record".to_string())?;
+    }
+    let sequence = fields
+        .next()
+        .ok_or_else(|| "malformed CollectBaseDistributionByCycle SAM record".to_string())?;
+    let is_second_end = flags & 0x1 != 0 && flags & 0x80 != 0;
+    let cycle_offset = if is_second_end { sequence.len() } else { 0 };
+    let cycles = if is_second_end {
+        &mut metrics.second
+    } else {
+        &mut metrics.first
+    };
+    ensure_base_cycle_capacity(cycles, cycle_offset + sequence.len());
+    if flags & 0x10 != 0 {
+        for (index, base) in sequence.iter().rev().enumerate() {
+            cycles[cycle_offset + index].observe(*base);
+        }
+    } else {
+        for (index, base) in sequence.iter().enumerate() {
+            cycles[cycle_offset + index].observe(*base);
+        }
+    }
+    Ok(())
+}
+
+#[derive(Debug)]
 struct QualityScoreDistributionSummary {
-    counts: BTreeMap<u8, u64>,
-    original_counts: BTreeMap<u8, u64>,
+    counts: [u64; 256],
+    original_counts: [u64; 256],
+    has_original: bool,
+}
+
+impl Default for QualityScoreDistributionSummary {
+    fn default() -> Self {
+        Self {
+            counts: [0; 256],
+            original_counts: [0; 256],
+            has_original: false,
+        }
+    }
 }
 
 impl QualityScoreDistributionSummary {
@@ -9181,14 +10148,15 @@ impl QualityScoreDistributionSummary {
             if !include_no_calls && sequence.get(index).is_some_and(|base| *base == b'N') {
                 continue;
             }
-            *self.counts.entry(quality).or_default() += 1;
+            self.counts[quality as usize] += 1;
         }
         if let Some(original_qualities) = original_quality_values(record) {
+            self.has_original = true;
             for (index, quality) in original_qualities.into_iter().enumerate() {
                 if !include_no_calls && sequence.get(index).is_some_and(|base| *base == b'N') {
                     continue;
                 }
-                *self.original_counts.entry(quality).or_default() += 1;
+                self.original_counts[quality as usize] += 1;
             }
         }
     }
@@ -9196,23 +10164,22 @@ impl QualityScoreDistributionSummary {
     fn to_picard_text(&self) -> String {
         let mut output = String::new();
         output.push_str("## HISTOGRAM\tjava.lang.Byte\n");
-        if self.original_counts.is_empty() {
+        if !self.has_original {
             output.push_str("QUALITY\tCOUNT_OF_Q\n");
-            for (quality, count) in &self.counts {
-                output.push_str(&format!("{quality}\t{count}\n"));
+            for quality in 0_u8..=u8::MAX {
+                let count = self.counts[quality as usize];
+                if count > 0 {
+                    output.push_str(&format!("{quality}\t{count}\n"));
+                }
             }
         } else {
             output.push_str("QUALITY\tCOUNT_OF_Q\tCOUNT_OF_OQ\n");
-            let qualities = self
-                .counts
-                .keys()
-                .chain(self.original_counts.keys())
-                .copied()
-                .collect::<BTreeSet<_>>();
-            for quality in qualities {
-                let primary = self.counts.get(&quality).copied().unwrap_or(0);
-                let original = self.original_counts.get(&quality).copied().unwrap_or(0);
-                output.push_str(&format!("{quality}\t{primary}\t{original}\n"));
+            for quality in 0_u8..=u8::MAX {
+                let primary = self.counts[quality as usize];
+                let original = self.original_counts[quality as usize];
+                if primary > 0 || original > 0 {
+                    output.push_str(&format!("{quality}\t{primary}\t{original}\n"));
+                }
             }
         }
         output
@@ -9250,6 +10217,12 @@ impl BaseCycleCounts {
     }
 }
 
+fn ensure_base_cycle_capacity(cycles: &mut Vec<BaseCycleCounts>, needed: usize) {
+    if cycles.len() < needed {
+        cycles.resize(needed, BaseCycleCounts::default());
+    }
+}
+
 impl BaseDistributionByCycleSummary {
     fn observe(&mut self, record: &bam::Record, aligned_reads_only: bool, pf_reads_only: bool) {
         if skip_quality_metric_record(record, aligned_reads_only, pf_reads_only) {
@@ -9263,17 +10236,15 @@ impl BaseDistributionByCycleSummary {
         } else {
             &mut self.first
         };
-        let iterator: Box<dyn Iterator<Item = u8>> = if record.is_reverse() {
-            Box::new(bases.iter().rev().copied())
-        } else {
-            Box::new(bases.iter().copied())
-        };
-        for (index, base) in iterator.enumerate() {
-            let cycle = cycle_offset + index;
-            if cycles.len() <= cycle {
-                cycles.resize(cycle + 1, BaseCycleCounts::default());
+        ensure_base_cycle_capacity(cycles, cycle_offset + bases.len());
+        if record.is_reverse() {
+            for (index, base) in bases.iter().rev().enumerate() {
+                cycles[cycle_offset + index].observe(*base);
             }
-            cycles[cycle].observe(base);
+        } else {
+            for (index, base) in bases.iter().enumerate() {
+                cycles[cycle_offset + index].observe(*base);
+            }
         }
     }
 
@@ -9655,6 +10626,137 @@ fn gc_percent(window: &[u8], window_size: usize) -> usize {
     ((gc * 100) + (window_size / 2)) / window_size
 }
 
+fn collect_mean_quality_by_cycle_sam_text(
+    input: &str,
+    aligned_reads_only: bool,
+    pf_reads_only: bool,
+    stop_after: u32,
+) -> Result<MeanQualityByCycleSummary, String> {
+    let file = fs::File::open(input).map_err(|error| error.to_string())?;
+    let mut reader = BufReader::with_capacity(1024 * 1024, file);
+    let mut line = Vec::new();
+    let mut metrics = MeanQualityByCycleSummary::default();
+    let mut observed = 0_u32;
+    loop {
+        line.clear();
+        if reader
+            .read_until(b'\n', &mut line)
+            .map_err(|error| error.to_string())?
+            == 0
+        {
+            break;
+        }
+        if line.starts_with(b"@") || line.iter().all(|byte| byte.is_ascii_whitespace()) {
+            continue;
+        }
+        observe_mean_quality_by_cycle_sam_line(
+            &mut metrics,
+            &line,
+            aligned_reads_only,
+            pf_reads_only,
+        )?;
+        observed = observed.saturating_add(1);
+        if stop_after > 0 && observed >= stop_after {
+            break;
+        }
+    }
+    Ok(metrics)
+}
+
+fn observe_mean_quality_by_cycle_sam_line(
+    metrics: &mut MeanQualityByCycleSummary,
+    line: &[u8],
+    aligned_reads_only: bool,
+    pf_reads_only: bool,
+) -> Result<(), String> {
+    let mut line = line;
+    while line.ends_with(b"\n") || line.ends_with(b"\r") {
+        line = &line[..line.len() - 1];
+    }
+    let mut fields = line.split(|byte| *byte == b'\t');
+    fields
+        .next()
+        .ok_or_else(|| "malformed MeanQualityByCycle SAM record".to_string())?;
+    let flags = parse_u16_bytes(
+        fields
+            .next()
+            .ok_or_else(|| "malformed MeanQualityByCycle SAM record".to_string())?,
+    )?;
+    if flags & 0x100 != 0 || flags & 0x800 != 0 {
+        return Ok(());
+    }
+    let rname = fields
+        .next()
+        .ok_or_else(|| "malformed MeanQualityByCycle SAM record".to_string())?;
+    if aligned_reads_only && rname == b"*" {
+        return Ok(());
+    }
+    if pf_reads_only && flags & 0x200 != 0 {
+        return Ok(());
+    }
+    for _ in 0..7 {
+        fields
+            .next()
+            .ok_or_else(|| "malformed MeanQualityByCycle SAM record".to_string())?;
+    }
+    let qualities = fields
+        .next()
+        .ok_or_else(|| "malformed MeanQualityByCycle SAM record".to_string())?;
+    let mut original_qualities = None::<&[u8]>;
+    for field in fields {
+        if let Some(value) = field.strip_prefix(b"OQ:Z:") {
+            original_qualities = Some(value);
+        }
+    }
+
+    metrics.records += 1;
+    let cycles = if flags & 0x1 != 0 && flags & 0x80 != 0 {
+        &mut metrics.second
+    } else {
+        &mut metrics.first
+    };
+    if flags & 0x10 != 0 {
+        ensure_cycle_quality_capacity(cycles, qualities.len());
+        for (cycle, quality) in qualities.iter().rev().copied().enumerate() {
+            let quality = quality.saturating_sub(33) as u64;
+            cycles[cycle].quality_sum += quality;
+            cycles[cycle].count += 1;
+        }
+    } else {
+        ensure_cycle_quality_capacity(cycles, qualities.len());
+        for (cycle, quality) in qualities.iter().copied().enumerate() {
+            let quality = quality.saturating_sub(33) as u64;
+            cycles[cycle].quality_sum += quality;
+            cycles[cycle].count += 1;
+        }
+    }
+
+    if let Some(original_qualities) = original_qualities {
+        metrics.original_records += 1;
+        let cycles = if flags & 0x1 != 0 && flags & 0x80 != 0 {
+            &mut metrics.original_second
+        } else {
+            &mut metrics.original_first
+        };
+        if flags & 0x10 != 0 {
+            ensure_cycle_quality_capacity(cycles, original_qualities.len());
+            for (cycle, quality) in original_qualities.iter().rev().copied().enumerate() {
+                let quality = quality.saturating_sub(33) as u64;
+                cycles[cycle].quality_sum += quality;
+                cycles[cycle].count += 1;
+            }
+        } else {
+            ensure_cycle_quality_capacity(cycles, original_qualities.len());
+            for (cycle, quality) in original_qualities.iter().copied().enumerate() {
+                let quality = quality.saturating_sub(33) as u64;
+                cycles[cycle].quality_sum += quality;
+                cycles[cycle].count += 1;
+            }
+        }
+    }
+    Ok(())
+}
+
 #[derive(Debug, Default)]
 struct MeanQualityByCycleSummary {
     first: Vec<CycleQuality>,
@@ -9671,6 +10773,12 @@ struct CycleQuality {
     count: u64,
 }
 
+fn ensure_cycle_quality_capacity(cycles: &mut Vec<CycleQuality>, needed: usize) {
+    if cycles.len() < needed {
+        cycles.resize(needed, CycleQuality::default());
+    }
+}
+
 impl MeanQualityByCycleSummary {
     fn observe(&mut self, record: &bam::Record, aligned_reads_only: bool, pf_reads_only: bool) {
         if skip_quality_metric_record(record, aligned_reads_only, pf_reads_only) {
@@ -9683,17 +10791,17 @@ impl MeanQualityByCycleSummary {
         } else {
             &mut self.first
         };
-        for (cycle, quality) in qualities.iter().copied().enumerate() {
-            let cycle = if record.is_reverse() {
-                qualities.len() - cycle - 1
-            } else {
-                cycle
-            };
-            if cycles.len() <= cycle {
-                cycles.resize(cycle + 1, CycleQuality::default());
+        if !qualities.is_empty() {
+            ensure_cycle_quality_capacity(cycles, qualities.len());
+            for (cycle, quality) in qualities.iter().copied().enumerate() {
+                let cycle = if record.is_reverse() {
+                    qualities.len() - cycle - 1
+                } else {
+                    cycle
+                };
+                cycles[cycle].quality_sum += quality as u64;
+                cycles[cycle].count += 1;
             }
-            cycles[cycle].quality_sum += quality as u64;
-            cycles[cycle].count += 1;
         }
         if let Some(original_qualities) = original_quality_values(record) {
             self.original_records += 1;
@@ -9702,17 +10810,17 @@ impl MeanQualityByCycleSummary {
             } else {
                 &mut self.original_first
             };
-            for (cycle, quality) in original_qualities.iter().copied().enumerate() {
-                let cycle = if record.is_reverse() {
-                    original_qualities.len() - cycle - 1
-                } else {
-                    cycle
-                };
-                if cycles.len() <= cycle {
-                    cycles.resize(cycle + 1, CycleQuality::default());
+            if !original_qualities.is_empty() {
+                ensure_cycle_quality_capacity(cycles, original_qualities.len());
+                for (cycle, quality) in original_qualities.iter().copied().enumerate() {
+                    let cycle = if record.is_reverse() {
+                        original_qualities.len() - cycle - 1
+                    } else {
+                        cycle
+                    };
+                    cycles[cycle].quality_sum += quality as u64;
+                    cycles[cycle].count += 1;
                 }
-                cycles[cycle].quality_sum += quality as u64;
-                cycles[cycle].count += 1;
             }
         }
     }
@@ -10538,10 +11646,20 @@ struct FastqRecord {
 
 struct FastqReader {
     reader: Box<dyn BufRead>,
+    options: FastqToSamOptions,
     name_buf: String,
     sequence_buf: String,
     plus_buf: String,
     qualities_buf: String,
+}
+
+#[derive(Clone, Copy)]
+struct FastqToSamOptions {
+    quality_offset: u8,
+    min_q: u8,
+    max_q: u8,
+    allow_and_ignore_empty_lines: bool,
+    allow_empty_fastq: bool,
 }
 
 enum FastqToSamWriter {
@@ -10583,6 +11701,7 @@ fn run_fastqtosam_standard_sam(
     fastq2: Option<&str>,
     output: &str,
     read_group: &FastqReadGroup,
+    options: FastqToSamOptions,
 ) -> Result<(), String> {
     let mut writer = BufWriter::with_capacity(
         1024 * 1024,
@@ -10591,14 +11710,15 @@ fn run_fastqtosam_standard_sam(
     writer
         .write_all(fastqtosam_header_text(read_group).as_bytes())
         .map_err(|error| error.to_string())?;
-    let mut first_reader = FastqBytesReader::from_path(fastq)?;
+    let mut first_reader = FastqBytesReader::from_path(fastq, options)?;
     let mut second_reader = match fastq2 {
-        Some(path) => Some(FastqBytesReader::from_path(path)?),
+        Some(path) => Some(FastqBytesReader::from_path(path, options)?),
         None => None,
     };
     let mut first = FastqBytesRecord::default();
     let mut second = FastqBytesRecord::default();
     let mut output_buffer = Vec::with_capacity(8 * 1024 * 1024);
+    let mut records_written = 0_u64;
     loop {
         if !first_reader.next_record_into(&mut first)? {
             if let Some(reader) = second_reader.as_mut() {
@@ -10623,11 +11743,16 @@ fn run_fastqtosam_standard_sam(
             }
             append_fastq_sam_bytes_record(&mut output_buffer, &first, 77, &read_group.id);
             append_fastq_sam_bytes_record(&mut output_buffer, &second, 141, &read_group.id);
+            records_written += 2;
             flush_large_fastqtosam_buffer(&mut writer, &mut output_buffer)?;
         } else {
             append_fastq_sam_bytes_record(&mut output_buffer, &first, 4, &read_group.id);
+            records_written += 1;
             flush_large_fastqtosam_buffer(&mut writer, &mut output_buffer)?;
         }
+    }
+    if records_written == 0 && !options.allow_empty_fastq {
+        return Err("malformed FastqToSam empty FASTQ input".to_string());
     }
     if !output_buffer.is_empty() {
         writer
@@ -10659,6 +11784,7 @@ struct FastqBytesRecord {
 
 struct FastqBytesReader {
     reader: FastqBytesReaderSource,
+    options: FastqToSamOptions,
     name_buf: Vec<u8>,
     plus_buf: Vec<u8>,
 }
@@ -10678,7 +11804,7 @@ impl FastqBytesReaderSource {
 }
 
 impl FastqBytesReader {
-    fn from_path(path: &str) -> Result<Self, String> {
+    fn from_path(path: &str, options: FastqToSamOptions) -> Result<Self, String> {
         let file = fs::File::open(path).map_err(|error| error.to_string())?;
         let reader = if has_gzip_extension(path) {
             FastqBytesReaderSource::Gzip(BufReader::with_capacity(
@@ -10690,46 +11816,134 @@ impl FastqBytesReader {
         };
         Ok(Self {
             reader,
+            options,
             name_buf: Vec::new(),
             plus_buf: Vec::new(),
         })
     }
 
     fn next_record_into(&mut self, record: &mut FastqBytesRecord) -> Result<bool, String> {
-        self.name_buf.clear();
-        if self
-            .reader
-            .read_until(b'\n', &mut self.name_buf)
-            .map_err(|error| error.to_string())?
-            == 0
-        {
+        if !read_fastq_bytes_line(
+            &mut self.reader,
+            &mut self.name_buf,
+            self.options.allow_and_ignore_empty_lines,
+        )? {
             return Ok(false);
         }
-        record.sequence.clear();
-        self.plus_buf.clear();
-        record.qualities.clear();
-        self.reader
-            .read_until(b'\n', &mut record.sequence)
-            .map_err(|error| error.to_string())?;
-        self.reader
-            .read_until(b'\n', &mut self.plus_buf)
-            .map_err(|error| error.to_string())?;
-        self.reader
-            .read_until(b'\n', &mut record.qualities)
-            .map_err(|error| error.to_string())?;
-        trim_ascii_line_end_bytes(&mut self.name_buf);
-        trim_ascii_line_end_bytes(&mut record.sequence);
-        trim_ascii_line_end_bytes(&mut self.plus_buf);
-        trim_ascii_line_end_bytes(&mut record.qualities);
+        if !read_fastq_bytes_line(
+            &mut self.reader,
+            &mut record.sequence,
+            self.options.allow_and_ignore_empty_lines,
+        )? || !read_fastq_bytes_line(
+            &mut self.reader,
+            &mut self.plus_buf,
+            self.options.allow_and_ignore_empty_lines,
+        )? || !read_fastq_bytes_line(
+            &mut self.reader,
+            &mut record.qualities,
+            self.options.allow_and_ignore_empty_lines,
+        )? {
+            return Err("malformed FastqToSam FASTQ record".to_string());
+        }
         if !self.name_buf.starts_with(b"@") || !self.plus_buf.starts_with(b"+") {
             return Err("malformed FastqToSam FASTQ record".to_string());
         }
         if record.sequence.len() != record.qualities.len() {
             return Err("malformed FastqToSam FASTQ sequence/quality length mismatch".to_string());
         }
+        validate_fastq_qualities(&record.qualities, self.options)?;
         record.name.clear();
         push_normalized_fastq_read_name_bytes(&self.name_buf[1..], &mut record.name);
         Ok(true)
+    }
+}
+
+fn detect_fastqtosam_quality_offset(
+    fastq: &str,
+    fastq2: Option<&str>,
+    allow_and_ignore_empty_lines: bool,
+) -> Result<u8, String> {
+    let mut saw_quality = false;
+    let mut saw_standard_only_quality = false;
+    scan_fastqtosam_quality_file(
+        fastq,
+        allow_and_ignore_empty_lines,
+        &mut saw_quality,
+        &mut saw_standard_only_quality,
+    )?;
+    if let Some(fastq2) = fastq2 {
+        scan_fastqtosam_quality_file(
+            fastq2,
+            allow_and_ignore_empty_lines,
+            &mut saw_quality,
+            &mut saw_standard_only_quality,
+        )?;
+    }
+
+    if !saw_quality || saw_standard_only_quality {
+        Ok(33)
+    } else {
+        Ok(64)
+    }
+}
+
+fn scan_fastqtosam_quality_file(
+    path: &str,
+    allow_and_ignore_empty_lines: bool,
+    saw_quality: &mut bool,
+    saw_standard_only_quality: &mut bool,
+) -> Result<(), String> {
+    let file = fs::File::open(path).map_err(|error| error.to_string())?;
+    let mut reader = if has_gzip_extension(path) {
+        FastqBytesReaderSource::Gzip(BufReader::with_capacity(1024 * 1024, GzDecoder::new(file)))
+    } else {
+        FastqBytesReaderSource::Plain(BufReader::with_capacity(1024 * 1024, file))
+    };
+    let mut name = Vec::new();
+    let mut sequence = Vec::new();
+    let mut plus = Vec::new();
+    let mut qualities = Vec::new();
+
+    loop {
+        if !read_fastq_bytes_line(&mut reader, &mut name, allow_and_ignore_empty_lines)? {
+            return Ok(());
+        }
+        if !read_fastq_bytes_line(&mut reader, &mut sequence, allow_and_ignore_empty_lines)?
+            || !read_fastq_bytes_line(&mut reader, &mut plus, allow_and_ignore_empty_lines)?
+            || !read_fastq_bytes_line(&mut reader, &mut qualities, allow_and_ignore_empty_lines)?
+        {
+            return Err("malformed FastqToSam FASTQ record".to_string());
+        }
+        if !name.starts_with(b"@") || !plus.starts_with(b"+") || sequence.len() != qualities.len() {
+            return Err("malformed FastqToSam FASTQ record".to_string());
+        }
+        if !qualities.is_empty() {
+            *saw_quality = true;
+        }
+        if qualities.iter().any(|quality| *quality < 64) {
+            *saw_standard_only_quality = true;
+        }
+    }
+}
+
+fn read_fastq_bytes_line(
+    reader: &mut FastqBytesReaderSource,
+    buffer: &mut Vec<u8>,
+    skip_empty: bool,
+) -> Result<bool, String> {
+    loop {
+        buffer.clear();
+        if reader
+            .read_until(b'\n', buffer)
+            .map_err(|error| error.to_string())?
+            == 0
+        {
+            return Ok(false);
+        }
+        trim_ascii_line_end_bytes(buffer);
+        if !skip_empty || !buffer.is_empty() {
+            return Ok(true);
+        }
     }
 }
 
@@ -10756,7 +11970,7 @@ fn append_fastq_sam_bytes_record(
 }
 
 impl FastqReader {
-    fn from_path(path: &str) -> Result<Self, String> {
+    fn from_path(path: &str, options: FastqToSamOptions) -> Result<Self, String> {
         let file = fs::File::open(path).map_err(|error| error.to_string())?;
         let reader: Box<dyn BufRead> = if has_gzip_extension(path) {
             Box::new(BufReader::with_capacity(1024 * 1024, GzDecoder::new(file)))
@@ -10765,6 +11979,7 @@ impl FastqReader {
         };
         Ok(Self {
             reader,
+            options,
             name_buf: String::new(),
             sequence_buf: String::new(),
             plus_buf: String::new(),
@@ -10773,36 +11988,38 @@ impl FastqReader {
     }
 
     fn next_record_into(&mut self, record: &mut FastqRecord) -> Result<bool, String> {
-        self.name_buf.clear();
-        if self
-            .reader
-            .read_line(&mut self.name_buf)
-            .map_err(|error| error.to_string())?
-            == 0
-        {
+        if !read_fastq_string_line(
+            self.reader.as_mut(),
+            &mut self.name_buf,
+            self.options.allow_and_ignore_empty_lines,
+        )? {
             return Ok(false);
         }
-        self.sequence_buf.clear();
-        self.plus_buf.clear();
-        self.qualities_buf.clear();
-        self.reader
-            .read_line(&mut self.sequence_buf)
-            .map_err(|error| error.to_string())?;
-        self.reader
-            .read_line(&mut self.plus_buf)
-            .map_err(|error| error.to_string())?;
-        self.reader
-            .read_line(&mut self.qualities_buf)
-            .map_err(|error| error.to_string())?;
-        let name = self.name_buf.trim_end_matches(['\r', '\n']);
+        if !read_fastq_string_line(
+            self.reader.as_mut(),
+            &mut self.sequence_buf,
+            self.options.allow_and_ignore_empty_lines,
+        )? || !read_fastq_string_line(
+            self.reader.as_mut(),
+            &mut self.plus_buf,
+            self.options.allow_and_ignore_empty_lines,
+        )? || !read_fastq_string_line(
+            self.reader.as_mut(),
+            &mut self.qualities_buf,
+            self.options.allow_and_ignore_empty_lines,
+        )? {
+            return Err("malformed FastqToSam FASTQ record".to_string());
+        }
+        let name = self.name_buf.as_str();
         if !name.starts_with('@') || !self.plus_buf.starts_with('+') {
             return Err("malformed FastqToSam FASTQ record".to_string());
         }
-        let sequence = self.sequence_buf.trim_end_matches(['\r', '\n']).as_bytes();
-        let qualities = self.qualities_buf.trim_end_matches(['\r', '\n']).as_bytes();
+        let sequence = self.sequence_buf.as_bytes();
+        let qualities = self.qualities_buf.as_bytes();
         if sequence.len() != qualities.len() {
             return Err("malformed FastqToSam FASTQ sequence/quality length mismatch".to_string());
         }
+        validate_fastq_qualities(qualities, self.options)?;
         record.name.clear();
         push_normalized_fastq_read_name(&name[1..], &mut record.name);
         record.sequence.clear();
@@ -10811,6 +12028,50 @@ impl FastqReader {
         record.qualities.extend_from_slice(qualities);
         Ok(true)
     }
+}
+
+fn read_fastq_string_line(
+    reader: &mut dyn BufRead,
+    buffer: &mut String,
+    skip_empty: bool,
+) -> Result<bool, String> {
+    loop {
+        buffer.clear();
+        if reader
+            .read_line(buffer)
+            .map_err(|error| error.to_string())?
+            == 0
+        {
+            return Ok(false);
+        }
+        while buffer.ends_with('\n') || buffer.ends_with('\r') {
+            buffer.pop();
+        }
+        if !skip_empty || !buffer.is_empty() {
+            return Ok(true);
+        }
+    }
+}
+
+fn validate_fastq_qualities(qualities: &[u8], options: FastqToSamOptions) -> Result<(), String> {
+    for quality in qualities {
+        let Some(decoded) = quality.checked_sub(options.quality_offset) else {
+            return Err("malformed FastqToSam quality below encoding offset".to_string());
+        };
+        if decoded < options.min_q {
+            return Err(format!(
+                "malformed FastqToSam quality below MIN_Q: {decoded} < {}",
+                options.min_q
+            ));
+        }
+        if decoded > options.max_q {
+            return Err(format!(
+                "malformed FastqToSam quality above MAX_Q: {decoded} > {}",
+                options.max_q
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn fastqtosam_header_text(read_group: &FastqReadGroup) -> String {
@@ -11220,6 +12481,10 @@ fn reject_unsupported_fastqtosam_args(
         "PROGRAM_GROUP",
         "PLATFORM_MODEL",
         "QUALITY_FORMAT",
+        "MIN_Q",
+        "MAX_Q",
+        "ALLOW_AND_IGNORE_EMPTY_LINES",
+        "ALLOW_EMPTY_FASTQ",
         "SORT_ORDER",
         "VALIDATION_STRINGENCY",
         "QUIET",
@@ -11244,6 +12509,10 @@ fn reject_unsupported_fastqtosam_args(
             return Err(format!("unsupported FastqToSam SORT_ORDER={sort_order}"));
         }
     }
+    optional_u32(args, "MIN_Q")?;
+    optional_u32(args, "MAX_Q")?;
+    optional_bool(args, "ALLOW_AND_IGNORE_EMPTY_LINES")?;
+    optional_bool(args, "ALLOW_EMPTY_FASTQ")?;
     optional_scalar(args, "VALIDATION_STRINGENCY")?;
     optional_scalar(args, "VERBOSITY")?;
     optional_bool(args, "QUIET")?;
@@ -11881,6 +13150,7 @@ fn reject_unsupported_sortsam_args(
         "INPUT",
         "OUTPUT",
         "SORT_ORDER",
+        "REFERENCE_SEQUENCE",
         "TMP_DIR",
         "VALIDATION_STRINGENCY",
         "QUIET",
@@ -11901,6 +13171,7 @@ fn reject_unsupported_sortsam_args(
     optional_bool(args, "CREATE_INDEX")?;
     optional_bool(args, "CREATE_MD5_FILE")?;
     optional_scalar(args, "TMP_DIR")?;
+    optional_scalar(args, "REFERENCE_SEQUENCE")?;
     optional_scalar(args, "VALIDATION_STRINGENCY")?;
     optional_scalar(args, "VERBOSITY")?;
     optional_u32(args, "MAX_RECORDS_IN_RAM")?;
@@ -11957,6 +13228,7 @@ fn reject_unsupported_mergesamfiles_args(
         "OUTPUT",
         "SORT_ORDER",
         "COMMENT",
+        "REFERENCE_SEQUENCE",
         "TMP_DIR",
         "VALIDATION_STRINGENCY",
         "QUIET",
@@ -11967,6 +13239,7 @@ fn reject_unsupported_mergesamfiles_args(
         "COMPRESSION_LEVEL",
         "MERGE_SEQUENCE_DICTIONARIES",
         "ASSUME_SORTED",
+        "INTERVALS",
     ];
 
     for key in args.keys() {
@@ -11979,10 +13252,10 @@ fn reject_unsupported_mergesamfiles_args(
     optional_bool(args, "CREATE_INDEX")?;
     optional_bool(args, "CREATE_MD5_FILE")?;
     optional_bool(args, "ASSUME_SORTED")?;
-    if optional_bool(args, "MERGE_SEQUENCE_DICTIONARIES")?.unwrap_or(false) {
-        return Err("unsupported MergeSamFiles MERGE_SEQUENCE_DICTIONARIES=true".to_string());
-    }
+    optional_bool(args, "MERGE_SEQUENCE_DICTIONARIES")?;
+    let _ = args.get("INTERVALS");
     optional_scalar(args, "TMP_DIR")?;
+    optional_scalar(args, "REFERENCE_SEQUENCE")?;
     optional_scalar(args, "VALIDATION_STRINGENCY")?;
     optional_scalar(args, "VERBOSITY")?;
     optional_u32(args, "MAX_RECORDS_IN_RAM")?;
@@ -12141,22 +13414,11 @@ fn limited_records<'a>(
 }
 
 fn output_format(output: &str) -> Result<bam::Format, String> {
-    output_format_for(output, "SortSam")
+    hts_io::output_format_for_path(output, "SortSam")
 }
 
 fn output_format_for(output: &str, command: &str) -> Result<bam::Format, String> {
-    match Path::new(output)
-        .extension()
-        .and_then(|extension| extension.to_str())
-        .map(str::to_ascii_lowercase)
-        .as_deref()
-    {
-        Some("sam") => Ok(bam::Format::Sam),
-        Some("bam") => Ok(bam::Format::Bam),
-        _ => Err(format!(
-            "unsupported {command} output format for {output}; expected .sam or .bam"
-        )),
-    }
+    hts_io::output_format_for_path(output, command)
 }
 
 fn clean_sam_record(record: &mut bam::Record, target_lengths: &[u64]) -> Result<(), String> {
@@ -12273,19 +13535,27 @@ fn push_merged_cigar(cigars: &mut Vec<Cigar>, cigar: Cigar) {
     cigars.push(cigar);
 }
 
-fn open_bam_reader(path: impl AsRef<Path>) -> Result<bam::Reader, String> {
-    let mut reader = bam::Reader::from_path(path).map_err(|error| error.to_string())?;
-    configure_bam_reader(&mut reader)?;
-    Ok(reader)
+fn picard_reference(args: &BTreeMap<String, Vec<String>>) -> Result<Option<String>, String> {
+    optional_scalar(args, "REFERENCE_SEQUENCE")
 }
 
-fn configure_bam_reader(reader: &mut bam::Reader) -> Result<(), String> {
-    if let Some(threads) = bgzf_threads() {
-        reader
-            .set_threads(threads)
-            .map_err(|error| error.to_string())?;
-    }
-    Ok(())
+fn open_bam_reader(path: impl AsRef<Path>) -> Result<bam::Reader, String> {
+    hts_io::open_reader(path, None)
+}
+
+fn open_bam_reader_with_reference(
+    path: impl AsRef<Path>,
+    reference: Option<&str>,
+) -> Result<bam::Reader, String> {
+    hts_io::open_reader(path, reference)
+}
+
+fn open_bam_reader_for_args(
+    path: impl AsRef<Path>,
+    args: &BTreeMap<String, Vec<String>>,
+) -> Result<bam::Reader, String> {
+    let reference = picard_reference(args)?;
+    open_bam_reader_with_reference(path, reference.as_deref())
 }
 
 fn bam_writer_for_path(
@@ -12294,21 +13564,17 @@ fn bam_writer_for_path(
     format: bam::Format,
     compression_level: Option<u32>,
 ) -> Result<bam::Writer, String> {
-    let mut writer =
-        bam::Writer::from_path(output, header, format).map_err(|error| error.to_string())?;
-    if format == bam::Format::Bam {
-        if let Some(threads) = bgzf_threads() {
-            writer
-                .set_threads(threads)
-                .map_err(|error| error.to_string())?;
-        }
-    }
-    if let Some(level) = compression_level {
-        writer
-            .set_compression_level(bam::CompressionLevel::Level(level))
-            .map_err(|error| error.to_string())?;
-    }
-    Ok(writer)
+    hts_io::open_writer(output, header, format, None, compression_level)
+}
+
+fn bam_writer_for_path_with_reference(
+    output: &str,
+    header: &bam::Header,
+    format: bam::Format,
+    reference: Option<&str>,
+    compression_level: Option<u32>,
+) -> Result<bam::Writer, String> {
+    hts_io::open_writer(output, header, format, reference, compression_level)
 }
 
 fn revert_record(
@@ -12417,10 +13683,7 @@ fn revert_record_default_unmapped_fast(
     remove_duplicate_information: bool,
     restore_hardclips: bool,
 ) -> Result<(), String> {
-    if !restore_hardclips
-        && record.aux(b"XB").is_err()
-        && record.aux(b"XQ").is_err()
-    {
+    if !restore_hardclips && record.aux(b"XB").is_err() && record.aux(b"XQ").is_err() {
         return revert_record_default_unmapped_in_place(record, remove_duplicate_information);
     }
 
@@ -13080,6 +14343,14 @@ fn header_sort_order(header: &bam::HeaderView) -> Option<String> {
 }
 
 fn sorted_header(source: &bam::HeaderView, sort_order: SortOrder) -> bam::Header {
+    sorted_header_with_group_order(source, sort_order, None)
+}
+
+fn sorted_header_with_group_order(
+    source: &bam::HeaderView,
+    sort_order: SortOrder,
+    group_order: Option<&str>,
+) -> bam::Header {
     let sort_order = match sort_order {
         SortOrder::Coordinate => "coordinate",
         SortOrder::QueryName => "queryname",
@@ -13104,29 +14375,47 @@ fn sorted_header(source: &bam::HeaderView, sort_order: SortOrder) -> bam::Header
         let is_hd = record_type == "HD";
         saw_hd |= is_hd;
         let mut saw_so = false;
+        let mut saw_go = false;
         for field in line.split('\t').skip(1) {
             let Some((tag, value)) = field.split_once(':') else {
                 continue;
             };
             if is_hd && tag == "SO" {
-                record.push_tag(b"SO", sort_order);
                 saw_so = true;
+                if group_order.is_none() {
+                    record.push_tag(b"SO", sort_order);
+                }
+            } else if is_hd && tag == "GO" {
+                if let Some(group_order) = group_order {
+                    record.push_tag(b"GO", group_order);
+                } else {
+                    record.push_tag(tag.as_bytes(), value);
+                }
+                saw_go = true;
             } else {
                 record.push_tag(tag.as_bytes(), value);
             }
         }
-        if is_hd && !saw_so {
-            record.push_tag(b"SO", sort_order);
+        if is_hd {
+            if let Some(group_order) = group_order {
+                if !saw_go {
+                    record.push_tag(b"GO", group_order);
+                }
+                record.push_tag(b"SO", sort_order);
+            } else if !saw_so {
+                record.push_tag(b"SO", sort_order);
+            }
         }
         header.push_record(&record);
     }
 
     if !saw_hd {
-        header.push_record(
-            HeaderRecord::new(b"HD")
-                .push_tag(b"VN", "1.6")
-                .push_tag(b"SO", sort_order),
-        );
+        let mut record = HeaderRecord::new(b"HD");
+        record.push_tag(b"VN", "1.6").push_tag(b"SO", sort_order);
+        if let Some(group_order) = group_order {
+            record.push_tag(b"GO", group_order);
+        }
+        header.push_record(&record);
     }
 
     header
@@ -13193,6 +14482,7 @@ fn reverted_header(
 struct MergePlan {
     header_builder: MergeHeaderBuilder,
     inputs: Vec<MergeInputPlan>,
+    target_names: Vec<String>,
 }
 
 struct MergeInputPlan {
@@ -13205,16 +14495,25 @@ fn build_merge_plan(
     inputs: &[String],
     sort_order: SortOrder,
     assume_sorted: bool,
+    reference: Option<&str>,
 ) -> Result<MergePlan, String> {
-    let first_reader = bam::Reader::from_path(&inputs[0]).map_err(|error| error.to_string())?;
+    let first_reader =
+        open_bam_reader_with_reference(&inputs[0], reference).map_err(|error| error.to_string())?;
     let first_header_text = String::from_utf8_lossy(first_reader.header().as_bytes()).into_owned();
+    let target_names = first_reader
+        .header()
+        .target_names()
+        .iter()
+        .map(|name| String::from_utf8_lossy(name).to_string())
+        .collect::<Vec<_>>();
     let first_sequence_dictionary = sequence_dictionary_lines(&first_header_text);
     let mut header_builder = MergeHeaderBuilder::new(&first_header_text, sort_order)?;
     drop(first_reader);
 
     let mut input_plans = Vec::with_capacity(inputs.len());
     for input in inputs {
-        let mut reader = open_bam_reader(input).map_err(|error| error.to_string())?;
+        let mut reader =
+            open_bam_reader_with_reference(input, reference).map_err(|error| error.to_string())?;
         let header_text = String::from_utf8_lossy(reader.header().as_bytes()).into_owned();
         if sequence_dictionary_lines(&header_text) != first_sequence_dictionary {
             return Err(
@@ -13222,7 +14521,13 @@ fn build_merge_plan(
             );
         }
         let read_group_renames = header_builder.observe_input_header(&header_text)?;
-        let is_sorted = assume_sorted || input_reader_is_sorted(&mut reader, sort_order)?;
+        let is_sorted = if assume_sorted {
+            true
+        } else if header_declares_sort_order(reader.header(), sort_order) {
+            true
+        } else {
+            input_reader_is_sorted(&mut reader, sort_order)?
+        };
         input_plans.push(MergeInputPlan {
             path: input.clone(),
             read_group_renames,
@@ -13233,15 +14538,24 @@ fn build_merge_plan(
     Ok(MergePlan {
         header_builder,
         inputs: input_plans,
+        target_names,
     })
 }
 
-fn collect_merge_records(input_plans: &[MergeInputPlan]) -> Result<Vec<bam::Record>, String> {
+fn collect_merge_records(
+    input_plans: &[MergeInputPlan],
+    reference: Option<&str>,
+    interval_filter: Option<&BTreeMap<i32, Vec<(u64, u64)>>>,
+) -> Result<Vec<bam::Record>, String> {
     let mut records = Vec::new();
     for input in input_plans {
-        let mut reader = open_bam_reader(&input.path).map_err(|error| error.to_string())?;
+        let mut reader = open_bam_reader_with_reference(&input.path, reference)
+            .map_err(|error| error.to_string())?;
         for record in reader.records() {
             let mut record = record.map_err(|error| error.to_string())?;
+            if !record_overlaps_intervals(&record, interval_filter) {
+                continue;
+            }
             rewrite_record_read_group(&mut record, &input.read_group_renames)?;
             records.push(record);
         }
@@ -13249,8 +14563,23 @@ fn collect_merge_records(input_plans: &[MergeInputPlan]) -> Result<Vec<bam::Reco
     Ok(records)
 }
 
-fn input_is_sorted(path: &str, sort_order: SortOrder) -> Result<bool, String> {
-    let mut reader = open_bam_reader(path).map_err(|error| error.to_string())?;
+fn header_declares_sort_order(header: &bam::HeaderView, sort_order: SortOrder) -> bool {
+    matches!(
+        (header_sort_order(header).as_deref(), sort_order),
+        (Some("coordinate"), SortOrder::Coordinate) | (Some("queryname"), SortOrder::QueryName)
+    )
+}
+
+fn input_is_sorted(
+    path: &str,
+    sort_order: SortOrder,
+    reference: Option<&str>,
+) -> Result<bool, String> {
+    let mut reader =
+        open_bam_reader_with_reference(path, reference).map_err(|error| error.to_string())?;
+    if header_declares_sort_order(reader.header(), sort_order) {
+        return Ok(true);
+    }
     input_reader_is_sorted(&mut reader, sort_order)
 }
 
@@ -13277,10 +14606,15 @@ fn write_kway_merged_records(
     writer: &mut bam::Writer,
     input_plans: &[MergeInputPlan],
     sort_order: SortOrder,
+    reference: Option<&str>,
+    interval_filter: Option<&BTreeMap<i32, Vec<(u64, u64)>>>,
 ) -> Result<(), String> {
     let mut readers = input_plans
         .iter()
-        .map(|input| bam::Reader::from_path(&input.path).map_err(|error| error.to_string()))
+        .map(|input| {
+            open_bam_reader_with_reference(&input.path, reference)
+                .map_err(|error| error.to_string())
+        })
         .collect::<Result<Vec<_>, _>>()?;
     let mut heap = BinaryHeap::new();
     let mut serial = 0u64;
@@ -13289,6 +14623,7 @@ fn write_kway_merged_records(
         if let Some(record) = read_next_merge_record(
             &mut readers[input_index],
             &input_plans[input_index].read_group_renames,
+            interval_filter,
         )? {
             heap.push(HeapRecord {
                 record,
@@ -13308,6 +14643,7 @@ fn write_kway_merged_records(
         if let Some(record) = read_next_merge_record(
             &mut readers[input_index],
             &input_plans[input_index].read_group_renames,
+            interval_filter,
         )? {
             heap.push(HeapRecord {
                 record,
@@ -13325,15 +14661,21 @@ fn write_kway_merged_records(
 fn read_next_merge_record(
     reader: &mut bam::Reader,
     read_group_renames: &BTreeMap<String, String>,
+    interval_filter: Option<&BTreeMap<i32, Vec<(u64, u64)>>>,
 ) -> Result<Option<bam::Record>, String> {
-    let mut record = bam::Record::new();
-    match reader.read(&mut record) {
-        Some(Ok(())) => {
-            rewrite_record_read_group(&mut record, read_group_renames)?;
-            Ok(Some(record))
+    loop {
+        let mut record = bam::Record::new();
+        match reader.read(&mut record) {
+            Some(Ok(())) => {
+                if !record_overlaps_intervals(&record, interval_filter) {
+                    continue;
+                }
+                rewrite_record_read_group(&mut record, read_group_renames)?;
+                return Ok(Some(record));
+            }
+            Some(Err(error)) => return Err(error.to_string()),
+            None => return Ok(None),
         }
-        Some(Err(error)) => Err(error.to_string()),
-        None => Ok(None),
     }
 }
 
@@ -13605,8 +14947,13 @@ fn write_requested_sidecars(
         write_md5_sidecar(output)?;
     }
     if create_index {
-        index::build(output, Some(&picard_bai_path(output)), index::Type::Bai, 1)
-            .map_err(|error| error.to_string())?;
+        index::build(
+            output,
+            Some(&picard_bai_path(output)),
+            index::Type::Bai,
+            turbo_picard_core::bgzf_threads::htslib_worker_threads(),
+        )
+        .map_err(|error| error.to_string())?;
     }
     Ok(())
 }
@@ -13640,6 +14987,23 @@ mod tests {
         ];
 
         assert!(!queryname_records_are_monotonic(&records));
+    }
+
+    #[test]
+    fn header_declares_sort_order_reads_hd_so_field() {
+        let dir = tempfile::tempdir().expect("tempdir exists");
+        let path = dir.path().join("coordinate.sam");
+        fs::write(&path, "@HD\tVN:1.6\tSO:coordinate\n@SQ\tSN:chr1\tLN:1000\n")
+            .expect("fixture is written");
+        let reader = bam::Reader::from_path(&path).expect("SAM opens");
+        assert!(header_declares_sort_order(
+            reader.header(),
+            SortOrder::Coordinate
+        ));
+        assert!(!header_declares_sort_order(
+            reader.header(),
+            SortOrder::QueryName
+        ));
     }
 }
 

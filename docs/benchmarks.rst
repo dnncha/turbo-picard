@@ -46,11 +46,43 @@ Do not generalize a benchmark from one command to another. ``MarkDuplicates``,
 ``SortSam``, FASTQ conversion, metrics collectors, and VCF utilities stress
 different parts of the system.
 
-The public benchmark suite currently reports 32 command speedups, so every
-native or partly native matrix entry has a parity-checked public speedup claim.
-Two scopes are deliberately narrow: ``CollectMultipleMetrics`` is benchmarked
-with ``PROGRAM=CollectQualityYieldMetrics``, and chart-producing child programs
-still use the chart-output disclosure below.
+The public benchmark suite currently reports 32 command speedups, covering the
+native or partly native data-processing commands in the matrix.
+``AccelerationStatus`` is exempt because it is a status/preflight command with
+no Picard data-processing runtime to benchmark. Two benchmark scopes are
+deliberately narrow: ``CollectMultipleMetrics`` is benchmarked with
+``PROGRAM=CollectQualityYieldMetrics``, and chart-producing child programs still
+use the chart-output disclosure below.
+
+Benchmark exemption: ``AccelerationStatus`` — status/preflight command with no Picard data-processing runtime to benchmark.
+
+Genome-scale evidence
+---------------------
+
+Micro-benchmarks in ``tools/bench_suite.py`` are useful for regression tracking,
+but a real switching decision should include at least one larger shard that
+resembles the workflow:
+
+* whole-genome or exome BAM size, not only 100k-read fixtures;
+* the same duplicate-marking, sorting, and FASTQ conversion commands the workflow uses;
+* wall time, peak RSS, and cloud cost estimates from the same machine profile.
+
+Refresh public evidence with:
+
+.. code-block:: bash
+
+   python3 tools/audit_real_data.py \
+     --input-bam /data/representative-wgs.bam \
+     --input-source-url https://example.org/accession.bam \
+     --input-source-commit example-accession \
+     --output-dir benchmarks/real-data/wgs-representative/evidence \
+     --dataset-id wgs-representative \
+     --picard-command "mamba run -p /opt/conda/envs/picard picard" \
+     --turbo-picard-command ./target/release/picard \
+     --skip-build
+
+Pair that bundle with ``python3 tools/bench_suite.py`` on the same commands so
+performance claims stay tied to parity-checked outputs.
 
 Real-data parity evidence
 -------------------------
@@ -65,7 +97,8 @@ with:
    python3 tools/verify_real_data_evidence.py --release-ready
 
 The checked-in release evidence currently includes GATK's public NA12878
-mitochondrial test BAM and Picard's public SNVQ metrics test BAM.
+mitochondrial test BAM, the same shard converted to CRAM with a pinned
+reference, and Picard's public SNVQ metrics test BAM.
 For GitHub-hosted real-data inputs, the evidence must cite a
 ``/blob/<commit>/`` URL and the full 40-character Git commit SHA, not a branch
 name or short hash.
@@ -81,6 +114,19 @@ GATK NA12878 mitochondrial evidence:
   ``benchmarks/real-data/gatk-na12878-mito/evidence/real-data-comparison.md``
 * scope caveat: ``GATK public NA12878 mitochondrial test BAM.``
 * minimum input threshold: ``1000000`` bytes
+
+GATK NA12878 mitochondrial CRAM evidence:
+
+* source:
+  ``https://github.com/broadinstitute/gatk/blob/e8c49f600b06c658e0fa9bf67256340ebb46bc48/src/test/resources/org/broadinstitute/hellbender/tools/mutect/mito/NA12878.bam``
+* commit: ``e8c49f600b06c658e0fa9bf67256340ebb46bc48``
+* local SHA-256:
+  ``68931e7cea6e9a35029cfed3638d0d8ea2c4bb662b4d83232968da247b68f7bc``
+* evidence report:
+  ``benchmarks/real-data/gatk-na12878-mito-cram/evidence/real-data-comparison.md``
+* scope caveat:
+  ``GATK public NA12878 mitochondrial test BAM converted to CRAM with assembly38 mt-only reference.``
+* minimum input threshold: ``910668`` bytes
 
 Picard SNVQ metrics evidence:
 
@@ -104,7 +150,10 @@ digest, ``SamToFastq`` with first-end, second-end, and unpaired FASTQ outputs
 matched byte-for-byte, and ``CollectInsertSizeMetrics`` with the stable metrics
 table and insert-size histogram digest matched against Picard. It also passes
 ``ValidateSamFile`` by matching the summary validation histogram and Picard's
-non-zero exit code on that input. The release check must cover this command set
+non-zero exit code on that input. The CRAM bundle passes ``CleanSam``,
+``CollectQualityYieldMetrics``, ``CollectInsertSizeMetrics``, ``MarkDuplicates``,
+``SortSam``, and ``AddOrReplaceReadGroups`` on the same public mitochondrial
+shard with native CRAM I/O. The release check must cover this command set
 somewhere in the pinned evidence:
 AddOrReplaceReadGroups, BuildBamIndex, CleanSam,
 CollectAlignmentSummaryMetrics, CollectInsertSizeMetrics,

@@ -11,6 +11,7 @@ COMMAND_DOCS = ROOT / "docs" / "commands.rst"
 CLI = ROOT / "crates" / "turbo-picard-cli" / "src" / "lib.rs"
 CI = ROOT / ".github" / "workflows" / "ci.yml"
 REAL_DATA_MANIFEST = ROOT / "benchmarks" / "real-data" / "manifest.json"
+CRAM_PARITY_SCRIPT = ROOT / "tools" / "verify_basic_cram_parity.sh"
 EXPECTED_PICARD_REFERENCE = "3.4.0"
 VALID_STATUSES = {"native", "partial-native", "fallback-only"}
 
@@ -172,6 +173,39 @@ def validate_release_candidate_scope_mentions(entries, release_candidate_command
     return errors
 
 
+def cram_parity_commands(script_text=None):
+    text = CRAM_PARITY_SCRIPT.read_text(encoding="utf-8") if script_text is None else script_text
+    match = re.search(r"CRAM hot-path parity passed for:\s*([^\n\"]+)", text)
+    if not match:
+        return set()
+    return {
+        command.strip()
+        for command in match.group(1).split(",")
+        if command.strip()
+    }
+
+
+def validate_cram_scope_mentions(entries, cram_commands):
+    entries_by_name = {
+        entry.get("name", ""): entry
+        for entry in entries
+        if isinstance(entry.get("name", ""), str)
+    }
+    errors = []
+    for command in sorted(cram_commands):
+        entry = entries_by_name.get(command)
+        if entry is None:
+            errors.append(
+                f"{command} has CRAM parity coverage but is missing from command matrix"
+            )
+            continue
+        if "cram" not in entry.get("native_scope", "").lower():
+            errors.append(
+                f"{command} has CRAM parity coverage but command matrix native_scope does not mention CRAM"
+            )
+    return errors
+
+
 def validate_command_docs_scope_language(text):
     errors = []
     if "Common native command examples" in text:
@@ -190,6 +224,10 @@ def validate_command_docs_scope_language(text):
 
 def validate_command_docs_examples(entries, text):
     errors = []
+    if re.search(r"\bpicard\s+ViewSam\b[^\n]*\bO=", text):
+        errors.append(
+            "commands docs must show upstream ViewSam writing to stdout, not O= output"
+        )
     for entry in entries:
         status = entry.get("status", "")
         command = entry.get("name", "")
@@ -279,6 +317,14 @@ def main():
     )
     if release_candidate_scope_errors:
         for error in release_candidate_scope_errors:
+            print(error, file=sys.stderr)
+        return 1
+    cram_scope_errors = validate_cram_scope_mentions(
+        matrix_entries(),
+        cram_parity_commands(),
+    )
+    if cram_scope_errors:
+        for error in cram_scope_errors:
             print(error, file=sys.stderr)
         return 1
     command_docs_errors = validate_command_docs_scope_language(

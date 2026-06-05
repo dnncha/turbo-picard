@@ -39,6 +39,8 @@ jobs:
           python3 -m pip install PyYAML==6.0.3
           python3 -m unittest tools/test_compare_markduplicates.py
           python3 -m unittest tools/test_bioconda_release_preflight.py
+          python3 -m unittest tools/test_audit_real_data.py
+          python3 -m unittest tools/test_parity_compare.py
           python3 -m unittest tools/test_compare_real_data.py
           python3 -m unittest tools/test_prepare_bioconda_release.py
           python3 -m unittest tools/test_render_benchmark_assets.py
@@ -62,8 +64,10 @@ jobs:
           python3 -m unittest tools/test_verify_site_benchmark_evidence.py
           python3 -m unittest tools/test_verify_site_links.py
           python3 -m py_compile \
+            tools/parity_compare.py \
             tools/compare_markduplicates.py \
             tools/bioconda_release_preflight.py \
+            tools/audit_real_data.py \
             tools/compare_real_data.py \
             tools/prepare_bioconda_release.py \
             tools/bench_addorreplacereadgroups.py \
@@ -187,6 +191,16 @@ jobs:
       - name: Smoke package install
         run: ./tools/verify_package_install.sh
 
+  docker:
+    name: Docker image
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Build reference container
+        run: docker build -t turbo-picard:ci .
+      - name: Smoke container entrypoint
+        run: docker run --rm turbo-picard:ci MarkDuplicates --help
+
   picard-parity:
     name: Picard parity
     runs-on: ubuntu-latest
@@ -215,6 +229,14 @@ jobs:
 
       - name: Verify Picard parity
         run: |
+          ./tools/verify_basic_accelerationstatus_parity.sh
+          TURBO_PICARD_CONDA_PREFIX="${MAMBA_ROOT_PREFIX}/envs/turbo-picard-ci" ./tools/verify_basic_cram_parity.sh
+          TURBO_PICARD_CONDA_PREFIX="${MAMBA_ROOT_PREFIX}/envs/turbo-picard-ci" ./tools/verify_markdup_cram_parity.sh
+          TURBO_PICARD_CONDA_PREFIX="${MAMBA_ROOT_PREFIX}/envs/turbo-picard-ci" ./tools/verify_gatk_preprocessing_combo_parity.sh
+          TURBO_PICARD_CONDA_PREFIX="${MAMBA_ROOT_PREFIX}/envs/turbo-picard-ci" ./tools/verify_gatk_mito_bam_parity.sh
+          TURBO_PICARD_CONDA_PREFIX="${MAMBA_ROOT_PREFIX}/envs/turbo-picard-ci" ./tools/verify_gatk_mito_cram_parity.sh
+          TURBO_PICARD_CONDA_PREFIX="${MAMBA_ROOT_PREFIX}/envs/turbo-picard-ci" ./tools/verify_gatk_preprocessing_combo_cram_parity.sh
+          TURBO_PICARD_CONDA_PREFIX="${MAMBA_ROOT_PREFIX}/envs/turbo-picard-ci" ./tools/validate_gatk_mito_cram_evidence.sh
           TURBO_PICARD_CONDA_PREFIX="${MAMBA_ROOT_PREFIX}/envs/turbo-picard-ci" ./tools/verify_basic_picard_parity.sh
           TURBO_PICARD_CONDA_PREFIX="${MAMBA_ROOT_PREFIX}/envs/turbo-picard-ci" ./tools/verify_basic_sortsam_parity.sh
           TURBO_PICARD_CONDA_PREFIX="${MAMBA_ROOT_PREFIX}/envs/turbo-picard-ci" ./tools/verify_basic_cleansam_parity.sh

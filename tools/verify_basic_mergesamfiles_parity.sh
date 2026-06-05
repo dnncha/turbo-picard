@@ -83,6 +83,58 @@ PY
 done
 
 cargo run -q -p turbo-picard-cli --bin picard -- \
+  SortSam "I=$workdir/input-a.sam" "O=$workdir/input-a.bam" SORT_ORDER=coordinate CREATE_INDEX=true
+cargo run -q -p turbo-picard-cli --bin picard -- \
+  SortSam "I=$workdir/input-b.sam" "O=$workdir/input-b.bam" SORT_ORDER=coordinate CREATE_INDEX=true
+
+cat > "$workdir/targets.interval_list" <<'INTERVALS'
+@HD	VN:1.6	SO:coordinate
+@SQ	SN:chr1	LN:1000
+chr1	45	60	+	target
+INTERVALS
+
+cargo run -q -p turbo-picard-cli --bin picard -- \
+  MergeSamFiles \
+  "I=$workdir/input-a.bam" \
+  "I=$workdir/input-b.bam" \
+  "O=$workdir/turbo-intervals.sam" \
+  SORT_ORDER=coordinate \
+  AS=true \
+  "INTERVALS=$workdir/targets.interval_list" \
+  VALIDATION_STRINGENCY=SILENT \
+  QUIET=true
+
+"${conda_runner[@]}" run -p "$conda_prefix" picard MergeSamFiles \
+  "I=$workdir/input-a.bam" \
+  "I=$workdir/input-b.bam" \
+  "O=$workdir/picard-intervals.sam" \
+  SORT_ORDER=coordinate \
+  AS=true \
+  "INTERVALS=$workdir/targets.interval_list" \
+  VALIDATION_STRINGENCY=SILENT \
+  QUIET=true
+
+python3 - "$workdir/turbo-intervals.sam" "$workdir/picard-intervals.sam" <<'PY'
+import sys
+
+def record_names(path):
+    names = []
+    with open(path, encoding="utf-8") as handle:
+        for line in handle:
+            if not line.startswith("@"):
+                names.append(line.split("\t", 1)[0])
+    return names
+
+turbo = record_names(sys.argv[1])
+picard = record_names(sys.argv[2])
+if turbo != picard:
+    raise SystemExit(f"MergeSamFiles INTERVALS records differ from Picard: turbo={turbo} picard={picard}")
+if turbo != ["read-b"]:
+    raise SystemExit(f"MergeSamFiles INTERVALS kept unexpected records: {turbo}")
+print("MergeSamFiles INTERVALS filtering matches Picard")
+PY
+
+cargo run -q -p turbo-picard-cli --bin picard -- \
   MergeSamFiles \
   "I=$workdir/input-a.sam" \
   "I=$workdir/input-b.sam" \
@@ -158,4 +210,39 @@ for name in ["turbo-sidecars.bam.md5", "picard-sidecars.bam.md5"]:
     if not re.fullmatch(r"[0-9a-f]{32}", text):
         raise SystemExit(f"MergeSamFiles invalid md5 sidecar content in {name}: {text!r}")
 print("MergeSamFiles runtime sidecars and BAM record order match Picard")
+PY
+
+cargo run -q -p turbo-picard-cli --bin picard -- \
+  MergeSamFiles \
+  "I=$workdir/input-a.sam" \
+  "I=$workdir/input-b.sam" \
+  "O=$workdir/turbo-merge-dicts.sam" \
+  SORT_ORDER=coordinate \
+  MERGE_SEQUENCE_DICTIONARIES=true \
+  VALIDATION_STRINGENCY=SILENT \
+  QUIET=true
+
+"${conda_runner[@]}" run -p "$conda_prefix" picard MergeSamFiles \
+  "I=$workdir/input-a.sam" \
+  "I=$workdir/input-b.sam" \
+  "O=$workdir/picard-merge-dicts.sam" \
+  SORT_ORDER=coordinate \
+  MERGE_SEQUENCE_DICTIONARIES=true \
+  VALIDATION_STRINGENCY=SILENT \
+  QUIET=true
+
+python3 - "$workdir/turbo-merge-dicts.sam" "$workdir/picard-merge-dicts.sam" <<'PY'
+import sys
+
+def record_names(path):
+    names = []
+    with open(path, encoding="utf-8") as handle:
+        for line in handle:
+            if not line.startswith("@"):
+                names.append(line.split("\t", 1)[0])
+    return names
+
+if record_names(sys.argv[1]) != record_names(sys.argv[2]):
+    raise SystemExit("MergeSamFiles MERGE_SEQUENCE_DICTIONARIES=true record order differs from Picard")
+print("MergeSamFiles MERGE_SEQUENCE_DICTIONARIES=true compatible-dictionary output matches Picard")
 PY

@@ -37,6 +37,7 @@ Parity evidence:
 
 - `benchmarks/real-data/manifest.json`
 - `benchmarks/real-data/gatk-na12878-mito/evidence/real-data-comparison.md`
+- `benchmarks/real-data/gatk-na12878-mito-cram/evidence/real-data-comparison.md`
 - `benchmarks/real-data/picard-snvq/evidence/real-data-comparison.md`
 - `docs/parity.rst`
 

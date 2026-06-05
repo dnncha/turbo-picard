@@ -86,8 +86,13 @@ for fixture in basic paired scoring softclip secondary pair-score-tie clear-dt t
   fi
   "${command[@]}"
 
-  "${conda_runner[@]}" run -p "$conda_prefix" samtools view -h "$fixture_workdir/turbo-picard.bam" > "$fixture_workdir/turbo-picard.sam"
-  "${conda_runner[@]}" run -p "$conda_prefix" samtools view -h "$fixture_dir/picard.bam" > "$fixture_workdir/picard.sam"
+  view_args=(QUIET=true VALIDATION_STRINGENCY=SILENT RECORDS_ONLY=true)
+  cargo run -q -p turbo-picard-cli --bin picard -- \
+    ViewSam I="$fixture_workdir/turbo-picard.bam" O="$fixture_workdir/turbo-picard.sam" \
+    "${view_args[@]}"
+  cargo run -q -p turbo-picard-cli --bin picard -- \
+    ViewSam I="$fixture_dir/picard.bam" O="$fixture_workdir/picard.sam" \
+    "${view_args[@]}"
 
   python3 "$repo_root/tools/compare_markduplicates.py" \
     --picard-bam "$fixture_workdir/picard.sam" \

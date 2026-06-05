@@ -28,10 +28,69 @@ The comparison target depends on the command:
 * ``BuildBamIndex`` compares the exact BAI binary digest.
 * ``SamToFastq`` compares first-end, second-end, and unpaired FASTQ outputs.
 * ``ValidateSamFile`` compares the summary validation histogram and exit code.
+* ``FixMateInformation`` compares stable SAM text with incidental ``@PG`` lines
+  ignored.
+* ``SetNmMdAndUqTags`` compares stable SAM text with incidental ``@PG`` lines
+  ignored and optional tags sorted before comparison.
 
 Those rules are encoded in ``tools/verify_real_data_evidence.py`` and the
 command-specific parity scripts under ``tools/``. The saved evidence names the
 comparison method for each command so reviewers can see the boundary.
+
+CRAM preprocessing parity
+-------------------------
+
+``tools/verify_basic_cram_parity.sh`` compares Picard and ``turbo-picard`` on a
+shared reference-backed CRAM shard for the hot preprocessing path:
+
+* ``MarkDuplicates`` — semantic duplicate flags/tags and metrics (via
+  ``tools/compare_markduplicates.py``)
+* ``SortSam``, ``ViewSam``, ``RevertSam`` — record text via ``samtools view``
+* ``MergeSamFiles`` — coordinate-sorted SAM record multiset digest (same rule
+  as BAM real-data evidence)
+* ``CleanSam`` — per-read MAPQ and CIGAR
+* ``SamToFastq`` — first-end and second-end FASTQ
+* ``ReplaceSamHeader`` — header lines and record order, ignoring incidental
+  ``@PG`` command lines from the viewer
+* ``AddOrReplaceReadGroups`` — stable SAM text
+* ``ValidateSamFile`` — SUMMARY histogram rows
+* ``FixMateInformation`` — stable SAM text
+* ``SetNmMdAndUqTags`` — stable SAM text with optional tags sorted before
+  comparison
+* ``CollectQualityYieldMetrics``, ``CollectAlignmentSummaryMetrics``,
+  ``CollectInsertSizeMetrics``, ``CollectBaseDistributionByCycle``,
+  ``MeanQualityByCycle``, ``QualityScoreDistribution``, and
+  ``CollectGcBiasMetrics`` (detail and summary) — stable metrics rows
+
+``BuildBamIndex`` is checked on BAM, not CRAM. Picard 3.4.x rejects CRAM input
+for that command, so the CRAM verifier does not claim CRAM index parity there.
+
+``tools/verify_markdup_cram_parity.sh`` runs semantic MarkDuplicates parity on
+every checked-in MarkDuplicates fixture through CRAM input and output.
+
+``tools/verify_gatk_preprocessing_combo_parity.sh`` runs the GATK mitochondrial
+BAM preprocessing chain: MarkDuplicates, SortSam on the raw shard, SortSam on
+the markdup output, FixMateInformation after a queryname resort, and
+SetNmMdAndUqTags with ``fixtures/reference/chrM.fa``.
+
+``tools/verify_gatk_mito_bam_parity.sh`` exercises the same GATK mitochondrial
+shard on native BAM I/O (ViewSam through chart metrics, plus BuildBamIndex,
+RevertSam, SamToFastq, CollectMultipleMetrics, CollectWgsMetrics, and
+FixMateInformation). ``tools/verify_gatk_mito_cram_parity.sh`` and
+``tools/verify_gatk_preprocessing_combo_cram_parity.sh`` exercise the GATK
+mitochondrial fixture through CRAM input and output. They prefer the checked-in
+``benchmarks/real-data/gatk-na12878-mito-cram/input.cram`` shard (CRAM 3.0 for
+Picard 3.4.x compatibility). The CRAM combo script runs MarkDuplicates, SortSam
+on the raw shard, SortSam on the markdup output, and SetNmMdAndUqTags on the
+sorted markdup output. It also checks ViewSam, CleanSam, AddOrReplaceReadGroups,
+ValidateSamFile, and the same metrics commands covered by the checked-in CRAM
+real-data bundle. Maintainer regeneration for CRAM real-data evidence is
+``tools/bootstrap_gatk_mito_cram_evidence.sh``; checked-in bundles are
+validated with ``tools/validate_gatk_mito_cram_evidence.sh`` (also run in CI).
+
+Shared comparison helpers live in ``tools/parity_compare.py``. Real-data
+audits accept CRAM inputs when ``--reference-fasta`` is supplied to
+``tools/compare_real_data.py`` and ``tools/audit_real_data.py``.
 
 What Parity Does Not Prove
 --------------------------

@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 import json
 import sys
@@ -344,6 +345,132 @@ class RealDataEvidenceTests(unittest.TestCase):
                     json.dumps(manifest["datasets"][0]),
                     encoding="utf-8",
                 )
+                cram_root = root / "benchmarks/real-data/fixture-cram"
+                cram_input = cram_root / "input.cram"
+                cram_evidence_root = cram_root / "evidence"
+                cram_evidence_root.mkdir(parents=True, exist_ok=True)
+                cram_input.write_bytes(b"cram")
+                cram_expected_commands = {
+                    command: comparison
+                    for command, comparison in {
+                        "CleanSam": "post-command SAM record digest",
+                        "CollectQualityYieldMetrics": "stable metrics digest",
+                        "CollectInsertSizeMetrics": "stable metrics digest with insert-size histogram",
+                        "MarkDuplicates": "duplicate-marking semantic digest plus stable metrics digest",
+                        "SortSam": "coordinate-sorted SAM record multiset digest",
+                        "AddOrReplaceReadGroups": "SAM record digest plus read-group header digest",
+                    }.items()
+                }
+                cram_evidence = {
+                    "parity": "PASS",
+                    "picard_version": verify_real_data_evidence.EXPECTED_PICARD_VERSION,
+                    "turbo_picard_version": "picard 0.1.1",
+                    "input": {
+                        "path": "benchmarks/real-data/fixture-cram/input.cram",
+                        "format": "CRAM",
+                        "size_bytes": len(b"cram"),
+                        "sha256": hashlib.sha256(b"cram").hexdigest(),
+                        "source_url": source_url,
+                        "source_commit": source_commit,
+                    },
+                    "commands": [
+                        {
+                            "command": command_name,
+                            "status": "PASS",
+                            "comparison": command_comparison,
+                            "turbo_seconds": 0.001,
+                            "picard_seconds": 0.001,
+                            "speedup": 1.0,
+                            "turbo_artifact": (
+                                "benchmarks/real-data/fixture-cram/evidence/work/"
+                                f"{command_name}/turbo.out"
+                            ),
+                            "picard_artifact": (
+                                "benchmarks/real-data/fixture-cram/evidence/work/"
+                                f"{command_name}/picard.out"
+                            ),
+                            "turbo_digest": "abc123",
+                            "picard_digest": "abc123",
+                        }
+                        for command_name, command_comparison in cram_expected_commands.items()
+                    ],
+                }
+                cram_evidence_json = cram_evidence_root / "real-data-comparison.json"
+                cram_evidence_md = cram_evidence_root / "real-data-comparison.md"
+                cram_evidence_json.write_text(json.dumps(cram_evidence), encoding="utf-8")
+                cram_evidence_md.write_text(
+                    "\n".join(
+                        [
+                            f"Input BAM: `{cram_evidence['input']['path']}`",
+                            f"Input SHA-256: `{cram_evidence['input']['sha256']}`",
+                            f"Picard: `{verify_real_data_evidence.EXPECTED_PICARD_VERSION}`",
+                            "## Comparison details",
+                            "ignores headers",
+                            "after a BAM-writing command",
+                            "generated headers do not affect parity",
+                            "duplicate flags",
+                            "tie-order differences",
+                            "sorted @RG header fields",
+                            "## Artifact digests",
+                            "benchmarks/real-data/fixture-cram/evidence/work",
+                            *(
+                                f"| {command_name} | PASS | {command_comparison} | 0.001s | 0.001s | 1.00x |"
+                                for command_name, command_comparison in cram_expected_commands.items()
+                            ),
+                            *(
+                                path
+                                for command_name in cram_expected_commands
+                                for path in (
+                                    f"benchmarks/real-data/fixture-cram/evidence/work/{command_name}/turbo.out",
+                                    f"benchmarks/real-data/fixture-cram/evidence/work/{command_name}/picard.out",
+                                )
+                            ),
+                        ]
+                    ),
+                    encoding="utf-8",
+                )
+                manifest["datasets"].append(
+                    {
+                        "id": "fixture-cram",
+                        "description": "fixture CRAM release candidate",
+                        "input_path": "benchmarks/real-data/fixture-cram/input.cram",
+                        "evidence_json": "benchmarks/real-data/fixture-cram/evidence/real-data-comparison.json",
+                        "evidence_markdown": "benchmarks/real-data/fixture-cram/evidence/real-data-comparison.md",
+                        "expected_commands": cram_expected_commands,
+                        "release_tier": "release_candidate",
+                        "scope_caveat": "fixture CRAM release candidate",
+                        "sha256": cram_evidence["input"]["sha256"],
+                        "source_url": source_url,
+                        "source_commit": source_commit,
+                        "minimum_input_bytes": len(b"cram"),
+                    }
+                )
+                (cram_evidence_root / "manifest-entry.json").write_text(
+                    json.dumps(manifest["datasets"][1]),
+                    encoding="utf-8",
+                )
+                project_readme += "fixture-cram\n"
+                readme += (
+                    f"{source_url}\n{source_commit}\n{cram_evidence['input']['sha256']}\n"
+                    "benchmarks/real-data/fixture-cram/evidence/real-data-comparison.md\n"
+                    "fixture CRAM release candidate\n"
+                    f"{len(b'cram')}\n"
+                )
+                site += (
+                    "fixture-cram\n"
+                    "benchmarks/real-data/fixture-cram/evidence/real-data-comparison.md\n"
+                    f"{cram_evidence['input']['sha256']}\n"
+                )
+                benchmark_docs += (
+                    f"{source_url}\n{source_commit}\n{cram_evidence['input']['sha256']}\n"
+                    "benchmarks/real-data/fixture-cram/evidence/real-data-comparison.md\n"
+                    "fixture CRAM release candidate\n"
+                    f"{len(b'cram')}\n"
+                )
+                for command_name in cram_expected_commands:
+                    readme += f"| {command_name} | PASS | {cram_expected_commands[command_name]} |\n"
+                    site += command_name + "\n"
+                    benchmark_docs += command_name + "\n"
                 with mock.patch.object(
                     verify_real_data_evidence,
                     "RELEASE_CANDIDATE_PORTFOLIO_MIN_BYTES",

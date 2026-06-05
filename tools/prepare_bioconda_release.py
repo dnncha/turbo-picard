@@ -46,9 +46,12 @@ KNOWN_COMPARISONS = {
     "coordinate-sorted SAM record multiset digest",
     "duplicate-marking semantic digest plus stable metrics digest",
     "post-command SAM record digest",
+    "replacement header lines and record order digest",
     "reverted SAM record digest",
     "stable metrics digest",
     "stable metrics digest with insert-size histogram",
+    "stable SAM digest after queryname sort and mate fixing",
+    "stable SAM digest with NM/MD/UQ tags",
     "summary validation histogram plus exit code",
 }
 

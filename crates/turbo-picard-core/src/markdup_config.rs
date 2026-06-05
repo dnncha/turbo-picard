@@ -26,6 +26,7 @@ pub struct MarkDuplicatesConfig {
     pub clear_dt: bool,
     pub optical_duplicate_pixel_distance: Option<u32>,
     pub compression_level: Option<u32>,
+    pub reference_sequence: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -97,6 +98,7 @@ impl MarkDuplicatesConfig {
                 "OPTICAL_DUPLICATE_PIXEL_DISTANCE",
             )?,
             compression_level: optional_compression_level(args)?,
+            reference_sequence: optional_scalar(args, "REFERENCE_SEQUENCE")?,
         })
     }
 }

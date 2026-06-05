@@ -227,6 +227,17 @@ fn normalizes_conflicting_aliases_by_command() {
         .expect("SetNmMdAndUqTags args parse");
     assert_eq!(set_tags["REFERENCE_SEQUENCE"], vec!["ref.fa"]);
 
+    let viewsam_args = vec![
+        "I=in.cram".to_string(),
+        "R=ref.fa".to_string(),
+        "RECORDS_ONLY=true".to_string(),
+    ];
+    let viewsam = normalize_picard_args_for_command("ViewSam", &viewsam_args)
+        .expect("ViewSam arguments parse");
+    assert_eq!(viewsam["INPUT"], vec!["in.cram"]);
+    assert_eq!(viewsam["REFERENCE_SEQUENCE"], vec!["ref.fa"]);
+    assert_eq!(viewsam["RECORDS_ONLY"], vec!["true"]);
+
     let liftover_args = vec![
         "C=lift.chain".to_string(),
         "R=target.fa".to_string(),

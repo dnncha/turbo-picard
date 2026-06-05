@@ -34,6 +34,7 @@ fn marks_duplicate_records_in_bam() {
         clear_dt: true,
         optical_duplicate_pixel_distance: None,
         compression_level: None,
+        reference_sequence: None,
     };
 
     turbo_picard_markdup::run(&config).expect("BAM duplicate marking succeeds");
@@ -73,6 +74,7 @@ fn marks_duplicate_pairs_and_reports_paired_metrics() {
         clear_dt: true,
         optical_duplicate_pixel_distance: None,
         compression_level: None,
+        reference_sequence: None,
     };
 
     turbo_picard_markdup::run(&config).expect("BAM duplicate marking succeeds");
@@ -116,6 +118,7 @@ fn mate_unmapped_aligned_reads_are_unpaired_duplicate_candidates() {
         clear_dt: true,
         optical_duplicate_pixel_distance: None,
         compression_level: None,
+        reference_sequence: None,
     };
 
     turbo_picard_markdup::run(&config).expect("BAM duplicate marking succeeds");
@@ -159,6 +162,7 @@ fn keeps_highest_quality_duplicate_representative() {
         clear_dt: true,
         optical_duplicate_pixel_distance: None,
         compression_level: None,
+        reference_sequence: None,
     };
 
     turbo_picard_markdup::run(&config).expect("BAM duplicate marking succeeds");
@@ -198,6 +202,7 @@ fn groups_duplicates_by_unclipped_five_prime_position() {
         clear_dt: true,
         optical_duplicate_pixel_distance: None,
         compression_level: None,
+        reference_sequence: None,
     };
 
     turbo_picard_markdup::run(&config).expect("BAM duplicate marking succeeds");
@@ -237,6 +242,7 @@ fn excludes_secondary_alignments_from_duplicate_testing() {
         clear_dt: true,
         optical_duplicate_pixel_distance: None,
         compression_level: None,
+        reference_sequence: None,
     };
 
     turbo_picard_markdup::run(&config).expect("BAM duplicate marking succeeds");
@@ -279,6 +285,7 @@ fn chooses_duplicate_representative_per_pair_not_per_mate() {
         clear_dt: true,
         optical_duplicate_pixel_distance: None,
         compression_level: None,
+        reference_sequence: None,
     };
 
     turbo_picard_markdup::run(&config).expect("BAM duplicate marking succeeds");
@@ -318,6 +325,7 @@ fn duplicate_scoring_ignores_bases_below_q15() {
         clear_dt: true,
         optical_duplicate_pixel_distance: None,
         compression_level: None,
+        reference_sequence: None,
     };
 
     turbo_picard_markdup::run(&config).expect("BAM duplicate marking succeeds");
@@ -356,6 +364,7 @@ fn paired_records_without_an_eligible_mate_are_not_marked_as_singleton_duplicate
         clear_dt: true,
         optical_duplicate_pixel_distance: None,
         compression_level: None,
+        reference_sequence: None,
     };
 
     turbo_picard_markdup::run(&config).expect("BAM duplicate marking succeeds");
@@ -399,6 +408,7 @@ fn creates_bam_index_when_requested() {
         clear_dt: true,
         optical_duplicate_pixel_distance: None,
         compression_level: None,
+        reference_sequence: None,
     };
 
     turbo_picard_markdup::run(&config).expect("BAM duplicate marking succeeds");
@@ -437,6 +447,7 @@ fn creates_md5_sidecar_when_requested() {
         clear_dt: true,
         optical_duplicate_pixel_distance: None,
         compression_level: None,
+        reference_sequence: None,
     };
 
     turbo_picard_markdup::run(&config).expect("BAM duplicate marking succeeds");
@@ -477,6 +488,7 @@ fn adds_picard_program_group_header_and_read_tags_by_default() {
         clear_dt: true,
         optical_duplicate_pixel_distance: None,
         compression_level: None,
+        reference_sequence: None,
     };
 
     turbo_picard_markdup::run(&config).expect("BAM duplicate marking succeeds");
@@ -521,6 +533,7 @@ fn tags_library_duplicates_when_tagging_policy_is_all() {
         clear_dt: true,
         optical_duplicate_pixel_distance: None,
         compression_level: None,
+        reference_sequence: None,
     };
 
     turbo_picard_markdup::run(&config).expect("BAM duplicate marking succeeds");
@@ -560,6 +573,7 @@ fn tags_duplicate_set_members_when_requested() {
         clear_dt: true,
         optical_duplicate_pixel_distance: None,
         compression_level: None,
+        reference_sequence: None,
     };
 
     turbo_picard_markdup::run(&config).expect("BAM duplicate marking succeeds");
@@ -608,6 +622,7 @@ fn separates_duplicate_groups_by_barcode_tag() {
         clear_dt: true,
         optical_duplicate_pixel_distance: None,
         compression_level: None,
+        reference_sequence: None,
     };
 
     turbo_picard_markdup::run(&config).expect("BAM duplicate marking succeeds");
@@ -646,6 +661,7 @@ fn separates_duplicate_groups_by_read_one_and_read_two_barcode_tags() {
         clear_dt: true,
         optical_duplicate_pixel_distance: None,
         compression_level: None,
+        reference_sequence: None,
     };
 
     turbo_picard_markdup::run(&config).expect("BAM duplicate marking succeeds");
@@ -684,6 +700,7 @@ fn tags_optical_duplicate_pairs_and_reports_metrics() {
         clear_dt: true,
         optical_duplicate_pixel_distance: Some(100),
         compression_level: None,
+        reference_sequence: None,
     };
 
     turbo_picard_markdup::run(&config).expect("BAM duplicate marking succeeds");
@@ -728,6 +745,7 @@ fn removes_only_optical_duplicates_when_requested() {
         clear_dt: true,
         optical_duplicate_pixel_distance: Some(100),
         compression_level: None,
+        reference_sequence: None,
     };
 
     turbo_picard_markdup::run(&config).expect("BAM duplicate marking succeeds");
@@ -772,6 +790,7 @@ fn removes_duplicate_pairs_when_requested() {
         clear_dt: true,
         optical_duplicate_pixel_distance: None,
         compression_level: None,
+        reference_sequence: None,
     };
 
     turbo_picard_markdup::run(&config).expect("BAM duplicate marking succeeds");
@@ -811,6 +830,7 @@ fn clears_existing_duplicate_type_tags_when_requested() {
         clear_dt: true,
         optical_duplicate_pixel_distance: Some(2500),
         compression_level: None,
+        reference_sequence: None,
     };
 
     turbo_picard_markdup::run(&config).expect("BAM duplicate marking succeeds");
@@ -849,6 +869,7 @@ fn preserves_existing_duplicate_type_tags_when_clear_dt_is_false() {
         clear_dt: false,
         optical_duplicate_pixel_distance: Some(2500),
         compression_level: None,
+        reference_sequence: None,
     };
 
     turbo_picard_markdup::run(&config).expect("BAM duplicate marking succeeds");
@@ -889,6 +910,7 @@ fn marks_duplicate_pairs_across_multiple_bam_inputs() {
         clear_dt: true,
         optical_duplicate_pixel_distance: None,
         compression_level: None,
+        reference_sequence: None,
     };
 
     turbo_picard_markdup::run(&config).expect("BAM duplicate marking succeeds");
@@ -929,6 +951,7 @@ fn keeps_duplicate_positions_separate_by_library() {
         clear_dt: true,
         optical_duplicate_pixel_distance: None,
         compression_level: None,
+        reference_sequence: None,
     };
 
     turbo_picard_markdup::run(&config).expect("BAM duplicate marking succeeds");
@@ -970,6 +993,7 @@ fn copies_single_bam_when_no_duplicates_and_no_rewrite_options_are_requested() {
         clear_dt: false,
         optical_duplicate_pixel_distance: None,
         compression_level: None,
+        reference_sequence: None,
     };
 
     turbo_picard_markdup::run(&config).expect("BAM duplicate marking succeeds");
@@ -1016,6 +1040,7 @@ fn preserves_libraries_from_later_bam_inputs() {
         clear_dt: true,
         optical_duplicate_pixel_distance: None,
         compression_level: None,
+        reference_sequence: None,
     };
 
     turbo_picard_markdup::run(&config).expect("BAM duplicate marking succeeds");

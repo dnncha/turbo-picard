@@ -43,6 +43,7 @@ requirements:
 test:
   commands:
     - picard --version
+    - turbo-picard AccelerationStatus --help
     - picard MarkDuplicates --help
 
 about:

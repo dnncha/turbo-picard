@@ -227,3 +227,166 @@ if turbo != picard:
     raise SystemExit(f"FastqToSam coordinate stable SAM differs:\nturbo={turbo}\npicard={picard}")
 print("FastqToSam SORT_ORDER=coordinate stable SAM matches Picard")
 PY
+
+cat > "$workdir/empty-lines.fastq" <<'FQ'
+
+@read1
+ACGT
++
+FFFF
+FQ
+
+cargo run -q -p turbo-picard-cli --bin picard -- \
+  FastqToSam \
+  "F1=$workdir/empty-lines.fastq" \
+  "O=$workdir/turbo-empty-lines.sam" \
+  SM=sample \
+  RG=rg1 \
+  ALLOW_AND_IGNORE_EMPTY_LINES=true \
+  QUALITY_FORMAT=Standard \
+  VALIDATION_STRINGENCY=SILENT \
+  QUIET=true
+
+"${conda_runner[@]}" run -p "$conda_prefix" picard FastqToSam \
+  "F1=$workdir/empty-lines.fastq" \
+  "O=$workdir/picard-empty-lines.sam" \
+  SM=sample \
+  RG=rg1 \
+  ALLOW_AND_IGNORE_EMPTY_LINES=true \
+  QUALITY_FORMAT=Standard \
+  VALIDATION_STRINGENCY=SILENT \
+  QUIET=true
+
+python3 - "$workdir/turbo-empty-lines.sam" "$workdir/picard-empty-lines.sam" <<'PY'
+import sys
+
+def stable(path):
+    rows = []
+    for line in open(path, encoding="utf-8"):
+        line = line.rstrip("\n")
+        if line.startswith("@HD") or line.startswith("@RG") or not line.startswith("@"):
+            rows.append(line)
+    return rows
+
+turbo = stable(sys.argv[1])
+picard = stable(sys.argv[2])
+if turbo != picard:
+    raise SystemExit(f"FastqToSam empty-line stable SAM differs:\nturbo={turbo}\npicard={picard}")
+print("FastqToSam ALLOW_AND_IGNORE_EMPTY_LINES output matches Picard")
+PY
+
+: > "$workdir/empty.fastq"
+cargo run -q -p turbo-picard-cli --bin picard -- \
+  FastqToSam \
+  "F1=$workdir/empty.fastq" \
+  "O=$workdir/turbo-empty.sam" \
+  SM=sample \
+  RG=rg1 \
+  ALLOW_EMPTY_FASTQ=true \
+  QUALITY_FORMAT=Standard \
+  VALIDATION_STRINGENCY=SILENT \
+  QUIET=true
+
+"${conda_runner[@]}" run -p "$conda_prefix" picard FastqToSam \
+  "F1=$workdir/empty.fastq" \
+  "O=$workdir/picard-empty.sam" \
+  SM=sample \
+  RG=rg1 \
+  ALLOW_EMPTY_FASTQ=true \
+  QUALITY_FORMAT=Standard \
+  VALIDATION_STRINGENCY=SILENT \
+  QUIET=true
+
+python3 - "$workdir/turbo-empty.sam" "$workdir/picard-empty.sam" <<'PY'
+import sys
+
+def header(path):
+    return [line.rstrip("\n") for line in open(path, encoding="utf-8") if line.startswith("@HD") or line.startswith("@RG")]
+
+if header(sys.argv[1]) != header(sys.argv[2]):
+    raise SystemExit("FastqToSam empty FASTQ header differs from Picard")
+print("FastqToSam ALLOW_EMPTY_FASTQ header matches Picard")
+PY
+
+cargo run -q -p turbo-picard-cli --bin picard -- \
+  FastqToSam \
+  "F1=$workdir/r1.fastq" \
+  "O=$workdir/turbo-minmax.sam" \
+  SM=sample \
+  RG=rg1 \
+  MIN_Q=0 \
+  MAX_Q=40 \
+  QUALITY_FORMAT=Standard \
+  VALIDATION_STRINGENCY=SILENT \
+  QUIET=true
+
+"${conda_runner[@]}" run -p "$conda_prefix" picard FastqToSam \
+  "F1=$workdir/r1.fastq" \
+  "O=$workdir/picard-minmax.sam" \
+  SM=sample \
+  RG=rg1 \
+  MIN_Q=0 \
+  MAX_Q=40 \
+  QUALITY_FORMAT=Standard \
+  VALIDATION_STRINGENCY=SILENT \
+  QUIET=true
+
+python3 - "$workdir/turbo-minmax.sam" "$workdir/picard-minmax.sam" <<'PY'
+import sys
+
+def stable(path):
+    rows = []
+    for line in open(path, encoding="utf-8"):
+        line = line.rstrip("\n")
+        if line.startswith("@HD") or line.startswith("@RG") or not line.startswith("@"):
+            rows.append(line)
+    return rows
+
+if stable(sys.argv[1]) != stable(sys.argv[2]):
+    raise SystemExit("FastqToSam MIN_Q/MAX_Q output differs from Picard")
+print("FastqToSam MIN_Q/MAX_Q output matches Picard")
+PY
+
+cat > "$workdir/illumina.fastq" <<'FQ'
+@read1
+ACGT
++
+bbbb
+FQ
+
+for name in r1 illumina; do
+  cargo run -q -p turbo-picard-cli --bin picard -- \
+    FastqToSam \
+    "F1=$workdir/$name.fastq" \
+    "O=$workdir/turbo-auto-$name.sam" \
+    SM=sample \
+    RG=rg1 \
+    VALIDATION_STRINGENCY=SILENT \
+    QUIET=true
+
+  "${conda_runner[@]}" run -p "$conda_prefix" picard FastqToSam \
+    "F1=$workdir/$name.fastq" \
+    "O=$workdir/picard-auto-$name.sam" \
+    SM=sample \
+    RG=rg1 \
+    VALIDATION_STRINGENCY=SILENT \
+    QUIET=true
+
+  python3 - "$workdir/turbo-auto-$name.sam" "$workdir/picard-auto-$name.sam" "$name" <<'PY'
+import sys
+
+turbo_path, picard_path, name = sys.argv[1:]
+
+def stable(path):
+    rows = []
+    for line in open(path, encoding="utf-8"):
+        line = line.rstrip("\n")
+        if line.startswith("@HD") or line.startswith("@RG") or not line.startswith("@"):
+            rows.append(line)
+    return rows
+
+if stable(turbo_path) != stable(picard_path):
+    raise SystemExit(f"FastqToSam auto quality output differs from Picard for {name}")
+print(f"FastqToSam auto quality output matches Picard for {name}")
+PY
+done

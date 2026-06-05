@@ -28,12 +28,21 @@ from urllib.parse import urlparse
 
 ROOT = Path(__file__).resolve().parents[1]
 RELEASE_CANDIDATE_MIN_BYTES = 1_000_000
+CRAM_RELEASE_CANDIDATE_MIN_BYTES = 500_000
 RELEASE_CANDIDATE_REQUIRED_COMMANDS = {
     "ViewSam",
     "CleanSam",
     "CollectQualityYieldMetrics",
     "CollectAlignmentSummaryMetrics",
     "MarkDuplicates",
+}
+CRAM_RELEASE_CANDIDATE_REQUIRED_COMMANDS = {
+    "CleanSam",
+    "CollectQualityYieldMetrics",
+    "CollectInsertSizeMetrics",
+    "MarkDuplicates",
+    "SortSam",
+    "AddOrReplaceReadGroups",
 }
 
 
@@ -75,7 +84,22 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Compare turbo-picard and Picard on a real input BAM.",
     )
-    parser.add_argument("--input-bam", required=True, type=Path)
+    parser.add_argument(
+        "--input-bam",
+        required=True,
+        type=Path,
+        help="Input BAM or CRAM alignment file.",
+    )
+    parser.add_argument(
+        "--merge-input-bam",
+        type=Path,
+        help="Second alignment for MergeSamFiles; defaults to --input-bam.",
+    )
+    parser.add_argument(
+        "--reference-fasta",
+        type=Path,
+        help="Reference FASTA required when --input-bam is CRAM.",
+    )
     parser.add_argument(
         "--input-source-url",
         help="Optional public source URL or accession for the input BAM.",
@@ -117,6 +141,16 @@ def parse_args() -> argparse.Namespace:
             "ValidateSamFile",
             "RevertSam",
             "SamToFastq",
+            "FixMateInformation",
+            "SetNmMdAndUqTags",
+            "MergeSamFiles",
+            "ReplaceSamHeader",
+            "MeanQualityByCycle",
+            "QualityScoreDistribution",
+            "CollectBaseDistributionByCycle",
+            "CollectGcBiasMetrics",
+            "CollectWgsMetrics",
+            "CollectMultipleMetrics",
         ],
         help="Commands to compare on the real BAM.",
     )
@@ -152,9 +186,19 @@ def parse_args() -> argparse.Namespace:
 def main() -> int:
     args = parse_args()
     if not args.input_bam.exists():
-        raise SystemExit(f"missing input BAM: {args.input_bam}")
+        raise SystemExit(f"missing input alignment: {args.input_bam}")
+    if args.input_bam.suffix.lower() == ".cram":
+        if args.reference_fasta is None:
+            raise SystemExit("CRAM input requires --reference-fasta")
+        if not args.reference_fasta.exists():
+            raise SystemExit(f"missing reference FASTA: {args.reference_fasta}")
     if args.stop_after is not None and args.stop_after < 1:
         raise SystemExit("--stop-after must be positive")
+    merge_input = args.merge_input_bam or args.input_bam
+    if not merge_input.exists():
+        raise SystemExit(f"missing merge input alignment: {merge_input}")
+    if merge_input.suffix.lower() == ".cram" and args.reference_fasta is None:
+        raise SystemExit("CRAM merge input requires --reference-fasta")
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
     if not args.skip_build:
@@ -173,13 +217,29 @@ def main() -> int:
     evidence: list[CommandEvidence] = []
     try:
         for command in args.commands:
-            evidence.append(compare_command(command, args.input_bam, work_root, turbo_prefix, picard_prefix, args.stop_after))
+            evidence.append(
+                compare_command(
+                    command,
+                    args.input_bam,
+                    work_root,
+                    turbo_prefix,
+                    picard_prefix,
+                    args.stop_after,
+                    args.reference_fasta,
+                    merge_input,
+                )
+            )
     finally:
         if args.discard_work:
             shutil.rmtree(work_root, ignore_errors=True)
 
     summary = {
-        "input": input_metadata(args.input_bam, args.input_source_url, args.input_source_commit),
+        "input": input_metadata(
+            args.input_bam,
+            args.input_source_url,
+            args.input_source_commit,
+            args.reference_fasta,
+        ),
         "picard_command": " ".join(picard_prefix),
         "picard_version": capture_version([*picard_prefix, "ViewSam", "--version"]),
         "turbo_picard_command": " ".join(turbo_prefix),
@@ -229,7 +289,55 @@ def default_picard_prefix(conda_prefix: str) -> list[str]:
         runner = shutil.which(name)
         if runner:
             return [runner, "run", "-p", conda_prefix, "picard"]
-    raise SystemExit("mamba or micromamba is required when --picard-command is omitted")
+    picard = Path(conda_prefix) / "bin" / "picard"
+    if picard.exists():
+        return [str(picard)]
+    raise SystemExit(
+        "mamba, micromamba, or a picard binary under --conda-prefix is required when "
+        "--picard-command is omitted"
+    )
+
+
+def alignment_io_args(input_alignment: Path, reference_fasta: Path | None) -> list[str]:
+    args = [f"I={input_alignment}"]
+    if input_alignment.suffix.lower() == ".cram":
+        if reference_fasta is None:
+            raise SystemExit("CRAM input requires --reference-fasta")
+        args.append(f"R={reference_fasta}")
+    return args
+
+
+def materialize_alignment_sam(
+    input_alignment: Path,
+    output_sam: Path,
+    reference_fasta: Path | None,
+) -> float:
+    command = ["samtools", "view", "-h"]
+    if input_alignment.suffix.lower() == ".cram":
+        if reference_fasta is None:
+            raise SystemExit("CRAM view requires --reference-fasta")
+        command.extend(["-T", str(reference_fasta)])
+    command.extend(["-o", str(output_sam), str(input_alignment)])
+    return run(command)
+
+
+def write_comparison_sams(
+    turbo_alignment: Path,
+    picard_alignment: Path,
+    turbo_sam: Path,
+    picard_sam: Path,
+    reference_fasta: Path | None,
+) -> None:
+    materialize_alignment_sam(turbo_alignment, turbo_sam, reference_fasta)
+    materialize_alignment_sam(picard_alignment, picard_sam, reference_fasta)
+
+
+def output_container_path(workdir: Path, prefix: str, input_alignment: Path) -> Path:
+    stem = prefix.rstrip(".")
+    suffix = input_alignment.suffix.lower()
+    if suffix in {".bam", ".cram", ".sam"}:
+        return workdir / f"{stem}{input_alignment.suffix}"
+    return workdir / f"{stem}.bam"
 
 
 def compare_command(
@@ -239,33 +347,115 @@ def compare_command(
     turbo_prefix: list[str],
     picard_prefix: list[str],
     stop_after: int | None,
+    reference_fasta: Path | None,
+    merge_input_bam: Path,
 ) -> CommandEvidence:
     workdir = work_root / command
     workdir.mkdir(parents=True)
     if command == "ViewSam":
-        return compare_viewsam(input_bam, workdir, turbo_prefix, picard_prefix)
+        return compare_viewsam(input_bam, workdir, turbo_prefix, picard_prefix, reference_fasta)
     if command == "CleanSam":
-        return compare_bam_output(command, input_bam, workdir, turbo_prefix, picard_prefix, ["CREATE_INDEX=true"])
+        clean_sam_extra = (
+            []
+            if input_bam.suffix.lower() == ".cram"
+            else ["CREATE_INDEX=true"]
+        )
+        return compare_bam_output(
+            command,
+            input_bam,
+            workdir,
+            turbo_prefix,
+            picard_prefix,
+            clean_sam_extra,
+            reference_fasta,
+        )
     if command == "MarkDuplicates":
-        return compare_bam_output(command, input_bam, workdir, turbo_prefix, picard_prefix, ["M={metrics}"])
+        return compare_bam_output(
+            command,
+            input_bam,
+            workdir,
+            turbo_prefix,
+            picard_prefix,
+            ["M={metrics}"],
+            reference_fasta,
+        )
     if command == "AddOrReplaceReadGroups":
-        return compare_add_or_replace_read_groups(input_bam, workdir, turbo_prefix, picard_prefix)
+        return compare_add_or_replace_read_groups(
+            input_bam, workdir, turbo_prefix, picard_prefix, reference_fasta
+        )
     if command == "BuildBamIndex":
-        return compare_build_bam_index(input_bam, workdir, turbo_prefix, picard_prefix)
+        return compare_build_bam_index(
+            input_bam, workdir, turbo_prefix, picard_prefix, reference_fasta
+        )
     if command == "RevertSam":
-        return compare_revertsam(input_bam, workdir, turbo_prefix, picard_prefix)
+        return compare_revertsam(input_bam, workdir, turbo_prefix, picard_prefix, reference_fasta)
     if command == "SamToFastq":
-        return compare_samtofastq(input_bam, workdir, turbo_prefix, picard_prefix)
+        return compare_samtofastq(input_bam, workdir, turbo_prefix, picard_prefix, reference_fasta)
     if command == "SortSam":
-        return compare_sortsam(input_bam, workdir, turbo_prefix, picard_prefix)
+        return compare_sortsam(input_bam, workdir, turbo_prefix, picard_prefix, reference_fasta)
+    if command == "FixMateInformation":
+        return compare_fix_mate_information(
+            input_bam, workdir, turbo_prefix, picard_prefix, reference_fasta
+        )
+    if command == "SetNmMdAndUqTags":
+        return compare_set_nm_md_and_uq_tags(
+            input_bam, workdir, turbo_prefix, picard_prefix, reference_fasta
+        )
+    if command == "MergeSamFiles":
+        return compare_merge_sam_files(
+            input_bam,
+            merge_input_bam,
+            workdir,
+            turbo_prefix,
+            picard_prefix,
+            reference_fasta,
+        )
+    if command == "ReplaceSamHeader":
+        return compare_replace_sam_header(
+            input_bam, workdir, turbo_prefix, picard_prefix, reference_fasta
+        )
     if command == "CollectInsertSizeMetrics":
         extra = [f"STOP_AFTER={stop_after}"] if stop_after is not None else []
-        return compare_insert_size_metrics(input_bam, workdir, turbo_prefix, picard_prefix, extra)
+        return compare_insert_size_metrics(
+            input_bam, workdir, turbo_prefix, picard_prefix, extra, reference_fasta
+        )
     if command == "ValidateSamFile":
-        return compare_validate_sam_file(input_bam, workdir, turbo_prefix, picard_prefix)
+        return compare_validate_sam_file(
+            input_bam, workdir, turbo_prefix, picard_prefix, reference_fasta
+        )
     if command in {"CollectQualityYieldMetrics", "CollectAlignmentSummaryMetrics"}:
         extra = [f"STOP_AFTER={stop_after}"] if stop_after is not None else []
-        return compare_metrics(command, input_bam, workdir, turbo_prefix, picard_prefix, extra)
+        return compare_metrics(
+            command, input_bam, workdir, turbo_prefix, picard_prefix, extra, reference_fasta
+        )
+    if command in {
+        "MeanQualityByCycle",
+        "QualityScoreDistribution",
+        "CollectBaseDistributionByCycle",
+    }:
+        extra = [f"STOP_AFTER={stop_after}"] if stop_after is not None else []
+        return compare_chart_metrics(
+            command, input_bam, workdir, turbo_prefix, picard_prefix, extra, reference_fasta
+        )
+    if command == "CollectGcBiasMetrics":
+        if reference_fasta is None:
+            raise SystemExit("CollectGcBiasMetrics requires --reference-fasta")
+        extra = [f"STOP_AFTER={stop_after}"] if stop_after is not None else []
+        return compare_gc_bias_metrics(
+            input_bam, workdir, turbo_prefix, picard_prefix, extra, reference_fasta
+        )
+    if command == "CollectWgsMetrics":
+        if reference_fasta is None:
+            raise SystemExit("CollectWgsMetrics requires --reference-fasta")
+        extra = [f"STOP_AFTER={stop_after}"] if stop_after is not None else []
+        return compare_wgs_metrics(
+            input_bam, workdir, turbo_prefix, picard_prefix, extra, reference_fasta
+        )
+    if command == "CollectMultipleMetrics":
+        extra = [f"STOP_AFTER={stop_after}"] if stop_after is not None else []
+        return compare_collect_multiple_metrics(
+            input_bam, workdir, turbo_prefix, picard_prefix, extra, reference_fasta
+        )
     raise AssertionError(command)
 
 
@@ -274,14 +464,229 @@ def compare_viewsam(
     workdir: Path,
     turbo_prefix: list[str],
     picard_prefix: list[str],
+    reference_fasta: Path | None,
 ) -> CommandEvidence:
     turbo_out = workdir / "turbo.sam"
     picard_out = workdir / "picard.sam"
-    turbo_seconds = run([*turbo_prefix, "ViewSam", f"I={input_bam}", "VALIDATION_STRINGENCY=SILENT", "QUIET=true"], stdout=turbo_out)
-    picard_seconds = run([*picard_prefix, "ViewSam", f"I={input_bam}", "VALIDATION_STRINGENCY=SILENT", "QUIET=true"], stdout=picard_out)
+    io_args = alignment_io_args(input_bam, reference_fasta)
+    turbo_seconds = run(
+        [*turbo_prefix, "ViewSam", *io_args, "VALIDATION_STRINGENCY=SILENT", "QUIET=true"],
+        stdout=turbo_out,
+    )
+    picard_seconds = run(
+        [*picard_prefix, "ViewSam", *io_args, "VALIDATION_STRINGENCY=SILENT", "QUIET=true"],
+        stdout=picard_out,
+    )
     turbo_digest = digest_sam_records(turbo_out)
     picard_digest = digest_sam_records(picard_out)
     return evidence("ViewSam", turbo_seconds, picard_seconds, "SAM record digest", turbo_out, picard_out, turbo_digest, picard_digest)
+
+
+def compare_wgs_metrics(
+    input_bam: Path,
+    workdir: Path,
+    turbo_prefix: list[str],
+    picard_prefix: list[str],
+    extra: list[str],
+    reference_fasta: Path,
+) -> CommandEvidence:
+    turbo_out = workdir / "turbo.wgs.metrics.txt"
+    picard_out = workdir / "picard.wgs.metrics.txt"
+    common = [
+        "CollectWgsMetrics",
+        *alignment_io_args(input_bam, reference_fasta),
+        f"R={reference_fasta}",
+        "VALIDATION_STRINGENCY=SILENT",
+        "QUIET=true",
+        *extra,
+    ]
+    turbo_seconds = run([*turbo_prefix, *common, f"O={turbo_out}"])
+    picard_seconds = run([*picard_prefix, *common, f"O={picard_out}"])
+    turbo_digest = digest_stable_text_or_missing(turbo_out, "turbo-picard WGS metrics")
+    picard_digest = digest_stable_text_or_missing(picard_out, "Picard WGS metrics")
+    label = "stable metrics digest" if not extra else f"stable metrics digest ({' '.join(extra)})"
+    return evidence(
+        "CollectWgsMetrics",
+        turbo_seconds,
+        picard_seconds,
+        label,
+        turbo_out,
+        picard_out,
+        turbo_digest,
+        picard_digest,
+    )
+
+
+def compare_collect_multiple_metrics(
+    input_bam: Path,
+    workdir: Path,
+    turbo_prefix: list[str],
+    picard_prefix: list[str],
+    extra: list[str],
+    reference_fasta: Path | None,
+) -> CommandEvidence:
+    turbo_prefix_path = workdir / "turbo.multi"
+    picard_prefix_path = workdir / "picard.multi"
+    common = [
+        "CollectMultipleMetrics",
+        *alignment_io_args(input_bam, reference_fasta),
+        "PROGRAM=null",
+        "PROGRAM=CollectQualityYieldMetrics",
+        "PROGRAM=CollectInsertSizeMetrics",
+        "VALIDATION_STRINGENCY=SILENT",
+        "QUIET=true",
+        f"TMP_DIR={workdir}",
+        *extra,
+    ]
+    turbo_seconds = run([*turbo_prefix, *common, f"O={turbo_prefix_path}"])
+    picard_seconds = run([*picard_prefix, *common, f"O={picard_prefix_path}"])
+    turbo_quality = Path(f"{turbo_prefix_path}.quality_yield_metrics")
+    picard_quality = Path(f"{picard_prefix_path}.quality_yield_metrics")
+    turbo_digest = digest_stable_text_or_missing(
+        turbo_quality,
+        "turbo-picard CollectMultipleMetrics quality yield",
+    )
+    picard_digest = digest_stable_text_or_missing(
+        picard_quality,
+        "Picard CollectMultipleMetrics quality yield",
+    )
+    label = (
+        "stable CollectMultipleMetrics quality-yield digest"
+        if not extra
+        else f"stable CollectMultipleMetrics quality-yield digest ({' '.join(extra)})"
+    )
+    return evidence(
+        "CollectMultipleMetrics",
+        turbo_seconds,
+        picard_seconds,
+        label,
+        turbo_quality,
+        picard_quality,
+        turbo_digest,
+        picard_digest,
+    )
+
+
+def compare_gc_bias_metrics(
+    input_bam: Path,
+    workdir: Path,
+    turbo_prefix: list[str],
+    picard_prefix: list[str],
+    extra: list[str],
+    reference_fasta: Path,
+) -> CommandEvidence:
+    turbo_detail = workdir / "turbo.detail.txt"
+    picard_detail = workdir / "picard.detail.txt"
+    turbo_summary = workdir / "turbo.summary.txt"
+    picard_summary = workdir / "picard.summary.txt"
+    turbo_chart = workdir / "turbo.chart.pdf"
+    picard_chart = workdir / "picard.chart.pdf"
+    fake_rscript = workdir / "Rscript"
+    write_fake_rscript(fake_rscript)
+    common = [
+        *alignment_io_args(input_bam, reference_fasta),
+        f"R={reference_fasta}",
+        "VALIDATION_STRINGENCY=SILENT",
+        "QUIET=true",
+        *extra,
+    ]
+    picard_env = rscript_shim_env(workdir)
+    shimmed_picard = picard_prefix_with_rscript_shim(picard_prefix, workdir)
+    turbo_seconds = run(
+        [
+            *turbo_prefix,
+            "CollectGcBiasMetrics",
+            *common,
+            f"O={turbo_detail}",
+            f"S={turbo_summary}",
+            f"CHART={turbo_chart}",
+        ],
+        env=picard_env,
+    )
+    picard_seconds = run(
+        [
+            *shimmed_picard,
+            "CollectGcBiasMetrics",
+            *common,
+            f"O={picard_detail}",
+            f"S={picard_summary}",
+            f"CHART={picard_chart}",
+        ],
+        env=picard_env,
+    )
+    turbo_digest = digest_stable_text_or_missing(
+        turbo_detail,
+        "turbo-picard GC bias detail",
+    )
+    picard_digest = digest_stable_text_or_missing(
+        picard_detail,
+        "Picard GC bias detail",
+    )
+    label = "stable metrics digest" if not extra else f"stable metrics digest ({' '.join(extra)})"
+    return evidence(
+        "CollectGcBiasMetrics",
+        turbo_seconds,
+        picard_seconds,
+        label,
+        turbo_detail,
+        picard_detail,
+        turbo_digest,
+        picard_digest,
+    )
+
+
+def compare_chart_metrics(
+    command: str,
+    input_bam: Path,
+    workdir: Path,
+    turbo_prefix: list[str],
+    picard_prefix: list[str],
+    extra: list[str],
+    reference_fasta: Path | None,
+) -> CommandEvidence:
+    turbo_out = workdir / "turbo.metrics.txt"
+    picard_out = workdir / "picard.metrics.txt"
+    turbo_chart = workdir / "turbo.chart.pdf"
+    picard_chart = workdir / "picard.chart.pdf"
+    fake_rscript = workdir / "Rscript"
+    write_fake_rscript(fake_rscript)
+    common = [
+        *alignment_io_args(input_bam, reference_fasta),
+        "VALIDATION_STRINGENCY=SILENT",
+        "QUIET=true",
+        *extra,
+    ]
+    turbo_seconds = run(
+        [
+            *turbo_prefix,
+            command,
+            *common,
+            f"O={turbo_out}",
+            f"CHART={turbo_chart}",
+        ]
+    )
+    picard_seconds = run(
+        [
+            *picard_prefix,
+            command,
+            *common,
+            f"O={picard_out}",
+            f"CHART={picard_chart}",
+        ]
+    )
+    turbo_digest = digest_stable_text_or_missing(turbo_out, "turbo-picard metrics")
+    picard_digest = digest_stable_text_or_missing(picard_out, "Picard metrics")
+    label = "stable metrics digest" if not extra else f"stable metrics digest ({' '.join(extra)})"
+    return evidence(
+        command,
+        turbo_seconds,
+        picard_seconds,
+        label,
+        turbo_out,
+        picard_out,
+        turbo_digest,
+        picard_digest,
+    )
 
 
 def compare_metrics(
@@ -291,10 +696,17 @@ def compare_metrics(
     turbo_prefix: list[str],
     picard_prefix: list[str],
     extra: list[str],
+    reference_fasta: Path | None,
 ) -> CommandEvidence:
     turbo_out = workdir / "turbo.metrics.txt"
     picard_out = workdir / "picard.metrics.txt"
-    common = [command, f"I={input_bam}", "VALIDATION_STRINGENCY=SILENT", "QUIET=true", *extra]
+    common = [
+        command,
+        *alignment_io_args(input_bam, reference_fasta),
+        "VALIDATION_STRINGENCY=SILENT",
+        "QUIET=true",
+        *extra,
+    ]
     turbo_seconds = run([*turbo_prefix, *common, f"O={turbo_out}"])
     picard_seconds = run([*picard_prefix, *common, f"O={picard_out}"])
     turbo_digest = digest_stable_text_or_missing(turbo_out, "turbo-picard metrics")
@@ -309,6 +721,7 @@ def compare_insert_size_metrics(
     turbo_prefix: list[str],
     picard_prefix: list[str],
     extra: list[str],
+    reference_fasta: Path | None,
 ) -> CommandEvidence:
     command = "CollectInsertSizeMetrics"
     turbo_out = workdir / "turbo.metrics.txt"
@@ -319,7 +732,13 @@ def compare_insert_size_metrics(
     write_fake_rscript(fake_rscript)
     picard_env = rscript_shim_env(workdir)
     picard_prefix = picard_prefix_with_rscript_shim(picard_prefix, workdir)
-    common = [command, f"I={input_bam}", "VALIDATION_STRINGENCY=SILENT", "QUIET=true", *extra]
+    common = [
+        command,
+        *alignment_io_args(input_bam, reference_fasta),
+        "VALIDATION_STRINGENCY=SILENT",
+        "QUIET=true",
+        *extra,
+    ]
     turbo_seconds = run([*turbo_prefix, *common, f"O={turbo_out}", f"H={turbo_histogram}"])
     picard_seconds = run(
         [*picard_prefix, *common, f"O={picard_out}", f"H={picard_histogram}"],
@@ -338,13 +757,14 @@ def compare_build_bam_index(
     workdir: Path,
     turbo_prefix: list[str],
     picard_prefix: list[str],
+    reference_fasta: Path | None,
 ) -> CommandEvidence:
     command = "BuildBamIndex"
     turbo_bai = workdir / "turbo.bai"
     picard_bai = workdir / "picard.bai"
     common = [
         command,
-        f"I={input_bam}",
+        *alignment_io_args(input_bam, reference_fasta),
         "VALIDATION_STRINGENCY=SILENT",
         "QUIET=true",
     ]
@@ -369,15 +789,16 @@ def compare_add_or_replace_read_groups(
     workdir: Path,
     turbo_prefix: list[str],
     picard_prefix: list[str],
+    reference_fasta: Path | None,
 ) -> CommandEvidence:
     command = "AddOrReplaceReadGroups"
-    turbo_bam = workdir / "turbo.bam"
-    picard_bam = workdir / "picard.bam"
+    turbo_bam = output_container_path(workdir, "turbo.", input_bam)
+    picard_bam = output_container_path(workdir, "picard.", input_bam)
     turbo_sam = workdir / "turbo.view.sam"
     picard_sam = workdir / "picard.view.sam"
     common = [
         command,
-        f"I={input_bam}",
+        *alignment_io_args(input_bam, reference_fasta),
         "RGID=turbo",
         "RGLB=library",
         "RGPL=ILLUMINA",
@@ -389,8 +810,7 @@ def compare_add_or_replace_read_groups(
     ]
     turbo_seconds = run([*turbo_prefix, *common, f"O={turbo_bam}"])
     picard_seconds = run([*picard_prefix, *common, f"O={picard_bam}"])
-    run([*turbo_prefix, "ViewSam", f"I={turbo_bam}", "VALIDATION_STRINGENCY=SILENT", "QUIET=true"], stdout=turbo_sam)
-    run([*picard_prefix, "ViewSam", f"I={picard_bam}", "VALIDATION_STRINGENCY=SILENT", "QUIET=true"], stdout=picard_sam)
+    write_comparison_sams(turbo_bam, picard_bam, turbo_sam, picard_sam, reference_fasta)
     turbo_digest = digest_sam_records_and_read_groups(turbo_sam)
     picard_digest = digest_sam_records_and_read_groups(picard_sam)
     return evidence(
@@ -410,22 +830,22 @@ def compare_revertsam(
     workdir: Path,
     turbo_prefix: list[str],
     picard_prefix: list[str],
+    reference_fasta: Path | None,
 ) -> CommandEvidence:
     command = "RevertSam"
-    turbo_bam = workdir / "turbo.bam"
-    picard_bam = workdir / "picard.bam"
+    turbo_bam = output_container_path(workdir, "turbo.", input_bam)
+    picard_bam = output_container_path(workdir, "picard.", input_bam)
     turbo_sam = workdir / "turbo.view.sam"
     picard_sam = workdir / "picard.view.sam"
     common = [
         command,
-        f"I={input_bam}",
+        *alignment_io_args(input_bam, reference_fasta),
         "VALIDATION_STRINGENCY=SILENT",
         "QUIET=true",
     ]
     turbo_seconds = run([*turbo_prefix, *common, f"O={turbo_bam}"])
     picard_seconds = run([*picard_prefix, *common, f"O={picard_bam}"])
-    run([*turbo_prefix, "ViewSam", f"I={turbo_bam}", "VALIDATION_STRINGENCY=SILENT", "QUIET=true"], stdout=turbo_sam)
-    run([*picard_prefix, "ViewSam", f"I={picard_bam}", "VALIDATION_STRINGENCY=SILENT", "QUIET=true"], stdout=picard_sam)
+    write_comparison_sams(turbo_bam, picard_bam, turbo_sam, picard_sam, reference_fasta)
     turbo_digest = digest_sam_records(turbo_sam)
     picard_digest = digest_sam_records(picard_sam)
     return evidence(
@@ -445,6 +865,7 @@ def compare_samtofastq(
     workdir: Path,
     turbo_prefix: list[str],
     picard_prefix: list[str],
+    reference_fasta: Path | None,
 ) -> CommandEvidence:
     command = "SamToFastq"
     turbo_r1 = workdir / "turbo-r1.fastq"
@@ -455,7 +876,7 @@ def compare_samtofastq(
     picard_unpaired = workdir / "picard-unpaired.fastq"
     common = [
         command,
-        f"I={input_bam}",
+        *alignment_io_args(input_bam, reference_fasta),
         "VALIDATION_STRINGENCY=SILENT",
         "QUIET=true",
     ]
@@ -498,9 +919,10 @@ def compare_bam_output(
     turbo_prefix: list[str],
     picard_prefix: list[str],
     extra_templates: list[str],
+    reference_fasta: Path | None,
 ) -> CommandEvidence:
-    turbo_bam = workdir / "turbo.bam"
-    picard_bam = workdir / "picard.bam"
+    turbo_bam = output_container_path(workdir, "turbo.", input_bam)
+    picard_bam = output_container_path(workdir, "picard.", input_bam)
     turbo_metrics = workdir / "turbo.metrics.txt"
     picard_metrics = workdir / "picard.metrics.txt"
     turbo_sam = workdir / "turbo.view.sam"
@@ -508,12 +930,16 @@ def compare_bam_output(
 
     turbo_extra = [value.format(metrics=turbo_metrics) for value in extra_templates]
     picard_extra = [value.format(metrics=picard_metrics) for value in extra_templates]
-    common = [command, f"I={input_bam}", "VALIDATION_STRINGENCY=SILENT", "QUIET=true"]
+    common = [
+        command,
+        *alignment_io_args(input_bam, reference_fasta),
+        "VALIDATION_STRINGENCY=SILENT",
+        "QUIET=true",
+    ]
     turbo_seconds = run([*turbo_prefix, *common, f"O={turbo_bam}", *turbo_extra])
     picard_seconds = run([*picard_prefix, *common, f"O={picard_bam}", *picard_extra])
 
-    run([*turbo_prefix, "ViewSam", f"I={turbo_bam}", "VALIDATION_STRINGENCY=SILENT", "QUIET=true"], stdout=turbo_sam)
-    run([*picard_prefix, "ViewSam", f"I={picard_bam}", "VALIDATION_STRINGENCY=SILENT", "QUIET=true"], stdout=picard_sam)
+    write_comparison_sams(turbo_bam, picard_bam, turbo_sam, picard_sam, reference_fasta)
     turbo_digest = digest_sam_records(turbo_sam)
     picard_digest = digest_sam_records(picard_sam)
     comparison = "post-command SAM record digest"
@@ -530,29 +956,313 @@ def compare_bam_output(
     return evidence(command, turbo_seconds, picard_seconds, comparison, turbo_bam, picard_bam, turbo_digest, picard_digest)
 
 
+def require_reference_fasta(reference_fasta: Path | None, command: str) -> Path:
+    if reference_fasta is None:
+        raise SystemExit(f"{command} requires --reference-fasta")
+    if not reference_fasta.exists():
+        raise SystemExit(f"missing reference FASTA: {reference_fasta}")
+    return reference_fasta
+
+
+def reference_io_args(input_alignment: Path, reference_fasta: Path) -> list[str]:
+    args = alignment_io_args(input_alignment, reference_fasta)
+    if input_alignment.suffix.lower() != ".cram":
+        args.append(f"R={reference_fasta}")
+    return args
+
+
+def cram_reference_arg(reference_fasta: Path | None, *paths: Path) -> list[str]:
+    if reference_fasta is None:
+        return []
+    if any(path.suffix.lower() == ".cram" for path in paths):
+        return [f"R={reference_fasta}"]
+    return []
+
+
+def compare_fix_mate_information(
+    input_bam: Path,
+    workdir: Path,
+    turbo_prefix: list[str],
+    picard_prefix: list[str],
+    reference_fasta: Path | None,
+) -> CommandEvidence:
+    command = "FixMateInformation"
+    turbo_prep = output_container_path(workdir, "turbo.queryname.", input_bam)
+    picard_prep = output_container_path(workdir, "picard.queryname.", input_bam)
+    turbo_out = output_container_path(workdir, "turbo.", input_bam)
+    picard_out = output_container_path(workdir, "picard.", input_bam)
+    turbo_sam = workdir / "turbo.view.sam"
+    picard_sam = workdir / "picard.view.sam"
+    sort_common = [
+        "SortSam",
+        *alignment_io_args(input_bam, reference_fasta),
+        "SORT_ORDER=queryname",
+        "VALIDATION_STRINGENCY=SILENT",
+        "QUIET=true",
+    ]
+    fix_common = [
+        command,
+        "ASSUME_SORTED=true",
+        "SORT_ORDER=queryname",
+        "VALIDATION_STRINGENCY=SILENT",
+        "QUIET=true",
+    ]
+    turbo_seconds = run([*turbo_prefix, *sort_common, f"O={turbo_prep}"])
+    turbo_seconds += run(
+        [
+            *turbo_prefix,
+            *fix_common,
+            *alignment_io_args(turbo_prep, reference_fasta),
+            f"O={turbo_out}",
+        ]
+    )
+    picard_seconds = run([*picard_prefix, *sort_common, f"O={picard_prep}"])
+    picard_seconds += run(
+        [
+            *picard_prefix,
+            *fix_common,
+            *alignment_io_args(picard_prep, reference_fasta),
+            f"O={picard_out}",
+        ]
+    )
+    write_comparison_sams(turbo_out, picard_out, turbo_sam, picard_sam, reference_fasta)
+    turbo_digest = digest_stable_sam(turbo_sam)
+    picard_digest = digest_stable_sam(picard_sam)
+    return evidence(
+        command,
+        turbo_seconds,
+        picard_seconds,
+        "stable SAM digest after queryname sort and mate fixing",
+        turbo_out,
+        picard_out,
+        turbo_digest,
+        picard_digest,
+    )
+
+
+def compare_set_nm_md_and_uq_tags(
+    input_bam: Path,
+    workdir: Path,
+    turbo_prefix: list[str],
+    picard_prefix: list[str],
+    reference_fasta: Path | None,
+) -> CommandEvidence:
+    command = "SetNmMdAndUqTags"
+    reference = require_reference_fasta(reference_fasta, command)
+    turbo_out = output_container_path(workdir, "turbo.", input_bam)
+    picard_out = output_container_path(workdir, "picard.", input_bam)
+    turbo_sam = workdir / "turbo.view.sam"
+    picard_sam = workdir / "picard.view.sam"
+    common = [
+        command,
+        *reference_io_args(input_bam, reference),
+        "VALIDATION_STRINGENCY=SILENT",
+        "QUIET=true",
+    ]
+    turbo_seconds = run([*turbo_prefix, *common, f"O={turbo_out}"])
+    picard_seconds = run([*picard_prefix, *common, f"O={picard_out}"])
+    write_comparison_sams(turbo_out, picard_out, turbo_sam, picard_sam, reference)
+    turbo_digest = digest_stable_sam(turbo_sam)
+    picard_digest = digest_stable_sam(picard_sam)
+    return evidence(
+        command,
+        turbo_seconds,
+        picard_seconds,
+        "stable SAM digest with NM/MD/UQ tags",
+        turbo_out,
+        picard_out,
+        turbo_digest,
+        picard_digest,
+    )
+
+
+def compare_merge_sam_files(
+    input_bam: Path,
+    merge_input_bam: Path,
+    workdir: Path,
+    turbo_prefix: list[str],
+    picard_prefix: list[str],
+    reference_fasta: Path | None,
+) -> CommandEvidence:
+    command = "MergeSamFiles"
+    turbo_out = output_container_path(workdir, "turbo.", input_bam)
+    picard_out = output_container_path(workdir, "picard.", input_bam)
+    turbo_sam = workdir / "turbo.view.sam"
+    picard_sam = workdir / "picard.view.sam"
+    tail = [
+        "SORT_ORDER=coordinate",
+        "ASSUME_SORTED=true",
+        "VALIDATION_STRINGENCY=SILENT",
+        "QUIET=true",
+        *cram_reference_arg(
+            reference_fasta,
+            input_bam,
+            merge_input_bam,
+            turbo_out,
+            picard_out,
+        ),
+    ]
+    turbo_seconds = run(
+        [
+            *turbo_prefix,
+            command,
+            f"I={input_bam}",
+            f"I={merge_input_bam}",
+            f"O={turbo_out}",
+            *tail,
+        ]
+    )
+    picard_seconds = run(
+        [
+            *picard_prefix,
+            command,
+            f"I={input_bam}",
+            f"I={merge_input_bam}",
+            f"O={picard_out}",
+            *tail,
+        ]
+    )
+    write_comparison_sams(turbo_out, picard_out, turbo_sam, picard_sam, reference_fasta)
+    turbo_digest = digest_coordinate_sorted_sam_multiset(turbo_sam)
+    picard_digest = digest_coordinate_sorted_sam_multiset(picard_sam)
+    return evidence(
+        command,
+        turbo_seconds,
+        picard_seconds,
+        "coordinate-sorted SAM record multiset digest",
+        turbo_out,
+        picard_out,
+        turbo_digest,
+        picard_digest,
+    )
+
+
+def compare_replace_sam_header(
+    input_bam: Path,
+    workdir: Path,
+    turbo_prefix: list[str],
+    picard_prefix: list[str],
+    reference_fasta: Path | None,
+) -> CommandEvidence:
+    command = "ReplaceSamHeader"
+    replacement_header = workdir / "replacement-header.sam"
+    turbo_out = output_container_path(workdir, "turbo.", input_bam)
+    picard_out = output_container_path(workdir, "picard.", input_bam)
+    turbo_sam = workdir / "turbo.view.sam"
+    picard_sam = workdir / "picard.view.sam"
+    header_source = workdir / "input-header.sam"
+    run(
+        [
+            *turbo_prefix,
+            "ViewSam",
+            *alignment_io_args(input_bam, reference_fasta),
+            "HEADER_ONLY=true",
+            "VALIDATION_STRINGENCY=SILENT",
+            "QUIET=true",
+        ],
+        stdout=header_source,
+    )
+    write_replacement_header(header_source, replacement_header)
+    common_tail = [
+        f"HEADER={replacement_header}",
+        "VALIDATION_STRINGENCY=SILENT",
+        "QUIET=true",
+    ]
+    turbo_seconds = run(
+        [
+            *turbo_prefix,
+            command,
+            *alignment_io_args(input_bam, reference_fasta),
+            f"O={turbo_out}",
+            *common_tail,
+        ]
+    )
+    picard_seconds = run(
+        [
+            *picard_prefix,
+            command,
+            *alignment_io_args(input_bam, reference_fasta),
+            f"O={picard_out}",
+            *common_tail,
+        ]
+    )
+    write_comparison_sams(turbo_out, picard_out, turbo_sam, picard_sam, reference_fasta)
+    turbo_digest = digest_replace_sam_header(turbo_sam)
+    picard_digest = digest_replace_sam_header(picard_sam)
+    return evidence(
+        command,
+        turbo_seconds,
+        picard_seconds,
+        "replacement header lines and record order digest",
+        turbo_out,
+        picard_out,
+        turbo_digest,
+        picard_digest,
+    )
+
+
+def write_replacement_header(source: Path, destination: Path) -> None:
+    lines: list[str] = []
+    with source.open(encoding="utf-8") as handle:
+        for line in handle:
+            if line.startswith("@HD"):
+                lines.append("@HD\tVN:1.6\tSO:coordinate\n")
+            elif line.startswith("@SQ"):
+                lines.append(line)
+            elif line.startswith("@RG"):
+                continue
+            elif line.startswith("@"):
+                continue
+            else:
+                break
+    lines.append("@CO\tturbo-picard real-data ReplaceSamHeader parity header\n")
+    destination.write_text("".join(lines), encoding="utf-8")
+
+
+def digest_replace_sam_header(path: Path) -> str:
+    digest = hashlib.sha256()
+    header_lines: list[bytes] = []
+    record_names: list[bytes] = []
+    with path.open("rb") as handle:
+        for raw in handle:
+            raw = raw.rstrip(b"\n")
+            if raw.startswith(b"@"):
+                header_lines.append(raw)
+            elif raw:
+                record_names.append(raw.split(b"\t", 1)[0])
+    for row in header_lines:
+        digest.update(row)
+        digest.update(b"\n")
+    for row in record_names:
+        digest.update(row)
+        digest.update(b"\n")
+    return digest.hexdigest()
+
+
 def compare_sortsam(
     input_bam: Path,
     workdir: Path,
     turbo_prefix: list[str],
     picard_prefix: list[str],
+    reference_fasta: Path | None,
 ) -> CommandEvidence:
     command = "SortSam"
-    turbo_bam = workdir / "turbo.bam"
-    picard_bam = workdir / "picard.bam"
+    turbo_bam = output_container_path(workdir, "turbo.", input_bam)
+    picard_bam = output_container_path(workdir, "picard.", input_bam)
     turbo_sam = workdir / "turbo.view.sam"
     picard_sam = workdir / "picard.view.sam"
     common = [
         command,
-        f"I={input_bam}",
+        *alignment_io_args(input_bam, reference_fasta),
         "SORT_ORDER=coordinate",
-        "CREATE_INDEX=true",
         "VALIDATION_STRINGENCY=SILENT",
         "QUIET=true",
     ]
+    if input_bam.suffix.lower() != ".cram":
+        common.insert(3, "CREATE_INDEX=true")
     turbo_seconds = run([*turbo_prefix, *common, f"O={turbo_bam}"])
     picard_seconds = run([*picard_prefix, *common, f"O={picard_bam}"])
-    run([*turbo_prefix, "ViewSam", f"I={turbo_bam}", "VALIDATION_STRINGENCY=SILENT", "QUIET=true"], stdout=turbo_sam)
-    run([*picard_prefix, "ViewSam", f"I={picard_bam}", "VALIDATION_STRINGENCY=SILENT", "QUIET=true"], stdout=picard_sam)
+    write_comparison_sams(turbo_bam, picard_bam, turbo_sam, picard_sam, reference_fasta)
     turbo_digest = digest_coordinate_sorted_sam_multiset(turbo_sam)
     picard_digest = digest_coordinate_sorted_sam_multiset(picard_sam)
     return evidence(
@@ -572,13 +1282,14 @@ def compare_validate_sam_file(
     workdir: Path,
     turbo_prefix: list[str],
     picard_prefix: list[str],
+    reference_fasta: Path | None,
 ) -> CommandEvidence:
     command = "ValidateSamFile"
     turbo_out = workdir / "turbo.summary.txt"
     picard_out = workdir / "picard.summary.txt"
     common = [
         command,
-        f"I={input_bam}",
+        *alignment_io_args(input_bam, reference_fasta),
         "MODE=SUMMARY",
         "VALIDATION_STRINGENCY=SILENT",
         "QUIET=true",
@@ -631,6 +1342,10 @@ def evidence(
 
 def command_evidence_dict(row: CommandEvidence) -> dict:
     data = asdict(row)
+    if data.get("turbo_artifact"):
+        data["turbo_artifact"] = relative_to_root(Path(data["turbo_artifact"]))
+    if data.get("picard_artifact"):
+        data["picard_artifact"] = relative_to_root(Path(data["picard_artifact"]))
     return {key: value for key, value in data.items() if value is not None}
 
 
@@ -752,23 +1467,35 @@ def capture_version(command: list[str]) -> str:
     return text or "unknown"
 
 
-def input_metadata(path: Path, source_url: str | None = None, source_commit: str | None = None) -> dict:
+def input_metadata(
+    path: Path,
+    source_url: str | None = None,
+    source_commit: str | None = None,
+    reference_fasta: Path | None = None,
+) -> dict:
     stat = path.stat()
     metadata = {
-        "path": str(path),
+        "path": relative_to_root(path),
         "size_bytes": stat.st_size,
         "sha256": digest_file(path),
     }
+    if path.suffix.lower() == ".cram":
+        metadata["format"] = "CRAM"
+    elif path.suffix.lower() == ".bam":
+        metadata["format"] = "BAM"
     if source_url:
         metadata["source_url"] = source_url
     if source_commit:
         metadata["source_commit"] = source_commit
+    if reference_fasta is not None:
+        metadata["reference_fasta"] = relative_to_root(reference_fasta)
+        metadata["reference_sha256"] = digest_file(reference_fasta)
     return metadata
 
 
 def relative_to_root(path: Path) -> str:
     try:
-        return str(path.resolve().relative_to(ROOT))
+        return str(path.resolve().relative_to(ROOT.resolve()))
     except ValueError:
         return str(path)
 
@@ -869,19 +1596,30 @@ def build_manifest_entry(
                 raise SystemExit(f"comparison summary command {command} missing comparison")
             expected_commands[command] = comparison
     if release_tier == "release_candidate":
-        missing_commands = sorted(RELEASE_CANDIDATE_REQUIRED_COMMANDS - expected_commands.keys())
+        required_commands = RELEASE_CANDIDATE_REQUIRED_COMMANDS
+        if input_summary.get("format") == "CRAM":
+            required_commands = CRAM_RELEASE_CANDIDATE_REQUIRED_COMMANDS
+        missing_commands = sorted(required_commands - expected_commands.keys())
         if missing_commands:
             raise SystemExit(
                 "release_candidate manifest entries require passing evidence for: "
                 + ", ".join(missing_commands)
             )
         size_bytes = int(input_summary.get("size_bytes", 0))
-        if size_bytes < RELEASE_CANDIDATE_MIN_BYTES:
-            raise SystemExit(
-                "release_candidate manifest entries require input size >= "
-                f"{RELEASE_CANDIDATE_MIN_BYTES} bytes; got {size_bytes}"
-            )
-        minimum_input_bytes = RELEASE_CANDIDATE_MIN_BYTES
+        if input_summary.get("format") == "CRAM":
+            if size_bytes < CRAM_RELEASE_CANDIDATE_MIN_BYTES:
+                raise SystemExit(
+                    "release_candidate CRAM manifest entries require input size >= "
+                    f"{CRAM_RELEASE_CANDIDATE_MIN_BYTES} bytes; got {size_bytes}"
+                )
+            minimum_input_bytes = size_bytes
+        else:
+            if size_bytes < RELEASE_CANDIDATE_MIN_BYTES:
+                raise SystemExit(
+                    "release_candidate manifest entries require input size >= "
+                    f"{RELEASE_CANDIDATE_MIN_BYTES} bytes; got {size_bytes}"
+                )
+            minimum_input_bytes = RELEASE_CANDIDATE_MIN_BYTES
     else:
         minimum_input_bytes = None
     entry = {
@@ -1012,6 +1750,18 @@ def normalize_sam_tag(tag: bytes) -> bytes:
     except (decimal.InvalidOperation, UnicodeDecodeError):
         return tag
     return b":".join([parts[0], parts[1], format(value.normalize(), "f").encode("ascii")])
+
+
+def digest_stable_sam(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for raw in handle:
+            stripped = raw.strip()
+            if not stripped or stripped.startswith(b"@PG"):
+                continue
+            digest.update(stripped)
+            digest.update(b"\n")
+    return digest.hexdigest()
 
 
 def digest_stable_text(path: Path) -> str:

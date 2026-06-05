@@ -1,0 +1,3 @@
+input_bam: /data/representative.bam
+sample_id: trial-sample
+use_turbo_picard: true

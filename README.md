@@ -5,16 +5,16 @@
 ![Abstract benchmark bars and sequencing-read streams](docs/site/assets/hero-pipeline.svg)
 
 `turbo-picard` is a faster Rust implementation of selected Picard commands.
-It is built for people who already trust Picard, already have it wired into
-WDL, Nextflow, Snakemake, or shell scripts, and mostly want one thing: make
-the slow Picard step stop dominating the run.
+It is for people who already run Picard in WDL, Nextflow, Snakemake, or shell
+pipelines and want the same command shape with a lot less waiting on the steps
+that hurt most.
 
 The command shape stays familiar: Picard command names, Picard-style
-`KEY=VALUE` arguments, and the same habit of replacing one pipeline step at a
-time.
+`KEY=VALUE` arguments, and a practical migration path where you swap one step,
+check it, then move on.
 
 It is not a full Picard replacement. Native command coverage is documented and
-tested against Picard 3.4.0. Unsupported commands fail clearly, or can be sent
+tested against Picard 3.4.0. Unsupported commands fail clearly, or can still go
 to upstream Picard if you configure a fallback.
 
 ```bash
@@ -31,6 +31,37 @@ turbo-picard SortSam I=reads.cram O=sorted.cram SORT_ORDER=coordinate R=$TURBO_P
 
 There is also an optional `picard` shim for environments that already call a
 binary named `picard`.
+
+## Why People Switch
+
+- The command line still looks like Picard, so existing pipeline code does not
+  need a conceptual rewrite.
+- The current saved benchmark suite shows `32/32` parity-checked commands with
+  a `26.74x` geometric mean speedup and an `84.46x` top speedup.
+- You can prove one command on your own data before changing a whole workflow.
+- Unsupported commands do not get guessed at. They fail clearly or go through
+  upstream Picard when fallback is configured.
+
+## Good First Targets
+
+These are usually the best places to start if you want a fast answer about
+whether `turbo-picard` is worth adopting in your environment:
+
+- `MarkDuplicates` when duplicate marking is dragging a preprocessing run.
+- `SortSam` when you are repeatedly reordering BAM or CRAM between stages.
+- `SamToFastq` when Picard export is still sitting in an alignment or remap path.
+- `BuildBamIndex` and small VCF utilities when pipeline glue work keeps adding up.
+- Metrics commands when iteration speed matters more than Picard's exact plot rendering.
+
+The right first trial is usually one slow, easy-to-compare command on one
+representative shard.
+
+## Choose An Install Path
+
+- `PyPI`: fastest local try, especially on macOS Apple Silicon.
+- `Source`: best when you are already working in the repo or want the current checkout.
+- `Container`: useful for pinned runtime behavior in cloud jobs and workflow profiles.
+- `Bioconda`: best target for Linux clusters and shared scientific environments once accepted.
 
 ## Quickstart
 
@@ -59,13 +90,83 @@ Installing from PyPI currently gives you both commands:
 Use a dedicated virtual environment if you need upstream Picard and the shim
 side by side.
 
+## Who This Fits
+
+- `WDL` and `Cromwell` users who want to replace one expensive Picard task without rewriting the task interface.
+- `Nextflow` and `nf-core` maintainers who want a pinned binary or container with familiar command shape.
+- `Snakemake` users who already shell out to Picard and want a faster command in the same slot.
+- Shell pipeline owners who want explicit side-by-side checks before changing production behavior.
+
+## Workflow Examples
+
+`WDL` task command:
+
+```wdl
+command <<<
+  turbo-picard MarkDuplicates \
+    I=~{input_bam} \
+    O=~{sample_id}.marked.bam \
+    M=~{sample_id}.metrics.txt \
+    ASSUME_SORTED=true
+>>>
+```
+
+`Nextflow` process script:
+
+```nextflow
+def picard = params.use_turbo_picard ? 'turbo-picard' : 'picard'
+"""
+${picard} SortSam I=${bam} O=${meta.id}.sorted.bam SORT_ORDER=coordinate
+"""
+```
+
+`Snakemake` shell step:
+
+```python
+shell:
+    "turbo-picard BuildBamIndex I={input.bam} O={output.bai}"
+```
+
+More detailed Nextflow and nf-core notes live in
+[`packaging/nf-core/README.md`](packaging/nf-core/README.md).
+Starter files for `WDL`, `Nextflow`, and `Snakemake` live in
+[`packaging/workflows/`](packaging/workflows/).
+That starter bundle also explains which file to begin with and which command is
+usually the best first trial for each workflow shape.
+It now includes starter examples for `MarkDuplicates`, `SortSam`,
+`SamToFastq`, and `BuildBamIndex`.
+If you are not sure where to begin, start with
+[`choose-your-first-command.md`](packaging/workflows/choose-your-first-command.md).
+There are also short walkthroughs for
+[`WDL / Cromwell`](packaging/workflows/wdl-cromwell.md),
+[`Nextflow / nf-core`](packaging/workflows/nextflow-nf-core.md), and
+[`Snakemake`](packaging/workflows/snakemake.md).
+For the smallest honest evaluation flow, see
+[`one-command-trial.md`](packaging/workflows/one-command-trial.md) plus the
+tiny [`trial.wdl`](packaging/workflows/trial.wdl) and
+[`trial.nf`](packaging/workflows/trial.nf) workflows.
+If you want text you can forward to a teammate or drop into a channel, see the
+small outreach kit in [`packaging/outreach/`](packaging/outreach/).
+If you need a quick go/no-go internal screen, start with
+[`evaluation-checklist.md`](packaging/outreach/evaluation-checklist.md).
+If you already have a result and just need to know which venue fits it, use
+[`channel-map.md`](packaging/outreach/channel-map.md).
+If you are ready to talk about the package more publicly, see
+[`launch-plan.md`](packaging/outreach/launch-plan.md),
+[`community-post.md`](packaging/outreach/community-post.md), and
+[`github-discussion.md`](packaging/outreach/github-discussion.md).
+If the discussion keeps stalling on the same concerns, see
+[`objections.md`](packaging/outreach/objections.md).
+If you want a short written decision record after a first trial, use
+[`team-review-template.md`](packaging/outreach/team-review-template.md).
+
 ## When It Helps
 
 The best first use is one expensive Picard step that you can compare easily:
 sorting, duplicate marking, FASTQ conversion, indexing, VCF housekeeping, or a
-metrics command that slows down iteration. Run Picard and `turbo-picard` beside
-each other on a representative file, compare the outputs that matter for that
-command, then switch only that checked step.
+metrics command that keeps slowing down iteration. Run Picard and
+`turbo-picard` beside each other on a representative file, compare the outputs
+that matter for that command, then switch only that checked step.
 
 Use the explicit `turbo-picard` command while testing. Add the optional
 `picard` shim only when you deliberately want existing pipeline code to resolve
@@ -86,26 +187,37 @@ The full docs are on Read the Docs:
 
 Good starting points:
 
+- [Is this for you?](https://turbo-picard.readthedocs.io/en/latest/is-this-for-you.html)
+  for a quick fit / not-fit decision before you spend time evaluating it.
+- [Choose your first command](https://turbo-picard.readthedocs.io/en/latest/first-command.html)
+  for picking the best first Picard step to test.
+- [Evaluation playbook](https://turbo-picard.readthedocs.io/en/latest/evaluation-playbook.html)
+  for the shortest path from first interest to trial, review, and rollout.
+- [Launch bundle](https://turbo-picard.readthedocs.io/en/latest/launch-bundle.html)
+  for the smallest complete outreach pack to use on the first real external pass.
 - [Quickstart](https://turbo-picard.readthedocs.io/en/latest/quickstart.html)
   for installation and first commands.
 - [Command coverage](https://turbo-picard.readthedocs.io/en/latest/commands.html)
   for what is native, partly native, or delegated.
-- [Fallback behavior](https://turbo-picard.readthedocs.io/en/latest/fallback.html)
-  for using upstream Picard beside turbo-picard.
-- [Benchmarks](https://turbo-picard.readthedocs.io/en/latest/benchmarks.html)
-  for the saved benchmark data and how it is checked.
-- [Performance notes](https://turbo-picard.readthedocs.io/en/latest/performance.html)
-  for thread controls, CRAM throughput, and the accelerator preflight.
+- [Picard vs turbo-picard](https://turbo-picard.readthedocs.io/en/latest/picard-vs-turbo-picard.html)
+  for a plain comparison of what stays familiar, what changes, and when not to switch.
+- [FAQ](https://turbo-picard.readthedocs.io/en/latest/faq.html)
+  for direct answers to common evaluation and rollout questions.
 - [What parity means](https://turbo-picard.readthedocs.io/en/latest/parity.html)
   for what the comparisons prove and what they do not.
-- [Trying it in a pipeline](https://turbo-picard.readthedocs.io/en/latest/adoption.html)
-  for trying it safely in an existing pipeline.
-- [Citation](https://turbo-picard.readthedocs.io/en/latest/citation.html)
-  for citing the software and the input data correctly.
-- [Packaging](https://turbo-picard.readthedocs.io/en/latest/packaging.html)
-  for the main package, shim package, and Bioconda notes.
+
+More guides, including workflow use cases, sharing material, benchmarks,
+performance notes, packaging, and citation, are listed on the docs index:
+
+- [Docs index](https://turbo-picard.readthedocs.io/en/latest/)
 
 The docs source is in [`docs/`](docs/).
+
+If you are deciding whether to try this in a real workflow, start with
+[Evaluation playbook](https://turbo-picard.readthedocs.io/en/latest/evaluation-playbook.html),
+then read
+[Quickstart](https://turbo-picard.readthedocs.io/en/latest/quickstart.html),
+[Trying it in a pipeline](https://turbo-picard.readthedocs.io/en/latest/adoption.html).
 
 ## Check Your Own Data
 
@@ -137,6 +249,7 @@ docker run --rm turbo-picard:local MarkDuplicates --help
 ```
 
 nf-core and Nextflow examples live in [`packaging/nf-core/README.md`](packaging/nf-core/README.md).
+Workflow starter files live in [`packaging/workflows/`](packaging/workflows/).
 
 ## Install From PyPI
 

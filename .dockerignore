@@ -1,0 +1,6 @@
+target/
+.git/
+.conda-turbo-picard/
+docs/_build/
+**/*.swp
+**/.DS_Store

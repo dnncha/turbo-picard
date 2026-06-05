@@ -164,6 +164,60 @@ Picard's own metrics test corpus. It adds coverage for insertion-heavy CIGARs,
 SAM floating-tag representation differences, and alignment-summary standard
 deviation behavior that matters when scientists compare Picard metrics files.
 
+The third checked-in release-candidate bundle is the GATK mitochondrial shard
+stored as CRAM:
+
+- Source citation:
+  `https://github.com/broadinstitute/gatk/blob/e8c49f600b06c658e0fa9bf67256340ebb46bc48/src/test/resources/org/broadinstitute/hellbender/tools/mutect/mito/NA12878.bam`
+- Source commit:
+  `e8c49f600b06c658e0fa9bf67256340ebb46bc48`
+- Local input:
+  `benchmarks/real-data/gatk-na12878-mito-cram/input.cram`
+- SHA-256:
+  `68931e7cea6e9a35029cfed3638d0d8ea2c4bb662b4d83232968da247b68f7bc`
+- Evidence:
+  `benchmarks/real-data/gatk-na12878-mito-cram/evidence/real-data-comparison.md`
+- Manifest entry:
+  `benchmarks/real-data/manifest.json`
+- Scope caveat:
+  `GATK public NA12878 mitochondrial test BAM converted to CRAM with assembly38 mt-only reference.`
+- Release tier:
+  `release_candidate`
+- Minimum input threshold:
+  `910668` bytes
+
+Current saved result against Picard 3.4.0:
+
+| Command | Status | Comparison |
+| --- | --- | --- |
+| CleanSam | PASS | post-command SAM record digest |
+| CollectQualityYieldMetrics | PASS | stable metrics digest |
+| CollectInsertSizeMetrics | PASS | stable metrics digest with insert-size histogram |
+| MarkDuplicates | PASS | duplicate-marking semantic digest plus stable metrics digest |
+| SortSam | PASS | coordinate-sorted SAM record multiset digest |
+| AddOrReplaceReadGroups | PASS | SAM record digest plus read-group header digest |
+
+This exercises native CRAM I/O and reference-backed preprocessing on the same
+public mitochondrial shard used for the BAM release-candidate bundle.
+
+To regenerate CRAM real-data evidence for the GATK mitochondrial fixture after
+changing comparison logic:
+
+```bash
+TURBO_PICARD_CONDA_PREFIX=/path/to/conda-env ./tools/bootstrap_gatk_mito_cram_evidence.sh
+```
+
+That script writes `benchmarks/real-data/gatk-na12878-mito-cram/` using
+`fixtures/reference/chrM.fa` and updates the manifest entry when parity passes.
+It compares ViewSam, CleanSam, CollectQualityYieldMetrics,
+CollectAlignmentSummaryMetrics, CollectInsertSizeMetrics, MarkDuplicates, SortSam,
+AddOrReplaceReadGroups, and ValidateSamFile.
+Validate a checked-in bundle with:
+
+```bash
+./tools/validate_gatk_mito_cram_evidence.sh
+```
+
 Before a scientific release, repeat `tools/compare_real_data.py` on larger
 public benchmark material such as GIAB/HG001 shards and on representative
 production BAMs from the workflows that would be switched. The release-ready

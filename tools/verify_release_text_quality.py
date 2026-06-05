@@ -53,8 +53,9 @@ BANNED_PHRASES = [
 REQUIRED_READER_CUES = {
     Path("README.md"): [
         "The full docs are on Read the Docs",
-        "Why Use It",
-        "Start with the explicit `turbo-picard` command",
+        "When It Helps",
+        "When To Stay With Picard",
+        "Use the explicit `turbo-picard` command while testing",
         "Cite the archived",
     ],
     Path("docs/index.rst"): [
@@ -70,7 +71,7 @@ REQUIRED_READER_CUES = {
     ],
     Path("docs/adoption.rst"): [
         "Practical path",
-        "Representative-data validation protocol",
+        "choose data that looks like the run you want to switch",
         "Treat a failure as useful information",
     ],
     Path("docs/citation.rst"): [

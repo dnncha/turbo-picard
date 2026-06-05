@@ -62,6 +62,13 @@ def validate_parity_docs(
         ("picard version", "Picard version evidence guidance"),
         ("turbo-picard version", "turbo-picard version evidence guidance"),
         ("tools/compare_real_data.py", "real-data comparator command"),
+        ("verify_basic_cram_parity", "CRAM preprocessing parity script"),
+        ("verify_markdup_cram_parity", "MarkDuplicates CRAM fixture parity script"),
+        ("verify_gatk_preprocessing_combo_parity", "GATK preprocessing combo parity script"),
+        ("verify_gatk_mito_bam_parity", "GATK mitochondrial BAM parity script"),
+        ("verify_gatk_mito_cram_parity", "GATK mitochondrial CRAM parity script"),
+        ("verify_gatk_preprocessing_combo_cram_parity", "GATK preprocessing CRAM combo parity script"),
+        ("bootstrap_gatk_mito_cram_evidence", "GATK mitochondrial CRAM evidence bootstrap script"),
         (
             "python3 tools/verify_real_data_evidence.py --release-ready",
             "release-ready verifier command",
@@ -78,6 +85,8 @@ def validate_parity_docs(
         "buildbamindex",
         "samtofastq",
         "validatesamfile",
+        "fixmateinformation",
+        "setnmmdanduqtags",
         "metrics commands",
     ]
     for command in required_comparisons:

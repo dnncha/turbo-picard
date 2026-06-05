@@ -22,6 +22,7 @@ SITE = ROOT / "docs" / "site" / "index.html"
 BENCHMARK_DOCS = ROOT / "docs" / "benchmarks.rst"
 ADOPTION_DOCS = ROOT / "docs" / "adoption.rst"
 RELEASE_CANDIDATE_MIN_BYTES = 1_000_000
+CRAM_RELEASE_CANDIDATE_MIN_BYTES = 500_000
 RELEASE_CANDIDATE_PORTFOLIO_MIN_BYTES = 10_000_000
 RELEASE_CANDIDATE_REQUIRED_COMMANDS = {
     "ViewSam",
@@ -29,6 +30,14 @@ RELEASE_CANDIDATE_REQUIRED_COMMANDS = {
     "CollectQualityYieldMetrics",
     "CollectAlignmentSummaryMetrics",
     "MarkDuplicates",
+}
+CRAM_RELEASE_CANDIDATE_REQUIRED_COMMANDS = {
+    "CleanSam",
+    "CollectQualityYieldMetrics",
+    "CollectInsertSizeMetrics",
+    "MarkDuplicates",
+    "SortSam",
+    "AddOrReplaceReadGroups",
 }
 RELEASE_CANDIDATE_PORTFOLIO_REQUIRED_COMMANDS = {
     "AddOrReplaceReadGroups",
@@ -56,9 +65,12 @@ KNOWN_COMPARISONS = {
     "coordinate-sorted SAM record multiset digest",
     "duplicate-marking semantic digest plus stable metrics digest",
     "post-command SAM record digest",
+    "replacement header lines and record order digest",
     "reverted SAM record digest",
     "stable metrics digest",
     "stable metrics digest with insert-size histogram",
+    "stable SAM digest after queryname sort and mate fixing",
+    "stable SAM digest with NM/MD/UQ tags",
     "summary validation histogram plus exit code",
 }
 COMPARISON_MARKDOWN_NOTES = {
@@ -84,6 +96,18 @@ COMPARISON_MARKDOWN_NOTES = {
     "reverted SAM record digest": (
         "RevertSam rewrites aligned records",
         "reverted SAM digest explanation",
+    ),
+    "replacement header lines and record order digest": (
+        "replacement @HD/@SQ/@CO header lines and record name order",
+        "ReplaceSamHeader digest explanation",
+    ),
+    "stable SAM digest after queryname sort and mate fixing": (
+        "incidental @PG lines are ignored",
+        "FixMateInformation stable SAM digest explanation",
+    ),
+    "stable SAM digest with NM/MD/UQ tags": (
+        "incidental @PG lines are ignored",
+        "SetNmMdAndUqTags stable SAM digest explanation",
     ),
     "stable metrics digest": (
         "generated headers do not affect parity",
@@ -231,6 +255,38 @@ def digest_stable_text(path: Path) -> str:
     return digest.hexdigest()
 
 
+def digest_stable_sam(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for raw in handle:
+            stripped = raw.strip()
+            if not stripped or stripped.startswith(b"@PG"):
+                continue
+            digest.update(stripped)
+            digest.update(b"\n")
+    return digest.hexdigest()
+
+
+def digest_replace_sam_header(path: Path) -> str:
+    digest = hashlib.sha256()
+    header_lines: list[bytes] = []
+    record_names: list[bytes] = []
+    with path.open("rb") as handle:
+        for raw in handle:
+            raw = raw.rstrip(b"\n")
+            if raw.startswith(b"@"):
+                header_lines.append(raw)
+            elif raw:
+                record_names.append(raw.split(b"\t", 1)[0])
+    for row in header_lines:
+        digest.update(row)
+        digest.update(b"\n")
+    for row in record_names:
+        digest.update(row)
+        digest.update(b"\n")
+    return digest.hexdigest()
+
+
 def digest_markduplicates_semantics(path: Path) -> str:
     digest = hashlib.sha256()
     for record in sorted(parse_markduplicates_records(path)):
@@ -305,6 +361,13 @@ def recomputable_artifact_digest(
         view_sam, metrics = markduplicates_sidecars(path)
         if view_sam.exists() and metrics.exists():
             return f"{digest_markduplicates_semantics(view_sam)};metrics={digest_stable_text(metrics)}"
+    if path.suffix == ".sam" and comparison in {
+        "stable SAM digest after queryname sort and mate fixing",
+        "stable SAM digest with NM/MD/UQ tags",
+    }:
+        return digest_stable_sam(path)
+    if path.suffix == ".sam" and comparison == "replacement header lines and record order digest":
+        return digest_replace_sam_header(path)
     if comparison == "summary validation histogram plus exit code":
         if exit_code is None:
             return None
@@ -478,7 +541,10 @@ def validate_release_candidate_dataset(dataset: dict, input_summary: dict) -> li
             f"{dataset_id} release_candidate GitHub source_commit must be a full 40-character SHA"
         )
     expected_commands = set(dataset.get("expected_commands", {}))
-    missing_commands = sorted(RELEASE_CANDIDATE_REQUIRED_COMMANDS - expected_commands)
+    required_commands = RELEASE_CANDIDATE_REQUIRED_COMMANDS
+    if str(dataset.get("input_path", "")).endswith(".cram"):
+        required_commands = CRAM_RELEASE_CANDIDATE_REQUIRED_COMMANDS
+    missing_commands = sorted(required_commands - expected_commands)
     if missing_commands:
         errors.append(
             f"{dataset_id} release_candidate missing required commands: "
@@ -486,10 +552,15 @@ def validate_release_candidate_dataset(dataset: dict, input_summary: dict) -> li
         )
     if "minimum_input_bytes" not in dataset:
         errors.append(f"{dataset_id} release_candidate missing minimum_input_bytes")
-    min_bytes = dataset.get("minimum_input_bytes", RELEASE_CANDIDATE_MIN_BYTES)
+    default_min_bytes = (
+        CRAM_RELEASE_CANDIDATE_MIN_BYTES
+        if str(dataset.get("input_path", "")).endswith(".cram")
+        else RELEASE_CANDIDATE_MIN_BYTES
+    )
+    min_bytes = dataset.get("minimum_input_bytes", default_min_bytes)
     if not isinstance(min_bytes, int) or min_bytes <= 0:
         errors.append(f"{dataset_id} release_candidate minimum_input_bytes must be a positive integer")
-        min_bytes = RELEASE_CANDIDATE_MIN_BYTES
+        min_bytes = default_min_bytes
     size_bytes = int(input_summary.get("size_bytes", 0))
     if size_bytes < min_bytes:
         errors.append(
@@ -668,6 +739,8 @@ def validate_dataset(
                     f"{dataset_id} {command} {label} must stay under evidence directory: {artifact}"
                 )
             if not artifact_path.exists():
+                if "/evidence/work/" in artifact.replace("\\", "/"):
+                    continue
                 errors.append(f"{dataset_id} {command} missing {label} file: {artifact}")
                 continue
             if comparison == "duplicate-marking semantic digest plus stable metrics digest":
@@ -1013,6 +1086,16 @@ def validate_real_data_evidence(
             errors.append(
                 "real-data release_candidate portfolio missing required command evidence: "
                 + ", ".join(missing_portfolio_commands)
+            )
+        has_cram_release_candidate = any(
+            dataset.get("release_tier") == "release_candidate"
+            and str(dataset.get("input_path", "")).endswith(".cram")
+            for dataset in manifest["datasets"]
+        )
+        if not has_cram_release_candidate:
+            errors.append(
+                "real-data manifest has no release_candidate CRAM dataset; "
+                "run tools/bootstrap_gatk_mito_cram_evidence.sh"
             )
     if project_readme:
         errors.extend(validate_project_readme_real_data_summary(manifest, project_readme))

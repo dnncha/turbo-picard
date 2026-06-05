@@ -638,6 +638,8 @@ class CompareRealDataTests(unittest.TestCase):
                     ["turbo-picard"],
                     ["picard"],
                     100,
+                    None,
+                    input_bam,
                 )
 
             self.assertEqual(observed, expected)
@@ -647,6 +649,7 @@ class CompareRealDataTests(unittest.TestCase):
                 ["turbo-picard"],
                 ["picard"],
                 ["STOP_AFTER=100"],
+                None,
             )
 
     def test_compare_command_supports_validate_sam_file(self):
@@ -679,6 +682,8 @@ class CompareRealDataTests(unittest.TestCase):
                     ["turbo-picard"],
                     ["picard"],
                     None,
+                    None,
+                    input_bam,
                 )
 
             self.assertEqual(observed, expected)
@@ -687,6 +692,7 @@ class CompareRealDataTests(unittest.TestCase):
                 work_root / "ValidateSamFile",
                 ["turbo-picard"],
                 ["picard"],
+                None,
             )
 
     def test_compare_command_supports_build_bam_index(self):
@@ -719,6 +725,8 @@ class CompareRealDataTests(unittest.TestCase):
                     ["turbo-picard"],
                     ["picard"],
                     None,
+                    None,
+                    input_bam,
                 )
 
             self.assertEqual(observed, expected)
@@ -727,6 +735,7 @@ class CompareRealDataTests(unittest.TestCase):
                 work_root / "BuildBamIndex",
                 ["turbo-picard"],
                 ["picard"],
+                None,
             )
 
     def test_compare_command_supports_add_or_replace_read_groups(self):
@@ -759,6 +768,8 @@ class CompareRealDataTests(unittest.TestCase):
                     ["turbo-picard"],
                     ["picard"],
                     None,
+                    None,
+                    input_bam,
                 )
 
             self.assertEqual(observed, expected)
@@ -767,6 +778,7 @@ class CompareRealDataTests(unittest.TestCase):
                 work_root / "AddOrReplaceReadGroups",
                 ["turbo-picard"],
                 ["picard"],
+                None,
             )
 
     def test_compare_command_supports_revertsam(self):
@@ -799,6 +811,8 @@ class CompareRealDataTests(unittest.TestCase):
                     ["turbo-picard"],
                     ["picard"],
                     None,
+                    None,
+                    input_bam,
                 )
 
             self.assertEqual(observed, expected)
@@ -807,6 +821,7 @@ class CompareRealDataTests(unittest.TestCase):
                 work_root / "RevertSam",
                 ["turbo-picard"],
                 ["picard"],
+                None,
             )
 
     def test_compare_command_supports_samtofastq(self):
@@ -839,6 +854,8 @@ class CompareRealDataTests(unittest.TestCase):
                     ["turbo-picard"],
                     ["picard"],
                     None,
+                    None,
+                    input_bam,
                 )
 
             self.assertEqual(observed, expected)
@@ -847,6 +864,7 @@ class CompareRealDataTests(unittest.TestCase):
                 work_root / "SamToFastq",
                 ["turbo-picard"],
                 ["picard"],
+                None,
             )
 
     def test_validate_sam_summary_digest_includes_exit_code(self):
@@ -885,6 +903,30 @@ class CompareRealDataTests(unittest.TestCase):
 
         self.assertNotIn("turbo_exit_code", compare_real_data.command_evidence_dict(row))
         self.assertNotIn("picard_exit_code", compare_real_data.command_evidence_dict(row))
+
+    def test_command_evidence_dict_rewrites_artifacts_relative_to_repo(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            artifact = root / "benchmarks/real-data/fixture/evidence/turbo.sam"
+            artifact.parent.mkdir(parents=True, exist_ok=True)
+            artifact.write_text("", encoding="utf-8")
+            row = compare_real_data.CommandEvidence(
+                command="ViewSam",
+                status="PASS",
+                turbo_seconds=1.0,
+                picard_seconds=2.0,
+                speedup=2.0,
+                comparison="SAM record digest",
+                turbo_artifact=str(artifact),
+                picard_artifact=str(artifact),
+                turbo_digest="abc",
+                picard_digest="abc",
+            )
+            with mock.patch.object(compare_real_data, "ROOT", root):
+                data = compare_real_data.command_evidence_dict(row)
+            self.assertFalse(Path(data["turbo_artifact"]).is_absolute())
+            self.assertFalse(Path(data["picard_artifact"]).is_absolute())
+            self.assertTrue(data["turbo_artifact"].startswith("benchmarks/real-data/"))
 
     def test_command_evidence_dict_keeps_validation_exit_codes(self):
         row = compare_real_data.CommandEvidence(
@@ -1017,6 +1059,111 @@ class CompareRealDataTests(unittest.TestCase):
             self.assertTrue(script.exists())
             self.assertIn("exit 0", script.read_text(encoding="utf-8"))
             self.assertTrue(os.access(script, os.X_OK))
+
+    def test_alignment_io_args_adds_reference_for_cram(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cram = Path(tmp) / "reads.cram"
+            reference = Path(tmp) / "ref.fa"
+            cram.write_text("", encoding="utf-8")
+            reference.write_text(">chr1\nACGT\n", encoding="utf-8")
+            self.assertEqual(
+                compare_real_data.alignment_io_args(cram, reference),
+                [f"I={cram}", f"R={reference}"],
+            )
+
+    def test_alignment_io_args_requires_reference_for_cram(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cram = Path(tmp) / "reads.cram"
+            cram.write_text("", encoding="utf-8")
+            with self.assertRaises(SystemExit):
+                compare_real_data.alignment_io_args(cram, None)
+
+    def test_cram_reference_arg_adds_reference_when_any_path_is_cram(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            bam = Path(tmp) / "reads.bam"
+            cram = Path(tmp) / "reads.cram"
+            reference = Path(tmp) / "ref.fa"
+            bam.write_text("", encoding="utf-8")
+            cram.write_text("", encoding="utf-8")
+            reference.write_text(">chr1\nACGT\n", encoding="utf-8")
+            self.assertEqual(
+                compare_real_data.cram_reference_arg(reference, bam, bam),
+                [],
+            )
+            self.assertEqual(
+                compare_real_data.cram_reference_arg(reference, bam, cram),
+                [f"R={reference}"],
+            )
+
+    def test_reference_io_args_adds_reference_for_bam(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            bam = Path(tmp) / "reads.bam"
+            reference = Path(tmp) / "ref.fa"
+            bam.write_text("", encoding="utf-8")
+            reference.write_text(">chr1\nACGT\n", encoding="utf-8")
+            self.assertEqual(
+                compare_real_data.reference_io_args(bam, reference),
+                [f"I={bam}", f"R={reference}"],
+            )
+
+    def test_require_reference_fasta_rejects_missing_path(self):
+        with self.assertRaisesRegex(SystemExit, "SetNmMdAndUqTags requires --reference-fasta"):
+            compare_real_data.require_reference_fasta(None, "SetNmMdAndUqTags")
+
+    def test_digest_stable_sam_ignores_pg_header_lines(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            first = Path(tmp) / "first.sam"
+            second = Path(tmp) / "second.sam"
+            first.write_text(
+                "@HD\tVN:1.6\n"
+                "@PG\tID:picard\n"
+                "read-a\t0\tchr1\t1\t60\t4M\t*\t0\t0\tACGT\tFFFF\n",
+                encoding="utf-8",
+            )
+            second.write_text(
+                "@HD\tVN:1.6\n"
+                "@PG\tID:turbo\n"
+                "read-a\t0\tchr1\t1\t60\t4M\t*\t0\t0\tACGT\tFFFF\n",
+                encoding="utf-8",
+            )
+            self.assertEqual(
+                compare_real_data.digest_stable_sam(first),
+                compare_real_data.digest_stable_sam(second),
+            )
+
+    def test_digest_replace_sam_header_tracks_header_and_record_order(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            first = Path(tmp) / "first.sam"
+            second = Path(tmp) / "second.sam"
+            first.write_text(
+                "@HD\tVN:1.6\n"
+                "@CO\treplacement\n"
+                "read-a\t0\tchr1\t1\t60\t4M\t*\t0\t0\tACGT\tFFFF\n"
+                "read-b\t0\tchr1\t2\t60\t4M\t*\t0\t0\tACGT\tFFFF\n",
+                encoding="utf-8",
+            )
+            second.write_text(
+                "@HD\tVN:1.6\n"
+                "@CO\treplacement\n"
+                "read-b\t0\tchr1\t2\t60\t4M\t*\t0\t0\tACGT\tFFFF\n"
+                "read-a\t0\tchr1\t1\t60\t4M\t*\t0\t0\tACGT\tFFFF\n",
+                encoding="utf-8",
+            )
+            self.assertNotEqual(
+                compare_real_data.digest_replace_sam_header(first),
+                compare_real_data.digest_replace_sam_header(second),
+            )
+
+    def test_input_metadata_records_reference_for_cram(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cram = Path(tmp) / "reads.cram"
+            reference = Path(tmp) / "ref.fa"
+            cram.write_bytes(b"\x00")
+            reference.write_text(">chr1\nACGT\n", encoding="utf-8")
+            metadata = compare_real_data.input_metadata(cram, reference_fasta=reference)
+            self.assertEqual(metadata["format"], "CRAM")
+            self.assertEqual(metadata["reference_fasta"], str(reference))
+            self.assertIn("reference_sha256", metadata)
 
     def test_markduplicates_semantic_digest_ignores_incidental_tags(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -26,9 +26,16 @@ class ParityDocsTests(unittest.TestCase):
         It does not mean every Picard behavior has been reimplemented.
         Passing parity evidence does not prove broad switching safety.
         Use representative inputs, input SHA-256, Picard version, turbo-picard version,
-        tools/compare_real_data.py, python3 tools/verify_real_data_evidence.py --release-ready,
+        tools/compare_real_data.py, verify_basic_cram_parity, verify_markdup_cram_parity,
+        verify_gatk_preprocessing_combo_parity,
+        verify_gatk_mito_bam_parity,
+        verify_gatk_mito_cram_parity,
+        verify_gatk_preprocessing_combo_cram_parity,
+        bootstrap_gatk_mito_cram_evidence,
+        python3 tools/verify_real_data_evidence.py --release-ready,
         and fallback to upstream Picard where needed.
-        MarkDuplicates SortSam BuildBamIndex SamToFastq ValidateSamFile metrics commands.
+        MarkDuplicates SortSam BuildBamIndex SamToFastq ValidateSamFile FixMateInformation
+        SetNmMdAndUqTags metrics commands.
         """
         errors = verify_parity_docs.validate_parity_docs(
             parity,

@@ -52,6 +52,7 @@ class SiteBenchmarkEvidenceTests(unittest.TestCase):
 <code>python3 tools/verify_benchmark_thresholds.py</code>
 <code>python3 tools/verify_real_data_evidence.py --release-ready</code>
 benchmark exceptions
+AccelerationStatus
 IntervalListTools
 LiftoverVcf
 <a href="#adopt">Adoption</a>

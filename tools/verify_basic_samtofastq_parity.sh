@@ -52,6 +52,30 @@ cmp "$workdir/picard-r1.fastq.md5" "$workdir/turbo-r1.fastq.md5"
 cmp "$workdir/picard-r2.fastq.md5" "$workdir/turbo-r2.fastq.md5"
 cmp "$workdir/picard-unpaired.fastq.md5" "$workdir/turbo-unpaired.fastq.md5"
 
+cat > "$workdir/rereverse-input.sam" <<'SAM'
+@HD	VN:1.6	SO:queryname
+@SQ	SN:chr1	LN:1000
+read-a	16	chr1	10	60	4M	*	0	0	AACG	ABCD
+SAM
+
+cargo run -q -p turbo-picard-cli --bin picard -- \
+  SamToFastq \
+  "I=$workdir/rereverse-input.sam" \
+  "FASTQ=$workdir/turbo-rereverse-false.fastq" \
+  RE_REVERSE=false \
+  VALIDATION_STRINGENCY=SILENT \
+  QUIET=true
+
+"${conda_runner[@]}" run -p "$conda_prefix" picard SamToFastq \
+  "I=$workdir/rereverse-input.sam" \
+  "FASTQ=$workdir/picard-rereverse-false.fastq" \
+  RE_REVERSE=false \
+  VALIDATION_STRINGENCY=SILENT \
+  QUIET=true
+
+diff -u "$workdir/picard-rereverse-false.fastq" "$workdir/turbo-rereverse-false.fastq"
+echo "SamToFastq RE_REVERSE=false output matches Picard"
+
 cat > "$workdir/trim-input.sam" <<'SAM'
 @HD	VN:1.6	SO:queryname
 @SQ	SN:chr1	LN:1000

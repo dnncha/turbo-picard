@@ -21,7 +21,7 @@ workflow.
    picard BuildBamIndex I=coordinate.bam O=coordinate.bai
    picard SamToFastq I=input.bam FASTQ=r1.fastq SECOND_END_FASTQ=r2.fastq
    picard FastqToSam F1=r1.fastq F2=r2.fastq O=unmapped.bam SM=sample RG=rg1
-   picard ViewSam I=input.bam O=view.sam
+   picard ViewSam I=input.bam > view.sam
    picard ReplaceSamHeader I=input.bam O=reheadered.bam H=replacement-header.sam
    picard AddOrReplaceReadGroups I=input.bam O=rg.bam RGID=1 RGLB=lib RGPL=ILLUMINA RGPU=unit RGSM=sample
    picard CollectAlignmentSummaryMetrics I=input.bam O=alignment_metrics.txt
@@ -29,6 +29,7 @@ workflow.
    picard CreateSequenceDictionary R=reference.fa O=reference.dict
    picard NormalizeFasta I=reference.fa O=normalized.fa LINE_LENGTH=100
    picard BedToIntervalList I=targets.bed O=targets.interval_list SD=reference.dict
+   turbo-picard AccelerationStatus
 
 Metrics and repair examples
 ---------------------------
@@ -69,6 +70,7 @@ documented command.
 Current matrix status summary:
 
 * ``AddOrReplaceReadGroups``: ``native``
+* ``AccelerationStatus``: ``native``
 * ``BedToIntervalList``: ``native``
 * ``BuildBamIndex``: ``native``
 * ``CleanSam``: ``partial-native``
@@ -77,7 +79,7 @@ Current matrix status summary:
 * ``CollectGcBiasMetrics``: ``partial-native``
 * ``CollectQualityYieldMetrics``: ``native``
 * ``CollectWgsMetrics``: ``partial-native``
-* ``CreateSequenceDictionary``: ``partial-native``
+* ``CreateSequenceDictionary``: ``native``
 * ``FastqToSam``: ``partial-native``
 * ``GatherVcfs``: ``partial-native``
 * ``MarkDuplicates``: ``partial-native``

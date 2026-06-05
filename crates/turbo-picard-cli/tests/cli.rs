@@ -17,6 +17,43 @@ fn unsupported_command_fails_clearly() {
 }
 
 #[test]
+fn acceleration_status_reports_cpu_backend() {
+    let mut cmd = Command::cargo_bin("turbo-picard").expect("binary exists");
+    cmd.arg("AccelerationStatus")
+        .env("TURBO_PICARD_THREADS", "3")
+        .env("TURBO_PICARD_ACCELERATOR", "cpu")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("backend=cpu"))
+        .stdout(predicate::str::contains("policy=cpu"))
+        .stdout(predicate::str::contains("htslib_worker_threads=3"))
+        .stdout(predicate::str::contains("gpu_acceleration=not-enabled"));
+}
+
+#[test]
+fn acceleration_status_rejects_required_gpu_without_backend() {
+    let mut cmd = Command::cargo_bin("turbo-picard").expect("binary exists");
+    cmd.arg("AccelerationStatus")
+        .env("TURBO_PICARD_ACCELERATOR", "gpu-required")
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains("policy=gpu-required"))
+        .stderr(predicate::str::contains(
+            "this build has no production GPU backend",
+        ));
+}
+
+#[test]
+fn acceleration_status_supports_help_smoke_check() {
+    let mut cmd = Command::cargo_bin("turbo-picard").expect("binary exists");
+    cmd.args(["AccelerationStatus", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Usage: picard AccelerationStatus"))
+        .stdout(predicate::str::contains("gpu_acceleration"));
+}
+
+#[test]
 fn markduplicates_requires_metrics_file() {
     let mut cmd = Command::cargo_bin("turbo-picard").expect("binary exists");
     cmd.args(["MarkDuplicates", "I=in.bam", "O=out.bam"])
@@ -719,6 +756,60 @@ fn mergesamfiles_assume_sorted_uses_streaming_merge() {
 }
 
 #[test]
+fn mergesamfiles_filters_records_by_intervals() {
+    let tempdir = tempfile::tempdir().expect("tempdir exists");
+    let input_a = tempdir.path().join("a.sam");
+    let input_b = tempdir.path().join("b.sam");
+    let intervals = tempdir.path().join("targets.interval_list");
+    let output = tempdir.path().join("merged.sam");
+    fs::write(
+        &input_a,
+        concat!(
+            "@HD\tVN:1.6\tSO:coordinate\n",
+            "@SQ\tSN:chr1\tLN:1000\n",
+            "read-c\t0\tchr1\t90\t60\t10M\t*\t0\t0\tCCCCCCCCCC\tFFFFFFFFFF\n",
+        ),
+    )
+    .expect("first input fixture is written");
+    fs::write(
+        &input_b,
+        concat!(
+            "@HD\tVN:1.6\tSO:coordinate\n",
+            "@SQ\tSN:chr1\tLN:1000\n",
+            "read-a\t0\tchr1\t10\t60\t10M\t*\t0\t0\tAAAAAAAAAA\tFFFFFFFFFF\n",
+            "read-b\t0\tchr1\t50\t60\t10M\t*\t0\t0\tBBBBBBBBBB\tFFFFFFFFFF\n",
+        ),
+    )
+    .expect("second input fixture is written");
+    fs::write(
+        &intervals,
+        concat!(
+            "@HD\tVN:1.6\tSO:coordinate\n",
+            "@SQ\tSN:chr1\tLN:1000\n",
+            "chr1\t45\t60\t+\ttarget\n",
+        ),
+    )
+    .expect("interval fixture is written");
+
+    Command::cargo_bin("picard")
+        .expect("binary exists")
+        .args([
+            "MergeSamFiles",
+            &format!("I={}", input_a.display()),
+            &format!("I={}", input_b.display()),
+            &format!("O={}", output.display()),
+            "SORT_ORDER=coordinate",
+            "AS=true",
+            &format!("INTERVALS={}", intervals.display()),
+        ])
+        .assert()
+        .success();
+
+    let output_sam = fs::read_to_string(&output).expect("output SAM exists");
+    assert_eq!(record_names(&output_sam), vec!["read-b"]);
+}
+
+#[test]
 fn mergesamfiles_preserves_unsorted_input_order() {
     let tempdir = tempfile::tempdir().expect("tempdir exists");
     let input_a = tempdir.path().join("a.sam");
@@ -801,6 +892,48 @@ fn mergesamfiles_rewrites_colliding_read_groups() {
     assert!(output_sam.contains("@RG\tID:rg1.1\tLB:lib-b"));
     assert!(output_sam.contains("read-a\t0\tchr1\t10\t60\t4M\t*\t0\t0\tAAAA\tFFFF\tRG:Z:rg1"));
     assert!(output_sam.contains("read-b\t0\tchr1\t20\t60\t4M\t*\t0\t0\tBBBB\tFFFF\tRG:Z:rg1.1"));
+}
+
+#[test]
+fn mergesamfiles_accepts_merge_sequence_dictionaries_for_matching_dictionaries() {
+    let tempdir = tempfile::tempdir().expect("tempdir exists");
+    let input_a = tempdir.path().join("a.sam");
+    let input_b = tempdir.path().join("b.sam");
+    let output = tempdir.path().join("merged.sam");
+    fs::write(
+        &input_a,
+        concat!(
+            "@HD\tVN:1.6\tSO:coordinate\n",
+            "@SQ\tSN:chr1\tLN:1000\n",
+            "read-b\t0\tchr1\t20\t60\t4M\t*\t0\t0\tBBBB\tFFFF\n",
+        ),
+    )
+    .expect("first input fixture is written");
+    fs::write(
+        &input_b,
+        concat!(
+            "@HD\tVN:1.6\tSO:coordinate\n",
+            "@SQ\tSN:chr1\tLN:1000\n",
+            "read-a\t0\tchr1\t10\t60\t4M\t*\t0\t0\tAAAA\tFFFF\n",
+        ),
+    )
+    .expect("second input fixture is written");
+
+    Command::cargo_bin("picard")
+        .expect("binary exists")
+        .args([
+            "MergeSamFiles",
+            &format!("I={}", input_a.display()),
+            &format!("I={}", input_b.display()),
+            &format!("O={}", output.display()),
+            "SORT_ORDER=coordinate",
+            "MERGE_SEQUENCE_DICTIONARIES=true",
+        ])
+        .assert()
+        .success();
+
+    let output_sam = fs::read_to_string(&output).expect("output SAM exists");
+    assert_eq!(record_names(&output_sam), vec!["read-a", "read-b"]);
 }
 
 #[test]
@@ -887,6 +1020,39 @@ fn samtofastq_streams_unpaired_reads() {
             "+\n",
             "DCBA\n",
         )
+    );
+}
+
+#[test]
+fn samtofastq_honors_re_reverse_false() {
+    let tempdir = tempfile::tempdir().expect("tempdir exists");
+    let input = tempdir.path().join("input.sam");
+    let fastq = tempdir.path().join("reads.fastq");
+    fs::write(
+        &input,
+        concat!(
+            "@HD\tVN:1.6\tSO:queryname\n",
+            "@SQ\tSN:chr1\tLN:1000\n",
+            "read-a\t16\tchr1\t10\t60\t4M\t*\t0\t0\tAACG\tABCD\n",
+        ),
+    )
+    .expect("input fixture is written");
+
+    Command::cargo_bin("picard")
+        .expect("binary exists")
+        .args([
+            "SamToFastq",
+            &format!("I={}", input.display()),
+            &format!("FASTQ={}", fastq.display()),
+            "RE_REVERSE=false",
+            "VALIDATION_STRINGENCY=SILENT",
+        ])
+        .assert()
+        .success();
+
+    assert_eq!(
+        fs::read_to_string(&fastq).expect("FASTQ output exists"),
+        "@read-a\nAACG\n+\nABCD\n"
     );
 }
 
@@ -1592,6 +1758,145 @@ fn fastqtosam_writes_repeated_comments_to_header() {
     let sam = fs::read_to_string(&output).expect("SAM output exists");
     assert!(sam.contains("@CO\tfirst comment\n@CO\tsecond comment\n"));
     assert!(sam.contains("read1\t4\t*\t0\t0\t*\t*\t0\t0\tACGT\tFFFF\tRG:Z:A\n"));
+}
+
+#[test]
+fn fastqtosam_auto_detects_standard_and_illumina_quality_offsets() {
+    let tempdir = tempfile::tempdir().expect("tempdir exists");
+    let standard_fastq = tempdir.path().join("standard.fastq");
+    let standard_output = tempdir.path().join("standard.sam");
+    let illumina_fastq = tempdir.path().join("illumina.fastq");
+    let illumina_output = tempdir.path().join("illumina.sam");
+    fs::write(&standard_fastq, "@read1\nACGT\n+\nFFFF\n").expect("standard FASTQ is written");
+    fs::write(&illumina_fastq, "@read1\nACGT\n+\nbbbb\n").expect("illumina FASTQ is written");
+
+    Command::cargo_bin("picard")
+        .expect("binary exists")
+        .args([
+            "FastqToSam",
+            &format!("FASTQ={}", standard_fastq.display()),
+            &format!("OUTPUT={}", standard_output.display()),
+            "SAMPLE_NAME=sample",
+            "VALIDATION_STRINGENCY=SILENT",
+            "QUIET=true",
+        ])
+        .assert()
+        .success();
+    Command::cargo_bin("picard")
+        .expect("binary exists")
+        .args([
+            "FastqToSam",
+            &format!("FASTQ={}", illumina_fastq.display()),
+            &format!("OUTPUT={}", illumina_output.display()),
+            "SAMPLE_NAME=sample",
+            "VALIDATION_STRINGENCY=SILENT",
+            "QUIET=true",
+        ])
+        .assert()
+        .success();
+
+    assert!(
+        fs::read_to_string(&standard_output)
+            .expect("standard output exists")
+            .contains("read1\t4\t*\t0\t0\t*\t*\t0\t0\tACGT\t''''\tRG:Z:A\n")
+    );
+    assert!(
+        fs::read_to_string(&illumina_output)
+            .expect("illumina output exists")
+            .contains("read1\t4\t*\t0\t0\t*\t*\t0\t0\tACGT\tCCCC\tRG:Z:A\n")
+    );
+}
+
+#[test]
+fn fastqtosam_honors_empty_line_and_empty_fastq_options() {
+    let tempdir = tempfile::tempdir().expect("tempdir exists");
+    let fastq = tempdir.path().join("reads.fastq");
+    let output = tempdir.path().join("unmapped.sam");
+    fs::write(&fastq, "\n@read1\nACGT\n+\nFFFF\n").expect("FASTQ fixture is written");
+
+    Command::cargo_bin("picard")
+        .expect("binary exists")
+        .args([
+            "FastqToSam",
+            &format!("FASTQ={}", fastq.display()),
+            &format!("OUTPUT={}", output.display()),
+            "SAMPLE_NAME=sample",
+            "ALLOW_AND_IGNORE_EMPTY_LINES=true",
+            "QUALITY_FORMAT=Standard",
+            "VALIDATION_STRINGENCY=SILENT",
+            "QUIET=true",
+        ])
+        .assert()
+        .success();
+
+    let sam = fs::read_to_string(&output).expect("SAM output exists");
+    assert!(sam.contains("read1\t4\t*\t0\t0\t*\t*\t0\t0\tACGT\tFFFF\tRG:Z:A\n"));
+
+    let empty_fastq = tempdir.path().join("empty.fastq");
+    let empty_output = tempdir.path().join("empty.sam");
+    fs::write(&empty_fastq, "").expect("empty FASTQ fixture is written");
+    Command::cargo_bin("picard")
+        .expect("binary exists")
+        .args([
+            "FastqToSam",
+            &format!("FASTQ={}", empty_fastq.display()),
+            &format!("OUTPUT={}", empty_output.display()),
+            "SAMPLE_NAME=sample",
+            "ALLOW_EMPTY_FASTQ=true",
+            "QUALITY_FORMAT=Standard",
+            "VALIDATION_STRINGENCY=SILENT",
+            "QUIET=true",
+        ])
+        .assert()
+        .success();
+
+    assert!(
+        fs::read_to_string(&empty_output)
+            .expect("empty SAM output exists")
+            .contains("@HD\tVN:1.6\tSO:queryname\n")
+    );
+}
+
+#[test]
+fn fastqtosam_rejects_empty_fastq_and_out_of_range_quality() {
+    let tempdir = tempfile::tempdir().expect("tempdir exists");
+    let empty_fastq = tempdir.path().join("empty.fastq");
+    let empty_output = tempdir.path().join("empty.sam");
+    fs::write(&empty_fastq, "").expect("empty FASTQ fixture is written");
+
+    Command::cargo_bin("picard")
+        .expect("binary exists")
+        .args([
+            "FastqToSam",
+            &format!("FASTQ={}", empty_fastq.display()),
+            &format!("OUTPUT={}", empty_output.display()),
+            "SAMPLE_NAME=sample",
+            "QUALITY_FORMAT=Standard",
+            "VALIDATION_STRINGENCY=SILENT",
+            "QUIET=true",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("empty FASTQ input"));
+
+    let fastq = tempdir.path().join("reads.fastq");
+    let output = tempdir.path().join("unmapped.sam");
+    fs::write(&fastq, "@read1\nACGT\n+\nFFFF\n").expect("FASTQ fixture is written");
+    Command::cargo_bin("picard")
+        .expect("binary exists")
+        .args([
+            "FastqToSam",
+            &format!("FASTQ={}", fastq.display()),
+            &format!("OUTPUT={}", output.display()),
+            "SAMPLE_NAME=sample",
+            "QUALITY_FORMAT=Standard",
+            "MAX_Q=30",
+            "VALIDATION_STRINGENCY=SILENT",
+            "QUIET=true",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("quality above MAX_Q"));
 }
 
 #[test]
@@ -3818,6 +4123,55 @@ fn fixmateinformation_updates_pair_fields_and_tags() {
 }
 
 #[test]
+fn fixmateinformation_accepts_multiple_inputs_with_split_pair() {
+    let tempdir = tempfile::tempdir().expect("tempdir exists");
+    let first = tempdir.path().join("first.sam");
+    let second = tempdir.path().join("second.sam");
+    let output = tempdir.path().join("fixed.sam");
+    fs::write(
+        &first,
+        concat!(
+            "@HD\tVN:1.6\tSO:queryname\n",
+            "@SQ\tSN:chr1\tLN:1000\n",
+            "pair1\t99\tchr1\t10\t60\t4M\t*\t0\t0\tACGT\tFFFF\n",
+        ),
+    )
+    .expect("first input fixture is written");
+    fs::write(
+        &second,
+        concat!(
+            "@HD\tVN:1.6\tSO:queryname\n",
+            "@SQ\tSN:chr1\tLN:1000\n",
+            "pair1\t147\tchr1\t30\t60\t4M\t*\t0\t0\tTGCA\tFFFF\n",
+        ),
+    )
+    .expect("second input fixture is written");
+
+    Command::cargo_bin("picard")
+        .expect("binary exists")
+        .args([
+            "FixMateInformation",
+            &format!("I={}", first.display()),
+            &format!("I={}", second.display()),
+            &format!("O={}", output.display()),
+            "ASSUME_SORTED=true",
+            "SORT_ORDER=queryname",
+            "VALIDATION_STRINGENCY=SILENT",
+            "QUIET=true",
+        ])
+        .assert()
+        .success();
+
+    let fixed = fs::read_to_string(&output).expect("fixed SAM exists");
+    assert!(
+        fixed.contains("pair1\t99\tchr1\t10\t60\t4M\t=\t30\t24\tACGT\tFFFF\tMC:Z:4M\tMQ:i:60\n")
+    );
+    assert!(
+        fixed.contains("pair1\t147\tchr1\t30\t60\t4M\t=\t10\t-24\tTGCA\tFFFF\tMC:Z:4M\tMQ:i:60\n")
+    );
+}
+
+#[test]
 fn fixmateinformation_honors_mate_cigar_short_alias() {
     let tempdir = tempfile::tempdir().expect("tempdir exists");
     let input = tempdir.path().join("input.sam");
@@ -4831,6 +5185,7 @@ fn validatesamfile_writes_summary_for_valid_and_warning_inputs() {
         ])
         .assert()
         .failure()
+        .code(3)
         .stdout(predicate::str::contains("ERROR:MISSING_READ_GROUP\t1"))
         .stdout(predicate::str::contains("WARNING:MISSING_TAG_NM\t1"))
         .stdout(predicate::str::contains(

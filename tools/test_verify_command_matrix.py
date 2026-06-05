@@ -97,6 +97,25 @@ class CommandMatrixTests(unittest.TestCase):
 
         self.assertEqual(errors, [])
 
+    def test_command_docs_examples_reject_upstream_viewsam_output_argument(self) -> None:
+        errors = verify_command_matrix.validate_command_docs_examples(
+            [],
+            "picard ViewSam I=input.bam O=view.sam\n",
+        )
+
+        self.assertIn(
+            "commands docs must show upstream ViewSam writing to stdout, not O= output",
+            errors,
+        )
+
+    def test_command_docs_examples_accept_upstream_viewsam_stdout_redirect(self) -> None:
+        errors = verify_command_matrix.validate_command_docs_examples(
+            [],
+            "picard ViewSam I=input.bam > view.sam\n",
+        )
+
+        self.assertEqual(errors, [])
+
     def test_scope_validation_allows_explicit_lightweight_chart_disclosure(self) -> None:
         errors = verify_command_matrix.validate_scope_notes(
             [
@@ -210,6 +229,45 @@ class CommandMatrixTests(unittest.TestCase):
         self.assertEqual(
             verify_command_matrix.release_candidate_real_data_commands("not json"),
             set(),
+        )
+
+    def test_cram_parity_commands_reads_script_summary(self) -> None:
+        script_text = 'echo "CRAM hot-path parity passed for: SortSam, ViewSam, CleanSam"\n'
+
+        self.assertEqual(
+            verify_command_matrix.cram_parity_commands(script_text),
+            {"SortSam", "ViewSam", "CleanSam"},
+        )
+        self.assertEqual(
+            verify_command_matrix.cram_parity_commands("no summary"),
+            set(),
+        )
+
+    def test_cram_scope_mentions_require_matrix_cram_wording(self) -> None:
+        entries = [
+            {
+                "name": "SortSam",
+                "native_scope": "Coordinate and queryname sorting for SAM/BAM/CRAM.",
+            },
+            {
+                "name": "CleanSam",
+                "native_scope": "Common SAM/BAM cleanup.",
+            },
+        ]
+
+        self.assertEqual(
+            verify_command_matrix.validate_cram_scope_mentions(entries, {"SortSam"}),
+            [],
+        )
+        self.assertEqual(
+            verify_command_matrix.validate_cram_scope_mentions(
+                entries,
+                {"CleanSam", "ViewSam"},
+            ),
+            [
+                "CleanSam has CRAM parity coverage but command matrix native_scope does not mention CRAM",
+                "ViewSam has CRAM parity coverage but is missing from command matrix",
+            ],
         )
 
     def test_parity_script_file_validation_reports_missing_scripts(self) -> None:

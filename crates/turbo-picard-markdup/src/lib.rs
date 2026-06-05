@@ -2,14 +2,14 @@
 
 use rust_htslib::bam::header::HeaderRecord;
 use rust_htslib::bam::record::Aux;
-use rust_htslib::bam::{self, CompressionLevel, Read, index};
+use rust_htslib::bam::{self, Read, index};
 use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
 use std::fmt;
 use std::fs;
 use std::path::Path;
-use turbo_picard_core::bgzf_threads::bgzf_threads;
+use turbo_picard_core::hts_io;
 use turbo_picard_core::markdup_config::MarkDuplicatesConfig;
 
 const DUPLICATE_FLAG: u16 = 0x400;
@@ -41,6 +41,7 @@ pub enum MarkDuplicatesError {
     UnsupportedInputFormat(String),
     Io(std::io::Error),
     Htslib(rust_htslib::errors::Error),
+    Operation(String),
     MalformedSam { line_number: usize, reason: String },
 }
 
@@ -53,6 +54,7 @@ impl fmt::Display for MarkDuplicatesError {
             ),
             Self::Io(error) => write!(f, "{error}"),
             Self::Htslib(error) => write!(f, "{error}"),
+            Self::Operation(message) => write!(f, "{message}"),
             Self::MalformedSam {
                 line_number,
                 reason,
@@ -99,8 +101,12 @@ struct BamDuplicateKey {
 }
 
 pub fn run(config: &MarkDuplicatesConfig) -> Result<MarkDuplicatesSummary, MarkDuplicatesError> {
-    if config.inputs.iter().all(|input| is_bam_input(input)) {
-        return run_bam(config);
+    if config
+        .inputs
+        .iter()
+        .all(|input| hts_io::is_hts_container_input(input))
+    {
+        return run_hts_container(config);
     }
 
     if config.inputs.len() > 1 {
@@ -218,23 +224,43 @@ fn ensure_sam_input(input: &str) -> Result<(), MarkDuplicatesError> {
     }
 }
 
-fn is_bam_input(input: &str) -> bool {
-    Path::new(input)
-        .extension()
-        .is_some_and(|extension| extension.eq_ignore_ascii_case("bam"))
+fn markdup_reference(config: &MarkDuplicatesConfig) -> Option<&str> {
+    config.reference_sequence.as_deref()
 }
 
-fn run_bam(config: &MarkDuplicatesConfig) -> Result<MarkDuplicatesSummary, MarkDuplicatesError> {
+fn open_markdup_reader(
+    config: &MarkDuplicatesConfig,
+    path: &str,
+) -> Result<bam::Reader, MarkDuplicatesError> {
+    hts_io::open_reader(path, markdup_reference(config)).map_err(MarkDuplicatesError::Operation)
+}
+
+fn open_markdup_writer(
+    config: &MarkDuplicatesConfig,
+    output: &str,
+    header: &bam::Header,
+) -> Result<bam::Writer, MarkDuplicatesError> {
+    let format =
+        hts_io::writer_format_for_output(output).map_err(MarkDuplicatesError::Operation)?;
+    hts_io::open_writer(
+        output,
+        header,
+        format,
+        markdup_reference(config),
+        config.compression_level,
+    )
+    .map_err(MarkDuplicatesError::Operation)
+}
+
+fn run_hts_container(
+    config: &MarkDuplicatesConfig,
+) -> Result<MarkDuplicatesSummary, MarkDuplicatesError> {
     if let Some(summary) = try_run_single_bam_no_duplicate_fast_path(config)? {
         return Ok(summary);
     }
 
     let first_input = &config.inputs[0];
-    let mut reader = bam::Reader::from_path(first_input)?;
-    let bgzf_threads = bgzf_threads();
-    if let Some(threads) = bgzf_threads {
-        reader.set_threads(threads)?;
-    }
+    let mut reader = open_markdup_reader(config, first_input)?;
     let mut library_registry = LibraryRegistry::new();
     let first_library_lookup = library_lookup(reader.header(), &mut library_registry);
     let library = library_registry
@@ -244,23 +270,13 @@ fn run_bam(config: &MarkDuplicatesConfig) -> Result<MarkDuplicatesSummary, MarkD
     let mut header = bam::Header::from_template(reader.header());
     let mut known_read_groups = read_group_ids(reader.header());
     for input in config.inputs.iter().skip(1) {
-        let reader = bam::Reader::from_path(input)?;
+        let reader = open_markdup_reader(config, input)?;
         append_missing_read_groups(&mut header, reader.header(), &mut known_read_groups);
     }
     if config.add_pg_tag_to_reads {
-        header.push_record(
-            HeaderRecord::new(b"PG")
-                .push_tag(b"ID", "MarkDuplicates")
-                .push_tag(b"PN", "MarkDuplicates"),
-        );
+        push_markdup_pg_header_if_needed(&mut header);
     }
-    let mut writer = bam::Writer::from_path(&config.output, &header, bam::Format::Bam)?;
-    if let Some(threads) = bgzf_threads {
-        writer.set_threads(threads)?;
-    }
-    if let Some(level) = config.compression_level {
-        writer.set_compression_level(CompressionLevel::Level(level))?;
-    }
+    let mut writer = open_markdup_writer(config, &config.output, &header)?;
     let mut records = Vec::new();
     let mut record_libraries = Vec::new();
     let mut eligible_indices = Vec::new();
@@ -287,10 +303,7 @@ fn run_bam(config: &MarkDuplicatesConfig) -> Result<MarkDuplicatesSummary, MarkD
         &mut summary,
     )?;
     for input in config.inputs.iter().skip(1) {
-        let mut reader = bam::Reader::from_path(input)?;
-        if let Some(threads) = bgzf_threads {
-            reader.set_threads(threads)?;
-        }
+        let mut reader = open_markdup_reader(config, input)?;
         let input_library_lookup = library_lookup(reader.header(), &mut library_registry);
         read_bam_records(
             &mut reader,
@@ -415,7 +428,7 @@ fn run_bam(config: &MarkDuplicatesConfig) -> Result<MarkDuplicatesSummary, MarkD
             &config.output,
             Some(&picard_bai_path(&config.output)),
             index::Type::Bai,
-            1,
+            turbo_picard_core::bgzf_threads::htslib_worker_threads(),
         )?;
     }
     Ok(summary)
@@ -439,11 +452,7 @@ fn try_run_single_bam_no_duplicate_fast_path(
         return Ok(None);
     }
 
-    let mut reader = bam::Reader::from_path(&config.input)?;
-    let bgzf_threads = bgzf_threads();
-    if let Some(threads) = bgzf_threads {
-        reader.set_threads(threads)?;
-    }
+    let mut reader = open_markdup_reader(config, &config.input)?;
     let mut library_registry = LibraryRegistry::new();
     let library_lookup = library_lookup(reader.header(), &mut library_registry);
     let library = library_registry
@@ -467,23 +476,13 @@ fn try_run_single_bam_no_duplicate_fast_path(
     let mut adjacent_pending_pair = None::<(Vec<u8>, FastPairRecord)>;
     let mut pending_pairs = HashMap::<Vec<u8>, FastPairRecord>::default();
     let copy_input_on_success = can_copy_input_without_rewrite(config);
-    let temp_output = (!copy_input_on_success).then(|| temp_bam_output_path(&config.output));
+    let temp_output = (!copy_input_on_success).then(|| temp_hts_output_path(&config.output));
     let mut writer = if let Some(temp_output) = temp_output.as_deref() {
         let mut header = bam::Header::from_template(reader.header());
         if config.add_pg_tag_to_reads {
-            header.push_record(
-                HeaderRecord::new(b"PG")
-                    .push_tag(b"ID", "MarkDuplicates")
-                    .push_tag(b"PN", "MarkDuplicates"),
-            );
+            push_markdup_pg_header_if_needed(&mut header);
         }
-        let mut writer = bam::Writer::from_path(temp_output, &header, bam::Format::Bam)?;
-        if let Some(threads) = bgzf_threads {
-            writer.set_threads(threads)?;
-        }
-        if let Some(level) = config.compression_level {
-            writer.set_compression_level(CompressionLevel::Level(level))?;
-        }
+        let writer = open_markdup_writer(config, temp_output, &header)?;
         Some(writer)
     } else {
         None
@@ -630,7 +629,7 @@ fn try_run_single_bam_no_duplicate_fast_path(
             &config.output,
             Some(&picard_bai_path(&config.output)),
             index::Type::Bai,
-            1,
+            turbo_picard_core::bgzf_threads::htslib_worker_threads(),
         )?;
     }
     Ok(Some(summary))
@@ -650,8 +649,9 @@ fn fast_pair_key_requires_fallback(
     )
 }
 
-fn temp_bam_output_path(output: &str) -> String {
-    format!("{}.tmp.{}.bam", output, std::process::id())
+fn temp_hts_output_path(output: &str) -> String {
+    let extension = hts_io::path_extension_lower(output).unwrap_or_else(|| "bam".to_string());
+    format!("{}.tmp.{}.{}", output, std::process::id(), extension)
 }
 
 fn can_copy_input_without_rewrite(config: &MarkDuplicatesConfig) -> bool {
@@ -659,6 +659,8 @@ fn can_copy_input_without_rewrite(config: &MarkDuplicatesConfig) -> bool {
         && !config.add_pg_tag_to_reads
         && !config.clear_dt
         && config.compression_level.is_none()
+        && hts_io::path_format(&config.input) == hts_io::path_format(&config.output)
+        && hts_io::path_format(&config.input) == Some(bam::Format::Bam)
         && Path::new(&config.input) != Path::new(&config.output)
 }
 
@@ -1058,12 +1060,34 @@ fn add_program_group_to_sam_fields(fields: &mut Vec<String>) {
 }
 
 fn add_program_group_to_sam_header(output: &mut String) {
+    if output
+        .lines()
+        .any(|line| line.starts_with("@PG") && line.contains("ID:MarkDuplicates"))
+    {
+        return;
+    }
     let insert_at = output
         .lines()
         .take_while(|line| line.starts_with('@'))
         .map(|line| line.len() + 1)
         .sum::<usize>();
     output.insert_str(insert_at, "@PG\tID:MarkDuplicates\tPN:MarkDuplicates\n");
+}
+
+fn push_markdup_pg_header_if_needed(header: &mut bam::Header) {
+    let header_bytes = header.to_bytes();
+    let header_text = String::from_utf8_lossy(&header_bytes);
+    if header_text
+        .lines()
+        .any(|line| line.starts_with("@PG") && line.contains("ID:MarkDuplicates"))
+    {
+        return;
+    }
+    header.push_record(
+        HeaderRecord::new(b"PG")
+            .push_tag(b"ID", "MarkDuplicates")
+            .push_tag(b"PN", "MarkDuplicates"),
+    );
 }
 
 fn picard_bai_path(output: &str) -> String {

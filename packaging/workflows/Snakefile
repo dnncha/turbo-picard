@@ -1,0 +1,7 @@
+rule build_bam_index:
+    input:
+        bam="results/{sample}.bam"
+    output:
+        bai="results/{sample}.bam.bai"
+    shell:
+        "turbo-picard BuildBamIndex I={input.bam} O={output.bai}"

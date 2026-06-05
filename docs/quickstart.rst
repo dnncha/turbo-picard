@@ -45,7 +45,7 @@ From a checkout of the repository:
 
    cargo install --locked --path crates/turbo-picard-cli --bin turbo-picard --bin picard
 
-This installs two binaries:
+This installs the same two commands:
 
 ``turbo-picard``
    The explicit command. Use this first while you are testing the tool.
@@ -77,10 +77,10 @@ The shim accepts the same Picard-style syntax:
 
    picard MarkDuplicates I=input.bam O=marked.bam M=metrics.txt
 
-Use the shim only after you have checked the commands your workflow needs. For
-a first pass, run ``turbo-picard`` and upstream Picard side by side on a
-representative input, then compare the primary output, sidecars, metrics, exit
-code, and runtime.
+Use the shim only after you have checked the commands your pipeline needs. For
+a first pass, pick one representative input and run ``turbo-picard`` beside
+upstream Picard. Compare the primary output, sidecars, metrics, exit code, and
+runtime before changing anything permanent.
 
 Use the command-specific help while evaluating:
 
@@ -120,21 +120,34 @@ and easy to compare against upstream Picard output:
 
 .. code-block:: bash
 
-   picard SortSam I=input.bam O=coordinate.bam SORT_ORDER=coordinate
-   picard CleanSam I=input.bam O=cleaned.bam
-   picard BuildBamIndex I=coordinate.bam O=coordinate.bai
-   picard SamToFastq I=input.bam FASTQ=reads.fastq
-   picard CollectQualityYieldMetrics I=input.bam O=quality_yield_metrics.txt
+   turbo-picard SortSam I=input.bam O=coordinate.bam SORT_ORDER=coordinate
+   turbo-picard CleanSam I=input.bam O=cleaned.bam
+   turbo-picard BuildBamIndex I=coordinate.bam O=coordinate.bai
+   turbo-picard SamToFastq I=input.bam FASTQ=reads.fastq
+   turbo-picard CollectQualityYieldMetrics I=input.bam O=quality_yield_metrics.txt
 
 For broader coverage, see :doc:`commands`.
+If the right first test is still unclear, go to :doc:`first-command`.
+
+CRAM inputs and outputs
+-----------------------
+
+Hot-path commands accept ``.cram`` when a reference FASTA is available. Pass
+Picard-style ``REFERENCE_SEQUENCE`` or export ``TURBO_PICARD_REFERENCE``:
+
+.. code-block:: bash
+
+   export TURBO_PICARD_REFERENCE=/path/to/reference.fa
+   turbo-picard SortSam I=reads.cram O=sorted.cram SORT_ORDER=coordinate
+   turbo-picard MarkDuplicates I=reads.cram O=marked.cram M=metrics.txt
 
 Before changing a workflow
 --------------------------
 
-Before putting the ``picard`` shim on ``PATH`` for a workflow:
+Before putting the ``picard`` shim on ``PATH`` for a pipeline:
 
 * check the command in :doc:`commands`;
-* read :doc:`parity` so the comparison boundary is clear;
+* read :doc:`parity` so you know what has actually been compared;
 * keep upstream Picard configured as fallback for unsupported commands;
 * keep the evidence for the exact command, input, Picard version, and
   ``turbo-picard`` version you tested.

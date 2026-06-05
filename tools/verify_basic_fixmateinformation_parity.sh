@@ -59,6 +59,56 @@ if turbo != picard:
 print("FixMateInformation stable SAM output matches Picard")
 PY
 
+cat > "$workdir/split-first.sam" <<'SAM'
+@HD	VN:1.6	SO:queryname
+@SQ	SN:chr1	LN:1000
+pair1	99	chr1	10	60	4M	*	0	0	ACGT	FFFF
+SAM
+
+cat > "$workdir/split-second.sam" <<'SAM'
+@HD	VN:1.6	SO:queryname
+@SQ	SN:chr1	LN:1000
+pair1	147	chr1	30	60	4M	*	0	0	TGCA	FFFF
+SAM
+
+cargo run -q -p turbo-picard-cli --bin picard -- \
+  FixMateInformation \
+  "I=$workdir/split-first.sam" \
+  "I=$workdir/split-second.sam" \
+  "O=$workdir/turbo-split-inputs.sam" \
+  ASSUME_SORTED=true \
+  SORT_ORDER=queryname \
+  VALIDATION_STRINGENCY=SILENT \
+  QUIET=true
+
+"${conda_runner[@]}" run -p "$conda_prefix" picard FixMateInformation \
+  "I=$workdir/split-first.sam" \
+  "I=$workdir/split-second.sam" \
+  "O=$workdir/picard-split-inputs.sam" \
+  ASSUME_SORTED=true \
+  SORT_ORDER=queryname \
+  VALIDATION_STRINGENCY=SILENT \
+  QUIET=true
+
+python3 - "$workdir/turbo-split-inputs.sam" "$workdir/picard-split-inputs.sam" <<'PY'
+import sys
+
+def stable_records(path):
+    records = []
+    for line in open(path, encoding="utf-8"):
+        line = line.rstrip("\n")
+        if not line or line.startswith("@PG"):
+            continue
+        records.append(line)
+    return records
+
+turbo = stable_records(sys.argv[1])
+picard = stable_records(sys.argv[2])
+if turbo != picard:
+    raise SystemExit(f"FixMateInformation split-input SAM output differs:\nturbo={turbo}\npicard={picard}")
+print("FixMateInformation split-input SAM output matches Picard")
+PY
+
 cargo run -q -p turbo-picard-cli --bin picard -- \
   FixMateInformation \
   "I=$workdir/input.sam" \

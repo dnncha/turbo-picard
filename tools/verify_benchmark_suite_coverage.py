@@ -20,7 +20,9 @@ from verify_command_matrix import matrix_native_commands  # noqa: E402
 BENCH_SUITE = ROOT / "tools" / "bench_suite.py"
 BENCHMARK_DATA = ROOT / "docs" / "site" / "assets" / "benchmark-data.json"
 BENCHMARK_DOCS = ROOT / "docs" / "benchmarks.rst"
-BENCHMARK_EXEMPTIONS: dict[str, str] = {}
+BENCHMARK_EXEMPTIONS: dict[str, str] = {
+    "AccelerationStatus": "status/preflight command with no Picard data-processing runtime to benchmark",
+}
 
 
 def suite_benchmark_commands(text: str) -> set[str]:
