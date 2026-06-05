@@ -81,9 +81,15 @@ class VerifyPyPiPackageTests(unittest.TestCase):
             encoding="utf-8",
         )
         (root / "docs" / "packaging.rst").write_text(
-            "PyPI\npython3 -m maturin build --release --compatibility pypi --out dist\n"
+            "PyPI\nhttps://pypi.org/project/turbo-picard/\n"
+            "python3 -m maturin build --release --compatibility pypi --out dist\n"
             "python3 -m twine check dist/*\nTrusted Publishing\n"
             ".github/workflows/publish-pypi.yml\npicard\n",
+            encoding="utf-8",
+        )
+        (root / "docs" / "quickstart.rst").write_text(
+            "python3 -m pip install turbo-picard\n"
+            "Start with ``turbo-picard`` while testing.\n",
             encoding="utf-8",
         )
         (root / ".github" / "workflows").mkdir(parents=True)

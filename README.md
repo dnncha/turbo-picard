@@ -32,6 +32,33 @@ turbo-picard SortSam I=reads.cram O=sorted.cram SORT_ORDER=coordinate R=$TURBO_P
 There is also an optional `picard` shim for environments that already call a
 binary named `picard`.
 
+## Quickstart
+
+```bash
+python3 -m pip install turbo-picard
+turbo-picard --version
+turbo-picard MarkDuplicates --help
+```
+
+Then try one command on a representative file:
+
+```bash
+turbo-picard MarkDuplicates I=input.bam O=marked.bam M=metrics.txt
+```
+
+PyPI currently has a macOS Apple Silicon wheel and a source distribution. If
+`pip` builds from source, you will need Rust and the native build dependencies
+available. For Linux clusters, Bioconda will be the cleaner install path once
+the recipe is accepted.
+
+Installing from PyPI currently gives you both commands:
+
+- `turbo-picard`, the explicit command to use while testing.
+- `picard`, the compatibility shim for existing scripts.
+
+Use a dedicated virtual environment if you need upstream Picard and the shim
+side by side.
+
 ## When It Helps
 
 The best first use is one expensive Picard step that you can compare easily:
@@ -117,14 +144,9 @@ nf-core and Nextflow examples live in [`packaging/nf-core/README.md`](packaging/
 python3 -m pip install turbo-picard
 ```
 
-Installing from PyPI currently gives you both commands:
-
-- `turbo-picard`, the explicit command to use while testing.
-- `picard`, the compatibility shim for existing scripts.
-
-That means a virtual environment with this package installed may resolve
-`picard` to `turbo-picard`. Use a dedicated environment if you need upstream
-Picard and the shim side by side.
+Use this for a quick local try. For the full install notes, including the
+`picard` shim and Linux source-build caveat, see the
+[quickstart](https://turbo-picard.readthedocs.io/en/latest/quickstart.html).
 
 ## Install From Source
 

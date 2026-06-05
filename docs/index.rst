@@ -30,8 +30,8 @@ Start here
       :link: quickstart
       :link-type: doc
 
-      Install ``turbo-picard``, run the first command, and understand the two
-      entrypoints.
+      Install from PyPI, check the two entrypoints, and run a first
+      Picard-style command.
 
    .. grid-item-card:: Pipeline owner
       :link: adoption
@@ -50,8 +50,8 @@ Start here
       :link: packaging
       :link-type: doc
 
-      Understand the main package, the optional ``picard`` shim, citation
-      boundaries, and the Bioconda release path.
+      Understand PyPI, the optional ``picard`` shim, citation boundaries, and
+      the Bioconda release path.
 
 .. toctree::
    :maxdepth: 2

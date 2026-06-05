@@ -28,12 +28,20 @@ on ``PATH``.
 PyPI
 ----
 
-The PyPI package is built with ``maturin`` and packages the Rust command-line
-binary targets as Python wheel scripts:
+The published PyPI package is available at
+https://pypi.org/project/turbo-picard/.
+
+It is built with ``maturin`` and packages the Rust command-line binary targets
+as Python wheel scripts:
 
 .. code-block:: bash
 
    python3 -m pip install turbo-picard
+
+Release ``0.1.1`` publishes a macOS Apple Silicon wheel and a source
+distribution. If ``pip`` builds from source, the machine needs a Rust toolchain
+and native build dependencies. For Linux clusters and shared environments,
+Bioconda is the cleaner target once the recipe is accepted.
 
 The current wheel exposes both commands from the CLI crate:
 

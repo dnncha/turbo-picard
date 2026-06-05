@@ -207,11 +207,15 @@ def validate_cli_bins(root: Path = ROOT) -> list[str]:
 
 def validate_docs(root: Path = ROOT) -> list[str]:
     readme = (root / "README.md").read_text(encoding="utf-8")
+    quickstart = (root / "docs" / "quickstart.rst").read_text(encoding="utf-8")
     packaging = (root / "docs" / "packaging.rst").read_text(encoding="utf-8")
     checks = [
         (readme, "python3 -m pip install turbo-picard", "README missing pip install command"),
         (readme, "Installing from PyPI currently gives you both", "README missing PyPI shim warning"),
+        (quickstart, "python3 -m pip install turbo-picard", "quickstart missing pip install command"),
+        (quickstart, "Start with ``turbo-picard``", "quickstart missing explicit entrypoint guidance"),
         (packaging, "PyPI", "packaging docs missing PyPI section"),
+        (packaging, "https://pypi.org/project/turbo-picard/", "packaging docs missing PyPI project link"),
         (packaging, "python3 -m maturin build --release --compatibility pypi --out dist", "packaging docs missing maturin build command"),
         (packaging, "python3 -m twine check dist/*", "packaging docs missing twine check command"),
         (packaging, "Trusted Publishing", "packaging docs missing PyPI publishing note"),
