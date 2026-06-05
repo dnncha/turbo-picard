@@ -51,6 +51,7 @@ jobs:
           python3 -m unittest tools/test_verify_ci_coverage.py
           python3 -m unittest tools/test_verify_command_matrix.py
           python3 -m unittest tools/test_verify_parity_docs.py
+          python3 -m unittest tools/test_verify_pypi_package.py
           python3 -m unittest tools/test_verify_readme_benchmark_evidence.py
           python3 -m unittest tools/test_verify_readme_links.py
           python3 -m unittest tools/test_verify_real_data_ci_coverage.py
@@ -110,6 +111,7 @@ jobs:
             tools/verify_joss_paper.py \
             tools/verify_command_matrix.py \
             tools/verify_parity_docs.py \
+            tools/verify_pypi_package.py \
             tools/verify_readme_benchmark_evidence.py \
             tools/verify_readme_links.py \
             tools/verify_real_data_ci_coverage.py \
@@ -133,6 +135,7 @@ jobs:
             tools/test_verify_ci_coverage.py \
             tools/test_verify_command_matrix.py \
             tools/test_verify_parity_docs.py \
+            tools/test_verify_pypi_package.py \
             tools/test_verify_readme_benchmark_evidence.py \
             tools/test_verify_readme_links.py \
             tools/test_verify_real_data_ci_coverage.py \
@@ -144,6 +147,7 @@ jobs:
             tools/test_verify_site_links.py
           python3 tools/verify_command_matrix.py
           python3 tools/verify_parity_docs.py
+          python3 tools/verify_pypi_package.py
           python3 tools/verify_bioconda_recipes.py
           python3 tools/verify_chart_disclosures.py
           python3 tools/verify_ci_coverage.py

@@ -22,6 +22,7 @@ CITATION_PATH = Path("CITATION.cff")
 
 VERSIONED_DOC_PATHS = [
     Path("README.md"),
+    Path("pyproject.toml"),
     Path("docs/citation.rst"),
     Path("docs/packaging.rst"),
     Path("docs/site/index.html"),
@@ -146,6 +147,23 @@ def collect_errors(root: Path = ROOT) -> list[str]:
             errors.append(
                 f"{recipe} version {match.group(1)} must match workspace {version}"
             )
+
+    pyproject_file = root / "pyproject.toml"
+    if not pyproject_file.exists():
+        errors.append("pyproject.toml is required for PyPI release metadata")
+    else:
+        pyproject = pyproject_file.read_text(encoding="utf-8")
+        match = re.search(r'(?m)^version\s*=\s*"([^"]+)"', pyproject)
+        if not match:
+            errors.append("pyproject.toml missing project version")
+        elif match.group(1) != version:
+            errors.append(
+                f"pyproject.toml version {match.group(1)} must match workspace {version}"
+            )
+        if 'manifest-path = "crates/turbo-picard-cli/Cargo.toml"' not in pyproject:
+            errors.append("pyproject.toml must build the turbo-picard CLI crate")
+        if 'bindings = "bin"' not in pyproject:
+            errors.append("pyproject.toml must use maturin bin bindings")
 
     citation_file = root / CITATION_PATH
     if not citation_file.exists():

@@ -1,0 +1,45 @@
+[build-system]
+requires = ["maturin>=1.8,<2"]
+build-backend = "maturin"
+
+[project]
+name = "turbo-picard"
+version = "0.1.1"
+description = "Fast Rust command-line tools for selected Picard-compatible genomics workflows."
+readme = "README.md"
+requires-python = ">=3.8"
+license = { text = "MIT" }
+authors = [{ name = "Donncha O'Toole" }]
+keywords = [
+  "bioinformatics",
+  "genomics",
+  "Picard",
+  "SAM",
+  "BAM",
+  "CRAM",
+  "VCF",
+  "Rust",
+]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Environment :: Console",
+  "Intended Audience :: Science/Research",
+  "License :: OSI Approved :: MIT License",
+  "Operating System :: MacOS",
+  "Operating System :: POSIX :: Linux",
+  "Programming Language :: Rust",
+  "Programming Language :: Python :: 3",
+  "Topic :: Scientific/Engineering :: Bio-Informatics",
+]
+
+[project.urls]
+Homepage = "https://github.com/dnncha/turbo-picard"
+Documentation = "https://turbo-picard.readthedocs.io/"
+Source = "https://github.com/dnncha/turbo-picard"
+Issues = "https://github.com/dnncha/turbo-picard/issues"
+Changelog = "https://github.com/dnncha/turbo-picard/releases"
+
+[tool.maturin]
+manifest-path = "crates/turbo-picard-cli/Cargo.toml"
+bindings = "bin"
+strip = true

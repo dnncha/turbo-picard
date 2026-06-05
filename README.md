@@ -4,41 +4,52 @@
 
 ![Abstract benchmark bars and sequencing-read streams](docs/site/assets/hero-pipeline.svg)
 
-`turbo-picard` is a faster Rust implementation of selected Picard commands. It
-is for people who already have Picard wired into WDL, Nextflow, Snakemake, or
-plain shell workflows and do not want a new interface just to make a slow step
-faster.
+`turbo-picard` is a faster Rust implementation of selected Picard commands.
+It is built for people who already trust Picard, already have it wired into
+WDL, Nextflow, Snakemake, or shell scripts, and mostly want one thing: make
+the slow Picard step stop dominating the run.
 
 The command shape stays familiar: Picard command names, Picard-style
 `KEY=VALUE` arguments, and the same habit of replacing one pipeline step at a
 time.
 
-It is not a full Picard replacement. The commands that are implemented natively
-are documented and tested against Picard 3.4.0. Unsupported commands fail
-clearly, or can be sent to upstream Picard if you configure a fallback.
+It is not a full Picard replacement. Native command coverage is documented and
+tested against Picard 3.4.0. Unsupported commands fail clearly, or can be sent
+to upstream Picard if you configure a fallback.
 
 ```bash
 turbo-picard MarkDuplicates I=input.bam O=marked.bam M=metrics.txt
 ```
 
+CRAM is supported on the hot preprocessing path when you pass a reference FASTA
+with Picard-compatible `REFERENCE_SEQUENCE` (or set `TURBO_PICARD_REFERENCE`):
+
+```bash
+export TURBO_PICARD_REFERENCE=/path/to/reference.fa
+turbo-picard SortSam I=reads.cram O=sorted.cram SORT_ORDER=coordinate R=$TURBO_PICARD_REFERENCE
+```
+
 There is also an optional `picard` shim for environments that already call a
 binary named `picard`.
 
-## Why Use It
+## When It Helps
 
-Use `turbo-picard` where the documented native scope matches your command and
-your own comparison data agrees. The easiest path is to start with one expensive
-step, run it side by side with Picard, compare the outputs that matter for that
-command, and keep upstream Picard available as fallback.
+The best first use is one expensive Picard step that you can compare easily:
+sorting, duplicate marking, FASTQ conversion, indexing, VCF housekeeping, or a
+metrics command that slows down iteration. Run Picard and `turbo-picard` beside
+each other on a representative file, compare the outputs that matter for that
+command, then switch only that checked step.
 
-Good candidates are repeated sorting, duplicate marking, FASTQ conversion,
-indexing, VCF housekeeping, and metrics steps where wall-clock time is getting
-in the way of iteration. Do not treat it as a blanket Picard replacement. The
-project is deliberately explicit about what is native, what is partial, and
-what should still go to upstream Picard.
+Use the explicit `turbo-picard` command while testing. Add the optional
+`picard` shim only when you deliberately want existing pipeline code to resolve
+to `turbo-picard`.
 
-Start with the explicit `turbo-picard` command. Use the `picard` shim only when
-you deliberately want it to stand in for Picard in a particular environment.
+## When To Stay With Picard
+
+Stay with upstream Picard for commands or options outside the documented native
+scope, for workflows that depend on exact Picard-rendered chart PDFs, and for
+any step you have not compared on data that looks like your own. Fallback is
+there so mixed pipelines can keep moving; it is not a reason to skip validation.
 
 ## Documentation
 
@@ -56,6 +67,8 @@ Good starting points:
   for using upstream Picard beside turbo-picard.
 - [Benchmarks](https://turbo-picard.readthedocs.io/en/latest/benchmarks.html)
   for the saved benchmark data and how it is checked.
+- [Performance notes](https://turbo-picard.readthedocs.io/en/latest/performance.html)
+  for thread controls, CRAM throughput, and the accelerator preflight.
 - [What parity means](https://turbo-picard.readthedocs.io/en/latest/parity.html)
   for what the comparisons prove and what they do not.
 - [Trying it in a pipeline](https://turbo-picard.readthedocs.io/en/latest/adoption.html)
@@ -66,6 +79,52 @@ Good starting points:
   for the main package, shim package, and Bioconda notes.
 
 The docs source is in [`docs/`](docs/).
+
+## Check Your Own Data
+
+Before switching a pipeline step, run Picard and `turbo-picard` on a
+representative file from that workflow and keep the comparison with the
+analysis. The helper below writes the command lines, versions, input identity,
+stable output digests, and timings into one directory:
+
+```bash
+python3 tools/audit_real_data.py \
+  --input-bam /data/representative.bam \
+  --input-source-url https://example.org/accession.bam \
+  --input-source-commit <40-char-sha-or-accession> \
+  --output-dir benchmarks/real-data/my-workflow/evidence \
+  --dataset-id my-workflow \
+  --picard-command "picard" \
+  --turbo-picard-command ./target/release/picard \
+  --skip-build
+```
+
+See [Trying it in a pipeline](https://turbo-picard.readthedocs.io/en/latest/adoption.html)
+for the full validation protocol.
+
+## Container image
+
+```bash
+docker build -t turbo-picard:local .
+docker run --rm turbo-picard:local MarkDuplicates --help
+```
+
+nf-core and Nextflow examples live in [`packaging/nf-core/README.md`](packaging/nf-core/README.md).
+
+## Install From PyPI
+
+```bash
+python3 -m pip install turbo-picard
+```
+
+Installing from PyPI currently gives you both commands:
+
+- `turbo-picard`, the explicit command to use while testing.
+- `picard`, the compatibility shim for existing scripts.
+
+That means a virtual environment with this package installed may resolve
+`picard` to `turbo-picard`. Use a dedicated environment if you need upstream
+Picard and the shim side by side.
 
 ## Install From Source
 
@@ -84,6 +143,7 @@ This installs:
 
 ```bash
 turbo-picard --help
+turbo-picard AccelerationStatus
 turbo-picard MarkDuplicates --help
 turbo-picard SortSam --help
 ```
@@ -134,11 +194,13 @@ Saved on `2026-06-04` from
 `python3 tools/bench_suite.py --repeats 1 --skip-build`.
 Raw log: `docs/site/assets/bench-suite-output.txt`.
 
-There are no benchmark exceptions right now. Every native or partly native
-command in `docs/command-matrix.yml` has a saved public speedup claim.
-Chart-producing metrics commands compare metrics text. Their lightweight PDF
-sidecars are there so Picard-style outputs still exist, not because the plots
-are claimed to be pixel-identical to Picard.
+Benchmark note: `AccelerationStatus` is listed under benchmark exceptions
+because it is a status/preflight command with no Picard data-processing runtime
+to benchmark. Every native or partly native data-processing command in
+`docs/command-matrix.yml` has a saved public speedup claim. Chart-producing
+metrics commands compare metrics text. Their lightweight PDF sidecars are there
+so Picard-style outputs still exist, not because the plots are claimed to be
+pixel-identical to Picard.
 
 | Command | Speedup | Parity |
 | --- | ---: | --- |
@@ -175,6 +237,18 @@ are claimed to be pixel-identical to Picard.
 | SetNmMdAndUqTags | 10.19x | PASS |
 | RevertSam | 8.55x | PASS |
 
+CRAM preprocessing is checked against Picard for the commands people usually
+care about in alignment-preprocessing workflows:
+
+```bash
+./tools/verify_basic_cram_parity.sh
+./tools/verify_markdup_cram_parity.sh
+./tools/verify_gatk_preprocessing_combo_parity.sh
+./tools/verify_gatk_mito_bam_parity.sh
+./tools/verify_gatk_mito_cram_parity.sh
+./tools/verify_gatk_preprocessing_combo_cram_parity.sh
+```
+
 Useful checks:
 
 ```bash
@@ -197,6 +271,7 @@ The current checked evidence is in
 It includes:
 
 - `gatk-na12878-mito`: a public GATK NA12878 mitochondrial BAM.
+- `gatk-na12878-mito-cram`: the same shard as CRAM with assembly38 mt-only reference.
 - `picard-snvq`: Picard's public SNVQ metrics test BAM.
 
 To add another pinned dataset:
@@ -227,8 +302,8 @@ Use the DOI for the archived release you actually used.
 
 A short JOSS-style software paper draft is in [`paper/`](paper/). It is kept in
 the repository so the software is ready to cite properly later, but it should
-not be submitted to JOSS yet: the project needs more public development history
-before it clears the current JOSS pre-review gate. Check the paper with:
+not be submitted to JOSS yet. The project needs more public development history
+before a submission would be fair to reviewers. Check the paper with:
 
 ```bash
 python3 tools/verify_joss_paper.py

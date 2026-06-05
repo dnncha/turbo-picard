@@ -25,6 +25,60 @@ The optional shim package installs:
 Use the shim deliberately. It shadows upstream Picard wherever it appears first
 on ``PATH``.
 
+PyPI
+----
+
+The PyPI package is built with ``maturin`` and packages the Rust command-line
+binary targets as Python wheel scripts:
+
+.. code-block:: bash
+
+   python3 -m pip install turbo-picard
+
+The current wheel exposes both commands from the CLI crate:
+
+``turbo-picard``
+   The explicit command. Prefer this while testing or when upstream Picard must
+   remain available as ``picard``.
+
+``picard``
+   The compatibility shim. It is useful in a dedicated virtual environment for
+   workflow code that already invokes ``picard`` by name.
+
+Use a dedicated virtual environment if you install from PyPI and also need
+upstream Picard on ``PATH``. The wheel-level shim is convenient, but it can
+shadow a different ``picard`` command in that environment.
+
+To build and inspect the package locally:
+
+.. code-block:: bash
+
+   python3 -m pip install --upgrade "maturin>=1.8,<2" twine
+   python3 -m maturin build --release --compatibility pypi --out dist
+   python3 -m twine check dist/*
+
+For publication, prefer PyPI Trusted Publishing from the GitHub release
+workflow rather than storing a long-lived PyPI token in repository secrets.
+Only publish after the wheel check, command smoke tests, parity checks, and
+release metadata verifiers pass on the exact commit being released.
+
+The publishing workflow is ``.github/workflows/publish-pypi.yml``. On PyPI,
+configure a trusted publisher for project ``turbo-picard`` with owner
+``dnncha``, repository ``turbo-picard``, workflow
+``publish-pypi.yml``, and environment ``pypi``.
+
+Container image
+---------------
+
+The repository root ``Dockerfile`` builds a minimal runtime image with both
+``turbo-picard`` and the ``picard`` shim. Use it for side-by-side nf-core
+profiles or cloud jobs where you want a pinned binary without conda solve time.
+
+.. code-block:: bash
+
+   docker build -t turbo-picard:local .
+   docker run --rm turbo-picard:local MarkDuplicates -h
+
 Conda-style deployment
 ----------------------
 
@@ -93,6 +147,7 @@ Then run the release checks:
    python3 tools/verify_benchmark_thresholds.py
    python3 tools/verify_ci_coverage.py
    python3 tools/verify_parity_docs.py
+   python3 tools/verify_pypi_package.py
    python3 tools/verify_readme_links.py
    python3 tools/verify_site_links.py
    python3 tools/verify_real_data_evidence.py --release-ready
