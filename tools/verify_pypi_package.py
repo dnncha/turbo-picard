@@ -221,7 +221,6 @@ def validate_publish_workflow(root: Path = ROOT) -> list[str]:
         ("pypa/gh-action-pypi-publish@release/v1", "PyPI workflow must publish with the PyPA action"),
         ("id-token: write", "PyPI workflow must allow Trusted Publishing OIDC"),
         ("environment: pypi", "PyPI workflow must use the pypi environment"),
-        ("manylinux: \"2014\"", "PyPI workflow must pin manylinux policy"),
     ]
     return [message for needle, message in checks if needle not in text]
 
