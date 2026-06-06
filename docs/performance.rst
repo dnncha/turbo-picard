@@ -6,6 +6,14 @@ Picard operations natively, and keeping BAM/CRAM I/O on mature HTSlib code.
 Those choices matter more for current Picard-style preprocessing than sending
 work to a GPU just because one is present.
 
+They also explain the scalability story. Faster wall time matters, but so does
+the ability to fan out many Picard-shaped tasks without paying Picard-scale JVM
+startup and memory costs on every shard. The saved benchmark suite currently
+shows an ``8.55x`` floor speedup, ``26.74x`` geometric mean speedup, and
+``84.46x`` top speedup against Picard 3.4.0, while the checked
+``MarkDuplicates`` performance run in this repository dropped median RSS from
+about ``1.2 GB`` to about ``8.7 MB``.
+
 Threading
 ---------
 

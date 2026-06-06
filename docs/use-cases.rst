@@ -84,7 +84,7 @@ Why it works well:
 Best first move:
 
 * use :doc:`evaluation-playbook`;
-* then use :doc:`after-evaluation` and :doc:`maintainer-next-steps`.
+* then widen the rollout only after one command is boring on representative data.
 
 When none of these are your situation
 -------------------------------------

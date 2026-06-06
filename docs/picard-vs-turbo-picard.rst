@@ -11,6 +11,8 @@ Use ``turbo-picard`` when you want:
 
 * the same Picard-style command shape;
 * much faster execution on the commands already accelerated;
+* lower per-task memory pressure when you fan those commands out across many
+  samples or shards;
 * a command-by-command rollout instead of a full tool rewrite;
 * fallback to upstream Picard for unsupported surfaces.
 
@@ -53,8 +55,14 @@ What you get in return
 The current checked benchmark suite reports:
 
 * ``32/32`` parity-checked commands;
+* ``8.55x`` slowest saved speedup;
 * ``26.74x`` geometric mean speedup;
 * ``84.46x`` top saved speedup.
+
+The saved ``MarkDuplicates`` performance run in the repository also shows why
+the project is more scalable in practice, not just faster in a micro-benchmark:
+median wall time dropped from ``2.595 s`` to ``0.127 s`` while median RSS
+dropped from about ``1.2 GB`` to about ``8.7 MB`` on the checked fixture.
 
 Those numbers are only used together with output checks, benchmark logs, and
 real-data comparison records. The claim is not “faster at any cost”. The claim

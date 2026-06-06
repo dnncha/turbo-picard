@@ -4,6 +4,14 @@ Benchmark runs are written under `benchmarks/runs/` and are intentionally
 ignored by git. Large generated input BAMs should go under `benchmarks/inputs/`,
 which is also ignored.
 
+The current saved public benchmark story is straightforward: every one of the
+32 benchmarked, parity-checked commands is faster than Picard 3.4.0, with an
+`8.55x` floor speedup, a `26.74x` geometric mean speedup, and an `84.46x` top
+speedup. The checked `MarkDuplicates` performance run also cut median RSS from
+about `1.2 GB` to about `8.7 MB`, which is why the project can honestly claim
+to be more scalable in pipeline fanout, not just quicker in isolated command
+timings.
+
 ## Public Real-Data Smoke
 
 The first checked-in public-BAM evidence bundle uses HTSlib's small

@@ -653,8 +653,8 @@
           <div class="proof-strip" aria-label="Benchmark summary">
             <div class="proof"><strong>32/32</strong><span>benchmark parity checks passing</span></div>
             <div class="proof"><strong>26.74x</strong><span>geometric mean speedup in the saved suite</span></div>
-            <div class="proof"><strong>84.46x</strong><span>fastest saved speedup</span></div>
-            <div class="proof"><strong>Picard</strong><span>same command style, fallback available</span></div>
+            <div class="proof"><strong>8.55x+</strong><span>speedup even at the slow end of the saved suite</span></div>
+            <div class="proof"><strong>1.2 GB to 8.7 MB</strong><span>checked MarkDuplicates median RSS drop versus Picard</span></div>
           </div>
         </div>
       </section>
@@ -666,7 +666,9 @@
             <p>
               The chart is rendered from the saved suite output in this repository. Each benchmark
               compares turbo-picard against Picard and reports speed only after the stable output
-              comparison passes.
+              comparison passes. That makes the story simple: the saved suite shows turbo-picard
+              ahead on every benchmarked command, and the checked MarkDuplicates performance run
+              shows that the gains are about scheduler-friendly memory use too, not just wall time.
               The current asset was saved on <code>2026-06-04</code> from
               <code>python3 tools/bench_suite.py --repeats 1 --skip-build</code>; the raw log is
               <code>docs/site/assets/bench-suite-output.txt</code>.
@@ -872,24 +874,6 @@
             <div class="benchmark-highlight"><b>Command choice</b><span>Use <code>choose-your-first-command.md</code> when the right first Picard step is still unclear.</span></div>
             <div class="benchmark-highlight"><b>Trial flow</b><span>Use <code>one-command-trial.md</code> plus the tiny <code>trial.wdl</code> or <code>trial.nf</code> workflow for a minimal honest evaluation.</span></div>
             <div class="benchmark-highlight"><b>Share it</b><span>Use the outreach kit after a good trial when you need to brief a team, open a PR, or post more widely.</span></div>
-          </div>
-        </div>
-      </section>
-
-      <section>
-        <div class="section-inner">
-          <div class="section-heading">
-            <h2>After one good trial, make the next step explicit.</h2>
-            <p>
-              A successful command-level test is only useful if the result gets recorded, scoped,
-              and shared carefully. The follow-through path is documented too.
-            </p>
-          </div>
-          <div class="benchmark-highlights" aria-label="Post-trial links">
-            <div class="benchmark-highlight"><b>After a trial</b><span>Use the Read the Docs follow-through page to turn one good result into a careful rollout plan.</span></div>
-            <div class="benchmark-highlight"><b>Review record</b><span>Use <code>team-review-template.md</code> to capture what was tested, what matched, and what should happen next.</span></div>
-            <div class="benchmark-highlight"><b>FAQ</b><span>Use the <a href="https://turbo-picard.readthedocs.io/en/latest/faq.html">public FAQ</a> when the same evaluation questions keep circling in review.</span></div>
-            <div class="benchmark-highlight"><b>Share it</b><span>Use <a href="https://turbo-picard.readthedocs.io/en/latest/share-results.html">share-results</a>, <a href="https://turbo-picard.readthedocs.io/en/latest/message-examples.html">message-examples</a>, <a href="https://turbo-picard.readthedocs.io/en/latest/channel-specific-examples.html">channel-specific examples</a>, <a href="https://turbo-picard.readthedocs.io/en/latest/propose-it-in-a-workflow-repo.html">workflow-repo proposal guidance</a>, the <a href="https://turbo-picard.readthedocs.io/en/latest/workflow-maintainer-checklist.html">maintainer checklist</a>, <a href="https://turbo-picard.readthedocs.io/en/latest/community-channels.html">community-channels</a>, <a href="https://turbo-picard.readthedocs.io/en/latest/community-targets.html">community-targets</a>, the <a href="https://turbo-picard.readthedocs.io/en/latest/launch-bundle.html">launch bundle</a>, and the <a href="https://turbo-picard.readthedocs.io/en/latest/first-target-shortlist.html">first target shortlist</a> when a narrow success is ready to be written up without overclaiming.</span></div>
           </div>
         </div>
       </section>

@@ -4,10 +4,18 @@
 
 ![Abstract benchmark bars and sequencing-read streams](docs/site/assets/hero-pipeline.svg)
 
-`turbo-picard` is a faster Rust implementation of selected Picard commands.
-It is for people who already run Picard in WDL, Nextflow, Snakemake, or shell
-pipelines and want the same command shape with a lot less waiting on the steps
-that hurt most.
+`turbo-picard` is a faster, more pipeline-scalable Rust implementation of
+selected Picard commands. It is for people who already run Picard in WDL,
+Nextflow, Snakemake, or shell pipelines and want the same command shape with a
+lot less waiting and a lot less JVM-era memory pressure on the steps that hurt
+most.
+
+The saved public benchmark suite currently shows `32/32` parity-checked
+commands passing, a `26.74x` geometric mean speedup, an `84.46x` top speedup,
+and an `8.55x` floor speedup versus Picard 3.4.0. The checked MarkDuplicates
+performance run in this repo also dropped median RSS from about `1.2 GB` in
+Picard to about `8.7 MB` in `turbo-picard`, which is the kind of difference
+that matters when the same workflow step fans out across many samples.
 
 The command shape stays familiar: Picard command names, Picard-style
 `KEY=VALUE` arguments, and a practical migration path where you swap one step,
@@ -37,7 +45,11 @@ binary named `picard`.
 - The command line still looks like Picard, so existing pipeline code does not
   need a conceptual rewrite.
 - The current saved benchmark suite shows `32/32` parity-checked commands with
-  a `26.74x` geometric mean speedup and an `84.46x` top speedup.
+  a `26.74x` geometric mean speedup, an `84.46x` top speedup, and an `8.55x`
+  floor speedup.
+- The current checked `MarkDuplicates` performance run cut median RSS from
+  about `1.2 GB` in Picard to about `8.7 MB`, which makes high-fanout pipeline
+  runs easier to schedule.
 - You can prove one command on your own data before changing a whole workflow.
 - Unsupported commands do not get guessed at. They fail clearly or go through
   upstream Picard when fallback is configured.
@@ -145,21 +157,6 @@ For the smallest honest evaluation flow, see
 [`one-command-trial.md`](packaging/workflows/one-command-trial.md) plus the
 tiny [`trial.wdl`](packaging/workflows/trial.wdl) and
 [`trial.nf`](packaging/workflows/trial.nf) workflows.
-If you want text you can forward to a teammate or drop into a channel, see the
-small outreach kit in [`packaging/outreach/`](packaging/outreach/).
-If you need a quick go/no-go internal screen, start with
-[`evaluation-checklist.md`](packaging/outreach/evaluation-checklist.md).
-If you already have a result and just need to know which venue fits it, use
-[`channel-map.md`](packaging/outreach/channel-map.md).
-If you are ready to talk about the package more publicly, see
-[`launch-plan.md`](packaging/outreach/launch-plan.md),
-[`community-post.md`](packaging/outreach/community-post.md), and
-[`github-discussion.md`](packaging/outreach/github-discussion.md).
-If the discussion keeps stalling on the same concerns, see
-[`objections.md`](packaging/outreach/objections.md).
-If you want a short written decision record after a first trial, use
-[`team-review-template.md`](packaging/outreach/team-review-template.md).
-
 ## When It Helps
 
 The best first use is one expensive Picard step that you can compare easily:
@@ -193,8 +190,6 @@ Good starting points:
   for picking the best first Picard step to test.
 - [Evaluation playbook](https://turbo-picard.readthedocs.io/en/latest/evaluation-playbook.html)
   for the shortest path from first interest to trial, review, and rollout.
-- [Launch bundle](https://turbo-picard.readthedocs.io/en/latest/launch-bundle.html)
-  for the smallest complete outreach pack to use on the first real external pass.
 - [Quickstart](https://turbo-picard.readthedocs.io/en/latest/quickstart.html)
   for installation and first commands.
 - [Command coverage](https://turbo-picard.readthedocs.io/en/latest/commands.html)
@@ -206,8 +201,8 @@ Good starting points:
 - [What parity means](https://turbo-picard.readthedocs.io/en/latest/parity.html)
   for what the comparisons prove and what they do not.
 
-More guides, including workflow use cases, sharing material, benchmarks,
-performance notes, packaging, and citation, are listed on the docs index:
+More guides, including workflow use cases, benchmarks, performance notes,
+packaging, and citation, are listed on the docs index:
 
 - [Docs index](https://turbo-picard.readthedocs.io/en/latest/)
 

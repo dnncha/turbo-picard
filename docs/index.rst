@@ -1,9 +1,9 @@
 turbo-picard documentation
 ==========================
 
-``turbo-picard`` is for teams that already use Picard and want selected commands
-to run much faster without retraining everyone or rewriting the shape of a
-working pipeline.
+``turbo-picard`` is for teams that already use Picard and want selected
+commands to run much faster and with less memory pressure, without retraining
+everyone or rewriting the shape of a working pipeline.
 
 It keeps the command shape people already know:
 
@@ -22,7 +22,11 @@ native pieces where the documented scope and your own representative data agree,
 and keep upstream Picard available for the rest.
 
 The current saved benchmark suite reports ``32/32`` parity-checked commands,
-``26.74x`` geometric mean speedup, and ``84.46x`` top speedup, but the intended
+an ``8.55x`` floor speedup, ``26.74x`` geometric mean speedup, and ``84.46x``
+top speedup. The checked ``MarkDuplicates`` performance run in the repository
+also cuts median RSS from about ``1.2 GB`` in Picard 3.4.0 to about ``8.7 MB``
+in ``turbo-picard``. That is why the project is positioned as both faster and
+easier to fan out across real pipeline workloads, even though the intended
 workflow is still careful switching rather than blind replacement.
 
 Start here
@@ -88,67 +92,6 @@ Start here
       Understand PyPI, the optional ``picard`` shim, citation boundaries, and
       the Bioconda release path.
 
-   .. grid-item-card:: After a trial
-      :link: after-evaluation
-      :link-type: doc
-
-      Turn one good command-level result into a careful rollout and a shareable
-      decision record.
-
-   .. grid-item-card:: Share a result
-      :link: share-results
-      :link-type: doc
-
-      See how to talk about a good command-level result without overclaiming.
-
-   .. grid-item-card:: Message examples
-      :link: message-examples
-      :link-type: doc
-
-      Start from short example blurbs for chat, PRs, discussions, and email.
-
-   .. grid-item-card:: Workflow repo proposal
-      :link: propose-it-in-a-workflow-repo
-      :link-type: doc
-
-      See how to bring a narrow turbo-picard change into an existing workflow repo.
-
-   .. grid-item-card:: Maintainer checklist
-      :link: workflow-maintainer-checklist
-      :link-type: doc
-
-      Use a quick checklist before opening a discussion, PR, or rollout path.
-
-   .. grid-item-card:: Community channels
-      :link: community-channels
-      :link-type: doc
-
-      Map a result to the right audience and venue once it leaves your local repo.
-
-   .. grid-item-card:: Community targets
-      :link: community-targets
-      :link-type: doc
-
-      See concrete workflow-community venues where the result is likely to land well.
-
-   .. grid-item-card:: Channel-specific examples
-      :link: channel-specific-examples
-      :link-type: doc
-
-      Start from short examples already shaped for nf-core, Seqera, workflow repos, and local team chat.
-
-   .. grid-item-card:: Launch bundle
-      :link: launch-bundle
-      :link-type: doc
-
-      Use one page to assemble the first real outreach pass from the existing materials.
-
-   .. grid-item-card:: First target shortlist
-      :link: first-target-shortlist
-      :link-type: doc
-
-      See the first concrete places to try, in order, with official community links.
-
 .. toctree::
    :maxdepth: 2
    :caption: User Guide
@@ -160,17 +103,6 @@ Start here
    use-cases
    picard-vs-turbo-picard
    faq
-   after-evaluation
-   share-results
-   message-examples
-   propose-it-in-a-workflow-repo
-   workflow-maintainer-checklist
-   community-channels
-   community-targets
-   channel-specific-examples
-   launch-bundle
-   first-target-shortlist
-   maintainer-next-steps
    adoption
    parity
    fallback

@@ -8,9 +8,6 @@ other people.
 1. Decide whether a trial is worth doing
 ----------------------------------------
 
-Start with ``packaging/outreach/evaluation-checklist.md`` if you need a quick
-internal go/no-go screen.
-
 Good reasons to trial ``turbo-picard``:
 
 * one Picard step keeps showing up in wall-time complaints;
@@ -67,35 +64,6 @@ The minimum standard is simple:
 
 For a fuller comparison bundle, use ``tools/audit_real_data.py`` or
 ``tools/compare_real_data.py``.
-
-5. Record the result
---------------------
-
-Use ``packaging/outreach/team-review-template.md`` after a first trial when you
-want a short written record other workflow owners can review quickly.
-
-6. Share it
------------
-
-If the result is useful and you want to spread it:
-
-* ``packaging/outreach/slack-message.md`` for internal chat;
-* ``packaging/outreach/email-blurb.md`` for a workflow owner or platform team;
-* ``packaging/outreach/module-pr-note.md`` for a workflow or module PR;
-* ``packaging/outreach/community-post.md`` and
-  ``packaging/outreach/github-discussion.md`` for broader visibility;
-* ``packaging/outreach/channel-map.md`` if the main question is which of those
-  channels fits the result you have;
-* ``packaging/outreach/launch-plan.md`` for the order in which to do that.
-
-If the conversation stalls on the usual concerns, use
-``packaging/outreach/objections.md``.
-
-7. Follow through
------------------
-
-If the first trial is good and you need the next steps spelled out, continue
-with :doc:`after-evaluation`.
 
 What this is not
 ----------------

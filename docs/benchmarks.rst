@@ -5,6 +5,14 @@ Benchmarks are useful only when they are reproducible and tied to parity. The
 repository benchmark suite is designed to report speed while keeping command
 coverage and Picard-compatible behavior visible.
 
+The current saved suite is already strong enough to support a plain-language
+claim: for the commands ``turbo-picard`` has accelerated and parity-checked, it
+is materially faster than Picard across the board, with an ``8.55x`` slowest
+saved speedup, ``26.74x`` geometric mean speedup, and ``84.46x`` top speedup.
+The companion ``MarkDuplicates`` performance run is also a useful reminder that
+"more scalable" is not marketing filler here; it cut median RSS from about
+``1.2 GB`` in Picard 3.4.0 to about ``8.7 MB`` on the checked fixture.
+
 Run the suite
 -------------
 

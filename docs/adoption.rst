@@ -92,20 +92,6 @@ If the right first substitution is still unclear, start with
 For the smallest reviewable trial shape, it also includes
 ``one-command-trial.md`` plus tiny ``trial.wdl`` and ``trial.nf`` workflows
 that show a single-command evaluation flow.
-If you need short text for a teammate, workflow group, or module discussion,
-see ``packaging/outreach/`` for reusable announcement and recommendation
-templates.
-For a quick internal go/no-go screen before a wider discussion, see
-``packaging/outreach/evaluation-checklist.md``.
-For broader launch or community-facing text, see
-``packaging/outreach/launch-plan.md``,
-``packaging/outreach/community-post.md``, and
-``packaging/outreach/github-discussion.md``.
-For repeated evaluation concerns, see
-``packaging/outreach/objections.md``.
-For a short written record after a first trial, use
-``packaging/outreach/team-review-template.md``.
-
 Practical path
 --------------
 
