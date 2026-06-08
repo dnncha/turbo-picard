@@ -312,12 +312,14 @@ class CommandMatrixTests(unittest.TestCase):
             [],
         )
 
-    def test_command_docs_scope_language_rejects_mixed_examples_as_native(self) -> None:
+    def test_command_docs_scope_language_requires_full_picard_surface_wording(self) -> None:
         self.assertEqual(
             verify_command_matrix.validate_command_docs_scope_language(
-                "Common command examples\n"
-                "These examples include partial-native surfaces. Check the "
-                "machine-readable matrix before treating any command as fully native.\n"
+                "Picard 3.4.0 command surface\n"
+                "turbo-picard --list-commands\n"
+                "machine-readable matrix\n"
+                "33 accelerated commands\n"
+                "89 delegated commands\n"
             ),
             [],
         )
@@ -329,9 +331,11 @@ class CommandMatrixTests(unittest.TestCase):
             "commands docs must not label mixed native/partial-native examples as native",
             errors,
         )
-        self.assertIn("commands docs missing partial-native scope wording", errors)
+        self.assertIn("commands docs missing Picard 3.4.0 compatibility wording", errors)
+        self.assertIn("commands docs missing list-commands pointer", errors)
         self.assertIn("commands docs missing matrix pointer", errors)
-        self.assertIn("commands docs missing fully native caution", errors)
+        self.assertIn("commands docs missing accelerated command wording", errors)
+        self.assertIn("commands docs missing delegated command wording", errors)
 
     def test_command_docs_examples_track_matrix_commands(self) -> None:
         entries = [
@@ -367,7 +371,8 @@ class CommandMatrixTests(unittest.TestCase):
                 entries,
                 "* ``MarkDuplicates``: ``partial-native``\n"
                 "* ``SortSam``: ``native``\n"
-                "* ``FutureCommand``: ``fallback-only``\n",
+                "2 accelerated commands\n"
+                "1 delegated commands\n",
             ),
             [],
         )
@@ -379,7 +384,8 @@ class CommandMatrixTests(unittest.TestCase):
             ),
             [
                 "commands docs missing matrix status summary for MarkDuplicates: partial-native",
-                "commands docs missing matrix status summary for FutureCommand: fallback-only",
+                "commands docs missing accelerated command count summary",
+                "commands docs missing delegated command count summary",
             ],
         )
 

@@ -65,7 +65,7 @@ dependencies = [
  "proc-macro2",
  "quote",
  "regex",
- "rustc-hash",
+ "rustc-hash 1.1.0",
  "shlex",
  "syn",
 ]
@@ -171,6 +171,21 @@ checksum = "9481c1c90cbf2ac953f07c8d4a58aa3945c425b7185c9154d67a65e4230da511"
 dependencies = [
  "cfg-if",
 ]
+
+[[package]]
+name = "crossbeam-channel"
+version = "0.5.15"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "82b8f8f868b36967f9606790d1903570de9ceaf870a7bf9fbbd3016d636a2cb2"
+dependencies = [
+ "crossbeam-utils",
+]
+
+[[package]]
+name = "crossbeam-utils"
+version = "0.8.21"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d0a5c400df2834b80a4c3327b3aad3a4c4cd4de0629063962b03235697506a28"
 
 [[package]]
 name = "curl-sys"
@@ -863,6 +878,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "08d43f7aa6b08d49f382cde6a7982047c3426db949b1424bc4b7ec9ae12c6ce2"
 
 [[package]]
+name = "rustc-hash"
+version = "2.1.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "94300abf3f1ae2e2b8ffb7b58043de3d399c73fa6f4b73826402a5c457614dbe"
+
+[[package]]
 name = "rustc_version"
 version = "0.1.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1077,10 +1098,12 @@ name = "turbo-picard-cli"
 version = "0.1.1"
 dependencies = [
  "assert_cmd",
+ "crossbeam-channel",
  "flate2",
  "md5 0.7.0",
  "predicates",
  "rust-htslib",
+ "rustc-hash 2.1.2",
  "tempfile",
  "turbo-picard-core",
  "turbo-picard-markdup",
@@ -1099,7 +1122,7 @@ version = "0.1.1"
 dependencies = [
  "md5 0.8.0",
  "rust-htslib",
- "rustc-hash",
+ "rustc-hash 1.1.0",
  "tempfile",
  "turbo-picard-core",
 ]

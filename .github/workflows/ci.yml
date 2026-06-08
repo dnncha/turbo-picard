@@ -63,6 +63,7 @@ jobs:
           python3 -m unittest tools/test_verify_site_disclosures.py
           python3 -m unittest tools/test_verify_site_benchmark_evidence.py
           python3 -m unittest tools/test_verify_site_links.py
+          python3 -m unittest tools/test_verify_workflow_starters.py
           python3 -m py_compile \
             tools/parity_compare.py \
             tools/compare_markduplicates.py \
@@ -125,6 +126,7 @@ jobs:
             tools/verify_site_disclosures.py \
             tools/verify_site_benchmark_evidence.py \
             tools/verify_site_links.py \
+            tools/verify_workflow_starters.py \
             tools/test_compare_markduplicates.py \
             tools/test_bioconda_release_preflight.py \
             tools/test_compare_real_data.py \
@@ -148,7 +150,10 @@ jobs:
             tools/test_verify_release_versions.py \
             tools/test_verify_site_disclosures.py \
             tools/test_verify_site_benchmark_evidence.py \
-            tools/test_verify_site_links.py
+            tools/test_verify_site_links.py \
+            tools/test_verify_workflow_starters.py
+          python3 tools/sync_picard_command_matrix.py
+          git diff --exit-code docs/command-matrix.yml docs/picard-3.4.0-commands.txt
           python3 tools/verify_command_matrix.py
           python3 tools/verify_parity_docs.py
           python3 tools/verify_pypi_package.py
@@ -174,6 +179,7 @@ jobs:
           python3 tools/verify_site_disclosures.py
           python3 tools/verify_site_benchmark_evidence.py
           python3 tools/verify_site_links.py
+          python3 tools/verify_workflow_starters.py
 
       - name: Verify benchmark evidence assets are current
         run: |
@@ -248,6 +254,7 @@ jobs:
           TURBO_PICARD_CONDA_PREFIX="${MAMBA_ROOT_PREFIX}/envs/turbo-picard-ci" ./tools/verify_basic_alignmentmetrics_parity.sh
           TURBO_PICARD_CONDA_PREFIX="${MAMBA_ROOT_PREFIX}/envs/turbo-picard-ci" ./tools/verify_basic_collectbasedistributionbycycle_parity.sh
           TURBO_PICARD_CONDA_PREFIX="${MAMBA_ROOT_PREFIX}/envs/turbo-picard-ci" ./tools/verify_basic_collectgcbiasmetrics_parity.sh
+
           TURBO_PICARD_CONDA_PREFIX="${MAMBA_ROOT_PREFIX}/envs/turbo-picard-ci" ./tools/verify_basic_qualityyield_parity.sh
           TURBO_PICARD_CONDA_PREFIX="${MAMBA_ROOT_PREFIX}/envs/turbo-picard-ci" ./tools/verify_basic_collectwgsmetrics_parity.sh
           TURBO_PICARD_CONDA_PREFIX="${MAMBA_ROOT_PREFIX}/envs/turbo-picard-ci" ./tools/verify_basic_qualityscoredistribution_parity.sh

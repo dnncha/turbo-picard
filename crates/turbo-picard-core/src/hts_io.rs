@@ -78,6 +78,29 @@ pub fn open_reader(path: impl AsRef<Path>, reference: Option<&str>) -> Result<ba
     Ok(reader)
 }
 
+/// Open a reader for pipelined decode (dedicated reader thread overlaps I/O).
+///
+/// BGZF worker threads are pinned to 1 so decode does not fight the
+/// application reader thread for the same block pool.
+pub fn open_reader_pipelined(
+    path: impl AsRef<Path>,
+    reference: Option<&str>,
+) -> Result<bam::Reader, String> {
+    let path = path.as_ref();
+    let path_text = path.to_string_lossy();
+    let reference = resolve_reference_sequence(&path_text, reference)?;
+    let mut reader = bam::Reader::from_path(path).map_err(|error| error.to_string())?;
+    if let Some(reference) = reference.as_deref() {
+        reader
+            .set_reference(reference)
+            .map_err(|error| error.to_string())?;
+    }
+    reader
+        .set_threads(1)
+        .map_err(|error| error.to_string())?;
+    Ok(reader)
+}
+
 pub fn open_writer(
     output: &str,
     header: &bam::Header,

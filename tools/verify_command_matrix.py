@@ -7,13 +7,31 @@ import json
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 MATRIX = ROOT / "docs" / "command-matrix.yml"
+PICARD_COMMANDS = ROOT / "docs" / "picard-3.4.0-commands.txt"
 COMMAND_DOCS = ROOT / "docs" / "commands.rst"
 CLI = ROOT / "crates" / "turbo-picard-cli" / "src" / "lib.rs"
 CI = ROOT / ".github" / "workflows" / "ci.yml"
 REAL_DATA_MANIFEST = ROOT / "benchmarks" / "real-data" / "manifest.json"
 CRAM_PARITY_SCRIPT = ROOT / "tools" / "verify_basic_cram_parity.sh"
 EXPECTED_PICARD_REFERENCE = "3.4.0"
-VALID_STATUSES = {"native", "partial-native", "fallback-only"}
+VALID_STATUSES = {"native", "partial-native", "scaffold", "fallback-only"}
+ACCELERATED_STATUSES = {"native", "partial-native", "scaffold"}
+
+
+def matrix_documented_commands():
+    commands = []
+    current_name = None
+    for line in MATRIX.read_text(encoding="utf-8").splitlines():
+        name_match = re.match(r"\s+- name: (.+)", line)
+        if name_match:
+            current_name = name_match.group(1)
+            continue
+        status_match = re.match(
+            r"\s+status: (native|partial-native|scaffold|fallback-only)", line
+        )
+        if status_match and current_name:
+            commands.append(current_name)
+    return set(commands)
 
 
 def matrix_picard_reference(text=None):
@@ -37,6 +55,32 @@ def matrix_native_commands():
         if status_match and current_name:
             commands.append(current_name)
     return set(commands)
+
+
+def matrix_accelerated_commands():
+    commands = []
+    current_name = None
+    for line in MATRIX.read_text(encoding="utf-8").splitlines():
+        name_match = re.match(r"\s+- name: (.+)", line)
+        if name_match:
+            current_name = name_match.group(1)
+            continue
+        status_match = re.match(
+            r"\s+status: (native|partial-native|scaffold)", line
+        )
+        if status_match and current_name:
+            commands.append(current_name)
+    return set(commands)
+
+
+def picard_reference_commands():
+    if not PICARD_COMMANDS.is_file():
+        return set()
+    return {
+        line.strip()
+        for line in PICARD_COMMANDS.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    }
 
 
 def matrix_parity_scripts():
@@ -103,7 +147,7 @@ def validate_matrix_entry_structure(entries):
         if status not in VALID_STATUSES:
             errors.append(f"{name} has invalid status: {status or '<missing>'}")
         parity_script = entry.get("parity_script", "").strip()
-        if status in {"native", "partial-native"} and not parity_script:
+        if status in {"native", "partial-native", "scaffold"} and not parity_script:
             errors.append(f"{name} missing parity_script")
         if status == "fallback-only" and parity_script not in {"", "null"}:
             errors.append(f"{name} fallback-only entry should not declare parity_script")
@@ -213,9 +257,11 @@ def validate_command_docs_scope_language(text):
             "commands docs must not label mixed native/partial-native examples as native"
         )
     for needle, description in [
-        ("partial-native", "partial-native scope wording"),
+        ("Picard 3.4.0", "Picard 3.4.0 compatibility wording"),
+        ("--list-commands", "list-commands pointer"),
         ("machine-readable matrix", "matrix pointer"),
-        ("fully native", "fully native caution"),
+        ("accelerated", "accelerated command wording"),
+        ("delegated", "delegated command wording"),
     ]:
         if needle not in text:
             errors.append(f"commands docs missing {description}")
@@ -231,7 +277,7 @@ def validate_command_docs_examples(entries, text):
     for entry in entries:
         status = entry.get("status", "")
         command = entry.get("name", "")
-        if status in {"native", "partial-native"} and command not in text:
+        if status in ACCELERATED_STATUSES and command not in text:
             errors.append(f"commands docs missing example for matrix command: {command}")
     return errors
 
@@ -243,10 +289,40 @@ def validate_command_docs_status_summary(entries, text):
         status = entry.get("status", "")
         if not command or not status:
             continue
+        if status not in ACCELERATED_STATUSES:
+            continue
         status_line = f"* ``{command}``: ``{status}``"
         if status_line not in text:
             errors.append(
                 f"commands docs missing matrix status summary for {command}: {status}"
+            )
+    accelerated_count = sum(
+        1 for entry in entries if entry.get("status") in ACCELERATED_STATUSES
+    )
+    fallback_count = sum(
+        1 for entry in entries if entry.get("status") == "fallback-only"
+    )
+    if f"{accelerated_count} accelerated" not in text:
+        errors.append("commands docs missing accelerated command count summary")
+    if f"{fallback_count} delegated" not in text:
+        errors.append("commands docs missing delegated command count summary")
+    return errors
+
+
+def validate_picard_reference_coverage(entries):
+    errors = []
+    matrix_names = {entry.get("name", "") for entry in entries}
+    for command in sorted(picard_reference_commands()):
+        if command not in matrix_names:
+            errors.append(
+                f"command matrix missing upstream Picard 3.4.0 command: {command}"
+            )
+    for entry in entries:
+        name = entry.get("name", "")
+        status = entry.get("status", "")
+        if name in picard_reference_commands() and status == "scaffold":
+            errors.append(
+                f"{name} is still scaffold; migrate to accelerated or fallback-only"
             )
     return errors
 
@@ -277,17 +353,35 @@ def main():
         for error in reference_errors:
             print(error, file=sys.stderr)
         return 1
-    matrix = matrix_native_commands()
+    matrix = matrix_documented_commands()
+    accelerated = matrix_accelerated_commands()
     dispatch = dispatcher_commands()
     missing = sorted(dispatch - matrix)
-    stale = sorted(matrix - dispatch)
-    if missing or stale:
+    stale = sorted(accelerated - dispatch)
+    unexpected_dispatch = sorted(dispatch - matrix - {"AccelerationStatus"})
+    if missing or stale or unexpected_dispatch:
         if missing:
             print("dispatcher commands missing from matrix:", ", ".join(missing), file=sys.stderr)
         if stale:
-            print("matrix native commands missing from dispatcher:", ", ".join(stale), file=sys.stderr)
+            print(
+                "matrix accelerated commands missing from dispatcher:",
+                ", ".join(stale),
+                file=sys.stderr,
+            )
+        if unexpected_dispatch:
+            print(
+                "dispatcher includes undocumented commands:",
+                ", ".join(unexpected_dispatch),
+                file=sys.stderr,
+            )
         return 1
-    structure_errors = validate_matrix_entry_structure(matrix_entries())
+    entries = matrix_entries()
+    reference_errors = validate_picard_reference_coverage(entries)
+    if reference_errors:
+        for error in reference_errors:
+            print(error, file=sys.stderr)
+        return 1
+    structure_errors = validate_matrix_entry_structure(entries)
     if structure_errors:
         for error in structure_errors:
             print(error, file=sys.stderr)

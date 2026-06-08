@@ -1,16 +1,22 @@
 Command coverage
 ================
 
-``turbo-picard`` focuses on common, high-value Picard commands. Some commands
-are native for the documented options, and many are partly native with fallback
-for advanced or uncommon behavior.
+``turbo-picard`` exposes the full Picard 3.4.0 command surface. Accelerated
+commands run natively in Rust when possible; every other Picard 3.4.0 command is
+delegated transparently to upstream Picard when it is installed or
+auto-discovered.
+
+List every upstream command with:
+
+.. code-block:: bash
+
+   turbo-picard --list-commands
 
 Common command examples
 -----------------------
 
-These examples include both native and partly native commands. Check the
-machine-readable matrix below before treating any command as fully native for a
-workflow.
+These examples cover the accelerated preprocessing and QC path. Check the
+machine-readable matrix below for the exact accelerated versus delegated split.
 
 .. code-block:: bash
 
@@ -20,7 +26,9 @@ workflow.
    picard MergeSamFiles I=lane1.bam I=lane2.bam O=merged.bam SORT_ORDER=coordinate
    picard BuildBamIndex I=coordinate.bam O=coordinate.bai
    picard SamToFastq I=input.bam FASTQ=r1.fastq SECOND_END_FASTQ=r2.fastq
+   picard SamToFastq I=input.bam OUTPUT_PER_RG=true OUTPUT_DIR=fastq-by-rg
    picard FastqToSam F1=r1.fastq F2=r2.fastq O=unmapped.bam SM=sample RG=rg1
+   picard FastqToSam F1=reads_R1_001.fastq F2=reads_R2_001.fastq O=unmapped.bam SM=sample RG=rg1 USE_SEQUENTIAL_FASTQS=true
    picard ViewSam I=input.bam > view.sam
    picard ReplaceSamHeader I=input.bam O=reheadered.bam H=replacement-header.sam
    picard AddOrReplaceReadGroups I=input.bam O=rg.bam RGID=1 RGLB=lib RGPL=ILLUMINA RGPU=unit RGSM=sample
@@ -41,8 +49,10 @@ Metrics and repair examples
    picard CollectBaseDistributionByCycle I=input.bam O=base_distribution.txt CHART=base_distribution.pdf
    picard CollectInsertSizeMetrics I=input.bam O=insert_size_metrics.txt H=insert_size_histogram.pdf
    picard CollectGcBiasMetrics I=input.bam O=gc_bias_detail.txt S=gc_bias_summary.txt CHART=gc_bias.pdf R=reference.fa
+   picard CollectHsMetrics I=input.bam O=hs_metrics.txt BAIT=baits.interval_list TARGET=targets.interval_list R=reference.fa
    picard CollectMultipleMetrics I=input.bam O=multiple_metrics PROGRAM=CollectInsertSizeMetrics
    picard CollectWgsMetrics I=input.bam O=wgs_metrics.txt R=reference.fa COUNT_UNPAIRED=true
+   picard CollectWgsMetrics I=input.bam O=wgs_metrics.fast.txt R=reference.fa COUNT_UNPAIRED=true USE_FAST_ALGORITHM=true
    picard FixMateInformation I=queryname.bam O=fixed.bam ASSUME_SORTED=true SORT_ORDER=queryname
    picard RevertSam I=aligned.bam O=unmapped.bam
    picard SetNmMdAndUqTags I=coordinate.bam O=tagged.bam R=reference.fa
@@ -65,9 +75,14 @@ Machine-readable coverage
 
 The canonical command matrix lives in ``docs/command-matrix.yml``. It records
 the current status, parity script, native scope, and fallback scope for each
-documented command.
+Picard 3.4.0 command plus the turbo-only ``AccelerationStatus`` utility.
 
 Current matrix status summary:
+
+* ``33 accelerated`` commands with native or partial-native Rust implementations
+* ``89 delegated`` Picard 3.4.0 commands forwarded to upstream Picard
+
+Accelerated command status:
 
 * ``AddOrReplaceReadGroups``: ``native``
 * ``AccelerationStatus``: ``native``
@@ -78,7 +93,11 @@ Current matrix status summary:
 * ``CollectBaseDistributionByCycle``: ``partial-native``
 * ``CollectGcBiasMetrics``: ``partial-native``
 * ``CollectQualityYieldMetrics``: ``native``
-* ``CollectWgsMetrics``: ``partial-native``
+* ``CollectWgsMetrics``: ``partial-native``. ``USE_FAST_ALGORITHM=true`` stays
+  native and defaults to a leaner WGS mode unless ``SAMPLE_SIZE`` or
+  ``INCLUDE_BQ_HISTOGRAM`` are set explicitly. ``TURBO_PICARD_WGS_FAST_DEFAULT=true``
+  applies that leaner default when the command line does not set
+  ``USE_FAST_ALGORITHM``.
 * ``CreateSequenceDictionary``: ``native``
 * ``FastqToSam``: ``partial-native``
 * ``GatherVcfs``: ``partial-native``

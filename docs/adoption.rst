@@ -12,8 +12,9 @@ shape stable, prove one command, then widen the rollout only after the evidence
 is good enough for that workflow.
 
 Good first candidates are usually ``MarkDuplicates``, ``SortSam``,
-``SamToFastq``, ``BuildBamIndex``, and the metrics commands that repeatedly
-slow down development or preprocessing runs.
+``SamToFastq``, ``FastqToSam``, ``FixMateInformation``, ``BuildBamIndex``,
+and the metrics commands that repeatedly slow down development or
+preprocessing runs.
 
 Workflow shapes
 ---------------
@@ -82,8 +83,9 @@ rule:
 
 If you want concrete files to start from, see ``packaging/workflows/`` for a
 minimal ``WDL`` tasks, small ``Nextflow`` processes, and a starter
-``Snakemake`` rule set covering ``MarkDuplicates``, ``SortSam``,
-``SamToFastq``, and ``BuildBamIndex``.
+``Snakemake`` rule set covering ``BuildBamIndex``, ``SortSam``,
+``MarkDuplicates``, ``SamToFastq``, ``FastqToSam``, and
+``FixMateInformation``.
 That directory also includes short walkthroughs for ``WDL / Cromwell``,
 ``Nextflow / nf-core``, and ``Snakemake`` so a workflow owner can choose a
 starter path quickly.

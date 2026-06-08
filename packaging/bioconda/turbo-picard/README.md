@@ -48,6 +48,7 @@ python3 tools/verify_ci_coverage.py
 python3 tools/verify_parity_docs.py
 python3 tools/verify_readme_links.py
 python3 tools/verify_site_links.py
+python3 tools/verify_workflow_starters.py
 python3 tools/verify_real_data_evidence.py
 python3 tools/verify_real_data_evidence.py --release-ready
 python3 tools/verify_bioconda_recipes.py --release-ready

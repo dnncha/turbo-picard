@@ -1,0 +1,101 @@
+{
+  "sample": "gatk-na12878-mito",
+  "input_bam": "/Users/donncha/Documents/GitHub/turbo-picard/benchmarks/real-data/gatk-na12878-mito/input.bam",
+  "input_bytes": 2097008,
+  "host": {
+    "hostname": "Donnchas-MacBook-Pro.local",
+    "cpu_count": 10
+  },
+  "has_riker": true,
+  "riker_threads": 4,
+  "rows": [
+    {
+      "sample": "gatk-na12878-mito",
+      "profile": "wgs-bundle",
+      "tool_family": "picard",
+      "tool_label": "CollectGcBiasMetrics",
+      "wall_s": "1.236998",
+      "max_rss_kb": "",
+      "threads": "",
+      "picard_bundle_role": "main",
+      "input_bytes": 2097008
+    },
+    {
+      "sample": "gatk-na12878-mito",
+      "profile": "wgs-bundle",
+      "tool_family": "picard",
+      "tool_label": "CollectMultipleMetrics",
+      "wall_s": "2.898778",
+      "max_rss_kb": "",
+      "threads": "",
+      "picard_bundle_role": "main",
+      "input_bytes": 2097008
+    },
+    {
+      "sample": "gatk-na12878-mito",
+      "profile": "wgs-bundle",
+      "tool_family": "picard",
+      "tool_label": "CollectWgsMetrics",
+      "wall_s": "6.626137",
+      "max_rss_kb": "",
+      "threads": "",
+      "picard_bundle_role": "main",
+      "input_bytes": 2097008
+    },
+    {
+      "sample": "gatk-na12878-mito",
+      "profile": "wgs-bundle",
+      "tool_family": "riker",
+      "tool_label": "multi",
+      "wall_s": "0.049356",
+      "max_rss_kb": "",
+      "threads": "",
+      "picard_bundle_role": "",
+      "input_bytes": 2097008
+    },
+    {
+      "sample": "gatk-na12878-mito",
+      "profile": "wgs-bundle",
+      "tool_family": "turbo-picard",
+      "tool_label": "CollectMultipleMetrics",
+      "wall_s": "0.025345",
+      "max_rss_kb": "",
+      "threads": "",
+      "picard_bundle_role": "",
+      "input_bytes": 2097008
+    },
+    {
+      "sample": "gatk-na12878-mito",
+      "profile": "wgs-only",
+      "tool_family": "picard",
+      "tool_label": "CollectWgsMetrics",
+      "wall_s": "6.627062",
+      "max_rss_kb": "",
+      "threads": "",
+      "picard_bundle_role": "main",
+      "input_bytes": 2097008
+    },
+    {
+      "sample": "gatk-na12878-mito",
+      "profile": "wgs-only",
+      "tool_family": "riker",
+      "tool_label": "wgs",
+      "wall_s": "0.021279",
+      "max_rss_kb": "",
+      "threads": "",
+      "picard_bundle_role": "",
+      "input_bytes": 2097008
+    },
+    {
+      "sample": "gatk-na12878-mito",
+      "profile": "wgs-only",
+      "tool_family": "turbo-picard",
+      "tool_label": "CollectWgsMetrics",
+      "wall_s": "0.012285",
+      "max_rss_kb": "",
+      "threads": "",
+      "picard_bundle_role": "",
+      "input_bytes": 2097008
+    }
+  ]
+}

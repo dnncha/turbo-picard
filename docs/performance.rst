@@ -34,7 +34,7 @@ MarkDuplicates or other indexed BAM outputs. It will not make a tiny test file
 much faster, and it will not fix slow storage.
 
 Without ``TURBO_PICARD_THREADS``, readers and writers still pick a small default
-thread count (up to four workers on multi-core hosts). Index creation uses the
+thread count (up to eight workers on multi-core hosts). Index creation uses the
 same worker count instead of a single thread.
 
 ``SortSam`` streams BAM/CRAM inputs without loading them into memory when the
@@ -54,6 +54,28 @@ score histograms use fixed ``[u64; 256]`` arrays. SAM-text alignment summaries
 scan optional tags in one pass instead of allocating a per-line tag vector. These
 choices keep parity with Picard output while avoiding repeated vector growth on
 long reads.
+
+``CollectWgsMetrics`` keeps one contig-sized ``u16`` depth buffer at a time,
+loads reference lengths from ``.fai`` when present (no full-genome FASTA load),
+updates coverage histograms incrementally as depths change (no ``O(genome size)``
+contig-finalize rescan), applies Picard-style mate overlap exclusion with
+``FxHashMap`` mate pairing and packed overlap bitmaps, and overlaps BGZF decode
+with pileup on BAM/CRAM inputs via a dedicated reader thread. That removes the
+memory and finalize costs that dominated WGS runs while keeping Picard-identical
+summary and histogram output.
+
+``CollectMultipleMetrics`` on BAM/CRAM inputs runs all selected collectors in
+one HTSlib pass (the same idea as riker's ``multi`` command) instead of
+re-opening and re-scanning the alignment file once per ``PROGRAM=``. When two
+or more collectors are active, a dedicated reader thread fills recycled
+128-record batches while persistent collector workers process in-flight batches
+asynchronously (override worker count with ``TURBO_PICARD_CMM_THREADS``). SAM
+inputs still use per-program passes so the existing SAM-text fast paths stay
+available.
+
+``CollectGcBiasMetrics`` loads one reference contig at a time via ``.fai`` seek
+for read-time GC windows and precomputes genome-window counts without keeping
+the full reference in memory.
 
 GPU acceleration
 ----------------

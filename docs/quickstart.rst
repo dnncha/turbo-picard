@@ -124,6 +124,7 @@ and easy to compare against upstream Picard output:
    turbo-picard CleanSam I=input.bam O=cleaned.bam
    turbo-picard BuildBamIndex I=coordinate.bam O=coordinate.bai
    turbo-picard SamToFastq I=input.bam FASTQ=reads.fastq
+   turbo-picard SamToFastq I=input.bam OUTPUT_PER_RG=true OUTPUT_DIR=fastq-by-rg
    turbo-picard CollectQualityYieldMetrics I=input.bam O=quality_yield_metrics.txt
 
 For broader coverage, see :doc:`commands`.

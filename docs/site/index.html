@@ -830,7 +830,9 @@
           <div class="command-grid">
             <div class="command-card"><b>MarkDuplicates</b><span>Best when duplicate marking is a clear wall-time problem and you want BAM plus metrics output that is easy to compare.</span></div>
             <div class="command-card"><b>SortSam</b><span>Best when repeated BAM or CRAM reordering keeps showing up across many shards or samples.</span></div>
-            <div class="command-card"><b>SamToFastq</b><span>Best when FASTQ export still sits in a remap or realignment path and plain FASTQ output is easy to check.</span></div>
+            <div class="command-card"><b>SamToFastq</b><span>Best when FASTQ export still sits in a remap or realignment path and the workflow now includes per-read-group FASTQ output that is easy to check.</span></div>
+            <div class="command-card"><b>FastqToSam</b><span>Best when lane-sharded FASTQ ingest still uses Picard before alignment or archival handoff and sequential shard naming is already in place.</span></div>
+            <div class="command-card"><b>FixMateInformation</b><span>Best when mate repair remains in preprocessing and the workflow already has a queryname-sorted handoff.</span></div>
             <div class="command-card"><b>BuildBamIndex</b><span>Best when the team wants the smallest low-risk substitution before trying a heavier command.</span></div>
           </div>
           <div class="benchmark-highlights" aria-label="First command links">
@@ -1035,7 +1037,7 @@ picard RevertSam I=aligned.bam O=unmapped.bam</pre>
             </div>
             <div class="evidence">
               <b>Start with the commands most people actually feel.</b>
-              <p>MarkDuplicates, SortSam, SamToFastq, BuildBamIndex, and common metrics commands are usually the fastest way to decide whether the package earns a place in your workflow.</p>
+              <p>MarkDuplicates, SortSam, SamToFastq, FastqToSam, FixMateInformation, BuildBamIndex, and common metrics commands are usually the fastest way to decide whether the package earns a place in your workflow.</p>
             </div>
           </div>
         </div>

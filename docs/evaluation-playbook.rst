@@ -25,7 +25,12 @@ In practice, the best first trials are usually:
 
 * ``MarkDuplicates`` for preprocessing-heavy pipelines;
 * ``SortSam`` for repeated BAM or CRAM reshaping;
-* ``SamToFastq`` for export-heavy realignment or remap paths;
+* ``SamToFastq`` for export-heavy realignment or remap paths, including
+  per-read-group FASTQ output;
+* ``FastqToSam`` for lane-sharded FASTQ ingestion before alignment or archival
+  handoff;
+* ``FixMateInformation`` when mate repair is still in the workflow and the
+  queryname-sorted boundary is already stable;
 * ``BuildBamIndex`` for a very small, low-risk first substitution.
 
 3. Pick the workflow shape
@@ -35,9 +40,12 @@ Starter files live in ``packaging/workflows/``.
 
 Use:
 
-* ``markduplicates.wdl`` or ``sortsam.wdl`` for ``WDL`` / ``Cromwell``;
-* ``markduplicates.nf``, ``sortsam.nf``, or ``samtofastq.nf`` for
-  ``Nextflow`` / nf-core style trials;
+* ``markduplicates.wdl``, ``sortsam.wdl``, ``samtofastq.wdl``,
+  ``fastqtosam.wdl``, or ``fixmateinformation.wdl`` for ``WDL`` /
+  ``Cromwell``;
+* ``markduplicates.nf``, ``sortsam.nf``, ``samtofastq.nf``,
+  ``fastqtosam.nf``, or ``fixmateinformation.nf`` for ``Nextflow`` / nf-core
+  style trials;
 * ``Snakefile`` for a small ``Snakemake``-style command swap.
 
 Walkthroughs:
@@ -54,7 +62,17 @@ For the smallest reviewable evaluation flow, use:
 * ``packaging/workflows/one-command-trial.md``
 * ``packaging/workflows/trial.wdl``
 * ``packaging/workflows/trial.nf``
+* ``packaging/workflows/trial-samtofastq.nf``
+* ``packaging/workflows/trial-samtofastq.wdl``
+* ``packaging/workflows/trial-fastqtosam.nf``
+* ``packaging/workflows/trial-fastqtosam.wdl``
+* ``packaging/workflows/trial-fixmateinformation.wdl``
+* ``packaging/workflows/trial-fixmateinformation.nf``
 * ``packaging/workflows/trial-config.yaml``
+
+The shared ``trial-config.yaml`` now carries the main knobs those command-level
+trials usually need: ``output_per_rg`` and ``rg_tag`` for ``SamToFastq``, plus
+``use_sequential_fastqs`` for ``FastqToSam``.
 
 The minimum standard is simple:
 

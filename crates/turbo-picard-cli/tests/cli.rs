@@ -6,14 +6,25 @@ use std::io::{Read, Write};
 use std::os::unix::fs::PermissionsExt;
 
 #[test]
-fn unsupported_command_fails_clearly() {
+fn collecthsmetrics_help_exposes_scaffold_surface() {
     let mut cmd = Command::cargo_bin("turbo-picard").expect("binary exists");
-    cmd.arg("CollectHsMetrics")
+    cmd.args(["CollectHsMetrics", "--help"])
         .assert()
-        .failure()
-        .stderr(predicate::str::contains(
-            "unsupported Picard command: CollectHsMetrics",
+        .success()
+        .stdout(predicate::str::contains(
+            "Native bait/target accumulation is not implemented yet",
         ));
+}
+
+#[test]
+fn list_commands_exposes_picard_reference_surface() {
+    let mut cmd = Command::cargo_bin("turbo-picard").expect("binary exists");
+    cmd.arg("--list-commands")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("CollectHsMetrics"))
+        .stdout(predicate::str::contains("CollectSamErrorMetrics"))
+        .stdout(predicate::str::contains("MarkDuplicates"));
 }
 
 #[test]
@@ -1521,16 +1532,151 @@ fn samtofastq_rejects_picard_invalid_option_combinations() {
         .args([
             "SamToFastq",
             &format!("I={}", input.display()),
+            &format!("FASTQ={}", tempdir.path().join("bad-per-rg.fastq").display()),
             "OUTPUT_PER_RG=true",
-            &format!("OUTPUT_DIR={}", tempdir.path().display()),
             "VALIDATION_STRINGENCY=SILENT",
             "QUIET=true",
         ])
         .assert()
         .failure()
         .stderr(predicate::str::contains(
-            "unsupported SamToFastq OUTPUT_PER_RG",
+            "SamToFastq OUTPUT_PER_RG cannot be combined with FASTQ, SECOND_END_FASTQ, or UNPAIRED_FASTQ",
         ));
+}
+
+#[test]
+fn samtofastq_can_output_fastqs_per_read_group_using_platform_unit() {
+    let tempdir = tempfile::tempdir().expect("tempdir exists");
+    let input = tempdir.path().join("input.sam");
+    let output_dir = tempdir.path().join("per-rg");
+    fs::create_dir(&output_dir).expect("output dir exists");
+    fs::write(
+        &input,
+        concat!(
+            "@HD\tVN:1.6\tSO:queryname\n",
+            "@SQ\tSN:chr1\tLN:100\n",
+            "@RG\tID:rg1\tSM:sample\tLB:lib\tPL:ILLUMINA\tPU:unit 1\n",
+            "pair1\t77\t*\t0\t0\t*\t*\t0\t0\tACGT\tFFFF\tRG:Z:rg1\n",
+            "pair1\t141\t*\t0\t0\t*\t*\t0\t0\tTGCA\tIIII\tRG:Z:rg1\n",
+        ),
+    )
+    .expect("input SAM is written");
+
+    Command::cargo_bin("picard")
+        .expect("binary exists")
+        .args([
+            "SamToFastq",
+            &format!("I={}", input.display()),
+            "OUTPUT_PER_RG=true",
+            &format!("OUTPUT_DIR={}", output_dir.display()),
+            "VALIDATION_STRINGENCY=SILENT",
+            "QUIET=true",
+        ])
+        .assert()
+        .success();
+
+    assert_eq!(
+        fs::read_to_string(output_dir.join("unit_1_1.fastq")).expect("read1 FASTQ exists"),
+        "@pair1/1\nACGT\n+\nFFFF\n",
+    );
+    assert_eq!(
+        fs::read_to_string(output_dir.join("unit_1_2.fastq")).expect("read2 FASTQ exists"),
+        "@pair1/2\nTGCA\n+\nIIII\n",
+    );
+}
+
+#[test]
+fn samtofastq_can_output_compressed_fastqs_per_read_group_using_id() {
+    let tempdir = tempfile::tempdir().expect("tempdir exists");
+    let input = tempdir.path().join("input.sam");
+    let output_dir = tempdir.path().join("per-rg");
+    fs::create_dir(&output_dir).expect("output dir exists");
+    fs::write(
+        &input,
+        concat!(
+            "@HD\tVN:1.6\tSO:queryname\n",
+            "@SQ\tSN:chr1\tLN:100\n",
+            "@RG\tID:rg:1\tSM:sample\tLB:lib\tPL:ILLUMINA\tPU:unit1\n",
+            "pair1\t77\t*\t0\t0\t*\t*\t0\t0\tAAAA\tHHHH\tRG:Z:rg:1\n",
+            "pair1\t141\t*\t0\t0\t*\t*\t0\t0\tCCCC\tJJJJ\tRG:Z:rg:1\n",
+        ),
+    )
+    .expect("input SAM is written");
+
+    Command::cargo_bin("picard")
+        .expect("binary exists")
+        .args([
+            "SamToFastq",
+            &format!("I={}", input.display()),
+            "OUTPUT_PER_RG=true",
+            "RG_TAG=ID",
+            "COMPRESS_OUTPUTS_PER_RG=true",
+            &format!("OUTPUT_DIR={}", output_dir.display()),
+            "VALIDATION_STRINGENCY=SILENT",
+            "QUIET=true",
+        ])
+        .assert()
+        .success();
+
+    let read1 = read_gzip_to_string(output_dir.join("rg_1_1.fastq.gz"));
+    let read2 = read_gzip_to_string(output_dir.join("rg_1_2.fastq.gz"));
+    assert_eq!(read1, "@pair1/1\nAAAA\n+\nHHHH\n");
+    assert_eq!(read2, "@pair1/2\nCCCC\n+\nJJJJ\n");
+}
+
+#[test]
+fn samtofastq_can_output_fastqs_per_read_group_from_bam_input() {
+    let tempdir = tempfile::tempdir().expect("tempdir exists");
+    let input_sam = tempdir.path().join("input.sam");
+    let input_bam = tempdir.path().join("input.bam");
+    let output_dir = tempdir.path().join("per-rg");
+    fs::create_dir(&output_dir).expect("output dir exists");
+    fs::write(
+        &input_sam,
+        concat!(
+            "@HD\tVN:1.6\tSO:queryname\n",
+            "@SQ\tSN:chr1\tLN:100\n",
+            "@RG\tID:rg1\tSM:sample\tLB:lib\tPL:ILLUMINA\tPU:lane/1\n",
+            "pair1\t77\t*\t0\t0\t*\t*\t0\t0\tACGT\tFFFF\tRG:Z:rg1\n",
+            "pair1\t141\t*\t0\t0\t*\t*\t0\t0\tTGCA\tIIII\tRG:Z:rg1\n",
+        ),
+    )
+    .expect("input SAM is written");
+
+    Command::cargo_bin("picard")
+        .expect("binary exists")
+        .args([
+            "SortSam",
+            &format!("I={}", input_sam.display()),
+            &format!("O={}", input_bam.display()),
+            "SO=queryname",
+            "VALIDATION_STRINGENCY=SILENT",
+            "QUIET=true",
+        ])
+        .assert()
+        .success();
+
+    Command::cargo_bin("picard")
+        .expect("binary exists")
+        .args([
+            "SamToFastq",
+            &format!("I={}", input_bam.display()),
+            "OUTPUT_PER_RG=true",
+            &format!("OUTPUT_DIR={}", output_dir.display()),
+            "VALIDATION_STRINGENCY=SILENT",
+            "QUIET=true",
+        ])
+        .assert()
+        .success();
+
+    assert_eq!(
+        fs::read_to_string(output_dir.join("lane_1_1.fastq")).expect("read1 FASTQ exists"),
+        "@pair1/1\nACGT\n+\nFFFF\n",
+    );
+    assert_eq!(
+        fs::read_to_string(output_dir.join("lane_1_2.fastq")).expect("read2 FASTQ exists"),
+        "@pair1/2\nTGCA\n+\nIIII\n",
+    );
 }
 
 #[test]
@@ -1541,16 +1687,12 @@ fn fastqtosam_writes_unmapped_paired_sam_with_read_group() {
     let output = tempdir.path().join("unmapped.sam");
     fs::write(
         &r1,
-        concat!(
-            "@read1\n", "ACGT\n", "+\n", "FFFF\n", "@read2\n", "TGCA\n", "+\n", "EEEE\n",
-        ),
+        concat!("@read1\n", "ACGT\n", "+\n", "FFFF\n", "@read2\n", "TGCA\n", "+\n", "EEEE\n",),
     )
     .expect("r1 fixture is written");
     fs::write(
         &r2,
-        concat!(
-            "@read1\n", "TTTT\n", "+\n", "IIII\n", "@read2\n", "CCCC\n", "+\n", "HHHH\n",
-        ),
+        concat!("@read1\n", "TTTT\n", "+\n", "IIII\n", "@read2\n", "CCCC\n", "+\n", "HHHH\n",),
     )
     .expect("r2 fixture is written");
 
@@ -1795,16 +1937,106 @@ fn fastqtosam_auto_detects_standard_and_illumina_quality_offsets() {
         .assert()
         .success();
 
-    assert!(
-        fs::read_to_string(&standard_output)
-            .expect("standard output exists")
-            .contains("read1\t4\t*\t0\t0\t*\t*\t0\t0\tACGT\t''''\tRG:Z:A\n")
-    );
-    assert!(
-        fs::read_to_string(&illumina_output)
-            .expect("illumina output exists")
-            .contains("read1\t4\t*\t0\t0\t*\t*\t0\t0\tACGT\tCCCC\tRG:Z:A\n")
-    );
+    assert!(fs::read_to_string(&standard_output)
+        .expect("standard output exists")
+        .contains("read1\t4\t*\t0\t0\t*\t*\t0\t0\tACGT\t''''\tRG:Z:A\n"));
+    assert!(fs::read_to_string(&illumina_output)
+        .expect("illumina output exists")
+        .contains("read1\t4\t*\t0\t0\t*\t*\t0\t0\tACGT\tCCCC\tRG:Z:A\n"));
+}
+
+#[test]
+fn fastqtosam_accepts_solexa_quality_format() {
+    let tempdir = tempfile::tempdir().expect("tempdir exists");
+    let fastq = tempdir.path().join("solexa.fastq");
+    let output = tempdir.path().join("solexa.sam");
+    fs::write(&fastq, "@read1\nACGT\n+\n;@JT\n").expect("solexa FASTQ is written");
+
+    Command::cargo_bin("picard")
+        .expect("binary exists")
+        .args([
+            "FastqToSam",
+            &format!("FASTQ={}", fastq.display()),
+            &format!("OUTPUT={}", output.display()),
+            "SAMPLE_NAME=sample",
+            "QUALITY_FORMAT=Solexa",
+            "VALIDATION_STRINGENCY=SILENT",
+            "QUIET=true",
+        ])
+        .assert()
+        .success();
+
+    assert!(fs::read_to_string(&output)
+        .expect("solexa output exists")
+        .contains("read1\t4\t*\t0\t0\t*\t*\t0\t0\tACGT\t\"$+5\tRG:Z:A\n"));
+}
+
+#[test]
+fn fastqtosam_accepts_sequential_fastq_collections() {
+    let tempdir = tempfile::tempdir().expect("tempdir exists");
+    let r1_001 = tempdir.path().join("reads_R1_001.fastq");
+    let r1_002 = tempdir.path().join("reads_R1_002.fastq");
+    let r2_001 = tempdir.path().join("reads_R2_001.fastq");
+    let r2_002 = tempdir.path().join("reads_R2_002.fastq");
+    let output = tempdir.path().join("unmapped.sam");
+    fs::write(&r1_001, "@read1\nACGT\n+\nFFFF\n").expect("r1_001 is written");
+    fs::write(&r1_002, "@read2\nTGCA\n+\nEEEE\n").expect("r1_002 is written");
+    fs::write(&r2_001, "@read1\nTTTT\n+\nIIII\n").expect("r2_001 is written");
+    fs::write(&r2_002, "@read2\nCCCC\n+\nHHHH\n").expect("r2_002 is written");
+
+    Command::cargo_bin("picard")
+        .expect("binary exists")
+        .args([
+            "FastqToSam",
+            &format!("FASTQ={}", r1_001.display()),
+            &format!("FASTQ2={}", r2_001.display()),
+            "USE_SEQUENTIAL_FASTQS=true",
+            &format!("OUTPUT={}", output.display()),
+            "SAMPLE_NAME=sample",
+            "READ_GROUP_NAME=rg1",
+            "QUALITY_FORMAT=Standard",
+            "VALIDATION_STRINGENCY=SILENT",
+            "QUIET=true",
+        ])
+        .assert()
+        .success();
+
+    let sam = fs::read_to_string(&output).expect("SAM output exists");
+    assert!(sam.contains("read1\t77\t*\t0\t0\t*\t*\t0\t0\tACGT\tFFFF\tRG:Z:rg1\n"));
+    assert!(sam.contains("read1\t141\t*\t0\t0\t*\t*\t0\t0\tTTTT\tIIII\tRG:Z:rg1\n"));
+    assert!(sam.contains("read2\t77\t*\t0\t0\t*\t*\t0\t0\tTGCA\tEEEE\tRG:Z:rg1\n"));
+    assert!(sam.contains("read2\t141\t*\t0\t0\t*\t*\t0\t0\tCCCC\tHHHH\tRG:Z:rg1\n"));
+}
+
+#[test]
+fn fastqtosam_rejects_mismatched_sequential_fastq_collections() {
+    let tempdir = tempfile::tempdir().expect("tempdir exists");
+    let r1_001 = tempdir.path().join("reads_R1_001.fastq");
+    let r1_002 = tempdir.path().join("reads_R1_002.fastq");
+    let r2_001 = tempdir.path().join("reads_R2_001.fastq");
+    let output = tempdir.path().join("unmapped.sam");
+    fs::write(&r1_001, "@read1\nACGT\n+\nFFFF\n").expect("r1_001 is written");
+    fs::write(&r1_002, "@read2\nTGCA\n+\nEEEE\n").expect("r1_002 is written");
+    fs::write(&r2_001, "@read1\nTTTT\n+\nIIII\n").expect("r2_001 is written");
+
+    Command::cargo_bin("picard")
+        .expect("binary exists")
+        .args([
+            "FastqToSam",
+            &format!("FASTQ={}", r1_001.display()),
+            &format!("FASTQ2={}", r2_001.display()),
+            "USE_SEQUENTIAL_FASTQS=true",
+            &format!("OUTPUT={}", output.display()),
+            "SAMPLE_NAME=sample",
+            "QUALITY_FORMAT=Standard",
+            "VALIDATION_STRINGENCY=SILENT",
+            "QUIET=true",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "Found 2 files for FASTQ and 1 files for FASTQ2.",
+        ));
 }
 
 #[test]
@@ -1850,11 +2082,9 @@ fn fastqtosam_honors_empty_line_and_empty_fastq_options() {
         .assert()
         .success();
 
-    assert!(
-        fs::read_to_string(&empty_output)
-            .expect("empty SAM output exists")
-            .contains("@HD\tVN:1.6\tSO:queryname\n")
-    );
+    assert!(fs::read_to_string(&empty_output)
+        .expect("empty SAM output exists")
+        .contains("@HD\tVN:1.6\tSO:queryname\n"));
 }
 
 #[test]
@@ -1931,9 +2161,7 @@ fn addorreplacereadgroups_rewrites_header_and_record_tags() {
 
     let output_sam = fs::read_to_string(&output).expect("output SAM exists");
     assert!(!output_sam.contains("ID:old"));
-    assert!(
-        output_sam.contains("@RG\tID:new\tLB:library-a\tPL:ILLUMINA\tSM:sample-a\tPU:unit-a\n")
-    );
+    assert!(output_sam.contains("@RG\tID:new\tLB:library-a\tPL:ILLUMINA\tSM:sample-a\tPU:unit-a\n"));
     assert!(output_sam.contains("read-a\t0\tchr1\t10\t60\t4M\t*\t0\t0\tACGT\tFFFF\tRG:Z:new"));
 }
 
@@ -2058,10 +2286,8 @@ fn collectalignmentsummarymetrics_writes_unpaired_metrics() {
     assert!(metrics.contains(
         "UNPAIRED\t3\t3\t1\t0\t2\t0.666667\t8\t2\t8\t8\t0\t0\t0\t0\t4\t0\t4\t0\t4\t4\t2.666667\t0\t0\t0\t0\t0\t0.5\t0\t0\t0\t0\t0\t\t\t\n"
     ));
-    assert!(
-        metrics
-            .contains("READ_LENGTH\tUNPAIRED_TOTAL_LENGTH_COUNT\tUNPAIRED_ALIGNED_LENGTH_COUNT\n")
-    );
+    assert!(metrics
+        .contains("READ_LENGTH\tUNPAIRED_TOTAL_LENGTH_COUNT\tUNPAIRED_ALIGNED_LENGTH_COUNT\n"));
     assert!(metrics.contains("0\t0\t1\n"));
     assert!(metrics.contains("4\t3\t2\n"));
 }
@@ -3131,6 +3357,119 @@ fn collectwgsmetrics_can_include_base_quality_histogram() {
 }
 
 #[test]
+fn collectwgsmetrics_use_fast_algorithm_defaults_to_zero_sample_and_no_bq_histogram() {
+    let tempdir = tempfile::tempdir().expect("tempdir exists");
+    let input = tempdir.path().join("input.sam");
+    let reference = tempdir.path().join("ref.fa");
+    let fast_output = tempdir.path().join("wgs_fast.txt");
+    let explicit_output = tempdir.path().join("wgs_sample0.txt");
+    fs::write(&reference, ">chr1\nACGTACGTACGT\n").expect("reference is written");
+    fs::write(
+        &input,
+        concat!(
+            "@HD\tVN:1.6\tSO:coordinate\n",
+            "@SQ\tSN:chr1\tLN:12\n",
+            "read-a\t0\tchr1\t1\t60\t4M\t*\t0\t0\tACGT\tFFFF\n",
+            "read-b\t0\tchr1\t3\t20\t4M\t*\t0\t0\tGTAC\tFFFF\n",
+            "read-c\t0\tchr1\t9\t60\t4M\t*\t0\t0\tACGT\tFFFF\n",
+        ),
+    )
+    .expect("input fixture is written");
+
+    Command::cargo_bin("picard")
+        .expect("binary exists")
+        .args([
+            "CollectWgsMetrics",
+            &format!("I={}", input.display()),
+            &format!("O={}", fast_output.display()),
+            &format!("R={}", reference.display()),
+            "COUNT_UNPAIRED=true",
+            "USE_FAST_ALGORITHM=true",
+            "VALIDATION_STRINGENCY=SILENT",
+            "QUIET=true",
+        ])
+        .assert()
+        .success();
+
+    Command::cargo_bin("picard")
+        .expect("binary exists")
+        .args([
+            "CollectWgsMetrics",
+            &format!("I={}", input.display()),
+            &format!("O={}", explicit_output.display()),
+            &format!("R={}", reference.display()),
+            "COUNT_UNPAIRED=true",
+            "SAMPLE_SIZE=0",
+            "INCLUDE_BQ_HISTOGRAM=false",
+            "VALIDATION_STRINGENCY=SILENT",
+            "QUIET=true",
+        ])
+        .assert()
+        .success();
+
+    assert_eq!(
+        fs::read_to_string(&fast_output).expect("fast metrics exist"),
+        fs::read_to_string(&explicit_output).expect("explicit metrics exist")
+    );
+}
+
+#[test]
+fn collectwgsmetrics_env_fast_default_matches_explicit_fast_algorithm() {
+    let tempdir = tempfile::tempdir().expect("tempdir exists");
+    let input = tempdir.path().join("input.sam");
+    let reference = tempdir.path().join("ref.fa");
+    let env_output = tempdir.path().join("wgs_env_fast.txt");
+    let explicit_output = tempdir.path().join("wgs_explicit_fast.txt");
+    fs::write(&reference, ">chr1\nACGTACGTACGT\n").expect("reference is written");
+    fs::write(
+        &input,
+        concat!(
+            "@HD\tVN:1.6\tSO:coordinate\n",
+            "@SQ\tSN:chr1\tLN:12\n",
+            "read-a\t0\tchr1\t1\t60\t4M\t*\t0\t0\tACGT\tFFFF\n",
+            "read-b\t0\tchr1\t3\t20\t4M\t*\t0\t0\tGTAC\tFFFF\n",
+            "read-c\t0\tchr1\t9\t60\t4M\t*\t0\t0\tACGT\tFFFF\n",
+        ),
+    )
+    .expect("input fixture is written");
+
+    Command::cargo_bin("picard")
+        .expect("binary exists")
+        .env("TURBO_PICARD_WGS_FAST_DEFAULT", "true")
+        .args([
+            "CollectWgsMetrics",
+            &format!("I={}", input.display()),
+            &format!("O={}", env_output.display()),
+            &format!("R={}", reference.display()),
+            "COUNT_UNPAIRED=true",
+            "VALIDATION_STRINGENCY=SILENT",
+            "QUIET=true",
+        ])
+        .assert()
+        .success();
+
+    Command::cargo_bin("picard")
+        .expect("binary exists")
+        .args([
+            "CollectWgsMetrics",
+            &format!("I={}", input.display()),
+            &format!("O={}", explicit_output.display()),
+            &format!("R={}", reference.display()),
+            "COUNT_UNPAIRED=true",
+            "USE_FAST_ALGORITHM=true",
+            "VALIDATION_STRINGENCY=SILENT",
+            "QUIET=true",
+        ])
+        .assert()
+        .success();
+
+    assert_eq!(
+        fs::read_to_string(&env_output).expect("env metrics exist"),
+        fs::read_to_string(&explicit_output).expect("explicit metrics exist")
+    );
+}
+
+#[test]
 fn collectinsertsizemetrics_writes_metrics_histogram_and_chart() {
     let tempdir = tempfile::tempdir().expect("tempdir exists");
     let input = tempdir.path().join("input.sam");
@@ -3605,15 +3944,66 @@ pair2\t147\tchr1\t130\t60\t4M\t=\t100\t-34\tTTTT\tFFFF
     assert!(output.with_extension("read_length_histogram.pdf").exists());
     assert!(output.with_extension("insert_size_metrics").exists());
     assert!(output.with_extension("insert_size_histogram.pdf").exists());
-    assert!(
-        output
-            .with_extension("quality_distribution_metrics")
-            .exists()
-    );
+    assert!(output
+        .with_extension("quality_distribution_metrics")
+        .exists());
     assert!(output.with_extension("quality_distribution.pdf").exists());
     assert!(output.with_extension("quality_by_cycle_metrics").exists());
     assert!(output.with_extension("quality_by_cycle.pdf").exists());
     assert!(output.with_extension("quality_yield_metrics").exists());
+}
+
+#[test]
+fn collectmultiplemetrics_accepts_use_fast_algorithm_with_wgs_program() {
+    let tempdir = tempfile::tempdir().expect("tempdir exists");
+    let input = tempdir.path().join("input.bam");
+    let sam = tempdir.path().join("input.sam");
+    let reference = tempdir.path().join("ref.fa");
+    let output = tempdir.path().join("multiple_wgs_fast");
+    fs::write(&reference, ">chr1\nACGTACGTACGT\n").expect("reference is written");
+    fs::write(
+        &sam,
+        concat!(
+            "@HD\tVN:1.6\tSO:coordinate\n",
+            "@SQ\tSN:chr1\tLN:12\n",
+            "read-a\t0\tchr1\t1\t60\t4M\t*\t0\t0\tACGT\tFFFF\n",
+            "read-b\t0\tchr1\t3\t20\t4M\t*\t0\t0\tGTAC\tFFFF\n",
+            "read-c\t0\tchr1\t9\t60\t4M\t*\t0\t0\tACGT\tFFFF\n",
+        ),
+    )
+    .expect("input fixture is written");
+
+    Command::cargo_bin("picard")
+        .expect("binary exists")
+        .args([
+            "SortSam",
+            &format!("I={}", sam.display()),
+            &format!("O={}", input.display()),
+            "SORT_ORDER=coordinate",
+            "VALIDATION_STRINGENCY=SILENT",
+            "QUIET=true",
+        ])
+        .assert()
+        .success();
+
+    Command::cargo_bin("picard")
+        .expect("binary exists")
+        .args([
+            "CollectMultipleMetrics",
+            &format!("I={}", input.display()),
+            &format!("O={}", output.display()),
+            "PROGRAM=CollectAlignmentSummaryMetrics",
+            "PROGRAM=CollectWgsMetrics",
+            &format!("REFERENCE_SEQUENCE={}", reference.display()),
+            "USE_FAST_ALGORITHM=true",
+            "VALIDATION_STRINGENCY=SILENT",
+            "QUIET=true",
+        ])
+        .assert()
+        .success();
+
+    assert!(output.with_extension("alignment_summary_metrics").exists());
+    assert!(output.with_extension("wgs_metrics").exists());
 }
 
 #[test]
@@ -3721,25 +4111,19 @@ pair1\t147\tchr1\t30\t60\t4M\t=\t10\t-24\tTGCA\tFFFF
 
     assert!(output.with_extension("alignment_summary_metrics").exists());
     assert!(output.with_extension("read_length_histogram.pdf").exists());
-    assert!(
-        output
-            .with_extension("base_distribution_by_cycle_metrics")
-            .exists()
-    );
-    assert!(
-        output
-            .with_extension("base_distribution_by_cycle.pdf")
-            .exists()
-    );
+    assert!(output
+        .with_extension("base_distribution_by_cycle_metrics")
+        .exists());
+    assert!(output
+        .with_extension("base_distribution_by_cycle.pdf")
+        .exists());
     assert!(output.with_extension("insert_size_metrics").exists());
     assert!(output.with_extension("insert_size_histogram.pdf").exists());
     assert!(output.with_extension("quality_by_cycle_metrics").exists());
     assert!(output.with_extension("quality_by_cycle.pdf").exists());
-    assert!(
-        output
-            .with_extension("quality_distribution_metrics")
-            .exists()
-    );
+    assert!(output
+        .with_extension("quality_distribution_metrics")
+        .exists());
     assert!(output.with_extension("quality_distribution.pdf").exists());
     assert!(!output.with_extension("quality_yield_metrics").exists());
 }
@@ -4372,6 +4756,41 @@ fn fixmateinformation_can_write_unsorted_output() {
     assert!(
         fixed.contains("pair1\t99\tchr1\t10\t60\t4M\t=\t30\t24\tACGT\tFFFF\tMC:Z:4M\tMQ:i:60\n")
     );
+}
+
+#[test]
+fn fixmateinformation_requires_upstream_picard_for_coordinate_input_without_assume_sorted() {
+    let tempdir = tempfile::tempdir().expect("tempdir exists");
+    let input = tempdir.path().join("input.sam");
+    let output = tempdir.path().join("fixed.sam");
+    fs::write(
+        &input,
+        concat!(
+            "@HD\tVN:1.6\tSO:coordinate\n",
+            "@SQ\tSN:chr1\tLN:1000\n",
+            "pair-b\t99\tchr1\t10\t60\t4M\t*\t0\t0\tACGT\tFFFF\n",
+            "pair-a\t99\tchr1\t20\t60\t4M\t*\t0\t0\tAAAA\tFFFF\n",
+            "pair-b\t147\tchr1\t30\t60\t4M\t*\t0\t0\tTGCA\tFFFF\n",
+            "pair-a\t147\tchr1\t40\t60\t4M\t*\t0\t0\tTTTT\tFFFF\n",
+        ),
+    )
+    .expect("input fixture is written");
+
+    Command::cargo_bin("picard")
+        .expect("binary exists")
+        .env("TURBO_PICARD_DISABLE_AUTO_FALLBACK", "1")
+        .args([
+            "FixMateInformation",
+            &format!("I={}", input.display()),
+            &format!("O={}", output.display()),
+            "VALIDATION_STRINGENCY=SILENT",
+            "QUIET=true",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "FixMateInformation non-queryname input should use upstream Picard",
+        ));
 }
 
 #[test]
@@ -5033,11 +5452,8 @@ fn setnmmdanduqtags_computes_reference_tags() {
         .success();
 
     let tagged = fs::read_to_string(output).expect("tagged SAM exists");
-    assert!(
-        tagged.contains(
-            "read1\t0\tchr1\t1\t60\t4M\t*\t0\t0\tACGA\tFFFF\tMD:Z:3T0\tNM:i:1\tUQ:i:37\n"
-        )
-    );
+    assert!(tagged
+        .contains("read1\t0\tchr1\t1\t60\t4M\t*\t0\t0\tACGA\tFFFF\tMD:Z:3T0\tNM:i:1\tUQ:i:37\n"));
     assert!(tagged.contains(
         "read2\t0\tchr1\t5\t60\t2M1I2M\t*\t0\t0\tACGTA\tFFFFF\tMD:Z:2G0T0\tNM:i:3\tUQ:i:74\n"
     ));
@@ -5081,11 +5497,8 @@ fn setnmmdanduqtags_set_only_uq_preserves_existing_nm_md() {
         .success();
 
     let tagged = fs::read_to_string(output).expect("tagged SAM exists");
-    assert!(
-        tagged.contains(
-            "read1\t0\tchr1\t1\t60\t4M\t*\t0\t0\tACGA\tFFFF\tMD:Z:keep\tNM:i:99\tUQ:i:37\n"
-        )
-    );
+    assert!(tagged
+        .contains("read1\t0\tchr1\t1\t60\t4M\t*\t0\t0\tACGA\tFFFF\tMD:Z:keep\tNM:i:99\tUQ:i:37\n"));
 }
 
 #[test]
@@ -7551,6 +7964,16 @@ fn fallback_script(dir: &std::path::Path, exit_code: i32) -> std::path::PathBuf 
     permissions.set_mode(0o755);
     fs::set_permissions(&script, permissions).expect("fallback script is executable");
     script
+}
+
+fn read_gzip_to_string(path: std::path::PathBuf) -> String {
+    let file = fs::File::open(path).expect("gzip output exists");
+    let mut decoder = GzDecoder::new(file);
+    let mut text = String::new();
+    decoder
+        .read_to_string(&mut text)
+        .expect("gzip output is readable");
+    text
 }
 
 fn record_names(sam: &str) -> Vec<&str> {

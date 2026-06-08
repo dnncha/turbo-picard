@@ -22,8 +22,12 @@ Why it works well:
 Best first move:
 
 * start with :doc:`first-command`;
-* then use ``packaging/workflows/markduplicates.wdl`` or
-  ``packaging/workflows/sortsam.wdl``.
+* then use ``packaging/workflows/markduplicates.wdl``,
+  ``packaging/workflows/sortsam.wdl``,
+  ``packaging/workflows/samtofastq.wdl``,
+  ``packaging/workflows/fastqtosam.wdl``, or
+  ``packaging/workflows/fixmateinformation.wdl`` depending on the boundary you
+  can swap cleanly.
 
 Nextflow / nf-core modules
 --------------------------
@@ -42,8 +46,11 @@ Why it works well:
 
 Best first move:
 
-* use ``packaging/workflows/markduplicates.nf`` or
-  ``packaging/workflows/sortsam.nf``;
+* use ``packaging/workflows/markduplicates.nf``,
+  ``packaging/workflows/sortsam.nf``,
+  ``packaging/workflows/samtofastq.nf``,
+  ``packaging/workflows/fastqtosam.nf``, or
+  ``packaging/workflows/fixmateinformation.nf``;
 * then read ``packaging/workflows/nextflow-nf-core.md``.
 
 Snakemake and shell pipelines
@@ -64,6 +71,9 @@ Why it works well:
 Best first move:
 
 * start with ``BuildBamIndex`` or ``SortSam`` if the team wants a low-risk first test;
+* move to ``SamToFastq``, ``FastqToSam``, or ``FixMateInformation`` when the
+  real adoption blocker is export, ingest, or mate repair behavior rather than
+  a pure preprocessing hotspot;
 * use ``packaging/workflows/Snakefile`` or the shell examples in :doc:`quickstart`.
 
 Platform teams and shared workflow environments

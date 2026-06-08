@@ -19,7 +19,19 @@ Start with `SamToFastq` if:
 
 - Picard export still sits on a realignment, remap, or handoff path
 - FASTQ generation is adding wall time in a loop you run often
-- you want to compare plain downstream FASTQ outputs directly
+- you want to compare plain downstream FASTQ outputs directly, including per-read-group FASTQs
+
+Start with `FastqToSam` if:
+
+- lane-sharded FASTQ ingest still runs through Picard before alignment
+- the workflow already depends on `_001`, `_002`, `_003` style FASTQ naming
+- you want a clean unmapped BAM or SAM output to compare before moving farther upstream
+
+Start with `FixMateInformation` if:
+
+- mate repair still appears in preprocessing or merge cleanup
+- the workflow already has a queryname-sorted handoff and you mainly want faster mate repair
+- you want a command-level check on BAM/SAM output plus sidecars before changing a shared task
 
 Start with `BuildBamIndex` if:
 

@@ -85,6 +85,7 @@ python3 tools/verify_ci_coverage.py
 python3 tools/verify_parity_docs.py
 python3 tools/verify_readme_links.py
 python3 tools/verify_site_links.py
+python3 tools/verify_workflow_starters.py
 ./tools/verify_package_install.sh
 cargo test --workspace
 ```

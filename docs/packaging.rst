@@ -158,6 +158,7 @@ Then run the release checks:
    python3 tools/verify_pypi_package.py
    python3 tools/verify_readme_links.py
    python3 tools/verify_site_links.py
+   python3 tools/verify_workflow_starters.py
    python3 tools/verify_real_data_evidence.py --release-ready
    python3 tools/verify_bioconda_recipes.py --release-ready
 

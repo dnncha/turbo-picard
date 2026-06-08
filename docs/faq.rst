@@ -11,8 +11,8 @@ How do we know where to start?
 ------------------------------
 
 Start with the command that hurts most and is easy to compare. In practice
-that usually means ``MarkDuplicates``, ``SortSam``, ``SamToFastq``, or
-``BuildBamIndex``.
+that usually means ``MarkDuplicates``, ``SortSam``, ``SamToFastq``,
+``FastqToSam``, ``FixMateInformation``, or ``BuildBamIndex``.
 
 If the right first trial is still unclear, go to :doc:`first-command`.
 

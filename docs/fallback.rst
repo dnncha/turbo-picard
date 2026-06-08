@@ -1,11 +1,30 @@
 Fallback behavior
 =================
 
-By default, unsupported Picard commands fail clearly. This is intentional: a
-pipeline should not silently change behavior.
+``turbo-picard`` targets full Picard 3.4.0 command compatibility. Commands
+without a native fast path, plus unsupported options on accelerated commands,
+are delegated to upstream Picard.
 
-For workflows that already call a ``picard`` command, configure an upstream
-Picard command prefix before testing the shim:
+Auto-discovery
+--------------
+
+When ``TURBO_PICARD_FALLBACK_COMMAND`` is unset, ``turbo-picard`` tries to find
+upstream Picard automatically:
+
+* ``PICARD_JAR`` if set;
+* ``$CONDA_PREFIX/share/picard-*/picard.jar``;
+* an executable ``picard`` on ``PATH`` that is not the turbo-picard shim.
+
+Disable auto-discovery with:
+
+.. code-block:: bash
+
+   export TURBO_PICARD_DISABLE_AUTO_FALLBACK=1
+
+Explicit override
+-----------------
+
+For reproducible environments, set an absolute upstream command prefix:
 
 .. code-block:: bash
 
@@ -22,14 +41,13 @@ What delegates
 
 ``turbo-picard`` delegates:
 
-* unsupported Picard commands;
-* explicitly unsupported native options or formats that the
-  native implementation recognizes as outside its current scope;
-* JVM-style leading options, but only when fallback is configured.
+* every Picard 3.4.0 command without a native fast path;
+* explicitly unsupported native options or formats that the native
+  implementation recognizes as outside its current scope;
+* JVM-style leading options when upstream Picard is available.
 
-Fallback is a compatibility bridge, not proof that a workflow is ready to
-switch. Use it with the command coverage table and the parity guidance in
-:doc:`parity` so unsupported surfaces remain visible while you test.
+Delegation keeps command compatibility. It does not replace the output parity
+evidence in :doc:`parity` for accelerated commands you plan to switch.
 
 What does not delegate
 ----------------------

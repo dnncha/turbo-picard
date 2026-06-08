@@ -41,7 +41,8 @@ Use this first when:
 
 * Picard export still sits on a remap, realignment, or handoff path;
 * FASTQ generation is a repeated source of waiting;
-* you want to compare plain downstream FASTQ outputs directly.
+* you want to compare plain downstream FASTQ outputs directly, including
+  per-read-group output when the workflow splits by ``PU`` or ``ID``.
 
 This is a good choice when export is clearly in the critical path and the team
 already knows how to check the resulting FASTQ files.

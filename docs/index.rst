@@ -11,15 +11,12 @@ It keeps the command shape people already know:
 
    picard MarkDuplicates I=input.bam O=marked.bam M=metrics.txt
 
-Supported commands run natively in Rust. Commands that are not ready fail
-clearly, or can run through upstream Picard when you configure a fallback. The
-project is meant to be adopted one command at a time, with output comparisons,
-benchmark logs, real-data checks, and citation guidance kept close to the claims
-they support.
-
-This is not a blanket claim that every Picard behavior has been rebuilt. Use the
-native pieces where the documented scope and your own representative data agree,
-and keep upstream Picard available for the rest.
+``turbo-picard`` exposes the full Picard 3.4.0 command surface. Accelerated
+commands run natively in Rust; every other Picard command delegates to upstream
+Picard when it is installed or auto-discovered. The project is still meant to
+be adopted one accelerated command at a time, with output comparisons, benchmark
+logs, real-data checks, and citation guidance kept close to the claims they
+support.
 
 The current saved benchmark suite reports ``32/32`` parity-checked commands,
 an ``8.55x`` floor speedup, ``26.74x`` geometric mean speedup, and ``84.46x``
@@ -73,6 +70,12 @@ Start here
 
       See what stays the same, what changes, and when to stay with Picard.
 
+   .. grid-item-card:: turbo-picard vs riker
+      :link: turbo-picard-vs-riker
+      :link-type: doc
+
+      Compare drop-in Picard acceleration against riker's QC-only redesign.
+
    .. grid-item-card:: FAQ
       :link: faq
       :link-type: doc
@@ -102,6 +105,7 @@ Start here
    evaluation-playbook
    use-cases
    picard-vs-turbo-picard
+   turbo-picard-vs-riker
    faq
    adoption
    parity

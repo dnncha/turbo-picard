@@ -9,18 +9,18 @@ Short version
 
 Use ``turbo-picard`` when you want:
 
-* the same Picard-style command shape;
+* the same Picard-style command shape across the full Picard 3.4.0 surface;
 * much faster execution on the commands already accelerated;
 * lower per-task memory pressure when you fan those commands out across many
   samples or shards;
-* a command-by-command rollout instead of a full tool rewrite;
-* fallback to upstream Picard for unsupported surfaces.
+* transparent delegation to upstream Picard for everything else;
+* a command-by-command rollout on the accelerated path instead of a full rewrite.
 
 Stay with upstream Picard when you need:
 
-* commands or options outside the documented native scope;
+* every step to run on the JVM without delegation;
 * exact Picard-rendered chart PDFs rather than metrics text;
-* one immediate full-suite replacement with no mixed-coverage period.
+* no mixed native/delegated execution model at all.
 
 What stays familiar
 -------------------
@@ -40,9 +40,9 @@ What changes
 
 The main differences are deliberate:
 
-* supported commands run natively in Rust instead of on the JVM;
-* unsupported commands fail clearly by default;
-* fallback can delegate unsupported surfaces to upstream Picard;
+* accelerated commands run natively in Rust instead of on the JVM;
+* every other Picard 3.4.0 command delegates to upstream Picard when available;
+* unsupported options on accelerated commands also delegate transparently;
 * the main package keeps ``turbo-picard`` explicit, with the ``picard`` shim
   left optional.
 
@@ -88,6 +88,10 @@ Choose ``turbo-picard`` first when:
 
 * Picard is a real wall-time problem;
 * the command boundary is stable;
+* the hot step is now covered by the native surface, including common
+  ``SamToFastq`` per-read-group export, ``FastqToSam``
+  ``USE_SEQUENTIAL_FASTQS`` ingestion, or queryname-sorted
+  ``FixMateInformation`` runs;
 * the team can review one command-level change at a time.
 
 Choose upstream Picard first when:
