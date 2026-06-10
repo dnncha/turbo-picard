@@ -294,7 +294,7 @@ commands:
     status: partial-native
     parity_script: tools/verify_basic_fixmateinformation_parity.sh
     native_scope: "Mate fixing for queryname-sorted one or more SAM/BAM/CRAM inputs with REFERENCE_SEQUENCE, supplementary mate updates, default output sort-order preservation, optional coordinate sorting/indexing, and MD5 sidecar."
-    fallback_scope: Non-queryname inputs and read groups without exactly two primary records should use upstream Picard.
+    fallback_scope: "Non-queryname inputs and read groups without exactly two primary records should use upstream Picard."
   - name: FixVcfHeader
     status: fallback-only
     native_scope: "Delegated to upstream Picard 3.4.0. turbo-picard runs the native accelerated implementation when one exists; otherwise it transparently forwards to upstream Picard when fallback is configured or auto-discovered."
