@@ -112,6 +112,25 @@ class ParityCompareTests(unittest.TestCase):
             turbo.write_text("ERROR\tMISSING_READ_GROUP\t1\n", encoding="utf-8")
             parity_compare.compare_validate_summary(picard, turbo, "ValidateSamFile")
 
+    def test_compare_merge_multiset_reports_record_difference(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            picard = Path(tempdir) / "picard.sam"
+            turbo = Path(tempdir) / "turbo.sam"
+            picard.write_text(
+                "@HD\tVN:1.6\tSO:coordinate\n"
+                "@SQ\tSN:chr1\tLN:1000\n"
+                "read1\t0\tchr1\t1\t0\t4M\t*\t0\t0\tACGT\tFFFF\tNM:i:0\n",
+                encoding="utf-8",
+            )
+            turbo.write_text(
+                "@HD\tVN:1.6\tSO:coordinate\n"
+                "@SQ\tSN:chr1\tLN:1000\n"
+                "read1\t0\tchr1\t1\t0\t4M\t*\t0\t0\tACGT\tFFFF\tNM:i:1\n",
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(SystemExit, "coordinate-sorted SAM multiset differs"):
+                parity_compare.compare_merge_multiset(picard, turbo, "test")
+
     def test_compare_merge_multiset(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:
             picard = Path(tempdir) / "picard.sam"

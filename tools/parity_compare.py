@@ -8,6 +8,7 @@ import csv
 import importlib.util
 import subprocess
 import sys
+from collections import Counter
 from pathlib import Path
 
 
@@ -177,7 +178,26 @@ def compare_merge_multiset(picard_path: Path, turbo_path: Path, label: str) -> N
     picard_digest = compare_real_data.digest_coordinate_sorted_sam_multiset(picard_path)
     turbo_digest = compare_real_data.digest_coordinate_sorted_sam_multiset(turbo_path)
     if picard_digest != turbo_digest:
+        picard_records = Counter(normalized_sam_records(picard_path, compare_real_data))
+        turbo_records = Counter(normalized_sam_records(turbo_path, compare_real_data))
+        picard_only = next((record for record, count in (picard_records - turbo_records).items() if count), None)
+        turbo_only = next((record for record, count in (turbo_records - picard_records).items() if count), None)
+        if picard_only is not None:
+            print(f"{label} first Picard-only record: {picard_only.decode('utf-8', 'replace')}", file=sys.stderr)
+        if turbo_only is not None:
+            print(f"{label} first turbo-only record: {turbo_only.decode('utf-8', 'replace')}", file=sys.stderr)
         raise SystemExit(f"{label} coordinate-sorted SAM multiset differs from Picard")
+
+
+def normalized_sam_records(path: Path, compare_real_data) -> list[bytes]:
+    records: list[bytes] = []
+    with path.open("rb") as handle:
+        for raw in handle:
+            raw = raw.rstrip(b"\n")
+            if raw.startswith(b"@"):
+                continue
+            records.append(compare_real_data.normalize_sam_record(raw))
+    return records
 
 
 def compare_validate_summary(picard_path: Path, turbo_path: Path, label: str) -> None:
