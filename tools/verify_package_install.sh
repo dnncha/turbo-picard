@@ -845,6 +845,6 @@ shim_recipe_smoke_dir="${tempdir}/shim-recipe-smoke"
 mkdir -p "${shim_recipe_smoke_dir}"
 (
   cd "${shim_recipe_smoke_dir}"
-  PATH="${shim_install_root}/bin:/usr/bin:/bin" \
+  PATH="${shim_install_root}/bin:${install_root}/bin:/usr/bin:/bin" \
     bash "${repo_root}/packaging/bioconda/turbo-picard-picard-shim/run_test.sh"
 )
