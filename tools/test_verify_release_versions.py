@@ -135,6 +135,20 @@ unsupported surfaces, and evidence reports.
 Picard 3.4.0 full Git commit.
 """,
             )
+        write(
+            root,
+            "pyproject.toml",
+            """
+[project]
+name = "turbo-picard"
+version = "0.1.0"
+description = "https://github.com/dnncha/turbo-picard/archive/refs/tags/v0.1.0.tar.gz <github-v0.1.0-source-archive-sha256>"
+
+[tool.maturin]
+manifest-path = "crates/turbo-picard-cli/Cargo.toml"
+bindings = "bin"
+""",
+        )
         return root
 
     def test_accepts_consistent_tree(self) -> None:

@@ -1172,13 +1172,13 @@ class CompareRealDataTests(unittest.TestCase):
             first.write_text(
                 "@HD\tVN:1.6\n"
                 "@SQ\tSN:chr1\tLN:100\n"
-                "read-a\t1024\tchr1\t1\t60\t4M\t=\t10\t100\tACGT\tFFFF\tPG:Z:picard\tDT:Z:LB\n",
+                "read-a\t1024\tchr1\t1\t60\t4M\t=\t10\t100\tACGT\tFFFF\tPG:Z:markdup\tDT:Z:LB\tzz:Z:picard\n",
                 encoding="utf-8",
             )
             second.write_text(
                 "@HD\tVN:1.6\n"
                 "@SQ\tSN:chr1\tLN:100\n"
-                "read-a\t1024\tchr1\t1\t60\t4M\t=\t10\t100\tACGT\tFFFF\tPG:Z:turbo\tDT:Z:LB\n",
+                "read-a\t1024\tchr1\t1\t60\t4M\t=\t10\t100\tACGT\tFFFF\tPG:Z:markdup\tDT:Z:LB\tzz:Z:turbo\n",
                 encoding="utf-8",
             )
 

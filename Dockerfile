@@ -1,5 +1,18 @@
 # Reference container for turbo-picard evaluation and nf-core side-by-side runs.
 FROM rust:1.89-bookworm AS builder
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        clang \
+        cmake \
+        libbz2-dev \
+        libclang-dev \
+        libcurl4-openssl-dev \
+        liblzma-dev \
+        libssl-dev \
+        make \
+        pkg-config \
+        zlib1g-dev \
+    && rm -rf /var/lib/apt/lists/*
 WORKDIR /src
 COPY . .
 RUN cargo build --release -p turbo-picard-cli --bin turbo-picard --bin picard

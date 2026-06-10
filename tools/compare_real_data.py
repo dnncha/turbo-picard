@@ -1738,7 +1738,12 @@ def normalize_sam_record(raw: bytes) -> bytes:
     fields = raw.split(b"\t")
     if len(fields) <= 11:
         return raw
-    return b"\t".join([*fields[:11], *sorted(normalize_sam_tag(tag) for tag in fields[11:])])
+    tags = [
+        normalize_sam_tag(tag)
+        for tag in fields[11:]
+        if not tag.startswith(b"PG:Z:")
+    ]
+    return b"\t".join([*fields[:11], *sorted(tags)])
 
 
 def normalize_sam_tag(tag: bytes) -> bytes:
