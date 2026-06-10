@@ -1115,15 +1115,15 @@ class CompareRealDataTests(unittest.TestCase):
             first = Path(tmp) / "first.sam"
             second = Path(tmp) / "second.sam"
             first.write_text(
-                "@HD\tVN:1.6\n"
+                "@HD\tVN:1.6\tSO:coordinate\n"
                 "@PG\tID:picard\n"
-                "read-a\t0\tchr1\t1\t60\t4M\t*\t0\t0\tACGT\tFFFF\n",
+                "read-a\t0\tchr1\t1\t60\t4M\t*\t0\t0\tACGT\tFFFF\tPG:Z:picard\n",
                 encoding="utf-8",
             )
             second.write_text(
-                "@HD\tVN:1.6\n"
+                "@HD\tVN:1.5\tSO:coordinate\n"
                 "@PG\tID:turbo\n"
-                "read-a\t0\tchr1\t1\t60\t4M\t*\t0\t0\tACGT\tFFFF\n",
+                "read-a\t0\tchr1\t1\t60\t4M\t*\t0\t0\tACGT\tFFFF\tPG:Z:turbo\n",
                 encoding="utf-8",
             )
             self.assertEqual(

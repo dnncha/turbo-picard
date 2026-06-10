@@ -72,9 +72,18 @@ class ParityCompareTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tempdir:
             picard = Path(tempdir) / "picard.sam"
             turbo = Path(tempdir) / "turbo.sam"
-            body = "@HD\tVN:1.6\nread1\t0\tchr1\t1\t0\t4M\t*\t0\t0\tACGT\tFFFF\n"
-            picard.write_text(body, encoding="utf-8")
-            turbo.write_text(body, encoding="utf-8")
+            picard.write_text(
+                "@HD\tVN:1.6\tSO:coordinate\n"
+                "@PG\tID:picard\n"
+                "read1\t0\tchr1\t1\t0\t4M\t*\t0\t0\tACGT\tFFFF\tPG:Z:picard\n",
+                encoding="utf-8",
+            )
+            turbo.write_text(
+                "@HD\tVN:1.5\tSO:coordinate\n"
+                "@PG\tID:turbo\n"
+                "read1\t0\tchr1\t1\t0\t4M\t*\t0\t0\tACGT\tFFFF\tPG:Z:turbo\n",
+                encoding="utf-8",
+            )
             parity_compare.compare_stable_sam_lines(picard, turbo, "test")
 
     def test_compare_stable_sam_lines_with_sorted_tags(self) -> None:

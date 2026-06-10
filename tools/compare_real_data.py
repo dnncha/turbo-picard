@@ -1764,9 +1764,20 @@ def digest_stable_sam(path: Path) -> str:
             stripped = raw.strip()
             if not stripped or stripped.startswith(b"@PG"):
                 continue
+            if stripped.startswith(b"@"):
+                stripped = normalize_stable_sam_header(stripped)
+            else:
+                stripped = normalize_sam_record(stripped)
             digest.update(stripped)
             digest.update(b"\n")
     return digest.hexdigest()
+
+
+def normalize_stable_sam_header(row: bytes) -> bytes:
+    fields = row.split(b"\t")
+    if not fields or fields[0] != b"@HD":
+        return row
+    return b"\t".join([fields[0], *(field for field in fields[1:] if not field.startswith(b"VN:"))])
 
 
 def digest_stable_text(path: Path) -> str:

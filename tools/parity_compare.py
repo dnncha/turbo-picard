@@ -108,13 +108,21 @@ def compare_clean_sam_fields(picard_path: Path, turbo_path: Path, label: str) ->
 
 
 def compare_stable_sam_lines(picard_path: Path, turbo_path: Path, label: str) -> None:
-    def stable_lines(path: Path) -> list[str]:
-        with path.open(encoding="utf-8") as handle:
-            return [
-                line.rstrip("\n")
-                for line in handle
-                if line.strip() and not line.startswith("@PG")
-            ]
+    compare_real_data = _compare_real_data_module()
+
+    def stable_lines(path: Path) -> list[bytes]:
+        lines = []
+        with path.open("rb") as handle:
+            for raw in handle:
+                line = raw.rstrip(b"\n")
+                if not line.strip() or line.startswith(b"@PG"):
+                    continue
+                if line.startswith(b"@"):
+                    line = compare_real_data.normalize_stable_sam_header(line)
+                else:
+                    line = compare_real_data.normalize_sam_record(line)
+                lines.append(line)
+        return lines
 
     if stable_lines(picard_path) != stable_lines(turbo_path):
         raise SystemExit(f"{label} stable SAM output differs from Picard")
