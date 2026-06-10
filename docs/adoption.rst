@@ -279,6 +279,9 @@ CollectQualityYieldMetrics, MarkDuplicates, RevertSam, SamToFastq, SortSam,
 ValidateSamFile, ViewSam somewhere in pinned release evidence. It also requires
 enough input data that the check cannot pass on one tiny fixture alone.
 
+Run it beside Picard first. For each workflow, compare turbo-picard and Picard
+outputs on representative inputs before changing production defaults.
+
 GATK-style preprocessing
 ------------------------
 
