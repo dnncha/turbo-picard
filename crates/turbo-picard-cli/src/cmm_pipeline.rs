@@ -1,7 +1,7 @@
-use crossbeam_channel::{bounded, Receiver, Sender};
+use crossbeam_channel::{Receiver, Sender, bounded};
 use rust_htslib::bam::{self, Read};
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::thread::{self, JoinHandle};
 
 /// Per-collector fast reject gates for a single BAM record.
@@ -41,9 +41,21 @@ impl CmmRecordGates {
                 && !supplementary
                 && record.is_last_in_template()
                 && record.insert_size() != 0,
-            base_distribution: !super::skip_quality_metric_record(record, aligned_reads_only, pf_reads_only),
-            quality_distribution: !super::skip_quality_metric_record(record, aligned_reads_only, pf_reads_only),
-            mean_quality: !super::skip_quality_metric_record(record, aligned_reads_only, pf_reads_only),
+            base_distribution: !super::skip_quality_metric_record(
+                record,
+                aligned_reads_only,
+                pf_reads_only,
+            ),
+            quality_distribution: !super::skip_quality_metric_record(
+                record,
+                aligned_reads_only,
+                pf_reads_only,
+            ),
+            mean_quality: !super::skip_quality_metric_record(
+                record,
+                aligned_reads_only,
+                pf_reads_only,
+            ),
             quality_yield: (!secondary || include_secondary_yield)
                 && (!supplementary || include_supplemental_yield),
             gc_bias: !secondary && !supplementary && !unmapped,

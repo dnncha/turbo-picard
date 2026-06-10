@@ -1,5 +1,5 @@
 # Reference container for turbo-picard evaluation and nf-core side-by-side runs.
-FROM rust:1.85-bookworm AS builder
+FROM rust:1.89-bookworm AS builder
 WORKDIR /src
 COPY . .
 RUN cargo build --release -p turbo-picard-cli --bin turbo-picard --bin picard

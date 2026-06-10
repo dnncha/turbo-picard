@@ -104,12 +104,15 @@ fn unsupported_command_delegates_to_configured_fallback() {
         fallback.display().to_string(),
     )
     .env("TURBO_PICARD_FALLBACK_LOG", log.display().to_string())
-    .args(["CollectHsMetrics", "I=in.bam", "O=metrics.txt"])
+    .args(["EstimateLibraryComplexity", "I=in.bam", "O=metrics.txt"])
     .assert()
     .code(17);
 
     let fallback_args = fs::read_to_string(log).expect("fallback log exists");
-    assert_eq!(fallback_args, "CollectHsMetrics\nI=in.bam\nO=metrics.txt\n");
+    assert_eq!(
+        fallback_args,
+        "EstimateLibraryComplexity\nI=in.bam\nO=metrics.txt\n"
+    );
 }
 
 #[test]
@@ -1687,12 +1690,16 @@ fn fastqtosam_writes_unmapped_paired_sam_with_read_group() {
     let output = tempdir.path().join("unmapped.sam");
     fs::write(
         &r1,
-        concat!("@read1\n", "ACGT\n", "+\n", "FFFF\n", "@read2\n", "TGCA\n", "+\n", "EEEE\n",),
+        concat!(
+            "@read1\n", "ACGT\n", "+\n", "FFFF\n", "@read2\n", "TGCA\n", "+\n", "EEEE\n",
+        ),
     )
     .expect("r1 fixture is written");
     fs::write(
         &r2,
-        concat!("@read1\n", "TTTT\n", "+\n", "IIII\n", "@read2\n", "CCCC\n", "+\n", "HHHH\n",),
+        concat!(
+            "@read1\n", "TTTT\n", "+\n", "IIII\n", "@read2\n", "CCCC\n", "+\n", "HHHH\n",
+        ),
     )
     .expect("r2 fixture is written");
 
@@ -1937,12 +1944,16 @@ fn fastqtosam_auto_detects_standard_and_illumina_quality_offsets() {
         .assert()
         .success();
 
-    assert!(fs::read_to_string(&standard_output)
-        .expect("standard output exists")
-        .contains("read1\t4\t*\t0\t0\t*\t*\t0\t0\tACGT\t''''\tRG:Z:A\n"));
-    assert!(fs::read_to_string(&illumina_output)
-        .expect("illumina output exists")
-        .contains("read1\t4\t*\t0\t0\t*\t*\t0\t0\tACGT\tCCCC\tRG:Z:A\n"));
+    assert!(
+        fs::read_to_string(&standard_output)
+            .expect("standard output exists")
+            .contains("read1\t4\t*\t0\t0\t*\t*\t0\t0\tACGT\t''''\tRG:Z:A\n")
+    );
+    assert!(
+        fs::read_to_string(&illumina_output)
+            .expect("illumina output exists")
+            .contains("read1\t4\t*\t0\t0\t*\t*\t0\t0\tACGT\tCCCC\tRG:Z:A\n")
+    );
 }
 
 #[test]
@@ -1966,9 +1977,11 @@ fn fastqtosam_accepts_solexa_quality_format() {
         .assert()
         .success();
 
-    assert!(fs::read_to_string(&output)
-        .expect("solexa output exists")
-        .contains("read1\t4\t*\t0\t0\t*\t*\t0\t0\tACGT\t\"$+5\tRG:Z:A\n"));
+    assert!(
+        fs::read_to_string(&output)
+            .expect("solexa output exists")
+            .contains("read1\t4\t*\t0\t0\t*\t*\t0\t0\tACGT\t\"$+5\tRG:Z:A\n")
+    );
 }
 
 #[test]
@@ -2082,9 +2095,11 @@ fn fastqtosam_honors_empty_line_and_empty_fastq_options() {
         .assert()
         .success();
 
-    assert!(fs::read_to_string(&empty_output)
-        .expect("empty SAM output exists")
-        .contains("@HD\tVN:1.6\tSO:queryname\n"));
+    assert!(
+        fs::read_to_string(&empty_output)
+            .expect("empty SAM output exists")
+            .contains("@HD\tVN:1.6\tSO:queryname\n")
+    );
 }
 
 #[test]
@@ -2161,7 +2176,9 @@ fn addorreplacereadgroups_rewrites_header_and_record_tags() {
 
     let output_sam = fs::read_to_string(&output).expect("output SAM exists");
     assert!(!output_sam.contains("ID:old"));
-    assert!(output_sam.contains("@RG\tID:new\tLB:library-a\tPL:ILLUMINA\tSM:sample-a\tPU:unit-a\n"));
+    assert!(
+        output_sam.contains("@RG\tID:new\tLB:library-a\tPL:ILLUMINA\tSM:sample-a\tPU:unit-a\n")
+    );
     assert!(output_sam.contains("read-a\t0\tchr1\t10\t60\t4M\t*\t0\t0\tACGT\tFFFF\tRG:Z:new"));
 }
 
@@ -2286,8 +2303,10 @@ fn collectalignmentsummarymetrics_writes_unpaired_metrics() {
     assert!(metrics.contains(
         "UNPAIRED\t3\t3\t1\t0\t2\t0.666667\t8\t2\t8\t8\t0\t0\t0\t0\t4\t0\t4\t0\t4\t4\t2.666667\t0\t0\t0\t0\t0\t0.5\t0\t0\t0\t0\t0\t\t\t\n"
     ));
-    assert!(metrics
-        .contains("READ_LENGTH\tUNPAIRED_TOTAL_LENGTH_COUNT\tUNPAIRED_ALIGNED_LENGTH_COUNT\n"));
+    assert!(
+        metrics
+            .contains("READ_LENGTH\tUNPAIRED_TOTAL_LENGTH_COUNT\tUNPAIRED_ALIGNED_LENGTH_COUNT\n")
+    );
     assert!(metrics.contains("0\t0\t1\n"));
     assert!(metrics.contains("4\t3\t2\n"));
 }
@@ -3117,10 +3136,10 @@ fn collectwgsmetrics_writes_coverage_metrics() {
     assert!(metrics.contains(
         "12\t1\t0.603023\t1\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0.833333\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\t1\t?\t?\t0.458333\t3\n"
     ));
-    assert!(metrics.contains("coverage\thigh_quality_coverage_count\n"));
-    assert!(metrics.contains("0\t2\n"));
-    assert!(metrics.contains("1\t8\n"));
-    assert!(metrics.contains("2\t2\n"));
+    assert!(metrics.contains("coverage\thigh_quality_coverage_count"));
+    assert!(metrics.contains("0\t2\t0\n"));
+    assert!(metrics.contains("1\t8\t0\n"));
+    assert!(metrics.contains("2\t2\t0\n"));
 }
 
 #[test]
@@ -3161,7 +3180,7 @@ fn collectwgsmetrics_accepts_common_temp_options() {
 
     let metrics = fs::read_to_string(&output).expect("metrics output exists");
     assert!(metrics.contains("## METRICS CLASS\tpicard.analysis.WgsMetrics\n"));
-    assert!(metrics.contains("coverage\thigh_quality_coverage_count\n"));
+    assert!(metrics.contains("coverage\thigh_quality_coverage_count"));
 }
 
 #[test]
@@ -3201,9 +3220,9 @@ fn collectwgsmetrics_honors_stop_after() {
 
     let metrics = fs::read_to_string(&output).expect("metrics output exists");
     assert!(metrics.contains("1\t1\t?\t0\t0"));
-    assert!(metrics.contains("coverage\thigh_quality_coverage_count\n"));
-    assert!(metrics.contains("0\t0\n"));
-    assert!(metrics.contains("1\t1\n"));
+    assert!(metrics.contains("coverage\thigh_quality_coverage_count"));
+    assert!(metrics.contains("0\t0\t0\n"));
+    assert!(metrics.contains("1\t1\t0\n"));
 }
 
 #[test]
@@ -3256,8 +3275,8 @@ fn collectwgsmetrics_honors_interval_list_territory() {
         "4\t1.5\t0.57735\t1.5\t0.5\t0\t0\t0\t0\t0\t0\t0\t0\t1\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\t1.5\t1.5\t1.5\t0.625\t4\n"
     ));
     assert!(metrics.contains("0\t0\n"));
-    assert!(metrics.contains("1\t2\n"));
-    assert!(metrics.contains("2\t2\n"));
+    assert!(metrics.contains("1\t2\t0\n"));
+    assert!(metrics.contains("2\t2\t0\n"));
 }
 
 #[test]
@@ -3308,10 +3327,10 @@ fn collectwgsmetrics_applies_stop_after_to_interval_territory() {
 
     let metrics = fs::read_to_string(&output).expect("metrics output exists");
     assert!(metrics.contains("2\t2\t0\t2\t0"));
-    assert!(metrics.contains("coverage\thigh_quality_coverage_count\n"));
+    assert!(metrics.contains("coverage\thigh_quality_coverage_count"));
     assert!(metrics.contains("0\t0\n"));
-    assert!(metrics.contains("1\t0\n"));
-    assert!(metrics.contains("2\t2\n"));
+    assert!(metrics.contains("1\t0\t0\n"));
+    assert!(metrics.contains("2\t2\t0\n"));
 }
 
 #[test]
@@ -3944,9 +3963,11 @@ pair2\t147\tchr1\t130\t60\t4M\t=\t100\t-34\tTTTT\tFFFF
     assert!(output.with_extension("read_length_histogram.pdf").exists());
     assert!(output.with_extension("insert_size_metrics").exists());
     assert!(output.with_extension("insert_size_histogram.pdf").exists());
-    assert!(output
-        .with_extension("quality_distribution_metrics")
-        .exists());
+    assert!(
+        output
+            .with_extension("quality_distribution_metrics")
+            .exists()
+    );
     assert!(output.with_extension("quality_distribution.pdf").exists());
     assert!(output.with_extension("quality_by_cycle_metrics").exists());
     assert!(output.with_extension("quality_by_cycle.pdf").exists());
@@ -4111,19 +4132,25 @@ pair1\t147\tchr1\t30\t60\t4M\t=\t10\t-24\tTGCA\tFFFF
 
     assert!(output.with_extension("alignment_summary_metrics").exists());
     assert!(output.with_extension("read_length_histogram.pdf").exists());
-    assert!(output
-        .with_extension("base_distribution_by_cycle_metrics")
-        .exists());
-    assert!(output
-        .with_extension("base_distribution_by_cycle.pdf")
-        .exists());
+    assert!(
+        output
+            .with_extension("base_distribution_by_cycle_metrics")
+            .exists()
+    );
+    assert!(
+        output
+            .with_extension("base_distribution_by_cycle.pdf")
+            .exists()
+    );
     assert!(output.with_extension("insert_size_metrics").exists());
     assert!(output.with_extension("insert_size_histogram.pdf").exists());
     assert!(output.with_extension("quality_by_cycle_metrics").exists());
     assert!(output.with_extension("quality_by_cycle.pdf").exists());
-    assert!(output
-        .with_extension("quality_distribution_metrics")
-        .exists());
+    assert!(
+        output
+            .with_extension("quality_distribution_metrics")
+            .exists()
+    );
     assert!(output.with_extension("quality_distribution.pdf").exists());
     assert!(!output.with_extension("quality_yield_metrics").exists());
 }
@@ -5452,8 +5479,11 @@ fn setnmmdanduqtags_computes_reference_tags() {
         .success();
 
     let tagged = fs::read_to_string(output).expect("tagged SAM exists");
-    assert!(tagged
-        .contains("read1\t0\tchr1\t1\t60\t4M\t*\t0\t0\tACGA\tFFFF\tMD:Z:3T0\tNM:i:1\tUQ:i:37\n"));
+    assert!(
+        tagged.contains(
+            "read1\t0\tchr1\t1\t60\t4M\t*\t0\t0\tACGA\tFFFF\tMD:Z:3T0\tNM:i:1\tUQ:i:37\n"
+        )
+    );
     assert!(tagged.contains(
         "read2\t0\tchr1\t5\t60\t2M1I2M\t*\t0\t0\tACGTA\tFFFFF\tMD:Z:2G0T0\tNM:i:3\tUQ:i:74\n"
     ));
@@ -5497,8 +5527,11 @@ fn setnmmdanduqtags_set_only_uq_preserves_existing_nm_md() {
         .success();
 
     let tagged = fs::read_to_string(output).expect("tagged SAM exists");
-    assert!(tagged
-        .contains("read1\t0\tchr1\t1\t60\t4M\t*\t0\t0\tACGA\tFFFF\tMD:Z:keep\tNM:i:99\tUQ:i:37\n"));
+    assert!(
+        tagged.contains(
+            "read1\t0\tchr1\t1\t60\t4M\t*\t0\t0\tACGA\tFFFF\tMD:Z:keep\tNM:i:99\tUQ:i:37\n"
+        )
+    );
 }
 
 #[test]

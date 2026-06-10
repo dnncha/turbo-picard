@@ -3,18 +3,20 @@
 mod cmm_pipeline;
 mod hs_metrics;
 
-const PICARD_REFERENCE_COMMANDS: &str =
-    include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../docs/picard-3.4.0-commands.txt"));
+const PICARD_REFERENCE_COMMANDS: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../docs/picard-3.4.0-commands.txt"
+));
 
+use flate2::Compression;
 use flate2::read::GzDecoder;
 use flate2::write::GzEncoder;
-use flate2::Compression;
 use rust_htslib::bam::header::HeaderRecord;
 use rust_htslib::bam::index;
 use rust_htslib::bam::record::{Aux, Cigar, CigarString};
 use rust_htslib::bam::{self, Read};
-use std::cmp::Ordering;
 use rustc_hash::{FxBuildHasher, FxHashMap};
+use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet, BinaryHeap, HashMap, HashSet};
 use std::env;
 use std::fs;
@@ -2445,9 +2447,7 @@ fn run_fastqtosam(args: &[String]) -> Result<(), String> {
     let compression_level = optional_u32(&args, "COMPRESSION_LEVEL")?.unwrap_or(5);
     let create_md5_file = optional_bool(&args, "CREATE_MD5_FILE")?.unwrap_or(false);
     let output_format = output_format_for(&output, "FastqToSam")?;
-    if matches!(output_format, bam::Format::Sam)
-        && quality_format == FastqQualityFormat::Standard
-    {
+    if matches!(output_format, bam::Format::Sam) && quality_format == FastqQualityFormat::Standard {
         run_fastqtosam_standard_sam(
             &fastq_paths,
             fastq2_paths.as_deref(),
@@ -2869,8 +2869,7 @@ fn run_collectgcbiasmetrics(args: &[String]) -> Result<(), String> {
         .iter()
         .map(|name| String::from_utf8_lossy(name).to_string())
         .collect::<Vec<_>>();
-    let mut metrics =
-        GcBiasMetricsSummary::new(&reference, window_size, also_ignore_duplicates)?;
+    let mut metrics = GcBiasMetricsSummary::new(&reference, window_size, also_ignore_duplicates)?;
     for record in limited_records(&mut reader, stop_after) {
         let record = record.map_err(|error| error.to_string())?;
         metrics.observe(&record, &target_names, window_size)?;
@@ -2896,11 +2895,9 @@ fn run_collecthsmetrics(args: &[String]) -> Result<(), String> {
     let input = required_scalar_for(&args, "INPUT", "CollectHsMetrics")?;
     let output = required_scalar_for(&args, "OUTPUT", "CollectHsMetrics")?;
     let bait_intervals_path = required_scalar_for(&args, "BAIT_INTERVALS", "CollectHsMetrics")?;
-    let target_intervals_path =
-        required_scalar_for(&args, "TARGET_INTERVALS", "CollectHsMetrics")?;
+    let target_intervals_path = required_scalar_for(&args, "TARGET_INTERVALS", "CollectHsMetrics")?;
     let reference = required_scalar_for(&args, "REFERENCE_SEQUENCE", "CollectHsMetrics")?;
-    let clip_overlapping_reads =
-        optional_bool(&args, "CLIP_OVERLAPPING_READS")?.unwrap_or(false);
+    let clip_overlapping_reads = optional_bool(&args, "CLIP_OVERLAPPING_READS")?.unwrap_or(false);
     let near_distance = optional_u32(&args, "NEAR_DISTANCE")?.unwrap_or(250);
 
     let references = read_fasta_sequences(&reference, true)?;
@@ -3026,12 +3023,8 @@ fn run_collectmultiplemetrics_single_pass(
                 let accumulation = insert_size_accumulation_level(args)?;
                 let include_duplicates = optional_bool(args, "INCLUDE_DUPLICATES")?
                     .or_else(|| {
-                        collectmultiplemetrics_extra_argument(
-                            args,
-                            program,
-                            "INCLUDE_DUPLICATES",
-                        )
-                        .and_then(|value| value.parse().ok())
+                        collectmultiplemetrics_extra_argument(args, program, "INCLUDE_DUPLICATES")
+                            .and_then(|value| value.parse().ok())
                     })
                     .unwrap_or(false);
                 let minimum_pct = optional_f64(args, "MINIMUM_PCT")?
@@ -3073,12 +3066,8 @@ fn run_collectmultiplemetrics_single_pass(
             "QualityScoreDistribution" => {
                 let aligned_reads_only = optional_bool(args, "ALIGNED_READS_ONLY")?
                     .or_else(|| {
-                        collectmultiplemetrics_extra_argument(
-                            args,
-                            program,
-                            "ALIGNED_READS_ONLY",
-                        )
-                        .and_then(|value| value.parse().ok())
+                        collectmultiplemetrics_extra_argument(args, program, "ALIGNED_READS_ONLY")
+                            .and_then(|value| value.parse().ok())
                     })
                     .unwrap_or(false);
                 let pf_reads_only = optional_bool(args, "PF_READS_ONLY")?
@@ -3109,12 +3098,8 @@ fn run_collectmultiplemetrics_single_pass(
             "MeanQualityByCycle" => {
                 let aligned_reads_only = optional_bool(args, "ALIGNED_READS_ONLY")?
                     .or_else(|| {
-                        collectmultiplemetrics_extra_argument(
-                            args,
-                            program,
-                            "ALIGNED_READS_ONLY",
-                        )
-                        .and_then(|value| value.parse().ok())
+                        collectmultiplemetrics_extra_argument(args, program, "ALIGNED_READS_ONLY")
+                            .and_then(|value| value.parse().ok())
                     })
                     .unwrap_or(false);
                 let pf_reads_only = optional_bool(args, "PF_READS_ONLY")?
@@ -3172,12 +3157,8 @@ fn run_collectmultiplemetrics_single_pass(
                 let reference = reference.as_ref().expect("reference checked above");
                 let window_size = optional_u32(args, "SCAN_WINDOW_SIZE")?
                     .or_else(|| {
-                        collectmultiplemetrics_extra_argument(
-                            args,
-                            program,
-                            "SCAN_WINDOW_SIZE",
-                        )
-                        .and_then(|value| value.parse().ok())
+                        collectmultiplemetrics_extra_argument(args, program, "SCAN_WINDOW_SIZE")
+                            .and_then(|value| value.parse().ok())
                     })
                     .unwrap_or(100) as usize;
                 let minimum_genome_fraction = optional_f64(args, "MINIMUM_GENOME_FRACTION")?
@@ -3243,8 +3224,8 @@ fn run_collectmultiplemetrics_single_pass(
         }
     }
 
-    let mut reader =
-        open_bam_reader_with_reference(input, reference.as_deref()).map_err(|error| error.to_string())?;
+    let mut reader = open_bam_reader_with_reference(input, reference.as_deref())
+        .map_err(|error| error.to_string())?;
     let header_text = String::from_utf8_lossy(reader.header().as_bytes());
     let read_groups = insert_size_read_groups_from_header(&header_text);
     let target_names = reader
@@ -3338,9 +3319,9 @@ fn run_collectmultiplemetrics_single_pass(
             observe_record(&record)?;
         }
     } else {
-        let alignment_worker = alignment.take().map(|(metrics, path)| {
-            (Arc::new(Mutex::new(metrics)), path)
-        });
+        let alignment_worker = alignment
+            .take()
+            .map(|(metrics, path)| (Arc::new(Mutex::new(metrics)), path));
         let insert_size_worker = insert_size.take().map(
             |(metrics, path, chart_path, include_duplicates, minimum_pct, deviations)| {
                 (
@@ -3353,9 +3334,9 @@ fn run_collectmultiplemetrics_single_pass(
                 )
             },
         );
-        let base_distribution_worker = base_distribution.take().map(
-            |(metrics, path, chart_path)| (Arc::new(Mutex::new(metrics)), path, chart_path),
-        );
+        let base_distribution_worker = base_distribution
+            .take()
+            .map(|(metrics, path, chart_path)| (Arc::new(Mutex::new(metrics)), path, chart_path));
         let quality_distribution_worker = quality_distribution.take().map(
             |(metrics, path, chart_path, aligned_reads_only, pf_reads_only, include_no_calls)| {
                 (
@@ -3391,7 +3372,14 @@ fn run_collectmultiplemetrics_single_pass(
             },
         );
         let gc_bias_worker = gc_bias.take().map(
-            |(metrics, detail_path, summary_path, chart_path, window_size, minimum_genome_fraction)| {
+            |(
+                metrics,
+                detail_path,
+                summary_path,
+                chart_path,
+                window_size,
+                minimum_genome_fraction,
+            )| {
                 (
                     Arc::new(Mutex::new(metrics)),
                     detail_path,
@@ -3491,12 +3479,7 @@ fn run_collectmultiplemetrics_single_pass(
                         continue;
                     }
                     let record = &entry.record;
-                    metrics.observe(
-                        record,
-                        aligned_reads_only,
-                        pf_reads_only,
-                        include_no_calls,
-                    );
+                    metrics.observe(record, aligned_reads_only, pf_reads_only, include_no_calls);
                 }
             }));
         }
@@ -3515,13 +3498,8 @@ fn run_collectmultiplemetrics_single_pass(
                 }
             }));
         }
-        if let Some((
-            worker,
-            _,
-            use_original_qualities,
-            include_secondary,
-            include_supplemental,
-        )) = &quality_yield_worker
+        if let Some((worker, _, use_original_qualities, include_secondary, include_supplemental)) =
+            &quality_yield_worker
         {
             let worker = Arc::clone(worker);
             let use_original_qualities = *use_original_qualities;
@@ -3554,7 +3532,8 @@ fn run_collectmultiplemetrics_single_pass(
                         continue;
                     }
                     let record = &entry.record;
-                    if let Err(error) = metrics.observe(record, target_names.as_slice(), window_size)
+                    if let Err(error) =
+                        metrics.observe(record, target_names.as_slice(), window_size)
                     {
                         panic!("CollectGcBiasMetrics failed: {error}");
                     }
@@ -3682,7 +3661,14 @@ fn run_collectmultiplemetrics_single_pass(
             },
         );
         gc_bias = gc_bias_worker.map(
-            |(worker, detail_path, summary_path, chart_path, window_size, minimum_genome_fraction)| {
+            |(
+                worker,
+                detail_path,
+                summary_path,
+                chart_path,
+                window_size,
+                minimum_genome_fraction,
+            )| {
                 (
                     Arc::try_unwrap(worker)
                         .expect("gc-bias collector thread still running")
@@ -3736,11 +3722,8 @@ fn run_collectmultiplemetrics_single_pass(
     if let Some((metrics, output_path, chart_path, _include_duplicates, minimum_pct, deviations)) =
         insert_size
     {
-        fs::write(
-            output_path,
-            metrics.to_picard_text(minimum_pct, deviations),
-        )
-        .map_err(|error| error.to_string())?;
+        fs::write(output_path, metrics.to_picard_text(minimum_pct, deviations))
+            .map_err(|error| error.to_string())?;
         write_summary_chart_pdf(&chart_path, "CollectInsertSizeMetrics")?;
     }
     if let Some((metrics, output_path, chart_path)) = base_distribution {
@@ -3765,7 +3748,7 @@ fn run_collectmultiplemetrics_single_pass(
         chart_path,
         window_size,
         minimum_genome_fraction,
-        ..
+        ..,
     )) = gc_bias
     {
         fs::write(
@@ -4079,10 +4062,10 @@ fn run_collectwgsmetrics(args: &[String]) -> Result<(), String> {
     let use_fast_algorithm = optional_bool(&args, "USE_FAST_ALGORITHM")?
         .or(env_bool("TURBO_PICARD_WGS_FAST_DEFAULT")?)
         .unwrap_or(false);
-    let sample_size = optional_u32(&args, "SAMPLE_SIZE")?
-        .unwrap_or(if use_fast_algorithm { 0 } else { 10_000 });
-    let include_bq_histogram = optional_bool(&args, "INCLUDE_BQ_HISTOGRAM")?
-        .unwrap_or(!use_fast_algorithm);
+    let sample_size =
+        optional_u32(&args, "SAMPLE_SIZE")?.unwrap_or(if use_fast_algorithm { 0 } else { 10_000 });
+    let include_bq_histogram =
+        optional_bool(&args, "INCLUDE_BQ_HISTOGRAM")?.unwrap_or(!use_fast_algorithm);
 
     let reference_contigs = read_reference_contigs_for_wgs(&reference)?;
     let interval_masks = collectwgs_interval_masks(args.get("INTERVALS"), &reference_contigs)?;
@@ -4097,11 +4080,7 @@ fn run_collectwgsmetrics(args: &[String]) -> Result<(), String> {
         .iter()
         .map(|name| String::from_utf8_lossy(name).to_string())
         .collect::<Vec<_>>();
-    let stop_after_u32 = if stop_after < 0 {
-        0
-    } else {
-        stop_after as u32
-    };
+    let stop_after_u32 = if stop_after < 0 { 0 } else { stop_after as u32 };
     if hts_io::is_hts_container_input(&input) {
         cmm_pipeline::pipeline_bam_records(reader, stop_after_u32, 8192, |record| {
             summary.observe(
@@ -4185,13 +4164,14 @@ fn run_fixmateinformation(args: &[String]) -> Result<(), String> {
                 .map_err(|error| error.to_string())?;
             if header_sort_order(reader.header()).as_deref() != Some("queryname") {
                 return Err(
-                    "FixMateInformation non-queryname input should use upstream Picard"
-                        .to_string(),
+                    "FixMateInformation non-queryname input should use upstream Picard".to_string(),
                 );
             }
         }
     } else {
-        return Err("FixMateInformation non-queryname input should use upstream Picard".to_string());
+        return Err(
+            "FixMateInformation non-queryname input should use upstream Picard".to_string(),
+        );
     }
     let header = sorted_header_with_group_order(
         reader.header(),
@@ -4831,7 +4811,8 @@ fn reverted_header_from_sam_text(
     let mut header = bam::Header::new();
     let mut saw_hd = false;
     for line in header_lines {
-        if remove_alignment_information && (line.starts_with("@SQ\t") || line.starts_with("@PG\t")) {
+        if remove_alignment_information && (line.starts_with("@SQ\t") || line.starts_with("@PG\t"))
+        {
             continue;
         }
         if line.starts_with("@HD\t") {
@@ -7145,7 +7126,10 @@ fn read_fai_contig_lengths(path: &str) -> Result<Vec<(String, usize)>, String> {
     Ok(contigs)
 }
 
-fn read_fasta_contig_lengths(path: &str, truncate_names: bool) -> Result<Vec<(String, usize)>, String> {
+fn read_fasta_contig_lengths(
+    path: &str,
+    truncate_names: bool,
+) -> Result<Vec<(String, usize)>, String> {
     let text = read_text_or_gzip(path)?;
     let mut contigs = Vec::new();
     let mut current_name: Option<String> = None;
@@ -7264,7 +7248,11 @@ fn load_fasta_contig_sequence_scan(path: &str, contig: &str) -> Result<Vec<u8>, 
     Err(format!("FASTA {path} missing contig {contig}"))
 }
 
-fn load_fasta_contig_sequence_indexed(path: &str, contig: &str, entry: FaiEntry) -> Result<Vec<u8>, String> {
+fn load_fasta_contig_sequence_indexed(
+    path: &str,
+    contig: &str,
+    entry: FaiEntry,
+) -> Result<Vec<u8>, String> {
     let mut file = fs::File::open(path).map_err(|error| error.to_string())?;
     file.seek(SeekFrom::Start(entry.offset))
         .map_err(|error| error.to_string())?;
@@ -7284,11 +7272,7 @@ fn load_fasta_contig_sequence_indexed(path: &str, contig: &str, entry: FaiEntry)
             continue;
         }
         let take = remaining.min(line.len());
-        sequence.extend(
-            line.as_bytes()[..take]
-                .iter()
-                .map(u8::to_ascii_uppercase),
-        );
+        sequence.extend(line.as_bytes()[..take].iter().map(u8::to_ascii_uppercase));
         remaining -= take;
     }
     if sequence.len() != entry.length {
@@ -11073,10 +11057,9 @@ fn wgs_locus_included_at(mask: Option<&[bool]>, index: usize, contig_length: usi
 }
 
 fn wgs_included_loci(contig: &WgsContigMetadata) -> usize {
-    contig
-        .included
-        .as_ref()
-        .map_or(contig.length, |mask| mask.iter().filter(|included| **included).count())
+    contig.included.as_ref().map_or(contig.length, |mask| {
+        mask.iter().filter(|included| **included).count()
+    })
 }
 
 #[derive(Debug)]
@@ -11394,14 +11377,11 @@ impl WgsMetricsSummary {
                         let reference_index = reference_offset + index;
                         if reference_index >= depth_len {
                             return Err(
-                                "CollectWgsMetrics alignment extends beyond reference".to_string(),
+                                "CollectWgsMetrics alignment extends beyond reference".to_string()
                             );
                         }
-                        if !wgs_locus_included_at(
-                            locus_mask.as_deref(),
-                            reference_index,
-                            depth_len,
-                        ) {
+                        if !wgs_locus_included_at(locus_mask.as_deref(), reference_index, depth_len)
+                        {
                             continue;
                         }
                         self.total_aligned_bases += 1;
@@ -11416,9 +11396,10 @@ impl WgsMetricsSummary {
                             .is_none_or(|quality| *quality < minimum_base_quality)
                         {
                             self.excluded_baseq += 1;
-                        } else if overlap_mode.as_ref().is_some_and(|mode| {
-                            mode.is_mate_covered(reference_index)
-                        }) {
+                        } else if overlap_mode
+                            .as_ref()
+                            .is_some_and(|mode| mode.is_mate_covered(reference_index))
+                        {
                             self.excluded_overlap += 1;
                         } else if self.active_depths[reference_index] >= coverage_cap as u16
                             || self.active_depths[reference_index] >= locus_accumulation_cap
@@ -11653,11 +11634,7 @@ fn mad_f64_from_histogram_u64(histogram: &[u64], median: f64) -> f64 {
         .filter(|(_, count)| **count > 0)
         .map(|(depth, count)| ((depth as f64 - median).abs(), *count))
         .collect();
-    deviation_counts.sort_by(|left, right| {
-        left.0
-            .partial_cmp(&right.0)
-            .unwrap_or(Ordering::Equal)
-    });
+    deviation_counts.sort_by(|left, right| left.0.partial_cmp(&right.0).unwrap_or(Ordering::Equal));
     if total_count % 2 == 1 {
         weighted_histogram_value_at_rank(&deviation_counts, total_count / 2)
     } else {
@@ -11773,7 +11750,10 @@ fn exact_quality_called_proportions(
     if iterations == 0 {
         return Vec::new();
     }
-    let total_weight = weighted_qualities.iter().map(|(_, count)| *count).sum::<u64>();
+    let total_weight = weighted_qualities
+        .iter()
+        .map(|(_, count)| *count)
+        .sum::<u64>();
     if total_weight == 0 {
         return vec![0.0; iterations];
     }
@@ -12311,11 +12291,7 @@ struct GcBiasMetricsSummary {
 }
 
 impl GcBiasMetricsSummary {
-    fn new(
-        reference_path: &str,
-        window_size: usize,
-        emit_unique: bool,
-    ) -> Result<Self, String> {
+    fn new(reference_path: &str, window_size: usize, emit_unique: bool) -> Result<Self, String> {
         Ok(Self {
             windows: count_gc_bias_windows(reference_path, window_size)?,
             read_starts: [0; 101],
@@ -17801,10 +17777,7 @@ fn discover_picard_on_path() -> Option<String> {
         if !is_executable_file(&candidate) {
             continue;
         }
-        if current_exe
-            .as_ref()
-            .is_some_and(|exe| exe == &candidate)
-        {
+        if current_exe.as_ref().is_some_and(|exe| exe == &candidate) {
             continue;
         }
         if is_turbo_picard_binary(&candidate) {
@@ -17842,7 +17815,9 @@ fn is_turbo_picard_binary(path: &Path) -> bool {
         .is_some_and(|text| {
             let normalized = text.trim().to_ascii_lowercase();
             normalized.contains("turbo-picard")
-                || normalized.starts_with(&format!("picard {}", env!("CARGO_PKG_VERSION")).to_ascii_lowercase())
+                || normalized.starts_with(
+                    &format!("picard {}", env!("CARGO_PKG_VERSION")).to_ascii_lowercase(),
+                )
         })
 }
 

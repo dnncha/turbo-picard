@@ -87,10 +87,7 @@ pub fn collect_hs_metrics<R: Read>(
     // Scaffold: keep the collector and Picard-shaped output hook, but fail until
     // bait/target territory and on/off-target accounting match Picard.
     let _preview = collector.to_picard_text();
-    Err(
-        "CollectHsMetrics native bait/target read accumulation is not implemented yet"
-            .to_string(),
-    )
+    Err("CollectHsMetrics native bait/target read accumulation is not implemented yet".to_string())
 }
 
 #[cfg(test)]

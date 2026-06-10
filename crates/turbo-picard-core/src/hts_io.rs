@@ -95,9 +95,7 @@ pub fn open_reader_pipelined(
             .set_reference(reference)
             .map_err(|error| error.to_string())?;
     }
-    reader
-        .set_threads(1)
-        .map_err(|error| error.to_string())?;
+    reader.set_threads(1).map_err(|error| error.to_string())?;
     Ok(reader)
 }
 
