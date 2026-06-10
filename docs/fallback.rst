@@ -48,6 +48,10 @@ What delegates
 
 Delegation keeps command compatibility. It does not replace the output parity
 evidence in :doc:`parity` for accelerated commands you plan to switch.
+Treat fallback as a compatibility bridge, not proof that every accelerated
+surface is interchangeable with Picard. Unsupported surfaces remain visible so
+operators can tell when a workflow is using upstream Picard instead of a native
+turbo-picard fast path.
 
 What does not delegate
 ----------------------
