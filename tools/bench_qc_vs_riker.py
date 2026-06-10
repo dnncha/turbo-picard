@@ -2,8 +2,9 @@
 """Three-way QC benchmark: Picard vs turbo-picard vs riker.
 
 Runs overlapping whole-genome and bundle QC profiles on the same BAM and
-writes a TSV plus a short Markdown summary. Riker is optional: when it is not
-installed, the script still benchmarks Picard against turbo-picard.
+writes a TSV plus a short Markdown summary. Riker is required for canonical
+three-way evidence; use --allow-missing-riker for Picard-vs-turbo smoke runs
+when riker is not installed.
 
 Smoke mode uses the pinned GATK NA12878 mitochondrial fixture in this repo.
 For WGS-scale comparisons, point --input-bam at a staged 1000 Genomes BAM and
@@ -591,10 +592,10 @@ def write_outputs(
         )
         if picard_total > 0 and turbo_total > 0:
             lines.append(
-                f"- turbo-picard bundle speedup vs Picard: **{picard_total / turbo_total:.2f}x**"
+                f"- turbo-picard profile speedup vs Picard: **{picard_total / turbo_total:.2f}x**"
             )
         if picard_total > 0 and riker_total > 0:
-            lines.append(f"- riker bundle speedup vs Picard: **{picard_total / riker_total:.2f}x**")
+            lines.append(f"- riker profile speedup vs Picard: **{picard_total / riker_total:.2f}x**")
         if turbo_total > 0 and riker_total > 0:
             lines.append(f"- turbo-picard vs riker: **{riker_total / turbo_total:.2f}x**")
         lines.append("")

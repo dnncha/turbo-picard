@@ -22,25 +22,26 @@ What overlaps
 Both projects accelerate Picard-style sequencing QC metrics. The direct overlap
 today is roughly:
 
-+-------------------------------+-------------------------------+
-| Picard command                | riker command                 |
-+===============================+===============================+
-| ``CollectWgsMetrics``         | ``riker wgs``                 |
-+-------------------------------+-------------------------------+
-| ``CollectAlignmentSummaryMetrics`` | ``riker alignment``    |
-+-------------------------------+-------------------------------+
-| ``CollectInsertSizeMetrics``  | ``riker isize``               |
-+-------------------------------+-------------------------------+
-| ``CollectGcBiasMetrics``      | ``riker gcbias``              |
-+-------------------------------+-------------------------------+
-| ``CollectBaseDistributionByCycle`` | part of ``riker basic`` |
-| ``MeanQualityByCycle``        |                               |
-| ``QualityScoreDistribution``  |                               |
-+-------------------------------+-------------------------------+
-| ``CollectMultipleMetrics``    | ``riker multi``               |
-+-------------------------------+-------------------------------+
-| ``CollectHsMetrics``          | ``riker hybcap``              |
-+-------------------------------+-------------------------------+
+.. list-table::
+   :header-rows: 1
+
+   * - Picard command
+     - riker command
+   * - ``CollectWgsMetrics``
+     - ``riker wgs``
+   * - ``CollectAlignmentSummaryMetrics``
+     - ``riker alignment``
+   * - ``CollectInsertSizeMetrics``
+     - ``riker isize``
+   * - ``CollectGcBiasMetrics``
+     - ``riker gcbias``
+   * - ``CollectBaseDistributionByCycle``, ``MeanQualityByCycle``,
+       ``QualityScoreDistribution``
+     - part of ``riker basic``
+   * - ``CollectMultipleMetrics``
+     - ``riker multi``
+   * - ``CollectHsMetrics``
+     - ``riker hybcap``
 
 Where turbo-picard is ahead today
 ---------------------------------

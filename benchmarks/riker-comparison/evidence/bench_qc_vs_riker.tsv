@@ -1,9 +1,9 @@
 sample	profile	tool_family	tool_label	wall_s	max_rss_kb	threads	picard_bundle_role	input_bytes
-gatk-na12878-mito	wgs-bundle	picard	CollectGcBiasMetrics	1.236998			main	2097008
-gatk-na12878-mito	wgs-bundle	picard	CollectMultipleMetrics	2.898778			main	2097008
-gatk-na12878-mito	wgs-bundle	picard	CollectWgsMetrics	6.626137			main	2097008
-gatk-na12878-mito	wgs-bundle	riker	multi	0.049356				2097008
-gatk-na12878-mito	wgs-bundle	turbo-picard	CollectMultipleMetrics	0.025345				2097008
-gatk-na12878-mito	wgs-only	picard	CollectWgsMetrics	6.627062			main	2097008
-gatk-na12878-mito	wgs-only	riker	wgs	0.021279				2097008
-gatk-na12878-mito	wgs-only	turbo-picard	CollectWgsMetrics	0.012285				2097008
+gatk-na12878-mito	wgs-bundle	picard	CollectGcBiasMetrics	1.412185			main	2097008
+gatk-na12878-mito	wgs-bundle	picard	CollectMultipleMetrics	3.292503			main	2097008
+gatk-na12878-mito	wgs-bundle	picard	CollectWgsMetrics	7.096286			main	2097008
+gatk-na12878-mito	wgs-bundle	riker	multi	0.052969				2097008
+gatk-na12878-mito	wgs-bundle	turbo-picard	CollectMultipleMetrics	0.024717				2097008
+gatk-na12878-mito	wgs-only	picard	CollectWgsMetrics	7.301973			main	2097008
+gatk-na12878-mito	wgs-only	riker	wgs	0.024241				2097008
+gatk-na12878-mito	wgs-only	turbo-picard	CollectWgsMetrics	0.011522				2097008
