@@ -105,6 +105,7 @@ jobs:
             tools/bench_suite.py \
             tools/bench_validatesamfile.py \
             tools/bench_viewsam.py \
+            tools/bench_qc_vs_riker.py \
             tools/render_benchmark_assets.py \
             tools/update_real_data_manifest.py \
             tools/verify_bioconda_recipes.py \
