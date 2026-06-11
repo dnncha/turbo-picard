@@ -6,9 +6,8 @@ keep the relevant parity evidence with your analysis notes. The repository
 includes a ``CITATION.cff`` file and Zenodo metadata so GitHub, Zenodo, and
 citation tools can produce a standard software citation.
 
-The ``v0.1.1`` release is archived on Zenodo at
-https://doi.org/10.5281/zenodo.20541928. Cite the DOI for the archived release
-you actually used.
+Use the Zenodo DOI for the archived release you actually used. GitHub and
+Zenodo update that metadata after a release is cut.
 
 The project citation is for the software. It is separate from the input-data
 citations used by the real-data parity checks. ``CITATION.cff`` does not cite

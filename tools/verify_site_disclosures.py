@@ -65,7 +65,7 @@ def validate_site_disclosures(html: str) -> list[str]:
         errors.append("site missing software-vs-input citation disclosure")
     if (
         "bioconda" not in text
-        or "v0.1.1" not in text
+        or "v0.1.2" not in text
         or "python3 tools/bioconda_release_preflight.py" not in text
         or "bioconda-utils lint recipes config.yml --packages turbo-picard turbo-picard-picard-shim" not in text
     ):

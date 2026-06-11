@@ -1,7 +1,5 @@
 # turbo-picard
 
-[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.20541928.svg)](https://doi.org/10.5281/zenodo.20541928)
-
 ![Abstract benchmark bars and sequencing-read streams](docs/site/assets/hero-pipeline.svg)
 
 **Drop-in Picard replacement. Rust speed. Up to `84.46x` faster.**
@@ -423,9 +421,8 @@ commits or accessions, and SHA-256 hashes. The
 [citation docs](https://turbo-picard.readthedocs.io/en/latest/citation.html)
 spell out what to record.
 
-The `v0.1.1` release is archived on Zenodo:
-[10.5281/zenodo.20541928](https://doi.org/10.5281/zenodo.20541928).
-Use the DOI for the archived release you actually used.
+Use the Zenodo DOI for the archived release you actually used. GitHub and
+Zenodo update that metadata after a release is cut.
 
 A short JOSS-style software paper draft is in [`paper/`](paper/). Check it with:
 
@@ -437,7 +434,7 @@ The submission checklist is in [`docs/joss-submission.md`](docs/joss-submission.
 
 ## Bioconda status
 
-Release `v0.1.1` has been submitted to Bioconda as two recipes:
+Release `v0.1.2` has been submitted to Bioconda as two recipes:
 
 - `turbo-picard` — installs `turbo-picard`.
 - `turbo-picard-picard-shim` — installs the optional `picard` command name.
@@ -447,7 +444,7 @@ Release checks:
 ```bash
 python3 tools/bioconda_release_preflight.py
 python3 tools/prepare_bioconda_release.py \
-  --archive ~/Downloads/turbo-picard-0.1.1.tar.gz
+  --archive ~/Downloads/turbo-picard-0.1.2.tar.gz
 python3 tools/verify_bioconda_recipes.py --release-ready
 ```
 
