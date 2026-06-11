@@ -1,9 +1,9 @@
 turbo-picard documentation
 ==========================
 
-``turbo-picard`` is for teams that already use Picard and want selected
-commands to run much faster and with less memory pressure, without retraining
-everyone or rewriting the shape of a working pipeline.
+``turbo-picard`` is for teams already using Picard that want the strongest
+practical replacement: faster execution, lower memory pressure, and a cleaner
+adoption path with almost no pipeline rewiring.
 
 It keeps the command shape people already know:
 
@@ -11,12 +11,11 @@ It keeps the command shape people already know:
 
    picard MarkDuplicates I=input.bam O=marked.bam M=metrics.txt
 
-``turbo-picard`` exposes the full Picard 3.4.0 command surface. Accelerated
-commands run natively in Rust; every other Picard command delegates to upstream
-Picard when it is installed or auto-discovered. The project is still meant to
-be adopted one accelerated command at a time, with output comparisons, benchmark
-logs, real-data checks, and citation guidance kept close to the claims they
-support.
+``turbo-picard`` keeps the full Picard 3.4.0 interface. Accelerated commands
+run natively in Rust, and every other command delegates to upstream Picard when it
+is installed or auto-discovered. The rollout model is deliberately incremental:
+replace one Picard command at a time, compare outputs with your pipeline,
+then expand once the first boundary is proven.
 
 The current saved benchmark suite reports ``32/32`` parity-checked commands,
 an ``8.55x`` floor speedup, ``26.74x`` geometric mean speedup, and ``84.46x``

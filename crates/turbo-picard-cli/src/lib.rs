@@ -2753,9 +2753,10 @@ fn run_collectqualityyieldmetrics(args: &[String]) -> Result<(), String> {
         optional_bool(&args, "INCLUDE_SUPPLEMENTAL_ALIGNMENTS")?.unwrap_or(false);
     let stop_after = optional_u32(&args, "STOP_AFTER")?.unwrap_or(0);
 
-    if has_sam_extension(&input) && use_original_qualities {
+    if has_sam_extension(&input) {
         let metrics = collect_quality_yield_sam_text(
             &input,
+            use_original_qualities,
             include_secondary,
             include_supplemental,
             stop_after,
@@ -2947,12 +2948,12 @@ fn collectmultiplemetrics_can_single_pass(input: &str, programs: &[String]) -> b
         matches!(
             program.as_str(),
             "CollectAlignmentSummaryMetrics"
+                | "CollectQualityYieldMetrics"
                 | "CollectBaseDistributionByCycle"
                 | "CollectGcBiasMetrics"
                 | "CollectInsertSizeMetrics"
                 | "QualityScoreDistribution"
                 | "MeanQualityByCycle"
-                | "CollectQualityYieldMetrics"
                 | "CollectWgsMetrics"
         )
     })
@@ -3053,6 +3054,18 @@ fn run_collectmultiplemetrics_single_pass(
                 ));
             }
             "CollectBaseDistributionByCycle" => {
+                let aligned_reads_only = optional_bool(args, "ALIGNED_READS_ONLY")?
+                    .or_else(|| {
+                        collectmultiplemetrics_extra_argument(args, program, "ALIGNED_READS_ONLY")
+                            .and_then(|value| value.parse().ok())
+                    })
+                    .unwrap_or(false);
+                let pf_reads_only = optional_bool(args, "PF_READS_ONLY")?
+                    .or_else(|| {
+                        collectmultiplemetrics_extra_argument(args, program, "PF_READS_ONLY")
+                            .and_then(|value| value.parse().ok())
+                    })
+                    .unwrap_or(false);
                 base_distribution = Some((
                     BaseDistributionByCycleSummary::default(),
                     collectmultiplemetrics_metric_path(
@@ -3061,6 +3074,8 @@ fn run_collectmultiplemetrics_single_pass(
                         file_extension,
                     ),
                     format!("{output}.base_distribution_by_cycle.pdf"),
+                    aligned_reads_only,
+                    pf_reads_only,
                 ));
             }
             "QualityScoreDistribution" => {
@@ -3121,6 +3136,16 @@ fn run_collectmultiplemetrics_single_pass(
                 ));
             }
             "CollectQualityYieldMetrics" => {
+                let use_original_qualities = optional_bool(args, "USE_ORIGINAL_QUALITIES")?
+                    .or_else(|| {
+                        collectmultiplemetrics_extra_argument(
+                            args,
+                            program,
+                            "USE_ORIGINAL_QUALITIES",
+                        )
+                        .and_then(|value| value.parse().ok())
+                    })
+                    .unwrap_or(true);
                 let include_secondary = optional_bool(args, "INCLUDE_SECONDARY_ALIGNMENTS")?
                     .or_else(|| {
                         collectmultiplemetrics_extra_argument(
@@ -3148,7 +3173,7 @@ fn run_collectmultiplemetrics_single_pass(
                         ".quality_yield_metrics",
                         file_extension,
                     ),
-                    true,
+                    use_original_qualities,
                     include_secondary,
                     include_supplemental,
                 ));
@@ -3202,6 +3227,16 @@ fn run_collectmultiplemetrics_single_pass(
                 let reference = reference.as_ref().expect("reference checked above");
                 let reference_contigs = read_reference_contigs_for_wgs(reference)?;
                 let coverage_cap = optional_u32(args, "COVERAGE_CAP")?.unwrap_or(250);
+                let use_fast_algorithm =
+                    if let Some(use_fast_algorithm) = optional_bool(args, "USE_FAST_ALGORITHM")? {
+                        use_fast_algorithm
+                    } else {
+                        env_bool("TURBO_PICARD_WGS_FAST_DEFAULT")?.unwrap_or(false)
+                    };
+                let sample_size = optional_u32(args, "SAMPLE_SIZE")?
+                    .unwrap_or(if use_fast_algorithm { 0 } else { 10_000 });
+                let include_bq_histogram =
+                    optional_bool(args, "INCLUDE_BQ_HISTOGRAM")?.unwrap_or(!use_fast_algorithm);
                 let mut summary = WgsMetricsSummary::new(&reference_contigs, None, coverage_cap);
                 if let Some(limit) = optional_i64(args, "STOP_AFTER")? {
                     if limit >= 0 {
@@ -3216,8 +3251,8 @@ fn run_collectmultiplemetrics_single_pass(
                     coverage_cap,
                     100_000_u32,
                     true,
-                    0_u32,
-                    false,
+                    sample_size,
+                    include_bq_histogram,
                 ));
             }
             _ => unreachable!("caller filters programs"),
@@ -3251,16 +3286,20 @@ fn run_collectmultiplemetrics_single_pass(
     let thread_count = cmm_collector_thread_count(active_collectors);
 
     let mut observe_record = |record: &bam::Record| -> Result<(), String> {
+        let read_group = if alignment.is_some() || insert_size.is_some() {
+            insert_size_read_group_for_bam_record(record, &read_groups)
+        } else {
+            None
+        };
+
         if let Some((metrics, ..)) = alignment.as_mut() {
-            let read_group = insert_size_read_group_for_bam_record(record, &read_groups);
             metrics.observe(record, read_group.as_ref());
         }
         if let Some((metrics, _, _, include_duplicates, ..)) = insert_size.as_mut() {
-            let read_group = insert_size_read_group_for_bam_record(record, &read_groups);
             metrics.observe(record, *include_duplicates, read_group.as_ref());
         }
-        if let Some((metrics, ..)) = base_distribution.as_mut() {
-            metrics.observe(record, false, false);
+        if let Some((metrics, .., aligned_reads_only, pf_reads_only)) = base_distribution.as_mut() {
+            metrics.observe(record, *aligned_reads_only, *pf_reads_only);
         }
         if let Some((metrics, _, _, aligned_reads_only, pf_reads_only, include_no_calls)) =
             quality_distribution.as_mut()
@@ -3334,9 +3373,17 @@ fn run_collectmultiplemetrics_single_pass(
                 )
             },
         );
-        let base_distribution_worker = base_distribution
-            .take()
-            .map(|(metrics, path, chart_path)| (Arc::new(Mutex::new(metrics)), path, chart_path));
+        let base_distribution_worker = base_distribution.take().map(
+            |(metrics, path, chart_path, aligned_reads_only, pf_reads_only)| {
+                (
+                    Arc::new(Mutex::new(metrics)),
+                    path,
+                    chart_path,
+                    aligned_reads_only,
+                    pf_reads_only,
+                )
+            },
+        );
         let quality_distribution_worker = quality_distribution.take().map(
             |(metrics, path, chart_path, aligned_reads_only, pf_reads_only, include_no_calls)| {
                 (
@@ -3360,6 +3407,12 @@ fn run_collectmultiplemetrics_single_pass(
                 )
             },
         );
+        let quality_yield_flags =
+            quality_yield
+                .as_ref()
+                .map(|(_, _, _, include_secondary, include_supplemental)| {
+                    (*include_secondary, *include_supplemental)
+                });
         let quality_yield_worker = quality_yield.take().map(
             |(metrics, path, use_original_qualities, include_secondary, include_supplemental)| {
                 (
@@ -3419,41 +3472,87 @@ fn run_collectmultiplemetrics_single_pass(
         let read_groups = Arc::new(read_groups);
         let target_names = Arc::new(target_names);
         let mut handlers: Vec<cmm_pipeline::CmmBatchHandler> = Vec::new();
-        if let Some((worker, _)) = &alignment_worker {
-            let worker = Arc::clone(worker);
+        let combine_alignment_and_insert_size =
+            alignment_worker.is_some() && insert_size_worker.is_some();
+
+        if combine_alignment_and_insert_size {
+            let alignment_worker =
+                Arc::clone(&alignment_worker.as_ref().expect("alignment worker").0);
+            let include_duplicates = insert_size_worker.as_ref().expect("insert-size worker").3;
+            let insert_size_worker =
+                Arc::clone(&insert_size_worker.as_ref().expect("insert-size worker").0);
             let read_groups = Arc::clone(&read_groups);
             handlers.push(Box::new(move |batch| {
-                let mut metrics = worker.lock().expect("alignment collector lock");
+                let mut alignment_metrics =
+                    alignment_worker.lock().expect("alignment collector lock");
+                let mut insert_size_metrics = insert_size_worker
+                    .lock()
+                    .expect("insert-size collector lock");
                 for entry in batch {
-                    if !entry.gates.alignment {
+                    if !entry.gates.alignment && !entry.gates.insert_size {
                         continue;
                     }
                     let record = &entry.record;
                     let read_group =
                         insert_size_read_group_for_bam_record(record, read_groups.as_ref());
-                    metrics.observe(record, read_group.as_ref());
-                }
-            }));
-        }
-        if let Some((worker, _, _, include_duplicates, _, _)) = &insert_size_worker {
-            let worker = Arc::clone(worker);
-            let read_groups = Arc::clone(&read_groups);
-            let include_duplicates = *include_duplicates;
-            handlers.push(Box::new(move |batch| {
-                let mut metrics = worker.lock().expect("insert-size collector lock");
-                for entry in batch {
-                    if !entry.gates.insert_size {
-                        continue;
+                    if entry.gates.alignment {
+                        alignment_metrics.observe(record, read_group.as_ref());
                     }
-                    let record = &entry.record;
-                    let read_group =
-                        insert_size_read_group_for_bam_record(record, read_groups.as_ref());
-                    metrics.observe(record, include_duplicates, read_group.as_ref());
+                    if entry.gates.insert_size {
+                        insert_size_metrics.observe(
+                            record,
+                            include_duplicates,
+                            read_group.as_ref(),
+                        );
+                    }
                 }
+                Ok(())
             }));
         }
-        if let Some((worker, _, _)) = &base_distribution_worker {
+
+        if !combine_alignment_and_insert_size {
+            if let Some((worker, _)) = &alignment_worker {
+                let worker = Arc::clone(worker);
+                let read_groups = Arc::clone(&read_groups);
+                handlers.push(Box::new(move |batch| {
+                    let mut metrics = worker.lock().expect("alignment collector lock");
+                    for entry in batch {
+                        if !entry.gates.alignment {
+                            continue;
+                        }
+                        let record = &entry.record;
+                        let read_group =
+                            insert_size_read_group_for_bam_record(record, read_groups.as_ref());
+                        metrics.observe(record, read_group.as_ref());
+                    }
+                    Ok(())
+                }));
+            }
+        }
+        if !combine_alignment_and_insert_size {
+            if let Some((worker, _, _, include_duplicates, _, _)) = &insert_size_worker {
+                let worker = Arc::clone(worker);
+                let read_groups = Arc::clone(&read_groups);
+                let include_duplicates = *include_duplicates;
+                handlers.push(Box::new(move |batch| {
+                    let mut metrics = worker.lock().expect("insert-size collector lock");
+                    for entry in batch {
+                        if !entry.gates.insert_size {
+                            continue;
+                        }
+                        let record = &entry.record;
+                        let read_group =
+                            insert_size_read_group_for_bam_record(record, read_groups.as_ref());
+                        metrics.observe(record, include_duplicates, read_group.as_ref());
+                    }
+                    Ok(())
+                }));
+            }
+        }
+        if let Some((worker, _, _, aligned_reads_only, pf_reads_only)) = &base_distribution_worker {
             let worker = Arc::clone(worker);
+            let aligned_reads_only = *aligned_reads_only;
+            let pf_reads_only = *pf_reads_only;
             handlers.push(Box::new(move |batch| {
                 let mut metrics = worker.lock().expect("base-distribution collector lock");
                 for entry in batch {
@@ -3461,8 +3560,9 @@ fn run_collectmultiplemetrics_single_pass(
                         continue;
                     }
                     let record = &entry.record;
-                    metrics.observe(record, false, false);
+                    metrics.observe(record, aligned_reads_only, pf_reads_only);
                 }
+                Ok(())
             }));
         }
         if let Some((worker, _, _, aligned_reads_only, pf_reads_only, include_no_calls)) =
@@ -3481,6 +3581,7 @@ fn run_collectmultiplemetrics_single_pass(
                     let record = &entry.record;
                     metrics.observe(record, aligned_reads_only, pf_reads_only, include_no_calls);
                 }
+                Ok(())
             }));
         }
         if let Some((worker, _, _, aligned_reads_only, pf_reads_only)) = &mean_quality_worker {
@@ -3496,6 +3597,7 @@ fn run_collectmultiplemetrics_single_pass(
                     let record = &entry.record;
                     metrics.observe(record, aligned_reads_only, pf_reads_only);
                 }
+                Ok(())
             }));
         }
         if let Some((worker, _, use_original_qualities, include_secondary, include_supplemental)) =
@@ -3519,6 +3621,7 @@ fn run_collectmultiplemetrics_single_pass(
                         include_supplemental,
                     );
                 }
+                Ok(())
             }));
         }
         if let Some((worker, _, _, _, window_size, _)) = &gc_bias_worker {
@@ -3535,9 +3638,10 @@ fn run_collectmultiplemetrics_single_pass(
                     if let Err(error) =
                         metrics.observe(record, target_names.as_slice(), window_size)
                     {
-                        panic!("CollectGcBiasMetrics failed: {error}");
+                        return Err(format!("CollectGcBiasMetrics failed: {error}"));
                     }
                 }
+                Ok(())
             }));
         }
         if let Some((
@@ -3575,13 +3679,26 @@ fn run_collectmultiplemetrics_single_pass(
                         locus_accumulation_cap,
                         count_unpaired,
                     ) {
-                        panic!("CollectWgsMetrics failed: {error}");
+                        return Err(format!("CollectWgsMetrics failed: {error}"));
                     }
                 }
+                Ok(())
             }));
         }
 
-        cmm_pipeline::CmmWorkerPool::new(handlers).run_parallel_bam_pass(reader, stop_after)?;
+        let (include_secondary_yield, include_supplemental_yield) =
+            quality_yield_flags.unwrap_or((false, false));
+        // Quality collectors each own their own ALIGNED_READS_ONLY / PF_READS_ONLY flags.
+        // Use conservative pre-filters here and keep per-collector filtering in the
+        // collector logic via each command's captured settings.
+        cmm_pipeline::CmmWorkerPool::new(handlers).run_parallel_bam_pass(
+            reader,
+            stop_after,
+            false,
+            false,
+            include_secondary_yield,
+            include_supplemental_yield,
+        )?;
 
         alignment = alignment_worker.map(|(worker, path)| {
             (
@@ -3607,16 +3724,20 @@ fn run_collectmultiplemetrics_single_pass(
                 )
             },
         );
-        base_distribution = base_distribution_worker.map(|(worker, path, chart_path)| {
-            (
-                Arc::try_unwrap(worker)
-                    .expect("base-distribution collector thread still running")
-                    .into_inner()
-                    .expect("base-distribution collector lock poisoned"),
-                path,
-                chart_path,
-            )
-        });
+        base_distribution = base_distribution_worker.map(
+            |(worker, path, chart_path, aligned_reads_only, pf_reads_only)| {
+                (
+                    Arc::try_unwrap(worker)
+                        .expect("base-distribution collector thread still running")
+                        .into_inner()
+                        .expect("base-distribution collector lock poisoned"),
+                    path,
+                    chart_path,
+                    aligned_reads_only,
+                    pf_reads_only,
+                )
+            },
+        );
         quality_distribution = quality_distribution_worker.map(
             |(worker, path, chart_path, aligned_reads_only, pf_reads_only, include_no_calls)| {
                 (
@@ -3726,7 +3847,7 @@ fn run_collectmultiplemetrics_single_pass(
             .map_err(|error| error.to_string())?;
         write_summary_chart_pdf(&chart_path, "CollectInsertSizeMetrics")?;
     }
-    if let Some((metrics, output_path, chart_path)) = base_distribution {
+    if let Some((metrics, output_path, chart_path, ..)) = base_distribution {
         fs::write(output_path, metrics.to_picard_text()).map_err(|error| error.to_string())?;
         write_summary_chart_pdf(&chart_path, "CollectBaseDistributionByCycle")?;
     }
@@ -3875,6 +3996,12 @@ fn run_collectmultiplemetrics(args: &[String]) -> Result<(), String> {
                     "VALIDATION_STRINGENCY=SILENT".to_string(),
                     "QUIET=true".to_string(),
                 ];
+                extend_collectmultiplemetrics_extra_arguments(
+                    &args,
+                    &program,
+                    &["ALIGNED_READS_ONLY", "PF_READS_ONLY"],
+                    &mut child_args,
+                );
                 child_args.extend(stop_after_arg.clone());
                 run_collectbasedistributionbycycle(&child_args)?;
             }
@@ -4001,6 +4128,7 @@ fn run_collectmultiplemetrics(args: &[String]) -> Result<(), String> {
                     &[
                         "INCLUDE_SECONDARY_ALIGNMENTS",
                         "INCLUDE_SUPPLEMENTAL_ALIGNMENTS",
+                        "USE_ORIGINAL_QUALITIES",
                     ],
                     &mut child_args,
                 );
@@ -4012,6 +4140,16 @@ fn run_collectmultiplemetrics(args: &[String]) -> Result<(), String> {
                     "missing required CollectMultipleMetrics argument for CollectWgsMetrics: REFERENCE_SEQUENCE"
                         .to_string()
                 })?;
+                let use_fast_algorithm =
+                    if let Some(use_fast_algorithm) = optional_bool(&args, "USE_FAST_ALGORITHM")? {
+                        use_fast_algorithm
+                    } else {
+                        env_bool("TURBO_PICARD_WGS_FAST_DEFAULT")?.unwrap_or(false)
+                    };
+                let sample_size = optional_u32(&args, "SAMPLE_SIZE")?
+                    .unwrap_or(if use_fast_algorithm { 0 } else { 10_000 });
+                let include_bq_histogram =
+                    optional_bool(&args, "INCLUDE_BQ_HISTOGRAM")?.unwrap_or(!use_fast_algorithm);
                 let mut child_args = vec![
                     format!("I={input}"),
                     format!(
@@ -4024,7 +4162,8 @@ fn run_collectmultiplemetrics(args: &[String]) -> Result<(), String> {
                     ),
                     format!("R={reference}"),
                     "COUNT_UNPAIRED=true".to_string(),
-                    "SAMPLE_SIZE=0".to_string(),
+                    format!("SAMPLE_SIZE={sample_size}"),
+                    format!("INCLUDE_BQ_HISTOGRAM={include_bq_histogram}"),
                     "VALIDATION_STRINGENCY=SILENT".to_string(),
                     "QUIET=true".to_string(),
                 ];
@@ -4059,9 +4198,12 @@ fn run_collectwgsmetrics(args: &[String]) -> Result<(), String> {
     let locus_accumulation_cap = optional_u32(&args, "LOCUS_ACCUMULATION_CAP")?.unwrap_or(100_000);
     let stop_after = optional_i64(&args, "STOP_AFTER")?.unwrap_or(-1);
     let count_unpaired = optional_bool(&args, "COUNT_UNPAIRED")?.unwrap_or(false);
-    let use_fast_algorithm = optional_bool(&args, "USE_FAST_ALGORITHM")?
-        .or(env_bool("TURBO_PICARD_WGS_FAST_DEFAULT")?)
-        .unwrap_or(false);
+    let use_fast_algorithm =
+        if let Some(use_fast_algorithm) = optional_bool(&args, "USE_FAST_ALGORITHM")? {
+            use_fast_algorithm
+        } else {
+            env_bool("TURBO_PICARD_WGS_FAST_DEFAULT")?.unwrap_or(false)
+        };
     let sample_size =
         optional_u32(&args, "SAMPLE_SIZE")?.unwrap_or(if use_fast_algorithm { 0 } else { 10_000 });
     let include_bq_histogram =
@@ -4847,7 +4989,7 @@ fn reverted_header_from_sam_text(
     Ok(header)
 }
 
-fn parse_sam_header_record_line(line: &str) -> Option<HeaderRecord> {
+fn parse_sam_header_record_line(line: &str) -> Option<HeaderRecord<'_>> {
     let mut parts = line.trim_end_matches(['\r', '\n']).split('\t');
     let record_type = parts.next()?;
     if !record_type.starts_with('@') {
@@ -8674,6 +8816,8 @@ fn reject_unsupported_collectmultiplemetrics_args(
         "USE_JDK_DEFLATER",
         "USE_JDK_INFLATER",
         "USE_FAST_ALGORITHM",
+        "SAMPLE_SIZE",
+        "INCLUDE_BQ_HISTOGRAM",
         "VALIDATION_STRINGENCY",
         "QUIET",
         "VERBOSITY",
@@ -8719,7 +8863,10 @@ fn reject_unsupported_collectmultiplemetrics_args(
             | ("MeanQualityByCycle", "ALIGNED_READS_ONLY")
             | ("MeanQualityByCycle", "PF_READS_ONLY")
             | ("CollectQualityYieldMetrics", "INCLUDE_SECONDARY_ALIGNMENTS")
-            | ("CollectQualityYieldMetrics", "INCLUDE_SUPPLEMENTAL_ALIGNMENTS") => {}
+            | ("CollectQualityYieldMetrics", "INCLUDE_SUPPLEMENTAL_ALIGNMENTS")
+            | ("CollectQualityYieldMetrics", "USE_ORIGINAL_QUALITIES")
+            | ("CollectBaseDistributionByCycle", "ALIGNED_READS_ONLY")
+            | ("CollectBaseDistributionByCycle", "PF_READS_ONLY") => {}
             _ => {
                 return Err(format!(
                     "unsupported CollectMultipleMetrics EXTRA_ARGUMENT={value}"
@@ -8738,6 +8885,8 @@ fn reject_unsupported_collectmultiplemetrics_args(
     optional_bool(args, "USE_JDK_DEFLATER")?;
     optional_bool(args, "USE_JDK_INFLATER")?;
     optional_bool(args, "USE_FAST_ALGORITHM")?;
+    optional_u32(args, "SAMPLE_SIZE")?;
+    optional_bool(args, "INCLUDE_BQ_HISTOGRAM")?;
     optional_scalar(args, "VALIDATION_STRINGENCY")?;
     optional_scalar(args, "VERBOSITY")?;
     optional_bool(args, "QUIET")?;
@@ -10486,6 +10635,7 @@ impl QualityYieldSummary {
 
 fn collect_quality_yield_sam_text(
     input: &str,
+    use_original_qualities: bool,
     include_secondary: bool,
     include_supplemental: bool,
     stop_after: u32,
@@ -10510,6 +10660,7 @@ fn collect_quality_yield_sam_text(
         observe_quality_yield_sam_line(
             &mut metrics,
             &line,
+            use_original_qualities,
             include_secondary,
             include_supplemental,
         )?;
@@ -10524,6 +10675,7 @@ fn collect_quality_yield_sam_text(
 fn observe_quality_yield_sam_line(
     metrics: &mut QualityYieldSummary,
     line: &[u8],
+    use_original_qualities: bool,
     include_secondary: bool,
     include_supplemental: bool,
 ) -> Result<(), String> {
@@ -10554,13 +10706,18 @@ fn observe_quality_yield_sam_line(
     let quality_field = fields
         .next()
         .ok_or_else(|| "malformed CollectQualityYieldMetrics SAM record".to_string())?;
-    let mut qualities = quality_field;
-    for field in fields {
-        if let Some(original_qualities) = field.strip_prefix(b"OQ:Z:") {
-            qualities = original_qualities;
-            break;
+    let qualities = if use_original_qualities {
+        let mut preferred = quality_field;
+        for field in fields {
+            if let Some(original_qualities) = field.strip_prefix(b"OQ:Z:") {
+                preferred = original_qualities;
+                break;
+            }
         }
-    }
+        preferred
+    } else {
+        quality_field
+    };
     let is_pf = flags & 0x200 == 0;
     metrics.total_reads += 1;
     metrics.total_bases += qualities.len() as u64;
@@ -17539,6 +17696,7 @@ fn write_requested_sidecars(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use turbo_picard_core::picard_args::normalize_picard_args;
 
     fn record_with_qname(qname: &[u8]) -> bam::Record {
         let mut record = bam::Record::new();
@@ -17584,6 +17742,67 @@ mod tests {
                 "CollectInsertSizeMetrics".to_string(),
             ]
         ));
+        assert!(collectmultiplemetrics_can_single_pass(
+            "reads.bam",
+            &[
+                "CollectQualityYieldMetrics".to_string(),
+                "CollectAlignmentSummaryMetrics".to_string(),
+            ]
+        ));
+    }
+
+    #[test]
+    fn collectmultiplemetrics_rejects_unsupported_arguments() {
+        let args = normalize_picard_args(&[
+            "PROGRAM=CollectWgsMetrics".to_string(),
+            "UNKNOWN=value".to_string(),
+        ])
+        .expect("args parse");
+        let err =
+            reject_unsupported_collectmultiplemetrics_args(&args).expect_err("unsupported key");
+        assert_eq!(err, "unsupported CollectMultipleMetrics argument: UNKNOWN");
+    }
+
+    #[test]
+    fn collectmultiplemetrics_accepts_wgs_sampling_arguments() {
+        let args = normalize_picard_args(&[
+            "I=in.bam".to_string(),
+            "O=out.txt".to_string(),
+            "PROGRAM=CollectWgsMetrics".to_string(),
+            "REFERENCE_SEQUENCE=ref.fa".to_string(),
+            "SAMPLE_SIZE=12345".to_string(),
+            "INCLUDE_BQ_HISTOGRAM=true".to_string(),
+        ])
+        .expect("args parse");
+        let rejection = reject_unsupported_collectmultiplemetrics_args(&args);
+        assert!(rejection.is_ok());
+    }
+
+    #[test]
+    fn collectmultiplemetrics_accepts_base_distribution_alignment_filters() {
+        let args = normalize_picard_args(&[
+            "I=in.bam".to_string(),
+            "O=out".to_string(),
+            "PROGRAM=CollectBaseDistributionByCycle".to_string(),
+            "EXTRA_ARGUMENT=CollectBaseDistributionByCycle::ALIGNED_READS_ONLY=true".to_string(),
+            "EXTRA_ARGUMENT=CollectBaseDistributionByCycle::PF_READS_ONLY=true".to_string(),
+        ])
+        .expect("args parse");
+        let rejection = reject_unsupported_collectmultiplemetrics_args(&args);
+        assert!(rejection.is_ok());
+    }
+
+    #[test]
+    fn collectmultiplemetrics_accepts_collect_quality_yield_original_quality_argument() {
+        let args = normalize_picard_args(&[
+            "I=in.bam".to_string(),
+            "O=out".to_string(),
+            "PROGRAM=CollectQualityYieldMetrics".to_string(),
+            "EXTRA_ARGUMENT=CollectQualityYieldMetrics::USE_ORIGINAL_QUALITIES=false".to_string(),
+        ])
+        .expect("args parse");
+        let rejection = reject_unsupported_collectmultiplemetrics_args(&args);
+        assert!(rejection.is_ok());
     }
 
     #[test]
@@ -17675,6 +17894,234 @@ mod tests {
             SortOrder::QueryName
         ));
     }
+
+    #[test]
+    fn split_fallback_command_handles_quoted_executable() {
+        let parts =
+            split_fallback_command(r#""/tmp/my tool/picard.jar" -jar input.jar"#).expect("parses");
+        assert_eq!(
+            parts,
+            vec![
+                "/tmp/my tool/picard.jar".to_string(),
+                "-jar".to_string(),
+                "input.jar".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn split_fallback_command_preserves_backslashes() {
+        let parts = split_fallback_command(r#"C:\tools\picard.jar -jar C:\tools\runner.jar"#)
+            .expect("parses");
+        assert_eq!(
+            parts,
+            vec![
+                r"C:\tools\picard.jar".to_string(),
+                "-jar".to_string(),
+                r"C:\tools\runner.jar".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn split_fallback_command_handles_escaped_spaces() {
+        let parts =
+            split_fallback_command(r#"C:\Program\ Files\My\ Tool\picard.jar -jar input.jar"#)
+                .expect("parses");
+        assert_eq!(
+            parts,
+            vec![
+                r"C:\Program Files\My Tool\picard.jar".to_string(),
+                "-jar".to_string(),
+                "input.jar".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn split_fallback_command_preserves_unc_paths() {
+        let parts =
+            split_fallback_command(r#"\\server\share\picard.jar -jar \\server\share\runner.jar"#)
+                .expect("parses");
+        assert_eq!(
+            parts,
+            vec![
+                r"\\server\share\picard.jar".to_string(),
+                "-jar".to_string(),
+                r"\\server\share\runner.jar".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn split_fallback_command_rejects_unmatched_quote() {
+        let err = split_fallback_command(r#""/tmp/missing.jar -jar input.jar"#).unwrap_err();
+        assert_eq!(err, "invalid fallback command: unmatched quote");
+    }
+
+    #[test]
+    fn split_fallback_command_rejects_unmatched_single_quote() {
+        let err = split_fallback_command(r"'/tmp/missing.jar -jar input.jar").unwrap_err();
+        assert_eq!(err, "invalid fallback command: unmatched quote");
+    }
+
+    #[test]
+    fn split_fallback_command_handles_single_quoted_executable() {
+        let parts =
+            split_fallback_command("'/tmp/my tool/picard.jar' -jar input.jar").expect("parses");
+        assert_eq!(
+            parts,
+            vec![
+                "/tmp/my tool/picard.jar".to_string(),
+                "-jar".to_string(),
+                "input.jar".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn fallback_command_quoting_handles_space_in_jar_path() {
+        let quoted = quote_fallback_command_arg("/tmp/my tool/picard.jar");
+        assert_eq!(quoted, "'/tmp/my tool/picard.jar'");
+        let parts = split_fallback_command(&format!("java -jar {quoted}")).expect("parses");
+        assert_eq!(
+            parts,
+            vec![
+                "java".to_string(),
+                "-jar".to_string(),
+                "/tmp/my tool/picard.jar".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn fallback_command_quoting_handles_single_quote_in_jar_path() {
+        let quoted = quote_fallback_command_arg("/tmp/o'reilly/picard.jar");
+        assert!(quoted.starts_with('"') && quoted.ends_with('"'));
+        let parts = split_fallback_command(&format!("java -jar {quoted}")).expect("parses");
+        assert_eq!(
+            parts,
+            vec![
+                "java".to_string(),
+                "-jar".to_string(),
+                "/tmp/o'reilly/picard.jar".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn fallback_command_quoting_escapes_double_quotes() {
+        let quoted = quote_fallback_command_arg("C:/tools/picard \"beta\".jar");
+        assert!(quoted.starts_with('\'') && quoted.ends_with('\''));
+        let parts = split_fallback_command(&format!("java -jar {quoted}")).expect("parses");
+        assert_eq!(
+            parts,
+            vec![
+                "java".to_string(),
+                "-jar".to_string(),
+                "C:/tools/picard \"beta\".jar".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn split_fallback_command_rejects_empty_command() {
+        let err = split_fallback_command("   ").unwrap_err();
+        assert_eq!(err, "fallback command is empty");
+    }
+
+    #[test]
+    fn split_fallback_command_fast_path_for_simple_command() {
+        assert_eq!(
+            split_fallback_command("java").expect("parses"),
+            vec!["java".to_string()]
+        );
+    }
+
+    #[test]
+    fn split_fallback_command_rejects_empty_quoted_program() {
+        let err = split_fallback_command(r#""""#).unwrap_err();
+        assert_eq!(err, "fallback command is empty");
+    }
+
+    #[test]
+    fn split_fallback_command_handles_leading_and_trailing_whitespace() {
+        let parts = split_fallback_command(r#"  "/tmp/my tool/picard.jar" -jar input.jar  "#)
+            .expect("parses");
+        assert_eq!(
+            parts,
+            vec![
+                "/tmp/my tool/picard.jar".to_string(),
+                "-jar".to_string(),
+                "input.jar".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn split_fallback_command_parses_tab_separated_parts() {
+        let parts = split_fallback_command("java\t-jar\tinput.jar").expect("parses");
+        assert_eq!(
+            parts,
+            vec![
+                "java".to_string(),
+                "-jar".to_string(),
+                "input.jar".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn split_fallback_command_parses_empty_quoted_argument() {
+        let parts = split_fallback_command(r#"java -jar "" -Dfoo=bar"#).expect("parses");
+        assert_eq!(
+            parts,
+            vec![
+                "java".to_string(),
+                "-jar".to_string(),
+                String::new(),
+                "-Dfoo=bar".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn quote_fallback_command_uses_single_quote_without_single_quotes_inside() {
+        let quoted = quote_fallback_command_arg("/tmp/with spaces/picard.jar");
+        assert_eq!(quoted, "'/tmp/with spaces/picard.jar'");
+        let parts = split_fallback_command(&format!("java -jar {quoted}")).expect("parses");
+        assert_eq!(
+            parts,
+            vec![
+                "java".to_string(),
+                "-jar".to_string(),
+                "/tmp/with spaces/picard.jar".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn quote_fallback_command_uses_double_quotes_when_single_quote_present() {
+        let quoted = quote_fallback_command_arg("/tmp/o'reilly/picard.jar");
+        assert_eq!(quoted, "\"/tmp/o'reilly/picard.jar\"");
+        let parts = split_fallback_command(&format!("java -jar {quoted}")).expect("parses");
+        assert_eq!(parts[2], "/tmp/o'reilly/picard.jar");
+    }
+
+    #[test]
+    fn fallback_command_with_both_quote_styles_parses_to_original_path() {
+        let quoted = quote_fallback_command_arg("C:/tools/picard \"be'ta\".jar");
+        assert_eq!(quoted, "\"C:/tools/picard \\\"be'ta\\\".jar\"");
+        let parts = split_fallback_command(&format!("java -jar {quoted}")).expect("parses");
+        assert_eq!(
+            parts,
+            vec![
+                "java".to_string(),
+                "-jar".to_string(),
+                "C:/tools/picard \"be'ta\".jar".to_string(),
+            ]
+        );
+    }
 }
 
 fn write_md5_sidecar(output: &str) -> Result<(), String> {
@@ -17737,7 +18184,7 @@ fn discover_upstream_picard_command() -> Option<String> {
     if let Ok(jar) = env::var("PICARD_JAR") {
         let trimmed = jar.trim();
         if !trimmed.is_empty() && Path::new(trimmed).is_file() {
-            return Some(format!("java -jar {trimmed}"));
+            return Some(format!("java -jar {}", quote_fallback_command_arg(trimmed)));
         }
     }
     if let Ok(prefix) = env::var("CONDA_PREFIX") {
@@ -17763,9 +18210,12 @@ fn discover_picard_in_prefix(prefix: &str) -> Option<String> {
         }
     }
     jars.sort();
-    jars.into_iter()
-        .next()
-        .map(|jar| format!("java -jar {}", jar.display()))
+    jars.into_iter().next().map(|jar| {
+        format!(
+            "java -jar {}",
+            quote_fallback_command_arg(&jar.display().to_string())
+        )
+    })
 }
 
 fn discover_picard_on_path() -> Option<String> {
@@ -17789,7 +18239,31 @@ fn discover_picard_on_path() -> Option<String> {
     candidates
         .into_iter()
         .next()
-        .map(|path| path.to_string_lossy().into_owned())
+        .map(|path| quote_fallback_command_arg(&path.to_string_lossy()))
+}
+
+fn quote_fallback_command_arg(value: &str) -> String {
+    if !value.contains(&['"', '\''][..]) && !value.contains(char::is_whitespace) {
+        return value.to_string();
+    }
+    if !value.contains('\'') {
+        let mut quoted = String::with_capacity(value.len() + 2);
+        quoted.push('\'');
+        quoted.push_str(value);
+        quoted.push('\'');
+        return quoted;
+    }
+
+    let mut quoted = String::new();
+    quoted.push('"');
+    for ch in value.chars() {
+        if ch == '"' {
+            quoted.push('\\');
+        }
+        quoted.push(ch);
+    }
+    quoted.push('"');
+    quoted
 }
 
 #[cfg(unix)]
@@ -17848,24 +18322,89 @@ fn should_delegate_to_picard(error: &str) -> bool {
 }
 
 fn fallback_status(fallback_command: &str, args: &[String]) -> Result<i32, String> {
-    let mut command = if cfg!(windows) {
-        let mut command = Command::new("cmd");
-        command.arg("/C").arg(format!("{fallback_command} %*"));
-        command
-    } else {
-        let mut command = Command::new("sh");
-        command
-            .arg("-c")
-            .arg(format!("exec {fallback_command} \"$@\""))
-            .arg("turbo-picard-fallback");
-        command
-    };
+    let mut command_parts = split_fallback_command(fallback_command)?;
+    let program = command_parts.remove(0);
+    let mut command = Command::new(program);
+    command.args(command_parts).args(args);
 
     let status = command
-        .args(args)
         .env_remove("TURBO_PICARD_FALLBACK_COMMAND")
         .status()
         .map_err(|error| format!("failed to run Picard fallback command: {error}"))?;
 
     Ok(status.code().unwrap_or(1))
+}
+
+fn split_fallback_command(command: &str) -> Result<Vec<String>, String> {
+    if command.trim().is_empty() {
+        return Err("fallback command is empty".to_string());
+    }
+    if !command.contains(char::is_whitespace) && !command.contains(&['"', '\''][..]) {
+        return Ok(vec![command.to_string()]);
+    }
+
+    let mut parts = Vec::new();
+    let mut current = String::new();
+    let mut quoted: Option<char> = None;
+    let mut chars = command.chars().peekable();
+
+    let mut in_token = false;
+
+    while let Some(ch) = chars.next() {
+        if ch == '\\' && quoted != Some('\'') {
+            if let Some(&next) = chars.peek() {
+                if next.is_whitespace() || matches!(next, '"' | '\'') {
+                    current.push(next);
+                    chars.next();
+                    in_token = true;
+                    continue;
+                }
+            }
+            current.push('\\');
+            in_token = true;
+            continue;
+        }
+
+        match ch {
+            '\'' if quoted.is_none() => {
+                quoted = Some('\'');
+                in_token = true;
+            }
+            '\'' if quoted == Some('\'') => {
+                quoted = None;
+            }
+            '"' if quoted.is_none() => {
+                quoted = Some('"');
+                in_token = true;
+            }
+            '"' if quoted == Some('"') => {
+                quoted = None;
+            }
+            ch if ch.is_whitespace() && quoted.is_none() => {
+                if in_token {
+                    if current.is_empty() {
+                        parts.push(String::new());
+                    } else {
+                        parts.push(std::mem::take(&mut current));
+                    }
+                    in_token = false;
+                }
+            }
+            _ => {
+                in_token = true;
+                current.push(ch);
+            }
+        }
+    }
+
+    if quoted.is_some() {
+        return Err("invalid fallback command: unmatched quote".to_string());
+    }
+    if in_token || !current.is_empty() {
+        parts.push(current);
+    }
+    if parts.first().is_none_or(|part| part.trim().is_empty()) {
+        return Err("fallback command is empty".to_string());
+    }
+    Ok(parts)
 }

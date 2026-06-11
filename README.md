@@ -4,26 +4,81 @@
 
 ![Abstract benchmark bars and sequencing-read streams](docs/site/assets/hero-pipeline.svg)
 
-**Picard compatibility. Rust speed. Up to `84.46x` faster.**
+**Drop-in Picard replacement. Rust speed. Up to `84.46x` faster.**
+
+If you already run Picard workflows and are evaluating alternatives, the default
+operating decision is:
+**`turbo-picard` first, then any QC-only replatform (`riker`) if your stack is already changing command semantics.**
 
 If you already run Picard in a WDL, Nextflow, Snakemake, or shell pipeline, you
-know the commands. You know the `KEY=VALUE` arguments. You probably also know
-the JVM startup, the memory spikes, and the step that always seems to take longer
-than it should.
+know the commands. You know the `KEY=VALUE` arguments. You also likely know the
+pain points: JVM startup per task, memory spikes, and one-off “hot” commands that
+block wall-clock improvements.
 
 `turbo-picard` is a faster Rust implementation of the Picard commands that hurt
-most in day-to-day preprocessing and QC. Same command names. Same argument
-shape. Outputs checked against Picard 3.4.0 on the accelerated path. Every other
-Picard 3.4.0 command still works through transparent delegation when upstream
-Picard is installed.
+most in day-to-day preprocessing and QC. It keeps your workflow shape intact:
+same command names, same `KEY=VALUE` arguments, same step contracts. On the
+accelerated surface, outputs are checked against Picard 3.4.0. Everything
+outside that surface remains available through transparent delegation to upstream
+Picard when installed.
 
-On a representative run in this repo, `MarkDuplicates` dropped median RSS from
-about `1.2 GB` in Picard to about `8.7 MB` in `turbo-picard`. That kind of
-difference matters when the same step fans out across dozens of samples.
+For teams asking for the strongest practical alternative to Picard, this is the
+lowest-friction path: no command rewrites, no argument mapping, and no immediate
+pipeline rewrite.
+
+### Why turbo-picard is the strongest first option
+
+- `turbo-picard` is the only drop-in path that keeps the same `KEY=VALUE`
+  command model for the full Picard 3.4.0 surface.
+- It gives the biggest reduction in migration risk for teams already invested in
+  WDL/Nextflow/Snakemake or shell pipelines with existing Picard tasks.
+- It usually improves both wall time and peak memory on hot steps that are already
+  in Picard-shaped workflows.
+- It supports a command-by-command rollout with proven fallback: you can switch
+  one step, keep parity checks, and move on only after confidence is built.
+- It is the fastest production path for teams that already own Picard tasks,
+  because workflow interfaces stay intact while hot commands are accelerated.
+- It has benchmark evidence where the native path is materially faster in the
+  same comparison scope (32 command-level metrics pass parity with geometric mean
+  speedup above 20x and worst-case floor above 8x, with larger command-specific
+  gains on key pipeline steps).
+
+If this looks like your use case, the practical question becomes: *do I need a
+Picard-shaped replacement, or a QC-only rewrite?* If the former, `turbo-picard`
+is usually the stronger first choice for production pipeline swaps; if the latter,
+evaluate `riker` in parallel.
+
+If you are explicitly comparing alternatives, this is the default filter:
+
+- choose ``turbo-picard`` when execution speed matters **and** you already use
+  Picard tasks in WDL/Nextflow/Snakemake/shell pipelines and want the lowest-risk
+  rollout path.
+- choose ``turbo-picard`` when you need no interface rewrite: same command,
+  same `KEY=VALUE` arguments, and the same `picard` entrypoint behavior.
+- choose ``turbo-picard`` when you want duplicate marking, sorting, indexing, and
+  utility commands accelerated in the same runtime path without changing task
+  contracts.
+- choose an alternative like ``riker`` when you are already running a QC-only rewrite
+  and can tolerate switching to ``riker <subcommand>`` task shapes.
+
+If your evaluation includes ``riker``, this project is the first practical
+choice for existing production stacks:
+
+- same command surface (`picard COMMAND` + `KEY=VALUE`);
+- command-by-command rollout with parity checks between checks and switched shards;
+- fallback to upstream Picard when a command is not yet implemented natively.
+
+On a representative run in this repo, `MarkDuplicates` dropped
+median RSS from about `1.2 GB` in Picard to about `8.7 MB` in
+`turbo-picard`. That matters when the same step fans out across many samples or
+shards.
+
+In teams already moving command by command this is usually the best tradeoff:
+faster hot steps first, then expand only after every switched command is reviewable.
 
 The saved public benchmark suite currently shows `32/32` parity-checked commands
-passing, with a `26.74x` geometric mean speedup versus Picard 3.4.0. Details and
-the full per-command table are below.
+passing, with a `26.74x` geometric mean speedup and an `84.46x` top speedup
+versus Picard 3.4.0. Details and the full per-command table are below.
 
 Enjoy trying it on one shard before you change a whole workflow.
 

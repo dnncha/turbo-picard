@@ -4,6 +4,10 @@ Picard vs turbo-picard
 This page is for the practical question an evaluator usually asks first:
 what changes if we use ``turbo-picard`` instead of upstream Picard?
 
+If you are choosing an alternative to Picard for an existing workflow, the
+compelling case is simple: keep the same command contract and swap only the
+binary that executes the already-proven tasks.
+
 Short version
 -------------
 
@@ -15,6 +19,28 @@ Use ``turbo-picard`` when you want:
   samples or shards;
 * transparent delegation to upstream Picard for everything else;
 * a command-by-command rollout on the accelerated path instead of a full rewrite.
+
+If your team wants “no workflow change” speedup, this is usually the strongest
+reason to evaluate ``turbo-picard`` first.
+
+If the alternative under review is ``riker``, this same question is usually the
+fastest filter:
+
+* Do you want the same command contract today (same entrypoint, same argument names, same outputs)?
+* Do you need duplicate marking, sorting, indexing, or SAM/VCF interoperability in the same command family as Picard?
+* Do you need to reduce migration risk while still getting multi-threaded, parity-checked performance?
+
+If most of those are true, ``turbo-picard`` is the stronger practical choice.
+
+For production teams, the strongest claim is not absolute speed in one metric, but
+the reduction in replacement cost:
+
+* keep commands and parameters unchanged,
+* keep downstream parsers untouched,
+* keep validation in front of each command migration instead of after a full rewrite.
+
+In other words, the win is: lower switching overhead + strong verified speedup where
+native support already exists.
 
 Stay with upstream Picard when you need:
 
@@ -63,6 +89,16 @@ The saved ``MarkDuplicates`` performance run in the repository also shows why
 the project is more scalable in practice, not just faster in a micro-benchmark:
 median wall time dropped from ``2.595 s`` to ``0.127 s`` while median RSS
 dropped from about ``1.2 GB`` to about ``8.7 MB`` on the checked fixture.
+
+Against nearby alternatives (notably ``riker``), the strongest argument remains this:
+``turbo-picard`` is a replacement for existing Picard contracts, not a redesign
+of the metric workflow.
+
+That gives teams three speed-critical advantages at once:
+
+* no argument-mapping phase before the first speed comparison;
+* no downstream parser rewrites when output contracts are shared;
+* no all-or-nothing cutover, because fallback remains available command by command.
 
 Those numbers are only used together with output checks, benchmark logs, and
 real-data comparison records. The claim is not “faster at any cost”. The claim

@@ -4,6 +4,9 @@ Use cases
 This page is for people who already know what Picard is and want to see where
 ``turbo-picard`` is most likely to pay off in real work.
 
+If you already have an existing Picard workflow, this is the best place to judge
+whether ``turbo-picard`` is the right practical replacement.
+
 WDL / Cromwell preprocessing pipelines
 --------------------------------------
 
@@ -28,6 +31,10 @@ Best first move:
   ``packaging/workflows/fastqtosam.wdl``, or
   ``packaging/workflows/fixmateinformation.wdl`` depending on the boundary you
   can swap cleanly.
+
+If your team is explicitly comparing against ``riker`` for this boundary, this is
+typically a stronger move than a tooling redesign because the process shape is the
+same Picard command contract plus a lower migration burden.
 
 Nextflow / nf-core modules
 --------------------------

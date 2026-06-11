@@ -61,7 +61,7 @@ fn normalize_picard_args_with_aliases(
                 .get(index + 1)
                 .ok_or_else(|| PicardArgError::MissingValue(key.clone()))?;
 
-            if value.starts_with("--") || (value.contains('=') && !value.starts_with('=')) {
+            if looks_like_flag_value(value) || (value.contains('=') && !value.starts_with('=')) {
                 return Err(PicardArgError::MissingValue(key));
             }
 
@@ -80,7 +80,7 @@ fn normalize_picard_args_with_aliases(
                 .get(index + 1)
                 .ok_or_else(|| PicardArgError::MissingValue(key.clone()))?;
 
-            if value.starts_with('-') || (value.contains('=') && !value.starts_with('=')) {
+            if looks_like_flag_value(value) || (value.contains('=') && !value.starts_with('=')) {
                 return Err(PicardArgError::MissingValue(key));
             }
 
@@ -99,6 +99,10 @@ fn normalize_picard_args_with_aliases(
     }
 
     Ok(normalized)
+}
+
+fn looks_like_flag_value(value: &str) -> bool {
+    value.len() > 1 && value.starts_with('-') && !matches!(value.as_bytes()[1], b'.' | b'0'..=b'9')
 }
 
 fn push_arg_with_aliases(

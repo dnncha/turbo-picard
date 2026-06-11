@@ -6,13 +6,44 @@ Use this page before you spend time evaluating ``turbo-picard``.
 Good fit
 --------
 
-``turbo-picard`` is a good fit when most of these are true:
+If you are looking for an alternative to Picard, ``turbo-picard`` is the option
+with the strongest migration advantage in this project:
+
+* you already have existing Picard tasks in production;
+* you want faster execution with little to no argument or contract changes;
+* you prefer command-by-command rollout to full rewrites;
+* your blocker is wall time, peak memory, or fan-out scale.
+
+Quick choice against alternatives:
+
+* choose ``turbo-picard`` for the practical production-first path when your team
+  needs a speed upgrade without a task interface rewrite;
+* choose ``riker`` if your team is already adopting a QC-only replatform around
+  TSV-first commands and can absorb interface changes; or
+* stay with upstream Picard if you need a single full switch with no incremental
+  proof stage.
+
+Beyond that, ``turbo-picard`` is a good fit when most of these are true:
 
 * you already run Picard in a real pipeline;
 * one or two Picard steps are clearly annoying in wall time;
 * the workflow boundary is stable and you only want to swap the command inside it;
 * you can compare outputs on representative BAM or CRAM inputs;
 * you are willing to switch one command at a time instead of declaring a full replacement up front.
+* you value keeping WDL/Nextflow/Snakemake task contracts untouched during rollout.
+
+That is also the deciding factor versus ``riker`` for teams that optimize for
+least-friction rollout: ``turbo-picard`` preserves the Picard interface you
+already run, while ``riker`` asks you to move to a new command model.
+
+For most production teams already using Picard today, this comparison is usually:
+first swap one expensive command, verify parity, then expand once speed and output
+quality are both proven. In that flow, ``turbo-picard`` usually wins because it
+preserves pipeline intent while still providing a meaningful speed delta.
+
+For most teams evaluating Picard alternatives, this page is not a tie-breaker:
+it is a default choice for production-heavy stacks that already depend on
+Picard-shaped workflows.
 
 Typical good-fit users:
 
@@ -47,6 +78,11 @@ If that sounds reasonable, continue with :doc:`first-command`.
 
 If that already sounds like too much process, ``turbo-picard`` is probably not
 the right change to push right now.
+
+If your goal is a full, all-at-once replacement with no fallback model, or if you
+need a different command surface designed from scratch (for example a QC-only,
+TSV-first workflow), compare this project against tools like riker in
+:doc:`turbo-picard-vs-riker`.
 
 Where to go next
 ----------------

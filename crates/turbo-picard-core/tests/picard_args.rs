@@ -62,6 +62,82 @@ fn normalizes_short_picard_options() {
 }
 
 #[test]
+fn normalizes_short_picard_options_with_negative_value() {
+    let args = vec!["-MQ".to_string(), "-1".to_string()];
+
+    let parsed =
+        normalize_picard_args_for_command("CollectWgsMetrics", &args).expect("arguments parse");
+
+    assert_eq!(
+        parsed.get("MINIMUM_MAPPING_QUALITY").unwrap(),
+        &vec!["-1".to_string()]
+    );
+}
+
+#[test]
+fn normalizes_short_picard_options_with_negative_float_value() {
+    let args = vec!["-Q".to_string(), "-.5".to_string()];
+
+    let parsed =
+        normalize_picard_args_for_command("CollectWgsMetrics", &args).expect("arguments parse");
+
+    assert_eq!(
+        parsed.get("MINIMUM_BASE_QUALITY").unwrap(),
+        &vec!["-.5".to_string()]
+    );
+}
+
+#[test]
+fn normalizes_long_picard_options_with_negative_value() {
+    let args = vec!["--MQ".to_string(), "-1".to_string()];
+
+    let parsed =
+        normalize_picard_args_for_command("CollectWgsMetrics", &args).expect("arguments parse");
+
+    assert_eq!(
+        parsed.get("MINIMUM_MAPPING_QUALITY").unwrap(),
+        &vec!["-1".to_string()]
+    );
+}
+
+#[test]
+fn normalizes_long_picard_options_with_negative_float_value() {
+    let args = vec!["--Q".to_string(), "-.5".to_string()];
+
+    let parsed =
+        normalize_picard_args_for_command("CollectWgsMetrics", &args).expect("arguments parse");
+
+    assert_eq!(
+        parsed.get("MINIMUM_BASE_QUALITY").unwrap(),
+        &vec!["-.5".to_string()]
+    );
+}
+
+#[test]
+fn normalizes_long_picard_options_treats_flag_like_values_as_flags() {
+    let args = vec!["--MQ".to_string(), "-X".to_string()];
+
+    let err = normalize_picard_args_for_command("CollectWgsMetrics", &args).expect_err("flag-like");
+
+    assert_eq!(
+        err.to_string(),
+        "missing value for Picard argument: MINIMUM_MAPPING_QUALITY"
+    );
+}
+
+#[test]
+fn normalizes_short_picard_options_treats_flag_like_values_as_flags() {
+    let args = vec!["-MQ".to_string(), "-X".to_string()];
+
+    let err = normalize_picard_args_for_command("CollectWgsMetrics", &args).expect_err("flag-like");
+
+    assert_eq!(
+        err.to_string(),
+        "missing value for Picard argument: MINIMUM_MAPPING_QUALITY"
+    );
+}
+
+#[test]
 fn normalizes_common_markduplicates_short_aliases() {
     let args = vec![
         "-AS".to_string(),

@@ -176,7 +176,7 @@ pub fn run(config: &MarkDuplicatesConfig) -> Result<MarkDuplicatesSummary, MarkD
         } else {
             summary.unpaired_reads_examined += 1;
         }
-        let key = duplicate_key(&fields, flag, config);
+        let key = duplicate_key(&fields, flag, line_number, config)?;
         let seen_count = seen.entry(key).or_insert(0);
         let duplicate = *seen_count > 0;
         *seen_count += 1;
@@ -581,12 +581,10 @@ fn try_run_single_bam_no_duplicate_fast_path(
         }
     }
 
-    if !should_fallback {
-        if let Some((qname, record)) = adjacent_pending_pair {
-            let key = fast_single_duplicate_key(&record);
-            if duplicate_key_seen_with_different_name(&mut seen_single_keys, key, &qname)? {
-                should_fallback = true;
-            }
+    if !should_fallback && let Some((qname, record)) = adjacent_pending_pair {
+        let key = fast_single_duplicate_key(&record);
+        if duplicate_key_seen_with_different_name(&mut seen_single_keys, key, &qname)? {
+            should_fallback = true;
         }
     }
 
@@ -1001,12 +999,9 @@ fn add_duplicate_set_member_tags(
         return Ok(());
     }
 
-    let mut member_names = Vec::<Vec<u8>>::new();
+    let mut member_names = HashSet::<Vec<u8>>::default();
     for index in group.iter().copied() {
-        let name = records[index].qname().to_vec();
-        if !member_names.iter().any(|existing| existing == &name) {
-            member_names.push(name);
-        }
+        member_names.insert(records[index].qname().to_vec());
     }
     if member_names.len() < 2 {
         return Ok(());
@@ -1104,18 +1099,38 @@ fn write_md5_sidecar(output: &str) -> Result<(), MarkDuplicatesError> {
     Ok(())
 }
 
-fn duplicate_key(fields: &[String], flag: u16, config: &MarkDuplicatesConfig) -> DuplicateKey {
+fn duplicate_key(
+    fields: &[String],
+    flag: u16,
+    line_number: usize,
+    config: &MarkDuplicatesConfig,
+) -> Result<DuplicateKey, MarkDuplicatesError> {
     let reverse_strand = flag & 0x10 != 0;
-    let position = fields[3].parse::<i64>().unwrap_or_default() - 1;
-    DuplicateKey {
+    let position = parse_sam_integer(&fields[3], "POS", line_number)? - 1;
+    let mate_position = parse_sam_integer(&fields[7], "MATE_POS", line_number)?;
+    let template_length = parse_sam_integer(&fields[8], "TLEN", line_number)?;
+    Ok(DuplicateKey {
         reference_name: fields[2].clone(),
-        position: unclipped_five_prime_position(position, &fields[5], reverse_strand),
+        position: unclipped_five_prime_position(position, &fields[5], reverse_strand, line_number)?,
         mate_reference_name: fields[6].clone(),
-        mate_position: fields[7].parse::<i64>().unwrap_or_default(),
-        template_length: fields[8].parse::<i64>().unwrap_or_default(),
+        mate_position,
+        template_length,
         reverse_strand,
         barcode: sam_barcode(fields, config),
-    }
+    })
+}
+
+fn parse_sam_integer(
+    value: &str,
+    field_name: &str,
+    line_number: usize,
+) -> Result<i64, MarkDuplicatesError> {
+    value
+        .parse::<i64>()
+        .map_err(|_| MarkDuplicatesError::MalformedSam {
+            line_number,
+            reason: format!("invalid {field_name} value: {value}"),
+        })
 }
 
 fn duplicate_groups(
@@ -1415,8 +1430,13 @@ fn raw_cigar_is_clip(operation: u32) -> bool {
     matches!(raw_cigar_op(operation), 4 | 5)
 }
 
-fn unclipped_five_prime_position(position: i64, cigar: &str, reverse_strand: bool) -> i64 {
-    let operations = parse_cigar(cigar);
+fn unclipped_five_prime_position(
+    position: i64,
+    cigar: &str,
+    reverse_strand: bool,
+    line_number: usize,
+) -> Result<i64, MarkDuplicatesError> {
+    let operations = parse_cigar(cigar, line_number)?;
     if reverse_strand {
         let reference_len: i64 = operations
             .iter()
@@ -1429,33 +1449,69 @@ fn unclipped_five_prime_position(position: i64, cigar: &str, reverse_strand: boo
             .take_while(|(_, op)| matches!(op, 'S' | 'H'))
             .map(|(len, _)| *len)
             .sum::<i64>();
-        position + reference_len + trailing_clip - 1
+        Ok(position + reference_len + trailing_clip - 1)
     } else {
         let leading_clip = operations
             .iter()
             .take_while(|(_, op)| matches!(op, 'S' | 'H'))
             .map(|(len, _)| *len)
             .sum::<i64>();
-        position - leading_clip
+        Ok(position - leading_clip)
     }
 }
 
-fn parse_cigar(cigar: &str) -> Vec<(i64, char)> {
+fn parse_cigar(cigar: &str, line_number: usize) -> Result<Vec<(i64, char)>, MarkDuplicatesError> {
     let mut operations = Vec::new();
-    let mut length = String::new();
+    let mut length = 0i64;
+    let mut seen_operation = false;
 
-    for character in cigar.chars() {
+    for character in cigar.bytes() {
         if character.is_ascii_digit() {
-            length.push(character);
+            length = length
+                .checked_mul(10)
+                .and_then(|value| value.checked_add(i64::from(character - b'0')))
+                .filter(|value| *value >= 0)
+                .ok_or_else(|| MarkDuplicatesError::MalformedSam {
+                    line_number,
+                    reason: format!("invalid CIGAR value: {cigar}"),
+                })?;
             continue;
         }
-        if !length.is_empty() {
-            operations.push((length.parse::<i64>().unwrap_or_default(), character));
-            length.clear();
+        if length == 0 {
+            return Err(MarkDuplicatesError::MalformedSam {
+                line_number,
+                reason: format!("invalid CIGAR value: {cigar}"),
+            });
         }
+        if !matches!(
+            character as char,
+            'M' | 'I' | 'D' | 'N' | 'S' | 'H' | 'P' | '=' | 'X'
+        ) {
+            return Err(MarkDuplicatesError::MalformedSam {
+                line_number,
+                reason: format!("invalid CIGAR value: {cigar}"),
+            });
+        }
+        operations.push((length, character as char));
+        length = 0;
+        seen_operation = true;
     }
 
-    operations
+    if !seen_operation {
+        return Err(MarkDuplicatesError::MalformedSam {
+            line_number,
+            reason: format!("invalid CIGAR value: {cigar}"),
+        });
+    }
+
+    if length != 0 {
+        return Err(MarkDuplicatesError::MalformedSam {
+            line_number,
+            reason: format!("invalid CIGAR value: {cigar}"),
+        });
+    }
+
+    Ok(operations)
 }
 
 fn quality_score(record: &bam::Record) -> u64 {
@@ -1485,34 +1541,25 @@ fn paired_duplicate_set_size(group: &[usize], records: &[bam::Record]) -> Option
     {
         return None;
     }
-    let mut names = Vec::<&[u8]>::new();
+    let mut names = HashSet::<Vec<u8>>::default();
     for index in group.iter().copied() {
-        let name = records[index].qname();
-        if !names.contains(&name) {
-            names.push(name);
-        }
+        names.insert(records[index].qname().to_vec());
     }
     u64::try_from(names.len()).ok().filter(|size| *size > 0)
 }
 
 fn best_duplicate_representative_index(group: &[usize], records: &[bam::Record]) -> usize {
-    let mut scores = Vec::<(usize, u64)>::new();
+    let mut scores_by_name = HashMap::<Vec<u8>, (usize, u64)>::default();
 
     for index in group.iter().copied() {
-        let name = records[index].qname();
         let score = quality_score(&records[index]);
-        if let Some((_, existing_score)) = scores
-            .iter_mut()
-            .find(|(existing_index, _)| records[*existing_index].qname() == name)
-        {
-            *existing_score += score;
-        } else {
-            scores.push((index, score));
-        }
+        let name = records[index].qname().to_vec();
+        let entry = scores_by_name.entry(name).or_insert((index, 0));
+        entry.1 += score;
     }
 
-    scores
-        .into_iter()
+    scores_by_name
+        .into_values()
         .max_by(|left, right| left.1.cmp(&right.1).then_with(|| right.0.cmp(&left.0)))
         .map(|(index, _)| index)
         .expect("non-empty duplicate group")
@@ -1891,5 +1938,235 @@ fn record_library_id(record: &bam::Record, lookup: &LibraryLookup) -> LibraryId 
             .copied()
             .unwrap_or(lookup.unknown_id),
         _ => lookup.unknown_id,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sam_markdup_config() -> MarkDuplicatesConfig {
+        MarkDuplicatesConfig {
+            input: String::new(),
+            inputs: Vec::new(),
+            output: String::new(),
+            metrics_file: String::new(),
+            remove_duplicates: false,
+            remove_sequencing_duplicates: false,
+            assume_sorted: true,
+            assume_sort_order: None,
+            validation_stringency: None,
+            quiet: true,
+            create_index: false,
+            create_md5_file: false,
+            add_pg_tag_to_reads: true,
+            tag_duplicate_set_members: false,
+            duplicate_scoring_strategy: None,
+            read_name_regex: None,
+            tagging_policy: None,
+            barcode_tag: None,
+            read_one_barcode_tag: None,
+            read_two_barcode_tag: None,
+            clear_dt: true,
+            optical_duplicate_pixel_distance: None,
+            compression_level: None,
+            reference_sequence: None,
+        }
+    }
+
+    fn valid_sam_fields() -> Vec<String> {
+        vec![
+            "r1".to_string(),
+            "0".to_string(),
+            "chr1".to_string(),
+            "1".to_string(),
+            "60".to_string(),
+            "10M".to_string(),
+            "*".to_string(),
+            "0".to_string(),
+            "0".to_string(),
+            "NNNNNNNNNN".to_string(),
+            "*".to_string(),
+        ]
+    }
+
+    fn assert_malformed_sam_err(
+        result: Result<DuplicateKey, MarkDuplicatesError>,
+        expected_line: usize,
+        field: &str,
+    ) {
+        let error = result.expect_err("expected malformed SAM error");
+        let MarkDuplicatesError::MalformedSam {
+            line_number,
+            reason,
+        } = error
+        else {
+            panic!("expected malformed SAM error");
+        };
+        assert_eq!(line_number, expected_line);
+        assert!(reason.contains(field));
+    }
+
+    fn record_with_name_and_qualities(qname: &[u8], qualities: &[u8], flags: u16) -> bam::Record {
+        let mut record = bam::Record::new();
+        let sequence = vec![b'A'; qualities.len()];
+        record.set(qname, None, &sequence, qualities);
+        record.set_flags(flags);
+        record
+    }
+
+    #[test]
+    fn best_duplicate_representative_index_aggregates_score_by_read_name() {
+        let records = [
+            record_with_name_and_qualities(b"dup-a", &[20], 0),
+            record_with_name_and_qualities(b"dup-a", &[15], 0),
+            record_with_name_and_qualities(b"dup-b", &[35], 0),
+            record_with_name_and_qualities(b"dup-c", &[5], 0),
+        ];
+
+        let representative_index = best_duplicate_representative_index(&[0, 1, 2, 3], &records);
+        assert_eq!(representative_index, 0);
+    }
+
+    #[test]
+    fn best_duplicate_representative_index_tie_keeps_first_seen_index() {
+        let records = [
+            record_with_name_and_qualities(b"dup-a", &[20], 0),
+            record_with_name_and_qualities(b"dup-b", &[10], 0),
+            record_with_name_and_qualities(b"dup-c", &[10], 0),
+        ];
+
+        let representative_index = best_duplicate_representative_index(&[0, 1, 2], &records);
+        assert_eq!(representative_index, 0);
+    }
+
+    #[test]
+    fn paired_duplicate_set_size_uses_unique_read_names_for_pairs() {
+        let records = [
+            record_with_name_and_qualities(b"dup-a", &[10], 0x1),
+            record_with_name_and_qualities(b"dup-a", &[20], 0x1),
+            record_with_name_and_qualities(b"dup-b", &[30], 0x0),
+            record_with_name_and_qualities(b"dup-b", &[40], 0x1),
+        ];
+
+        assert_eq!(paired_duplicate_set_size(&[0, 1, 2, 3], &records), Some(2));
+    }
+
+    #[test]
+    fn paired_duplicate_set_size_none_without_paired_candidate() {
+        let records = [
+            record_with_name_and_qualities(b"dup-a", &[10], 0x0),
+            record_with_name_and_qualities(b"dup-a", &[20], 0x0),
+        ];
+
+        assert_eq!(paired_duplicate_set_size(&[0, 1], &records), None);
+    }
+
+    fn record_with_name_and_flags(qname: &[u8], flags: u16) -> bam::Record {
+        let mut record = bam::Record::new();
+        let qualities = [0x1f_u8];
+        record.set(qname, None, &vec![b'A'; qualities.len()], &qualities);
+        record.set_flags(flags);
+        record.set_tid(0);
+        record.set_pos(0);
+        record.set_mtid(-1);
+        record.set_mpos(-1);
+        record.set_insert_size(0);
+        record
+    }
+
+    #[test]
+    fn add_duplicate_set_member_tags_uses_unique_read_names_for_duplicate_set_size() {
+        let mut records = [
+            record_with_name_and_flags(b"dup-a", 0x1),
+            record_with_name_and_flags(b"dup-a", 0x1),
+            record_with_name_and_flags(b"dup-b", 0x1),
+            record_with_name_and_flags(b"dup-c", 0x1),
+        ];
+
+        add_duplicate_set_member_tags(&[0, 1, 2, 3], &mut records, b"dup-a").expect("tags applied");
+
+        for index in [0usize, 1, 2, 3] {
+            let di = records[index].aux(b"DI").expect("DI tag exists");
+            let ds = records[index].aux(b"DS").expect("DS tag exists");
+            assert!(matches!(di, Aux::I32(0)));
+            assert!(matches!(ds, Aux::I32(3)));
+        }
+    }
+
+    #[test]
+    fn add_duplicate_set_member_tags_skips_groups_without_paired_record() {
+        let mut records = [
+            record_with_name_and_flags(b"dup-a", 0x0),
+            record_with_name_and_flags(b"dup-a", 0x0),
+        ];
+
+        add_duplicate_set_member_tags(&[0, 1], &mut records, b"dup-a").expect("returns");
+
+        assert!(records[0].aux(b"DI").is_err());
+        assert!(records[1].aux(b"DI").is_err());
+    }
+
+    #[test]
+    fn duplicate_key_rejects_invalid_position() {
+        let mut fields = valid_sam_fields();
+        fields[3] = "bad".to_string();
+
+        let key = duplicate_key(&fields, 0, 7, &sam_markdup_config());
+        assert_malformed_sam_err(key, 7, "POS");
+    }
+
+    #[test]
+    fn duplicate_key_rejects_invalid_mate_position() {
+        let mut fields = valid_sam_fields();
+        fields[7] = "bad".to_string();
+
+        let key = duplicate_key(&fields, 0, 11, &sam_markdup_config());
+        assert_malformed_sam_err(key, 11, "MATE_POS");
+    }
+
+    #[test]
+    fn duplicate_key_rejects_invalid_template_length() {
+        let mut fields = valid_sam_fields();
+        fields[8] = "bad".to_string();
+
+        let key = duplicate_key(&fields, 0, 13, &sam_markdup_config());
+        assert_malformed_sam_err(key, 13, "TLEN");
+    }
+
+    #[test]
+    fn duplicate_key_rejects_invalid_cigar() {
+        let mut fields = valid_sam_fields();
+        fields[5] = "10M5".to_string();
+
+        let key = duplicate_key(&fields, 0, 17, &sam_markdup_config());
+        assert_malformed_sam_err(key, 17, "CIGAR");
+    }
+
+    #[test]
+    fn duplicate_key_rejects_zero_length_cigar_op() {
+        let mut fields = valid_sam_fields();
+        fields[5] = "0M".to_string();
+
+        let key = duplicate_key(&fields, 0, 19, &sam_markdup_config());
+        assert_malformed_sam_err(key, 19, "CIGAR");
+    }
+
+    #[test]
+    fn duplicate_key_rejects_empty_cigar() {
+        let mut fields = valid_sam_fields();
+        fields[5] = "".to_string();
+
+        let key = duplicate_key(&fields, 0, 23, &sam_markdup_config());
+        assert_malformed_sam_err(key, 23, "CIGAR");
+    }
+
+    #[test]
+    fn duplicate_key_rejects_star_cigar() {
+        let mut fields = valid_sam_fields();
+        fields[5] = "*".to_string();
+
+        let key = duplicate_key(&fields, 0, 31, &sam_markdup_config());
+        assert_malformed_sam_err(key, 31, "CIGAR");
     }
 }

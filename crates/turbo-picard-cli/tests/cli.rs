@@ -2836,6 +2836,38 @@ fn collectqualityyieldmetrics_uses_original_qualities_by_default() {
 }
 
 #[test]
+fn collectqualityyieldmetrics_can_disable_original_qualities_in_sam() {
+    let tempdir = tempfile::tempdir().expect("tempdir exists");
+    let input = tempdir.path().join("input.sam");
+    let output = tempdir.path().join("quality_yield_metrics.txt");
+    fs::write(
+        &input,
+        concat!(
+            "@HD\tVN:1.6\tSO:coordinate\n",
+            "@SQ\tSN:chr1\tLN:100\n",
+            "read-a\t0\tchr1\t1\t60\t4M\t*\t0\t0\tACGT\t!!!!\tOQ:Z:FFFF\n",
+        ),
+    )
+    .expect("input SAM is written");
+
+    Command::cargo_bin("picard")
+        .expect("binary exists")
+        .args([
+            "CollectQualityYieldMetrics",
+            &format!("I={}", input.display()),
+            &format!("O={}", output.display()),
+            "USE_ORIGINAL_QUALITIES=false",
+            "VALIDATION_STRINGENCY=SILENT",
+            "QUIET=true",
+        ])
+        .assert()
+        .success();
+
+    let metrics = fs::read_to_string(&output).expect("metrics output exists");
+    assert!(metrics.contains("1\t1\t4\t4\t4\t0\t0\t0\t0\t0\t0\n"));
+}
+
+#[test]
 fn collectqualityyieldmetrics_can_include_secondary_and_supplemental_alignments() {
     let tempdir = tempfile::tempdir().expect("tempdir exists");
     let input = tempdir.path().join("input.sam");
@@ -4369,6 +4401,367 @@ fn collectmultiplemetrics_forwards_quality_yield_extra_arguments() {
     assert!(metrics.contains("3\t3\t4\t12\t12\t12\t12\t12\t12\t22\t22\n"));
 }
 
+#[test]
+fn collectmultiplemetrics_forwards_quality_yield_use_original_qualities_argument() {
+    let tempdir = tempfile::tempdir().expect("tempdir exists");
+    let input = tempdir.path().join("input.sam");
+    let output = tempdir.path().join("multiple_yield_original");
+    fs::write(
+        &input,
+        concat!(
+            "@HD\tVN:1.6\tSO:coordinate\n",
+            "@SQ\tSN:chr1\tLN:1000\n",
+            "primary\t0\tchr1\t1\t60\t4M\t*\t0\t0\tACGT\t!!!!\tOQ:Z:FFFF\n",
+        ),
+    )
+    .expect("input fixture is written");
+
+    Command::cargo_bin("picard")
+        .expect("binary exists")
+        .args([
+            "CollectMultipleMetrics",
+            &format!("I={}", input.display()),
+            &format!("O={}", output.display()),
+            "PROGRAM=null",
+            "PROGRAM=CollectQualityYieldMetrics",
+            "EXTRA_ARGUMENT=CollectQualityYieldMetrics::USE_ORIGINAL_QUALITIES=false",
+            "VALIDATION_STRINGENCY=SILENT",
+            "QUIET=true",
+        ])
+        .assert()
+        .success();
+
+    let metrics = fs::read_to_string(output.with_extension("quality_yield_metrics"))
+        .expect("quality yield metrics exist");
+    assert!(metrics.contains("1\t1\t4\t4\t4\t0\t0\t0\t0\t0\t0\n"));
+}
+
+#[test]
+fn collectmultiplemetrics_threads_forwards_quality_yield_use_original_qualities_argument() {
+    let tempdir = tempfile::tempdir().expect("tempdir exists");
+    let input = tempdir.path().join("input.sam");
+    let bam = tempdir.path().join("input.bam");
+    let output = tempdir.path().join("multiple_yield_threads");
+    fs::write(
+        &input,
+        concat!(
+            "@HD\tVN:1.6\tSO:coordinate\n",
+            "@SQ\tSN:chr1\tLN:1000\n",
+            "primary\t0\tchr1\t1\t60\t4M\t*\t0\t0\tACGT\t!!!!\tOQ:Z:FFFF\n",
+            "secondary\t256\tchr1\t2\t60\t4M\t*\t0\t0\tACGT\tFFFF\n",
+            "supplemental\t2048\tchr1\t3\t60\t4M\t*\t0\t0\tACGT\tEEEE\n",
+        ),
+    )
+    .expect("input fixture is written");
+
+    Command::cargo_bin("picard")
+        .expect("binary exists")
+        .args([
+            "SortSam",
+            &format!("I={}", input.display()),
+            &format!("O={}", bam.display()),
+            "SORT_ORDER=coordinate",
+            "VALIDATION_STRINGENCY=SILENT",
+            "QUIET=true",
+        ])
+        .assert()
+        .success();
+
+    Command::cargo_bin("picard")
+        .expect("binary exists")
+        .env("TURBO_PICARD_CMM_THREADS", "2")
+        .args([
+            "CollectMultipleMetrics",
+            &format!("I={}", bam.display()),
+            &format!("O={}", output.display()),
+            "PROGRAM=null",
+            "PROGRAM=CollectAlignmentSummaryMetrics",
+            "PROGRAM=CollectQualityYieldMetrics",
+            "EXTRA_ARGUMENT=CollectQualityYieldMetrics::USE_ORIGINAL_QUALITIES=false",
+            "EXTRA_ARGUMENT=CollectQualityYieldMetrics::INCLUDE_SECONDARY_ALIGNMENTS=true",
+            "EXTRA_ARGUMENT=CollectQualityYieldMetrics::INCLUDE_SUPPLEMENTAL_ALIGNMENTS=true",
+            "VALIDATION_STRINGENCY=SILENT",
+            "QUIET=true",
+        ])
+        .assert()
+        .success();
+
+    let metrics = fs::read_to_string(output.with_extension("quality_yield_metrics"))
+        .expect("quality yield metrics exist");
+    assert!(metrics.contains("3\t3\t4\t12\t12\t8\t8\t8\t8\t14\t14\n"));
+    assert!(output.with_extension("alignment_summary_metrics").exists());
+}
+
+#[test]
+fn collectmultiplemetrics_forwards_base_distribution_extra_arguments() {
+    let tempdir = tempfile::tempdir().expect("tempdir exists");
+    let input = tempdir.path().join("input.sam");
+    let output = tempdir.path().join("multiple_base");
+    fs::write(
+        &input,
+        concat!(
+            "@HD\tVN:1.6\tSO:coordinate\n",
+            "@SQ\tSN:chr1\tLN:1000\n",
+            "mapped\t0\tchr1\t1\t60\t4M\t*\t0\t0\tACGT\tFFFF\n",
+            "unmapped\t4\t*\t0\t0\t4M\t*\t0\t0\tNNNN\tFFFF\n",
+        ),
+    )
+    .expect("input fixture is written");
+
+    Command::cargo_bin("picard")
+        .expect("binary exists")
+        .args([
+            "CollectMultipleMetrics",
+            &format!("I={}", input.display()),
+            &format!("O={}", output.display()),
+            "PROGRAM=null",
+            "PROGRAM=CollectBaseDistributionByCycle",
+            "EXTRA_ARGUMENT=CollectBaseDistributionByCycle::ALIGNED_READS_ONLY=true",
+            "VALIDATION_STRINGENCY=SILENT",
+            "QUIET=true",
+        ])
+        .assert()
+        .success();
+
+    let metrics = fs::read_to_string(output.with_extension("base_distribution_by_cycle_metrics"))
+        .expect("base distribution metrics exist");
+    assert!(metrics.contains("1\t1\t100\t0\t0\t0\t0\n"));
+}
+
+#[test]
+fn collectmultiplemetrics_threads_forwards_base_distribution_extra_arguments() {
+    let tempdir = tempfile::tempdir().expect("tempdir exists");
+    let input = tempdir.path().join("input.sam");
+    let bam = tempdir.path().join("input.bam");
+    let output = tempdir.path().join("multiple_base_threads");
+    fs::write(
+        &input,
+        concat!(
+            "@HD\tVN:1.6\tSO:coordinate\n",
+            "@SQ\tSN:chr1\tLN:1000\n",
+            "mapped\t0\tchr1\t1\t60\t4M\t*\t0\t0\tACGT\tFFFF\n",
+            "unmapped\t4\t*\t0\t0\t*\t*\t0\t0\tNNNN\t!!!!\n",
+        ),
+    )
+    .expect("input fixture is written");
+
+    Command::cargo_bin("picard")
+        .expect("binary exists")
+        .args([
+            "SortSam",
+            &format!("I={}", input.display()),
+            &format!("O={}", bam.display()),
+            "SORT_ORDER=coordinate",
+            "VALIDATION_STRINGENCY=SILENT",
+            "QUIET=true",
+        ])
+        .assert()
+        .success();
+
+    Command::cargo_bin("picard")
+        .expect("binary exists")
+        .env("TURBO_PICARD_CMM_THREADS", "2")
+        .args([
+            "CollectMultipleMetrics",
+            &format!("I={}", bam.display()),
+            &format!("O={}", output.display()),
+            "PROGRAM=null",
+            "PROGRAM=CollectAlignmentSummaryMetrics",
+            "PROGRAM=CollectBaseDistributionByCycle",
+            "EXTRA_ARGUMENT=CollectBaseDistributionByCycle::ALIGNED_READS_ONLY=true",
+            "VALIDATION_STRINGENCY=SILENT",
+            "QUIET=true",
+        ])
+        .assert()
+        .success();
+
+    let metrics = fs::read_to_string(output.with_extension("base_distribution_by_cycle_metrics"))
+        .expect("base distribution metrics exist");
+    assert!(metrics.contains("1\t1\t100\t0\t0\t0\t0\n"));
+}
+
+#[test]
+fn collectmultiplemetrics_threads_runs_alignment_and_insert_size_together() {
+    let tempdir = tempfile::tempdir().expect("tempdir exists");
+    let input = tempdir.path().join("input.sam");
+    let bam = tempdir.path().join("input.bam");
+    let output = tempdir.path().join("multiple_alignment_insert_threads");
+    fs::write(
+        &input,
+        concat!(
+            "@HD\tVN:1.6\tSO:coordinate\n",
+            "@SQ\tSN:chr1\tLN:1000\n",
+            "primary\t99\tchr1\t10\t60\t4M\t=\t30\t24\tACGT\tFFFF\n",
+            "primary\t147\tchr1\t30\t60\t4M\t=\t10\t-24\tTGCA\tFFFF\n",
+            "secondary\t355\tchr1\t50\t60\t4M\t=\t70\t20\tAAAA\tFFFF\n",
+            "supplemental\t827\tchr1\t60\t60\t4M\t=\t10\t-50\tTTTT\tFFFF\n",
+        ),
+    )
+    .expect("input fixture is written");
+
+    Command::cargo_bin("picard")
+        .expect("binary exists")
+        .args([
+            "SortSam",
+            &format!("I={}", input.display()),
+            &format!("O={}", bam.display()),
+            "SORT_ORDER=coordinate",
+            "VALIDATION_STRINGENCY=SILENT",
+            "QUIET=true",
+        ])
+        .assert()
+        .success();
+
+    Command::cargo_bin("picard")
+        .expect("binary exists")
+        .env("TURBO_PICARD_CMM_THREADS", "2")
+        .args([
+            "CollectMultipleMetrics",
+            &format!("I={}", bam.display()),
+            &format!("O={}", output.display()),
+            "PROGRAM=null",
+            "PROGRAM=CollectAlignmentSummaryMetrics",
+            "PROGRAM=CollectInsertSizeMetrics",
+            "VALIDATION_STRINGENCY=SILENT",
+            "QUIET=true",
+        ])
+        .assert()
+        .success();
+
+    let alignment_metrics = fs::read_to_string(output.with_extension("alignment_summary_metrics"))
+        .expect("alignment summary metrics exist");
+    let insert_metrics = fs::read_to_string(output.with_extension("insert_size_metrics"))
+        .expect("insert-size metrics exist");
+
+    assert!(alignment_metrics.contains("PAIR\t"));
+    assert!(
+        alignment_metrics
+            .contains("READ_LENGTH\tPAIRED_TOTAL_LENGTH_COUNT\tPAIRED_ALIGNED_LENGTH_COUNT")
+    );
+    assert!(insert_metrics.contains("\tFR\t"));
+    assert!(insert_metrics.contains("24\t1\n"));
+}
+
+#[test]
+fn collectmultiplemetrics_threads_runs_quality_yield_with_base_distribution() {
+    let tempdir = tempfile::tempdir().expect("tempdir exists");
+    let input = tempdir.path().join("input.sam");
+    let bam = tempdir.path().join("input.bam");
+    let output = tempdir.path().join("multiple_quality_yield_threads");
+    fs::write(
+        &input,
+        concat!(
+            "@HD\tVN:1.6\tSO:coordinate\n",
+            "@SQ\tSN:chr1\tLN:1000\n",
+            "primary\t99\tchr1\t10\t60\t4M\t=\t30\t24\tACGT\t!!!!\tOQ:Z:FFFF\n",
+            "primary\t147\tchr1\t30\t60\t4M\t=\t10\t-24\tTGCA\t!!!!\tOQ:Z:FFFF\n",
+            "secondary\t355\tchr1\t50\t60\t4M\t=\t70\t20\tAAAA\tFFFF\tOQ:Z:BBBB\n",
+            "supplemental\t827\tchr1\t60\t60\t4M\t=\t10\t-50\tTTTT\tEEEE\tOQ:Z:CCCC\n",
+        ),
+    )
+    .expect("input fixture is written");
+
+    Command::cargo_bin("picard")
+        .expect("binary exists")
+        .args([
+            "SortSam",
+            &format!("I={}", input.display()),
+            &format!("O={}", bam.display()),
+            "SORT_ORDER=coordinate",
+            "VALIDATION_STRINGENCY=SILENT",
+            "QUIET=true",
+        ])
+        .assert()
+        .success();
+
+    Command::cargo_bin("picard")
+        .expect("binary exists")
+        .env("TURBO_PICARD_CMM_THREADS", "2")
+        .args([
+            "CollectMultipleMetrics",
+            &format!("I={}", bam.display()),
+            &format!("O={}", output.display()),
+            "PROGRAM=null",
+            "PROGRAM=CollectQualityYieldMetrics",
+            "PROGRAM=CollectBaseDistributionByCycle",
+            "EXTRA_ARGUMENT=CollectQualityYieldMetrics::INCLUDE_SECONDARY_ALIGNMENTS=true",
+            "EXTRA_ARGUMENT=CollectQualityYieldMetrics::INCLUDE_SUPPLEMENTAL_ALIGNMENTS=true",
+            "EXTRA_ARGUMENT=CollectQualityYieldMetrics::USE_ORIGINAL_QUALITIES=true",
+            "EXTRA_ARGUMENT=CollectBaseDistributionByCycle::ALIGNED_READS_ONLY=true",
+            "VALIDATION_STRINGENCY=SILENT",
+            "QUIET=true",
+        ])
+        .assert()
+        .success();
+
+    let quality_metrics = fs::read_to_string(output.with_extension("quality_yield_metrics"))
+        .expect("quality yield metrics exist");
+    assert!(quality_metrics.contains(
+        "## METRICS CLASS\tpicard.analysis.CollectQualityYieldMetrics$QualityYieldMetrics"
+    ));
+    let base_metrics =
+        fs::read_to_string(output.with_extension("base_distribution_by_cycle_metrics"))
+            .expect("base distribution metrics exist");
+    assert!(base_metrics.contains("1\t1\t100\t0\t0\t0\t0"));
+}
+
+#[test]
+fn collectmultiplemetrics_threads_respects_conflicting_quality_filters() {
+    let tempdir = tempfile::tempdir().expect("tempdir exists");
+    let input = tempdir.path().join("input.sam");
+    let bam = tempdir.path().join("input.bam");
+    let output = tempdir.path().join("multiple_quality_filter_threads");
+    fs::write(
+        &input,
+        concat!(
+            "@HD\tVN:1.6\tSO:coordinate\n",
+            "@SQ\tSN:chr1\tLN:1000\n",
+            "mapped\t0\tchr1\t1\t60\t4M\t*\t0\t0\tACGT\tFFFF\n",
+            "unmapped\t4\t*\t0\t0\t4M\t*\t0\t0\tTTTT\t!!!!\n",
+        ),
+    )
+    .expect("input fixture is written");
+
+    Command::cargo_bin("picard")
+        .expect("binary exists")
+        .args([
+            "SortSam",
+            &format!("I={}", input.display()),
+            &format!("O={}", bam.display()),
+            "SORT_ORDER=coordinate",
+            "VALIDATION_STRINGENCY=SILENT",
+            "QUIET=true",
+        ])
+        .assert()
+        .success();
+
+    Command::cargo_bin("picard")
+        .expect("binary exists")
+        .env("TURBO_PICARD_CMM_THREADS", "2")
+        .args([
+            "CollectMultipleMetrics",
+            &format!("I={}", bam.display()),
+            &format!("O={}", output.display()),
+            "PROGRAM=null",
+            "PROGRAM=CollectBaseDistributionByCycle",
+            "PROGRAM=QualityScoreDistribution",
+            "EXTRA_ARGUMENT=CollectBaseDistributionByCycle::ALIGNED_READS_ONLY=true",
+            "VALIDATION_STRINGENCY=SILENT",
+            "QUIET=true",
+        ])
+        .assert()
+        .success();
+
+    let base_metrics =
+        fs::read_to_string(output.with_extension("base_distribution_by_cycle_metrics"))
+            .expect("base distribution metrics exist");
+    assert!(base_metrics.contains("1	1	100	0	0	0	0"));
+
+    let quality_metrics = fs::read_to_string(output.with_extension("quality_distribution_metrics"))
+        .expect("quality distribution metrics exist");
+    assert!(quality_metrics.contains("0	4"));
+    assert!(quality_metrics.contains("37	4"));
+}
 #[test]
 fn collectmultiplemetrics_forwards_insert_size_extra_arguments() {
     let tempdir = tempfile::tempdir().expect("tempdir exists");

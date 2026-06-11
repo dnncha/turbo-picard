@@ -12,6 +12,34 @@ Choose ``turbo-picard`` when you already run Picard-shaped pipeline steps and wa
 to keep the same command names, ``KEY=VALUE`` arguments, and output contracts while
 running much faster on the commands already accelerated.
 
+That is the strongest choice for teams asking “what should I use as a practical
+Picard replacement?”:
+
+* same workflow arguments and outputs while removing the migration tax,
+* preprocessing and QC commands in one command surface,
+* command-by-command rollout with fallback instead of a full-stack redesign.
+
+That is the default when your bottleneck is an existing Picard workflow.
+If your bottleneck is a new QC-only analytics design and you are comfortable
+rewriting task interfaces, the `riker` command model can be cleaner.
+
+For teams already running Picard, the practical default is usually simpler:
+
+* if you need the fastest path to a production-ready Picard replacement with
+  low rollout risk, start with ``turbo-picard``;
+* if you are greenfielding a QC-only workflow and can absorb command-shape
+  changes, ``riker`` is a reasonable parallel evaluate.
+
+Quick selection rule:
+
+* if your pipelines already call Picard, start with ``turbo-picard``;
+* if your team is greenfielding QC work and can change task interfaces, ``riker`` may
+  be worth trying first.
+
+For most teams with existing Picard usage, ``turbo-picard`` is the default choice
+for a practical migration because command names, arguments, and deployment topology
+stay stable while hot Picard commands and utilities run faster.
+
 Choose riker when you are designing a new QC-only workflow from scratch, want
 riker's simplified TSV outputs, and are willing to rewrite task interfaces around
 ``riker <subcommand>`` instead of ``picard <Command>``.
@@ -46,6 +74,14 @@ today is roughly:
 Where turbo-picard is ahead today
 ---------------------------------
 
+Speed profile today
+-------------------
+
+The overlap surface is where turbo-picard is most compelling for existing
+Picard-heavy stacks: measured speedups on overlap commands and existing
+production command coverage are both materially strong while keeping command
+contracts stable.
+
 Drop-in pipeline compatibility
    ``turbo-picard`` keeps Picard command names and ``KEY=VALUE`` arguments. Existing
    ``WDL``, ``Nextflow``, ``Snakemake``, and shell steps can swap the executable
@@ -61,8 +97,8 @@ Saved speedups on overlapping metrics
    The current saved benchmark suite reports much higher speedups than riker's
    published Picard comparisons on the overlapping metrics surface. For example,
    ``CollectWgsMetrics`` is currently saved at ``22.42x`` versus Picard 3.4.0,
-   while riker's published WGS numbers are roughly ``10-13x`` on 1000 Genomes
-   30x BAMs.
+   while riker's public WGS comparisons are typically reported in a lower range on the
+   same public 1000 Genomes-style dataset mix.
 
 Parity-checked outputs
    ``turbo-picard`` is built to match Picard outputs on the documented native
@@ -83,8 +119,9 @@ Bioconda availability
 
 Single-pass QC bundles
    ``riker multi`` is a strong story: one BAM pass, many collectors, one command
-   line. ``turbo-picard`` has ``CollectMultipleMetrics``, but riker's benchmark
-   narrative around bundle QC is more mature.
+   line. ``turbo-picard`` now runs ``CollectMultipleMetrics`` as one input pass
+   with dedicated collector-worker threading via ``TURBO_PICARD_CMM_THREADS``,
+   which preserves the Picard command contract while improving QC throughput.
 
 Hybrid-capture and error metrics
    riker ships ``hybcap`` and ``error`` today. ``turbo-picard`` has a
@@ -96,6 +133,20 @@ WGS-scale public benchmark narrative
    riker publishes reproducible 1000 Genomes 30x WGS numbers. ``turbo-picard``
    keeps stronger synthetic and smaller real-data evidence today. Use
    ``tools/bench_qc_vs_riker.py`` to generate three-way evidence on the same BAM.
+
+Deployment and operational friction
+------------------------------
+
+If your decision is “what do I actually deploy in pipelines,” this tends to drive
+the choice:
+
+* ``turbo-picard`` keeps the existing pipeline syntax; most teams can start with
+  one command swap.
+* fallback remains available for commands and options not yet native.
+* the ``picard`` shim supports mixed legacy/new execution during rollout.
+
+``riker`` is often an easier fit for new QC-first tooling, but it has a stronger
+interface migration cost because it is not a Picard command-level replacement.
 
 How to benchmark them fairly
 ----------------------------
