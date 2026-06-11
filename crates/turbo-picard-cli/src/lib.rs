@@ -762,7 +762,11 @@ Reports turbo-picard's effective acceleration policy.
 Output fields:
   backend                 Active execution backend for this build
   policy                  TURBO_PICARD_ACCELERATOR setting after validation
-  htslib_worker_threads   Worker threads used for BGZF/CRAM I/O
+  htslib_worker_threads   Worker threads used for HTSlib index construction
+  htslib_reader_threads   Worker threads used for normal BAM/CRAM readers
+  htslib_writer_threads   Worker threads used for BAM/CRAM writers
+  htslib_pipeline_reader_threads
+                          Worker threads used when a command also has a reader thread
   gpu_runtime             Detected GPU runtime, if visible
   gpu_acceleration        Whether production GPU acceleration is enabled"
     );
@@ -771,11 +775,26 @@ Output fields:
 fn run_acceleration_status() -> Result<(), String> {
     let policy = accelerator_policy()?;
     let workers = turbo_picard_core::bgzf_threads::htslib_worker_threads();
+    let reader_threads = turbo_picard_core::bgzf_threads::bgzf_threads_for(
+        turbo_picard_core::bgzf_threads::HtsThreadRole::Reader,
+    )
+    .unwrap_or(1);
+    let writer_threads = turbo_picard_core::bgzf_threads::bgzf_threads_for(
+        turbo_picard_core::bgzf_threads::HtsThreadRole::Writer,
+    )
+    .unwrap_or(1);
+    let pipeline_reader_threads = turbo_picard_core::bgzf_threads::bgzf_threads_for(
+        turbo_picard_core::bgzf_threads::HtsThreadRole::PipelineReader,
+    )
+    .unwrap_or(1);
     let gpu_runtime = detect_gpu_runtime();
 
     println!("backend=cpu");
     println!("policy={policy}");
     println!("htslib_worker_threads={workers}");
+    println!("htslib_reader_threads={reader_threads}");
+    println!("htslib_writer_threads={writer_threads}");
+    println!("htslib_pipeline_reader_threads={pipeline_reader_threads}");
     println!("gpu_runtime={}", gpu_runtime.as_deref().unwrap_or("none"));
     println!("gpu_acceleration=not-enabled");
 
@@ -2966,14 +2985,23 @@ fn cmm_collector_thread_count(active_collectors: usize) -> usize {
         return 1;
     }
     if let Ok(value) = std::env::var("TURBO_PICARD_CMM_THREADS") {
+        if value.trim().eq_ignore_ascii_case("auto") {
+            return default_cmm_collector_thread_count(active_collectors);
+        }
         if let Ok(threads) = value.parse::<usize>() {
             return threads.max(1).min(active_collectors);
         }
     }
-    turbo_picard_core::bgzf_threads::bgzf_threads()
+    default_cmm_collector_thread_count(active_collectors)
+}
+
+fn default_cmm_collector_thread_count(active_collectors: usize) -> usize {
+    std::thread::available_parallelism()
+        .ok()
+        .map(|parallelism| parallelism.get().saturating_sub(2))
         .unwrap_or(1)
         .min(active_collectors)
-        .min(4)
+        .min(6)
         .max(1)
 }
 

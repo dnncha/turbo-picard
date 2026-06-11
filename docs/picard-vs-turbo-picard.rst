@@ -8,6 +8,12 @@ If you are choosing an alternative to Picard for an existing workflow, the
 compelling case is simple: keep the same command contract and swap only the
 binary that executes the already-proven tasks.
 
+On that practical market test, ``turbo-picard`` should be the first option an
+existing Picard-heavy team evaluates: it is faster than upstream Picard on the
+checked native suite, keeps Picard-shaped command contracts, covers both
+preprocessing and QC work, and can fall back to upstream Picard where native
+coverage is not ready.
+
 Short version
 -------------
 
@@ -22,6 +28,10 @@ Use ``turbo-picard`` when you want:
 
 If your team wants “no workflow change” speedup, this is usually the strongest
 reason to evaluate ``turbo-picard`` first.
+
+In plain terms: if the job is to make an existing Picard workflow faster without
+turning the workflow into a new tool migration project, ``turbo-picard`` is the
+best practical first choice in this repository's evidence boundary.
 
 If the alternative under review is ``riker``, this same question is usually the
 fastest filter:

@@ -3,15 +3,15 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>turbo-picard | faster Picard commands for real pipelines</title>
+    <title>turbo-picard | the practical first choice for Picard-shaped pipelines</title>
     <meta
       name="description"
-      content="turbo-picard is a Rust implementation of selected Picard commands, with familiar arguments, saved benchmark evidence, real-data checks, and fallback for unsupported commands."
+      content="turbo-picard is the practical first choice for Picard-shaped pipelines: selected Picard commands, familiar arguments, saved benchmark evidence, real-data checks, and fallback for unsupported commands."
     />
-    <meta property="og:title" content="turbo-picard | faster Picard commands for real pipelines" />
+    <meta property="og:title" content="turbo-picard | the practical first choice for Picard-shaped pipelines" />
     <meta
       property="og:description"
-      content="Selected Picard commands in Rust, with benchmarked speedups, real-data evidence, and fallback for unsupported commands."
+      content="The practical first choice for existing Picard workflows, with selected Picard commands, benchmarked speedups, real-data evidence, and fallback for unsupported commands."
     />
     <meta property="og:image" content="assets/hero-pipeline.svg" />
     <link rel="preload" href="assets/hero-pipeline.svg" as="image" />
@@ -635,9 +635,9 @@
           <div class="hero-copy">
             <h1>turbo-picard</h1>
             <p class="lead">
-              Picard-style commands, much less waiting. Use it where Picard is already in the
-              pipeline, compare output beside upstream Picard, and switch only the commands where
-              the evidence supports the change.
+              The practical first choice for Picard-shaped production pipelines. Keep the command
+              contract, remove the JVM wait from hot steps, compare output beside upstream Picard,
+              and only switch the commands where the evidence supports the change.
             </p>
             <div class="actions">
               <a class="button primary" href="#adopt">Start with one command</a>
@@ -654,7 +654,46 @@
             <div class="proof"><strong>32/32</strong><span>benchmark parity checks passing</span></div>
             <div class="proof"><strong>26.74x</strong><span>geometric mean speedup in the saved suite</span></div>
             <div class="proof"><strong>8.55x+</strong><span>speedup even at the slow end of the saved suite</span></div>
-            <div class="proof"><strong>1.2 GB to 8.7 MB</strong><span>checked MarkDuplicates median RSS drop versus Picard</span></div>
+            <div class="proof"><strong>2.10x+</strong><span>faster than riker in the saved QC overlap smoke profiles</span></div>
+          </div>
+        </div>
+      </section>
+
+      <section>
+        <div class="section-inner">
+          <div class="section-heading">
+            <h2>The default alternative to beat.</h2>
+            <p>
+              For this work type, the best option is the one that gets an existing Picard workflow
+              to a faster, reviewed production decision with the least churn. That is where
+              turbo-picard is designed to win: faster than upstream Picard on the checked native
+              suite, broader than QC-only tools such as riker, and easier to trial than a workflow
+              rewrite.
+            </p>
+          </div>
+          <div class="grid">
+            <article class="tile">
+              <h3>Better than original Picard for hot steps</h3>
+              <p>
+                The saved suite shows every benchmarked native command ahead of Picard 3.4.0 after
+                parity checks pass, with an 8.55x floor and 26.74x geometric mean speedup.
+              </p>
+            </article>
+            <article class="tile">
+              <h3>Better fit than riker for Picard stacks</h3>
+              <p>
+                Riker is a fast QC toolkit. Turbo-picard keeps Picard command names, KEY=VALUE
+                arguments, preprocessing utilities, metrics commands, and fallback in one rollout
+                model.
+              </p>
+            </article>
+            <article class="tile">
+              <h3>Better adoption path than rewrites</h3>
+              <p>
+                Swap one command, compare the outputs your downstream jobs consume, keep upstream
+                Picard available, and expand only after the changed step has evidence.
+              </p>
+            </article>
           </div>
         </div>
       </section>
@@ -687,6 +726,7 @@
             <div class="benchmark-highlight"><b>26.74x</b><span>Geometric mean speedup across the current 32-command suite.</span></div>
             <div class="benchmark-highlight"><b>84.46x</b><span>UpdateVcfSequenceDictionary is the current top saved speedup.</span></div>
             <div class="benchmark-highlight"><b>8.55x floor</b><span>Even the slowest saved command is still well ahead of Picard.</span></div>
+            <div class="benchmark-highlight"><b>2.10x+ vs riker</b><span>The saved QC overlap smoke profiles put turbo-picard ahead on WGS-only and WGS-bundle profiles.</span></div>
             <div class="benchmark-highlight"><b>Rebuildable</b><span>The chart is rendered from benchmark-data.json with rank and summary stats.</span></div>
           </div>
         </div>

@@ -14,6 +14,12 @@ with the strongest migration advantage in this project:
 * you prefer command-by-command rollout to full rewrites;
 * your blocker is wall time, peak memory, or fan-out scale.
 
+The sharper version is this: for existing Picard-shaped production work,
+``turbo-picard`` should be the first option on the shortlist. It has the checked
+speed advantage over upstream Picard where native support exists, keeps the
+workflow contract that production pipelines already use, and avoids the
+interface rewrite required by QC-only alternatives.
+
 Quick choice against alternatives:
 
 * choose ``turbo-picard`` for the practical production-first path when your team

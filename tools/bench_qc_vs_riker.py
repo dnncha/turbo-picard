@@ -538,6 +538,7 @@ def write_outputs(
         by_profile.setdefault(str(row["profile"]), []).append(row)
 
     has_riker = any(row["tool_family"] == "riker" for row in rows)
+    profile_comparisons: dict[str, dict[str, object]] = {}
     title = (
         "# QC benchmark: Picard vs turbo-picard vs riker"
         if has_riker
@@ -597,7 +598,33 @@ def write_outputs(
         if picard_total > 0 and riker_total > 0:
             lines.append(f"- riker profile speedup vs Picard: **{picard_total / riker_total:.2f}x**")
         if turbo_total > 0 and riker_total > 0:
-            lines.append(f"- turbo-picard vs riker: **{riker_total / turbo_total:.2f}x**")
+            turbo_vs_riker = riker_total / turbo_total
+            lines.append(f"- turbo-picard vs riker: **{turbo_vs_riker:.2f}x**")
+            if turbo_vs_riker >= 1.0:
+                lines.append("- overlap leader: **turbo-picard**")
+                leader = "turbo-picard"
+                gap = turbo_vs_riker
+            else:
+                lines.append(f"- overlap leader: **riker** by **{1 / turbo_vs_riker:.2f}x**")
+                leader = "riker"
+                gap = 1 / turbo_vs_riker
+            profile_comparisons[profile_name] = {
+                "picard_total_wall_s": picard_total,
+                "turbo_total_wall_s": turbo_total,
+                "riker_total_wall_s": riker_total,
+                "turbo_vs_riker": turbo_vs_riker,
+                "leader": leader,
+                "leader_gap": gap,
+            }
+        elif picard_total > 0 and turbo_total > 0:
+            profile_comparisons[profile_name] = {
+                "picard_total_wall_s": picard_total,
+                "turbo_total_wall_s": turbo_total,
+                "riker_total_wall_s": None,
+                "turbo_vs_riker": None,
+                "leader": "not-measured",
+                "leader_gap": None,
+            }
         lines.append("")
 
     md_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
@@ -613,6 +640,7 @@ def write_outputs(
                 },
                 "has_riker": has_riker,
                 "riker_threads": riker_thread_count,
+                "profile_comparisons": profile_comparisons,
                 "rows": rows,
             },
             indent=2,
@@ -666,7 +694,7 @@ def main() -> int:
         "--repeats",
         type=int,
         default=None,
-        help="Number of repeats per tool/profile. Defaults to 5 for --smoke and 1 otherwise.",
+        help="Number of repeats per tool/profile. Defaults to 5 for --smoke and 3 otherwise.",
     )
     parser.add_argument(
         "--profiles",
@@ -695,7 +723,7 @@ def main() -> int:
     args = parser.parse_args()
 
     if args.repeats is None:
-        args.repeats = 5 if args.smoke else 1
+        args.repeats = 5 if args.smoke else 3
 
     if args.repeats < 1:
         raise SystemExit("--repeats must be >= 1")
@@ -799,11 +827,17 @@ def main() -> int:
 
     if args.repeats > 1:
         collapsed: list[dict[str, object]] = []
-        groups: dict[tuple[str, str, str], list[float]] = {}
+        groups: dict[tuple[str, str, str], list[dict[str, object]]] = {}
         for row in rows:
             key = (str(row["profile"]), str(row["tool_family"]), str(row["tool_label"]))
-            groups.setdefault(key, []).append(float(row["wall_s"]))
-        for (profile_name, family, label), walls in sorted(groups.items()):
+            groups.setdefault(key, []).append(row)
+        for (profile_name, family, label), group_rows in sorted(groups.items()):
+            walls = [float(row["wall_s"]) for row in group_rows]
+            rss_values = [
+                int(row["max_rss_kb"])
+                for row in group_rows
+                if row.get("max_rss_kb") not in (None, "")
+            ]
             collapsed.append(
                 {
                     "sample": sample_id,
@@ -811,8 +845,8 @@ def main() -> int:
                     "tool_family": family,
                     "tool_label": label,
                     "wall_s": f"{statistics.median(walls):.6f}",
-                    "max_rss_kb": "",
-                    "threads": "",
+                    "max_rss_kb": str(int(statistics.median(rss_values))) if rss_values else "",
+                    "threads": str(group_rows[0].get("threads", "")),
                     "picard_bundle_role": "main" if family == "picard" else "",
                     "input_bytes": input_bam.stat().st_size,
                 }

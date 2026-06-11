@@ -1,6 +1,6 @@
 //! SAM/BAM/CRAM path helpers shared by native commands.
 
-use crate::bgzf_threads::bgzf_threads;
+use crate::bgzf_threads::{HtsThreadRole, bgzf_threads_for};
 use rust_htslib::bam::{self, Format, Read};
 use std::path::Path;
 
@@ -95,7 +95,11 @@ pub fn open_reader_pipelined(
             .set_reference(reference)
             .map_err(|error| error.to_string())?;
     }
-    reader.set_threads(1).map_err(|error| error.to_string())?;
+    if let Some(threads) = bgzf_threads_for(HtsThreadRole::PipelineReader) {
+        reader
+            .set_threads(threads)
+            .map_err(|error| error.to_string())?;
+    }
     Ok(reader)
 }
 
@@ -126,7 +130,7 @@ pub fn open_writer(
 }
 
 pub fn configure_reader_threads(reader: &mut bam::Reader) -> Result<(), String> {
-    if let Some(threads) = bgzf_threads() {
+    if let Some(threads) = bgzf_threads_for(HtsThreadRole::Reader) {
         reader
             .set_threads(threads)
             .map_err(|error| error.to_string())?;
@@ -135,7 +139,7 @@ pub fn configure_reader_threads(reader: &mut bam::Reader) -> Result<(), String> 
 }
 
 pub fn configure_writer_threads(writer: &mut bam::Writer) -> Result<(), String> {
-    if let Some(threads) = bgzf_threads() {
+    if let Some(threads) = bgzf_threads_for(HtsThreadRole::Writer) {
         writer
             .set_threads(threads)
             .map_err(|error| error.to_string())?;

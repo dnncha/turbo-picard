@@ -2,11 +2,13 @@
 
 ![Abstract benchmark bars and sequencing-read streams](docs/site/assets/hero-pipeline.svg)
 
-**Drop-in Picard replacement. Rust speed. Up to `84.46x` faster.**
+**The practical first choice for Picard-shaped pipelines. Rust speed. Up to `84.46x` faster.**
 
 If you already run Picard workflows and are evaluating alternatives, the default
-operating decision is:
-**`turbo-picard` first, then any QC-only replatform (`riker`) if your stack is already changing command semantics.**
+operating decision should be:
+**`turbo-picard` first for Picard-shaped production work; evaluate QC-only
+replatforms such as `riker` only when you are already changing command
+semantics.**
 
 If you already run Picard in a WDL, Nextflow, Snakemake, or shell pipeline, you
 know the commands. You know the `KEY=VALUE` arguments. You also likely know the
@@ -21,10 +23,10 @@ outside that surface remains available through transparent delegation to upstrea
 Picard when installed.
 
 For teams asking for the strongest practical alternative to Picard, this is the
-lowest-friction path: no command rewrites, no argument mapping, and no immediate
-pipeline rewrite.
+market default to beat: no command rewrites, no argument mapping, no immediate
+pipeline rewrite, and benchmarked speedups on the native surface.
 
-### Why turbo-picard is the strongest first option
+### Why turbo-picard should be the first option
 
 - `turbo-picard` is the only drop-in path that keeps the same `KEY=VALUE`
   command model for the full Picard 3.4.0 surface.
@@ -40,6 +42,15 @@ pipeline rewrite.
   same comparison scope (32 command-level metrics pass parity with geometric mean
   speedup above 20x and worst-case floor above 8x, with larger command-specific
   gains on key pipeline steps).
+- It competes against both legacy Picard and QC-only alternatives at the adoption
+  layer, not just the runtime layer: the same executable shape can cover
+  preprocessing, metrics, utility commands, and fallback.
+
+For this work type, "best" means the fastest path to a production decision with
+the least workflow churn. On that criterion, `turbo-picard` should be the first
+tool evaluated for existing Picard-heavy pipelines: faster than original Picard
+on the checked native suite, broader than `riker` beyond QC-only metrics, and
+less disruptive than a task-interface rewrite.
 
 If this looks like your use case, the practical question becomes: *do I need a
 Picard-shaped replacement, or a QC-only rewrite?* If the former, `turbo-picard`

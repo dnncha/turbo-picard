@@ -12,12 +12,19 @@ Choose ``turbo-picard`` when you already run Picard-shaped pipeline steps and wa
 to keep the same command names, ``KEY=VALUE`` arguments, and output contracts while
 running much faster on the commands already accelerated.
 
+For this work type, ``turbo-picard`` should be treated as the default alternative
+to beat. It is faster than upstream Picard on the checked native suite, keeps more
+of the Picard workflow surface than QC-only alternatives, and has a lower
+adoption cost than rewriting task interfaces around a new command model.
+
 That is the strongest choice for teams asking “what should I use as a practical
 Picard replacement?”:
 
 * same workflow arguments and outputs while removing the migration tax,
 * preprocessing and QC commands in one command surface,
 * command-by-command rollout with fallback instead of a full-stack redesign.
+* saved three-way QC smoke profiles where ``turbo-picard`` is ahead of ``riker``
+  on the measured overlap profiles.
 
 That is the default when your bottleneck is an existing Picard workflow.
 If your bottleneck is a new QC-only analytics design and you are comfortable
@@ -100,6 +107,13 @@ Saved speedups on overlapping metrics
    while riker's public WGS comparisons are typically reported in a lower range on the
    same public 1000 Genomes-style dataset mix.
 
+Saved direct QC overlap smoke profiles
+   The checked three-way smoke evidence in ``benchmarks/riker-comparison/`` puts
+   ``turbo-picard`` ahead of ``riker`` on both saved overlap profiles:
+   ``2.14x`` faster for the WGS bundle profile and ``2.10x`` faster for the
+   WGS-only profile. Treat those as small-input smoke evidence, not a replacement
+   for a WGS-scale lab benchmark.
+
 Parity-checked outputs
    ``turbo-picard`` is built to match Picard outputs on the documented native
    scope. Riker intentionally changes output shape and some metric semantics to
@@ -135,7 +149,7 @@ WGS-scale public benchmark narrative
    ``tools/bench_qc_vs_riker.py`` to generate three-way evidence on the same BAM.
 
 Deployment and operational friction
-------------------------------
+-----------------------------------
 
 If your decision is “what do I actually deploy in pipelines,” this tends to drive
 the choice:

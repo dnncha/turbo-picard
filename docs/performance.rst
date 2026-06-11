@@ -28,14 +28,34 @@ for BAM and CRAM reading and writing. You can set the count explicitly:
      SORT_ORDER=coordinate \
      R=reference.fa
 
+For larger runs, the I/O thread policy can now be tuned by role:
+
+.. code-block:: bash
+
+   TURBO_PICARD_READER_THREADS=4 \
+   TURBO_PICARD_WRITER_THREADS=8 \
+   TURBO_PICARD_INDEX_THREADS=8 \
+   turbo-picard MarkDuplicates I=input.bam O=marked.bam M=metrics.txt
+
+``TURBO_PICARD_THREADS`` remains the broad override. The role-specific variables
+win when set. ``TURBO_PICARD_MAX_THREADS`` caps the automatic defaults, and
+``TURBO_PICARD_THREADS=auto`` returns to the built-in policy. Commands that use
+a dedicated application reader thread, such as large WGS/QC paths, use a smaller
+``htslib_pipeline_reader_threads`` value so BGZF workers do not fight the
+pipeline thread for the same CPU budget. Set
+``TURBO_PICARD_PIPELINE_READER_THREADS`` only when profiling shows that this
+specialized path needs a different value from ``TURBO_PICARD_READER_THREADS``.
+
 This helps most when the command is spending real time in BAM or CRAM
 compression, decompression, reference-backed CRAM work, or BAI generation after
 MarkDuplicates or other indexed BAM outputs. It will not make a tiny test file
 much faster, and it will not fix slow storage.
 
-Without ``TURBO_PICARD_THREADS``, readers and writers still pick a small default
-thread count (up to eight workers on multi-core hosts). Index creation uses the
-same worker count instead of a single thread.
+Without explicit thread variables, readers, writers, index construction, and
+pipelined readers each pick a bounded automatic default from available CPU
+parallelism. Reader defaults still cap at eight workers, writer and index
+defaults cap at twelve workers, and pipelined readers cap lower because the
+command is already overlapping I/O with application-level processing.
 
 ``SortSam`` streams BAM/CRAM inputs without loading them into memory when the
 ``@HD`` sort order already matches the requested ``SORT_ORDER``. Inputs with
@@ -69,9 +89,25 @@ one HTSlib pass (the same idea as riker's ``multi`` command) instead of
 re-opening and re-scanning the alignment file once per ``PROGRAM=``. When two
 or more collectors are active, a dedicated reader thread fills recycled
 128-record batches while persistent collector workers process in-flight batches
-asynchronously (override worker count with ``TURBO_PICARD_CMM_THREADS``). SAM
-inputs still use per-program passes so the existing SAM-text fast paths stay
-available.
+asynchronously. The default now scales up to six collector workers when CPUs and
+active collectors are available. Override with ``TURBO_PICARD_CMM_THREADS=N`` or
+set ``TURBO_PICARD_CMM_THREADS=auto`` to force the built-in policy. SAM inputs
+still use per-program passes so the existing SAM-text fast paths stay available.
+
+Profiling benchmark runs
+------------------------
+
+Use the suite profiler when working on speed claims:
+
+.. code-block:: bash
+
+   python3 tools/bench_suite.py --repeats 3 --skip-build \
+     --profile-output benchmarks/runs/bench-suite-profile.json
+
+The JSON artifact records per-command wall time, wrapper CPU time, observed RSS,
+thread-related environment variables, read count, parity result, and per-repeat
+details. Keep these generated artifacts under ``benchmarks/runs/`` unless a
+specific release evidence bundle is being promoted.
 
 ``CollectGcBiasMetrics`` loads one reference contig at a time via ``.fai`` seek
 for read-time GC windows and precomputes genome-window counts without keeping
@@ -92,7 +128,7 @@ There is a production-facing accelerator preflight:
 
    turbo-picard AccelerationStatus
 
-It reports the active policy, HTSlib worker-thread count, and whether a CUDA,
+It reports the active policy, HTSlib worker-thread counts, and whether a CUDA,
 ROCm, or Metal runtime appears to be present. Current release builds still use
 the CPU backend for Picard-compatible work:
 
@@ -101,6 +137,9 @@ the CPU backend for Picard-compatible work:
    backend=cpu
    policy=auto
    htslib_worker_threads=4
+   htslib_reader_threads=4
+   htslib_writer_threads=4
+   htslib_pipeline_reader_threads=2
    gpu_runtime=metal
    gpu_acceleration=not-enabled
 

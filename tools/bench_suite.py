@@ -1,8 +1,14 @@
 #!/usr/bin/env python3
 import argparse
+import json
+import os
+import platform
+import resource
+import shutil
 import statistics
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 
@@ -10,19 +16,62 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def run(command):
+    stdout, _ = run_profiled(command)
+    return stdout
+
+
+def run_profiled(command):
+    usage_before = resource.getrusage(resource.RUSAGE_CHILDREN)
+    start = time.perf_counter()
+    timed_command = time_wrapper(command)
     completed = subprocess.run(
-        command,
+        timed_command,
         cwd=ROOT,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
         check=False,
     )
+    elapsed = time.perf_counter() - start
+    usage_after = resource.getrusage(resource.RUSAGE_CHILDREN)
     if completed.returncode != 0:
         sys.stderr.write(completed.stdout)
         sys.stderr.write(completed.stderr)
         raise SystemExit(f"command failed with exit {completed.returncode}: {' '.join(command)}")
-    return completed.stdout
+    profile = {
+        "command_line": command,
+        "wall_seconds": elapsed,
+        "cpu_user_seconds": usage_after.ru_utime - usage_before.ru_utime,
+        "cpu_system_seconds": usage_after.ru_stime - usage_before.ru_stime,
+        "max_rss_kb": parse_time_max_rss_kb(completed.stderr),
+    }
+    return completed.stdout, profile
+
+
+def time_wrapper(command):
+    time_bin = shutil.which("time")
+    if not time_bin:
+        return command
+    if platform.system() == "Darwin":
+        return [time_bin, "-l", *command]
+    return [time_bin, "-v", *command]
+
+
+def parse_time_max_rss_kb(stderr):
+    for line in stderr.splitlines():
+        if "Maximum resident set size" in line:
+            value = line.split(":", 1)[1].strip().split()[0]
+            try:
+                return int(value)
+            except ValueError:
+                return None
+        if "maximum resident set size" in line:
+            value = line.strip().split()[0]
+            try:
+                return int(value) // 1024
+            except ValueError:
+                return None
+    return None
 
 
 def parse_key_values(text):
@@ -38,12 +87,14 @@ def parse_key_values(text):
 def run_benchmark(label, script, reads, repeats):
     rows = []
     for _ in range(repeats):
-        output = run(["python3", str(ROOT / "tools" / script), "--reads", str(reads), "--skip-build"])
+        command = ["python3", str(ROOT / "tools" / script), "--reads", str(reads), "--skip-build"]
+        output, profile = run_profiled(command)
         row = parse_key_values(output)
         row["label"] = label
         row["speedup_float"] = float(row["speedup"].removesuffix("x"))
         row["turbo_seconds_float"] = float(row["turbo_seconds"])
         row["picard_seconds_float"] = float(row["picard_seconds"])
+        row["profile"] = profile
         if row.get("parity") != "PASS":
             raise SystemExit(f"{label} parity failed: {output}")
         rows.append(row)
@@ -63,6 +114,40 @@ def summarize(rows):
         "median_speedup": statistics.median(speedups),
         "best_speedup": max(speedups),
         "parity": "PASS",
+    }
+
+
+def benchmark_profile(rows):
+    summary = summarize(rows)
+    profiles = [row["profile"] for row in rows]
+    cpu_seconds = [
+        profile["cpu_user_seconds"] + profile["cpu_system_seconds"] for profile in profiles
+    ]
+    wall_seconds = [profile["wall_seconds"] for profile in profiles]
+    max_rss_kb = [profile["max_rss_kb"] for profile in profiles if profile["max_rss_kb"]]
+    return {
+        **summary,
+        "label": rows[0]["label"],
+        "median_wrapper_wall_seconds": statistics.median(wall_seconds),
+        "median_wrapper_cpu_seconds": statistics.median(cpu_seconds),
+        "max_observed_rss_kb": max(max_rss_kb) if max_rss_kb else None,
+        "turbo_threads": os.environ.get("TURBO_PICARD_THREADS", "auto"),
+        "turbo_reader_threads": os.environ.get("TURBO_PICARD_READER_THREADS", ""),
+        "turbo_pipeline_reader_threads": os.environ.get(
+            "TURBO_PICARD_PIPELINE_READER_THREADS", ""
+        ),
+        "turbo_writer_threads": os.environ.get("TURBO_PICARD_WRITER_THREADS", ""),
+        "turbo_index_threads": os.environ.get("TURBO_PICARD_INDEX_THREADS", ""),
+        "turbo_cmm_threads": os.environ.get("TURBO_PICARD_CMM_THREADS", ""),
+        "runs_detail": [
+            {
+                "turbo_seconds": row["turbo_seconds_float"],
+                "picard_seconds": row["picard_seconds_float"],
+                "speedup": row["speedup_float"],
+                "profile": row["profile"],
+            }
+            for row in rows
+        ],
     }
 
 
@@ -102,6 +187,11 @@ def main():
     parser.add_argument("--replacesamheader-reads", type=int, default=50_000)
     parser.add_argument("--updatevcfdict-reads", type=int, default=100_000)
     parser.add_argument("--skip-build", action="store_true")
+    parser.add_argument(
+        "--profile-output",
+        type=Path,
+        help="Write per-command benchmark profiling JSON with wall time, CPU, RSS, thread env, and parity.",
+    )
     args = parser.parse_args()
 
     if args.repeats < 1:
@@ -258,6 +348,31 @@ def main():
             "median_speedup={median_speedup:.2f}x best_speedup={best_speedup:.2f}x "
             "parity={parity}".format(**summary)
         )
+
+    if args.profile_output:
+        profile = {
+            "schema_version": 1,
+            "source": "python3 tools/bench_suite.py",
+            "host": {
+                "platform": platform.platform(),
+                "machine": platform.machine(),
+                "python": platform.python_version(),
+                "cpu_count": os.cpu_count(),
+            },
+            "environment": {
+                "TURBO_PICARD_THREADS": os.environ.get("TURBO_PICARD_THREADS", ""),
+                "TURBO_PICARD_READER_THREADS": os.environ.get("TURBO_PICARD_READER_THREADS", ""),
+                "TURBO_PICARD_PIPELINE_READER_THREADS": os.environ.get(
+                    "TURBO_PICARD_PIPELINE_READER_THREADS", ""
+                ),
+                "TURBO_PICARD_WRITER_THREADS": os.environ.get("TURBO_PICARD_WRITER_THREADS", ""),
+                "TURBO_PICARD_INDEX_THREADS": os.environ.get("TURBO_PICARD_INDEX_THREADS", ""),
+                "TURBO_PICARD_CMM_THREADS": os.environ.get("TURBO_PICARD_CMM_THREADS", ""),
+            },
+            "benchmarks": [benchmark_profile(rows) for rows in results],
+        }
+        args.profile_output.parent.mkdir(parents=True, exist_ok=True)
+        args.profile_output.write_text(json.dumps(profile, indent=2, sort_keys=True) + "\n")
 
 
 if __name__ == "__main__":

@@ -13,6 +13,13 @@ The companion ``MarkDuplicates`` performance run is also a useful reminder that
 "more scalable" is not marketing filler here; it cut median RSS from about
 ``1.2 GB`` in Picard 3.4.0 to about ``8.7 MB`` on the checked fixture.
 
+For evaluators comparing nearby tools, the saved riker overlap smoke evidence
+also supports the practical first-choice story: on the checked WGS bundle and
+WGS-only smoke profiles, ``turbo-picard`` is ``2.14x`` and ``2.10x`` faster than
+``riker`` respectively. Those are small-input overlap checks; for WGS-scale
+selection, rerun the comparison on your own representative BAMs with the same
+versions and machine profile.
+
 Run the suite
 -------------
 
@@ -91,6 +98,34 @@ Refresh public evidence with:
 
 Pair that bundle with ``python3 tools/bench_suite.py`` on the same commands so
 performance claims stay tied to parity-checked outputs.
+
+Large-input speed evidence
+--------------------------
+
+Use large-input speed evidence for market comparisons against tools such as
+``riker``. Keep it separate from the small release-candidate parity fixtures so
+readers can tell which numbers are smoke checks and which numbers came from a
+workflow-sized BAM.
+
+For the QC overlap surface, stage the ``HG02675_4x`` BAM described in
+``benchmarks/riker-comparison/README.md`` and run:
+
+.. code-block:: bash
+
+   python3 tools/bench_qc_vs_riker.py \
+     --sample-id HG02675_4x \
+     --input-bam /mnt/scratch/HG02675_4x/input.bam \
+     --reference-fasta /mnt/scratch/refs/hg38.fa \
+     --output-dir benchmarks/riker-comparison/evidence/HG02675_4x \
+     --repeats 3 \
+     --measure-rss \
+     --skip-build
+
+The report includes per-profile Picard, ``turbo-picard``, and ``riker`` wall
+time, optional RSS, total profile speedups, and an explicit overlap leader/gap
+summary for ``wgs-only`` and ``wgs-bundle``. If ``riker`` wins a profile, record
+that gap and the next bottleneck instead of using the smoke fixture as a
+substitute for WGS-scale evidence.
 
 Real-data parity evidence
 -------------------------
