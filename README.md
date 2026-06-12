@@ -1,6 +1,6 @@
 # turbo-picard
 
-![Abstract benchmark bars and sequencing-read streams](docs/site/assets/hero-pipeline.svg)
+![Turbo Picard starship captain accelerating genomic pipeline data streams](docs/site/assets/turbo-picard-readme-hero.png)
 
 **The practical first choice for Picard-shaped pipelines. Rust speed. Up to `84.46x` faster.**
 
