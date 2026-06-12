@@ -84,8 +84,8 @@
     "source_url": "https://github.com/broadinstitute/gatk/blob/e8c49f600b06c658e0fa9bf67256340ebb46bc48/src/test/resources/org/broadinstitute/hellbender/tools/mutect/mito/NA12878.bam"
   },
   "parity": "PASS",
-  "picard_command": "mamba run -p /Users/donncha/Documents/GitHub/turbo-picard/.conda-turbo-picard picard",
+  "picard_command": "mamba run -p .conda-turbo-picard picard",
   "picard_version": "Version:3.4.0",
-  "turbo_picard_command": "/Users/donncha/Documents/GitHub/turbo-picard/target/release/picard",
+  "turbo_picard_command": "target/release/picard",
   "turbo_picard_version": "picard 0.1.1"
 }

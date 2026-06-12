@@ -53,6 +53,8 @@ class SiteBenchmarkEvidenceTests(unittest.TestCase):
 <code>python3 tools/verify_real_data_evidence.py --release-ready</code>
 benchmark exceptions
 AccelerationStatus
+doctor
+explain
 IntervalListTools
 LiftoverVcf
 <a href="#adopt">Adoption</a>

@@ -69,8 +69,8 @@
     "source_url": "https://github.com/samtools/htslib/blob/5cded8325aca2f84f6c18641664893b900638086/test/range.bam"
   },
   "parity": "PASS",
-  "picard_command": "/opt/homebrew/bin/mamba run -p /Users/donncha/Documents/GitHub/turbo-picard/.conda-turbo-picard picard",
+  "picard_command": "mamba run -p .conda-turbo-picard picard",
   "picard_version": "Version:3.4.0",
-  "turbo_picard_command": "/Users/donncha/Documents/GitHub/turbo-picard/target/release/picard",
+  "turbo_picard_command": "target/release/picard",
   "turbo_picard_version": "picard 0.1.0"
 }

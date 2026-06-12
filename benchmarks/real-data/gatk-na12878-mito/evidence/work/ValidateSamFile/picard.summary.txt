@@ -1,7 +1,0 @@
-
-
-## HISTOGRAM	java.lang.String
-Error Type	Count
-ERROR:MATE_NOT_FOUND	2548
-WARNING:MISSING_TAG_NM	14705
-

@@ -1,7 +1,7 @@
 # QC benchmark: Picard vs turbo-picard vs riker
 
 - sample: `gatk-na12878-mito`
-- input: `/Users/donncha/Documents/GitHub/turbo-picard/benchmarks/real-data/gatk-na12878-mito/input.bam`
+- input: `benchmarks/real-data/gatk-na12878-mito/input.bam`
 - input bytes: `2097008`
 
 ## wgs-bundle

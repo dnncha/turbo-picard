@@ -65,6 +65,73 @@ fn acceleration_status_supports_help_smoke_check() {
 }
 
 #[test]
+fn doctor_reports_runtime_and_fallback_state() {
+    let tempdir = tempfile::tempdir().expect("tempdir exists");
+    let fallback = fallback_script(tempdir.path(), 0);
+
+    let mut cmd = Command::cargo_bin("turbo-picard").expect("binary exists");
+    cmd.arg("doctor")
+        .env(
+            "TURBO_PICARD_FALLBACK_COMMAND",
+            fallback.display().to_string(),
+        )
+        .env("TURBO_PICARD_THREADS", "2")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("turbo_picard_version="))
+        .stdout(predicate::str::contains("picard_reference_version=3.4.0"))
+        .stdout(predicate::str::contains("backend=cpu"))
+        .stdout(predicate::str::contains("htslib_worker_threads=2"))
+        .stdout(predicate::str::contains(format!(
+            "fallback_command={}",
+            fallback.display()
+        )));
+}
+
+#[test]
+fn explain_reports_native_scope_and_declared_outputs() {
+    let tempdir = tempfile::tempdir().expect("tempdir exists");
+    let fallback = fallback_script(tempdir.path(), 0);
+
+    let mut cmd = Command::cargo_bin("turbo-picard").expect("binary exists");
+    cmd.args([
+        "explain",
+        "MarkDuplicates",
+        "I=input.bam",
+        "O=marked.bam",
+        "M=metrics.txt",
+    ])
+    .env(
+        "TURBO_PICARD_FALLBACK_COMMAND",
+        fallback.display().to_string(),
+    )
+    .assert()
+    .success()
+    .stdout(predicate::str::contains("command=MarkDuplicates"))
+    .stdout(predicate::str::contains("status=partial-native"))
+    .stdout(predicate::str::contains(
+        "execution_path=native-when-inside-documented-scope-otherwise-fallback",
+    ))
+    .stdout(predicate::str::contains(
+        "declared_outputs=O=marked.bam,M=metrics.txt",
+    ));
+}
+
+#[test]
+fn explain_reports_fallback_only_reference_commands() {
+    let mut cmd = Command::cargo_bin("turbo-picard").expect("binary exists");
+    cmd.args(["explain", "EstimateLibraryComplexity", "O=metrics.txt"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "command=EstimateLibraryComplexity",
+        ))
+        .stdout(predicate::str::contains("status=fallback-only"))
+        .stdout(predicate::str::contains("fallback_command="))
+        .stdout(predicate::str::contains("declared_outputs=O=metrics.txt"));
+}
+
+#[test]
 fn markduplicates_requires_metrics_file() {
     let mut cmd = Command::cargo_bin("turbo-picard").expect("binary exists");
     cmd.args(["MarkDuplicates", "I=in.bam", "O=out.bam"])
@@ -3168,10 +3235,11 @@ fn collectwgsmetrics_writes_coverage_metrics() {
     assert!(metrics.contains(
         "12\t1\t0.603023\t1\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0.833333\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\t1\t?\t?\t0.458333\t3\n"
     ));
-    assert!(metrics.contains("coverage\thigh_quality_coverage_count"));
-    assert!(metrics.contains("0\t2\t0\n"));
-    assert!(metrics.contains("1\t8\t0\n"));
-    assert!(metrics.contains("2\t2\t0\n"));
+    assert!(metrics.contains("coverage\thigh_quality_coverage_count\n"));
+    assert!(!metrics.contains("coverage\thigh_quality_coverage_count\tunfiltered_baseq_count\n"));
+    assert!(metrics.contains("0\t2\n"));
+    assert!(metrics.contains("1\t8\n"));
+    assert!(metrics.contains("2\t2\n"));
 }
 
 #[test]
@@ -3252,9 +3320,9 @@ fn collectwgsmetrics_honors_stop_after() {
 
     let metrics = fs::read_to_string(&output).expect("metrics output exists");
     assert!(metrics.contains("1\t1\t?\t0\t0"));
-    assert!(metrics.contains("coverage\thigh_quality_coverage_count"));
-    assert!(metrics.contains("0\t0\t0\n"));
-    assert!(metrics.contains("1\t1\t0\n"));
+    assert!(metrics.contains("coverage\thigh_quality_coverage_count\n"));
+    assert!(metrics.contains("0\t0\n"));
+    assert!(metrics.contains("1\t1\n"));
 }
 
 #[test]
@@ -3307,8 +3375,8 @@ fn collectwgsmetrics_honors_interval_list_territory() {
         "4\t1.5\t0.57735\t1.5\t0.5\t0\t0\t0\t0\t0\t0\t0\t0\t1\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\t1.5\t1.5\t1.5\t0.625\t4\n"
     ));
     assert!(metrics.contains("0\t0\n"));
-    assert!(metrics.contains("1\t2\t0\n"));
-    assert!(metrics.contains("2\t2\t0\n"));
+    assert!(metrics.contains("1\t2\n"));
+    assert!(metrics.contains("2\t2\n"));
 }
 
 #[test]
@@ -3359,10 +3427,10 @@ fn collectwgsmetrics_applies_stop_after_to_interval_territory() {
 
     let metrics = fs::read_to_string(&output).expect("metrics output exists");
     assert!(metrics.contains("2\t2\t0\t2\t0"));
-    assert!(metrics.contains("coverage\thigh_quality_coverage_count"));
+    assert!(metrics.contains("coverage\thigh_quality_coverage_count\n"));
     assert!(metrics.contains("0\t0\n"));
-    assert!(metrics.contains("1\t0\t0\n"));
-    assert!(metrics.contains("2\t2\t0\n"));
+    assert!(metrics.contains("1\t0\n"));
+    assert!(metrics.contains("2\t2\n"));
 }
 
 #[test]

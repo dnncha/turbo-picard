@@ -237,6 +237,8 @@ jobs:
       - name: Verify Picard parity
         run: |
           ./tools/verify_basic_accelerationstatus_parity.sh
+          ./tools/verify_basic_doctor_parity.sh
+          ./tools/verify_basic_explain_parity.sh
           TURBO_PICARD_CONDA_PREFIX="${MAMBA_ROOT_PREFIX}/envs/turbo-picard-ci" ./tools/verify_basic_cram_parity.sh
           TURBO_PICARD_CONDA_PREFIX="${MAMBA_ROOT_PREFIX}/envs/turbo-picard-ci" ./tools/verify_markdup_cram_parity.sh
           TURBO_PICARD_CONDA_PREFIX="${MAMBA_ROOT_PREFIX}/envs/turbo-picard-ci" ./tools/verify_gatk_preprocessing_combo_parity.sh

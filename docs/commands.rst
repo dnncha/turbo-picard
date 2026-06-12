@@ -38,6 +38,8 @@ machine-readable matrix below for the exact accelerated versus delegated split.
    picard NormalizeFasta I=reference.fa O=normalized.fa LINE_LENGTH=100
    picard BedToIntervalList I=targets.bed O=targets.interval_list SD=reference.dict
    turbo-picard AccelerationStatus
+   turbo-picard doctor
+   turbo-picard explain MarkDuplicates I=input.bam O=marked.bam M=metrics.txt
 
 Metrics and repair examples
 ---------------------------
@@ -75,11 +77,12 @@ Machine-readable coverage
 
 The canonical command matrix lives in ``docs/command-matrix.yml``. It records
 the current status, parity script, native scope, and fallback scope for each
-Picard 3.4.0 command plus the turbo-only ``AccelerationStatus`` utility.
+Picard 3.4.0 command plus turbo-only utilities such as
+``AccelerationStatus``, ``doctor``, and ``explain``.
 
 Current matrix status summary:
 
-* ``33 accelerated`` commands with native or partial-native Rust implementations
+* ``35 accelerated`` commands with native or partial-native Rust implementations
 * ``89 delegated`` Picard 3.4.0 commands forwarded to upstream Picard
 
 Accelerated command status:
@@ -93,11 +96,13 @@ Accelerated command status:
 * ``CollectBaseDistributionByCycle``: ``partial-native``
 * ``CollectGcBiasMetrics``: ``partial-native``
 * ``CollectQualityYieldMetrics``: ``native``
-* ``CollectWgsMetrics``: ``partial-native``. ``USE_FAST_ALGORITHM=true`` stays
-  native and defaults to a leaner WGS mode unless ``SAMPLE_SIZE`` or
-  ``INCLUDE_BQ_HISTOGRAM`` are set explicitly. ``TURBO_PICARD_WGS_FAST_DEFAULT=true``
-  applies that leaner default when the command line does not set
-  ``USE_FAST_ALGORITHM``.
+* ``CollectWgsMetrics``: ``partial-native``. ``INCLUDE_BQ_HISTOGRAM`` defaults
+  to ``false`` to match Picard 3.4.0 histogram output. ``USE_FAST_ALGORITHM=true``
+  stays native and defaults ``SAMPLE_SIZE`` to ``0`` unless it is set explicitly.
+  ``TURBO_PICARD_WGS_FAST_DEFAULT=true`` applies that sample-size default when
+  the command line does not set ``USE_FAST_ALGORITHM``.
+* ``doctor``: ``native``
+* ``explain``: ``native``
 * ``CreateSequenceDictionary``: ``native``
 * ``FastqToSam``: ``partial-native``
 * ``GatherVcfs``: ``partial-native``

@@ -194,8 +194,18 @@ commands:
   - name: CollectWgsMetrics
     status: partial-native
     parity_script: tools/verify_basic_collectwgsmetrics_parity.sh
-    native_scope: "Common coordinate-sorted whole-genome coverage metrics for SAM/BAM/CRAM with REFERENCE_SEQUENCE, optional interval territory, base-quality histogram, STOP_AFTER, Picard-style theoretical het sensitivity sampling, and a native USE_FAST_ALGORITHM mode that defaults to SAMPLE_SIZE=0 and INCLUDE_BQ_HISTOGRAM=false unless those options are set explicitly. TURBO_PICARD_WGS_FAST_DEFAULT=true applies that same leaner default when USE_FAST_ALGORITHM is omitted."
+    native_scope: "Common coordinate-sorted whole-genome coverage metrics for SAM/BAM/CRAM with REFERENCE_SEQUENCE, optional interval territory, explicit base-quality histogram output, STOP_AFTER, Picard-style theoretical het sensitivity sampling, and a native USE_FAST_ALGORITHM mode that defaults SAMPLE_SIZE to 0 unless that option is set explicitly. INCLUDE_BQ_HISTOGRAM defaults to false to match Picard 3.4.0 histogram output. TURBO_PICARD_WGS_FAST_DEFAULT=true applies the same SAMPLE_SIZE default when USE_FAST_ALGORITHM is omitted."
     fallback_scope: Unsupported advanced WGS options should use upstream Picard.
+  - name: doctor
+    status: native
+    parity_script: tools/verify_basic_doctor_parity.sh
+    native_scope: "turbo-picard utility command that reports local runtime state without running Picard, including version, executable path, CPU/thread policy, reference configuration, fallback resolution, PATH picard discovery, and auto-fallback state."
+    fallback_scope: This is not an upstream Picard command and does not delegate to fallback.
+  - name: explain
+    status: native
+    parity_script: tools/verify_basic_explain_parity.sh
+    native_scope: "turbo-picard utility command that explains the documented execution path for a Picard-shaped command, including native or fallback status, scope notes, resolved fallback command, and declared output arguments."
+    fallback_scope: This is not an upstream Picard command and does not delegate to fallback.
   - name: CollectWgsMetricsWithNonZeroCoverage
     status: fallback-only
     native_scope: "Delegated to upstream Picard 3.4.0. turbo-picard runs the native accelerated implementation when one exists; otherwise it transparently forwards to upstream Picard when fallback is configured or auto-discovered."

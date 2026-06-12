@@ -7,6 +7,10 @@ const PICARD_REFERENCE_COMMANDS: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../../docs/picard-3.4.0-commands.txt"
 ));
+const COMMAND_MATRIX_YAML: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../docs/command-matrix.yml"
+));
 
 use flate2::Compression;
 use flate2::read::GzDecoder;
@@ -54,6 +58,33 @@ pub fn run_cli(program_name: &str, raw_args: impl IntoIterator<Item = String>) -
         }
         Some("--version" | "version") => {
             println!("{program_name} {}", env!("CARGO_PKG_VERSION"));
+            0
+        }
+        Some("doctor") => {
+            let command_args = args.cloned().collect::<Vec<_>>();
+            if command_args
+                .iter()
+                .any(|arg| arg == "--help" || arg == "-h")
+            {
+                print_doctor_help(program_name);
+                return 0;
+            }
+            run_doctor(program_name);
+            0
+        }
+        Some("explain") => {
+            let command_args = args.cloned().collect::<Vec<_>>();
+            if command_args
+                .iter()
+                .any(|arg| arg == "--help" || arg == "-h")
+            {
+                print_explain_help(program_name);
+                return 0;
+            }
+            if let Err(error) = run_explain(&command_args) {
+                eprintln!("{error}");
+                return 2;
+            }
             0
         }
         Some("AccelerationStatus") => {
@@ -702,6 +733,8 @@ fn print_top_level_help(program_name: &str) {
 Usage: {program_name} <PicardCommand> [KEY=VALUE ...]
 
 Available commands:
+  doctor            Reports install, PATH, acceleration, reference, and fallback state
+  explain COMMAND   Explains whether a command is native, partial-native, or fallback-only
   AddOrReplaceReadGroups
                     Adds or replaces a single read group in SAM/BAM/CRAM files
   AccelerationStatus
@@ -752,6 +785,200 @@ Available commands:
     );
 }
 
+fn print_doctor_help(program_name: &str) {
+    println!(
+        "\
+Usage: {program_name} doctor
+
+Reports the local turbo-picard runtime state without running a Picard command.
+The report includes version, executable path, CPU/thread policy, reference
+discovery, fallback resolution, and whether `picard` on PATH appears to be the
+turbo-picard shim."
+    );
+}
+
+fn print_explain_help(program_name: &str) {
+    println!(
+        "\
+Usage: {program_name} explain <PicardCommand> [KEY=VALUE ...]
+
+Explains the documented execution path for a Picard-shaped command. The report
+shows native/fallback status, documented native scope, documented fallback scope,
+resolved fallback command, and declared output arguments from the provided
+KEY=VALUE arguments."
+    );
+}
+
+fn run_doctor(program_name: &str) {
+    println!("turbo_picard_version={}", env!("CARGO_PKG_VERSION"));
+    println!("program_name={program_name}");
+    match env::current_exe() {
+        Ok(path) => println!("current_exe={}", path.display()),
+        Err(error) => println!("current_exe=unavailable ({error})"),
+    }
+    println!("picard_reference_version={}", picard_reference_version());
+    println!("cpu_arch={}", env::consts::ARCH);
+    println!("cpu_os={}", env::consts::OS);
+    print_acceleration_status_lines();
+    match env::var("TURBO_PICARD_REFERENCE")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+    {
+        Some(reference) => println!("reference={reference}"),
+        None => println!("reference=not-set"),
+    }
+    match resolve_fallback_command() {
+        Some(command) => println!("fallback_command={command}"),
+        None => println!("fallback_command=not-found"),
+    }
+    match discover_picard_on_path() {
+        Some(command) => println!("path_picard={command}"),
+        None => println!("path_picard=not-found-or-shim-only"),
+    }
+    println!(
+        "auto_fallback={}",
+        if env::var("TURBO_PICARD_DISABLE_AUTO_FALLBACK").is_ok() {
+            "disabled"
+        } else {
+            "enabled"
+        }
+    );
+}
+
+fn run_explain(args: &[String]) -> Result<(), String> {
+    let command = args
+        .first()
+        .ok_or_else(|| "usage: turbo-picard explain <PicardCommand> [KEY=VALUE ...]".to_string())?;
+    let Some(metadata) = command_matrix_entry(command) else {
+        if is_picard_reference_command(command) {
+            println!("command={command}");
+            println!("status=fallback-only");
+            println!("native_scope=No native metadata is available for this Picard command.");
+            println!(
+                "fallback_scope=Transparent upstream Picard delegation when fallback is configured or auto-discovered."
+            );
+            print_explain_fallback();
+            print_declared_outputs(&args[1..]);
+            return Ok(());
+        }
+        return Err(format!("unsupported Picard command: {command}"));
+    };
+
+    println!("command={}", metadata.name);
+    println!("status={}", metadata.status);
+    println!("native_scope={}", metadata.native_scope);
+    println!("fallback_scope={}", metadata.fallback_scope);
+    println!(
+        "execution_path={}",
+        match metadata.status.as_str() {
+            "native" => "native",
+            "partial-native" => "native-when-inside-documented-scope-otherwise-fallback",
+            "fallback-only" => "fallback",
+            _ => "see-command-matrix",
+        }
+    );
+    print_explain_fallback();
+    print_declared_outputs(&args[1..]);
+    Ok(())
+}
+
+fn print_explain_fallback() {
+    match resolve_fallback_command() {
+        Some(command) => println!("fallback_command={command}"),
+        None => println!("fallback_command=not-found"),
+    }
+}
+
+fn print_declared_outputs(args: &[String]) {
+    let outputs = args
+        .iter()
+        .filter_map(|arg| arg.split_once('='))
+        .filter(|(key, value)| {
+            !value.is_empty()
+                && matches!(
+                    key.to_ascii_uppercase().as_str(),
+                    "O" | "OUTPUT"
+                        | "M"
+                        | "METRICS_FILE"
+                        | "CHART_OUTPUT"
+                        | "HISTOGRAM_FILE"
+                        | "F"
+                        | "FASTQ"
+                        | "F2"
+                        | "SECOND_END_FASTQ"
+                        | "FU"
+                        | "UNPAIRED_FASTQ"
+                )
+        })
+        .map(|(key, value)| format!("{key}={value}"))
+        .collect::<Vec<_>>();
+    if outputs.is_empty() {
+        println!("declared_outputs=none");
+    } else {
+        println!("declared_outputs={}", outputs.join(","));
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct CommandMatrixEntry {
+    name: String,
+    status: String,
+    native_scope: String,
+    fallback_scope: String,
+}
+
+fn picard_reference_version() -> &'static str {
+    COMMAND_MATRIX_YAML
+        .lines()
+        .find_map(|line| line.trim().strip_prefix("picard_reference:"))
+        .map(|value| value.trim().trim_matches('"'))
+        .unwrap_or("unknown")
+}
+
+fn command_matrix_entry(command: &str) -> Option<CommandMatrixEntry> {
+    let mut entries = Vec::new();
+    let mut current: Option<CommandMatrixEntry> = None;
+    for line in COMMAND_MATRIX_YAML.lines() {
+        let trimmed = line.trim();
+        if let Some(name) = trimmed.strip_prefix("- name:") {
+            if let Some(entry) = current.take() {
+                entries.push(entry);
+            }
+            current = Some(CommandMatrixEntry {
+                name: unquote_yaml_scalar(name.trim()),
+                status: String::new(),
+                native_scope: String::new(),
+                fallback_scope: String::new(),
+            });
+            continue;
+        }
+        let Some(entry) = current.as_mut() else {
+            continue;
+        };
+        if let Some(value) = trimmed.strip_prefix("status:") {
+            entry.status = unquote_yaml_scalar(value.trim());
+        } else if let Some(value) = trimmed.strip_prefix("native_scope:") {
+            entry.native_scope = unquote_yaml_scalar(value.trim());
+        } else if let Some(value) = trimmed.strip_prefix("fallback_scope:") {
+            entry.fallback_scope = unquote_yaml_scalar(value.trim());
+        }
+    }
+    if let Some(entry) = current {
+        entries.push(entry);
+    }
+    entries.into_iter().find(|entry| entry.name == command)
+}
+
+fn unquote_yaml_scalar(value: &str) -> String {
+    if value.len() >= 2 && value.starts_with('"') && value.ends_with('"') {
+        value[1..value.len() - 1]
+            .replace("\\\"", "\"")
+            .replace("\\\\", "\\")
+    } else {
+        value.to_string()
+    }
+}
+
 fn print_accelerationstatus_help() {
     println!(
         "\
@@ -774,6 +1001,24 @@ Output fields:
 
 fn run_acceleration_status() -> Result<(), String> {
     let policy = accelerator_policy()?;
+    print_acceleration_status_lines_for_policy(&policy);
+
+    if policy == "gpu-required" {
+        return Err(
+            "TURBO_PICARD_ACCELERATOR=gpu-required was set, but this build has no production GPU backend"
+                .to_string(),
+        );
+    }
+
+    Ok(())
+}
+
+fn print_acceleration_status_lines() {
+    let policy = accelerator_policy().unwrap_or_else(|error| format!("invalid ({error})"));
+    print_acceleration_status_lines_for_policy(&policy);
+}
+
+fn print_acceleration_status_lines_for_policy(policy: &str) {
     let workers = turbo_picard_core::bgzf_threads::htslib_worker_threads();
     let reader_threads = turbo_picard_core::bgzf_threads::bgzf_threads_for(
         turbo_picard_core::bgzf_threads::HtsThreadRole::Reader,
@@ -797,15 +1042,6 @@ fn run_acceleration_status() -> Result<(), String> {
     println!("htslib_pipeline_reader_threads={pipeline_reader_threads}");
     println!("gpu_runtime={}", gpu_runtime.as_deref().unwrap_or("none"));
     println!("gpu_acceleration=not-enabled");
-
-    if policy == "gpu-required" {
-        return Err(
-            "TURBO_PICARD_ACCELERATOR=gpu-required was set, but this build has no production GPU backend"
-                .to_string(),
-        );
-    }
-
-    Ok(())
 }
 
 fn accelerator_policy() -> Result<String, String> {
@@ -1208,10 +1444,11 @@ Supported options:
   VALIDATION_STRINGENCY
   QUIET
 
+INCLUDE_BQ_HISTOGRAM defaults to false to match Picard 3.4.0 histogram output.
 USE_FAST_ALGORITHM=true switches to a leaner native WGS mode by defaulting
-SAMPLE_SIZE to 0 and INCLUDE_BQ_HISTOGRAM to false unless the caller sets
-those options explicitly. TURBO_PICARD_WGS_FAST_DEFAULT=true applies the
-same default when USE_FAST_ALGORITHM is not set on the command line."
+SAMPLE_SIZE to 0 unless the caller sets it explicitly.
+TURBO_PICARD_WGS_FAST_DEFAULT=true applies that SAMPLE_SIZE default when
+USE_FAST_ALGORITHM is not set on the command line."
     );
 }
 
@@ -3264,7 +3501,7 @@ fn run_collectmultiplemetrics_single_pass(
                 let sample_size = optional_u32(args, "SAMPLE_SIZE")?
                     .unwrap_or(if use_fast_algorithm { 0 } else { 10_000 });
                 let include_bq_histogram =
-                    optional_bool(args, "INCLUDE_BQ_HISTOGRAM")?.unwrap_or(!use_fast_algorithm);
+                    optional_bool(args, "INCLUDE_BQ_HISTOGRAM")?.unwrap_or(false);
                 let mut summary = WgsMetricsSummary::new(&reference_contigs, None, coverage_cap);
                 if let Some(limit) = optional_i64(args, "STOP_AFTER")? {
                     if limit >= 0 {
@@ -4177,7 +4414,7 @@ fn run_collectmultiplemetrics(args: &[String]) -> Result<(), String> {
                 let sample_size = optional_u32(&args, "SAMPLE_SIZE")?
                     .unwrap_or(if use_fast_algorithm { 0 } else { 10_000 });
                 let include_bq_histogram =
-                    optional_bool(&args, "INCLUDE_BQ_HISTOGRAM")?.unwrap_or(!use_fast_algorithm);
+                    optional_bool(&args, "INCLUDE_BQ_HISTOGRAM")?.unwrap_or(false);
                 let mut child_args = vec![
                     format!("I={input}"),
                     format!(
@@ -4234,8 +4471,7 @@ fn run_collectwgsmetrics(args: &[String]) -> Result<(), String> {
         };
     let sample_size =
         optional_u32(&args, "SAMPLE_SIZE")?.unwrap_or(if use_fast_algorithm { 0 } else { 10_000 });
-    let include_bq_histogram =
-        optional_bool(&args, "INCLUDE_BQ_HISTOGRAM")?.unwrap_or(!use_fast_algorithm);
+    let include_bq_histogram = optional_bool(&args, "INCLUDE_BQ_HISTOGRAM")?.unwrap_or(false);
 
     let reference_contigs = read_reference_contigs_for_wgs(&reference)?;
     let interval_masks = collectwgs_interval_masks(args.get("INTERVALS"), &reference_contigs)?;
@@ -11900,14 +12136,6 @@ fn sampled_quality_called_proportions(
     if sample_size == 0 || iterations == 0 {
         return vec![0.0; iterations];
     }
-    let weighted_qualities = quality_histogram
-        .iter()
-        .enumerate()
-        .filter_map(|(quality, count)| (*count > 0).then_some((quality, *count)))
-        .collect::<Vec<_>>();
-    if weighted_qualities.len() <= 64 {
-        return exact_quality_called_proportions(iterations, &weighted_qualities);
-    }
     let mut wheel = PicardRouletteWheel::new(quality_histogram);
     let thresholds = (0..iterations)
         .map(|depth| 10.0 * (depth as f64 * 2.0_f64.log10() + 3.0))
@@ -11926,56 +12154,6 @@ fn sampled_quality_called_proportions(
         .into_iter()
         .map(|count| count as f64 / sample_size as f64)
         .collect()
-}
-
-fn exact_quality_called_proportions(
-    iterations: usize,
-    weighted_qualities: &[(usize, u64)],
-) -> Vec<f64> {
-    if iterations == 0 {
-        return Vec::new();
-    }
-    let total_weight = weighted_qualities
-        .iter()
-        .map(|(_, count)| *count)
-        .sum::<u64>();
-    if total_weight == 0 {
-        return vec![0.0; iterations];
-    }
-    let thresholds = (0..iterations)
-        .map(|depth| (10.0 * (depth as f64 * 2.0_f64.log10() + 3.0)).ceil() as usize)
-        .collect::<Vec<_>>();
-    let max_threshold = thresholds.iter().copied().max().unwrap_or(0);
-    let weights = weighted_qualities
-        .iter()
-        .map(|(quality, count)| (*quality, *count as f64 / total_weight as f64))
-        .collect::<Vec<_>>();
-    let mut distribution = vec![0.0_f64; max_threshold.saturating_add(1)];
-    distribution[0] = 1.0;
-    let mut next = vec![0.0_f64; distribution.len()];
-    let mut called = vec![0.0_f64; iterations];
-
-    for depth in 1..iterations {
-        next.fill(0.0);
-        for (sum, probability) in distribution.iter().copied().enumerate() {
-            if probability == 0.0 {
-                continue;
-            }
-            for (quality, weight) in &weights {
-                let next_sum = sum.saturating_add(*quality).min(max_threshold);
-                next[next_sum] += probability * *weight;
-            }
-        }
-        std::mem::swap(&mut distribution, &mut next);
-        let threshold = thresholds[depth].min(max_threshold);
-        called[depth] = if threshold == 0 {
-            1.0
-        } else {
-            distribution.iter().skip(threshold).sum::<f64>()
-        };
-    }
-
-    called
 }
 
 fn het_snp_detection_probability(depth: usize, called_proportions: &[f64]) -> f64 {
@@ -17892,18 +18070,6 @@ mod tests {
         assert_eq!(summary.coverage_histogram, scanned);
         assert_eq!(summary.coverage_histogram[1], 12);
         assert_eq!(summary.coverage_histogram[0], 0);
-    }
-
-    #[test]
-    fn exact_quality_called_proportions_handles_single_quality_bucket() {
-        let called = exact_quality_called_proportions(6, &[(30, 100)]);
-        let expected = (0..6)
-            .map(|depth| {
-                let threshold = (10.0 * (depth as f64 * 2.0_f64.log10() + 3.0)).ceil() as usize;
-                if 30 * depth >= threshold { 1.0 } else { 0.0 }
-            })
-            .collect::<Vec<_>>();
-        assert_eq!(called, expected);
     }
 
     #[test]

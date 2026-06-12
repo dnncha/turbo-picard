@@ -122,6 +122,7 @@ cargo install --locked --path crates/turbo-picard-cli --bin turbo-picard --bin p
 turbo-picard --version
 turbo-picard MarkDuplicates --help
 turbo-picard AccelerationStatus
+turbo-picard doctor
 ```
 
 ### Run one command
@@ -149,6 +150,20 @@ turbo-picard SortSam I=reads.cram O=sorted.cram SORT_ORDER=coordinate R=$TURBO_P
 Use the explicit `turbo-picard` command while testing. Add the optional `picard`
 shim only when you deliberately want existing pipeline code to resolve to
 `turbo-picard`.
+
+### Explain a command before switching it
+
+Use `doctor` to confirm the local runtime and fallback setup, then use `explain`
+to see whether a specific Picard-shaped command is native, partly native, or
+fallback-only:
+
+```bash
+turbo-picard doctor
+turbo-picard explain MarkDuplicates I=input.bam O=marked.bam M=metrics.txt
+```
+
+`explain` reports the documented native scope, fallback scope, resolved fallback
+command, and declared output files. It does not run Picard or modify inputs.
 
 ## What stays the same
 
@@ -334,9 +349,9 @@ Summary:
 - `26.82x` median speedup.
 - `26.74x` geometric mean speedup.
 
-Benchmark note: `AccelerationStatus` is listed under benchmark exceptions
-because it is a status/preflight command with no Picard data-processing runtime
-to benchmark. Every native or partly native data-processing command in
+Benchmark note: `AccelerationStatus`, `doctor`, and `explain` are listed under
+benchmark exceptions because they are status/preflight commands with no Picard
+data-processing runtime to benchmark. Every native or partly native data-processing command in
 `docs/command-matrix.yml` has a saved public speedup claim. Chart-producing
 metrics commands compare metrics text. Their lightweight PDF sidecars are there
 so Picard-style outputs still exist, not because the plots are claimed to be

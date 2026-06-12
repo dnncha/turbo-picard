@@ -57,6 +57,8 @@ python3 tools/verify_benchmark_thresholds.py
 python3 tools/verify_real_data_evidence.py --release-ready
 benchmark exceptions
 AccelerationStatus
+doctor
+explain
 IntervalListTools
 LiftoverVcf
 https://turbo-picard.readthedocs.io/en/latest/adoption.html

@@ -2,4 +2,6 @@
 /.conda-*
 /benchmarks/inputs/
 /benchmarks/runs/
+/benchmarks/real-data/**/evidence/work/
+/benchmarks/riker-comparison/evidence/*-atlas/
 /docs/_build/

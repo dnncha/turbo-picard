@@ -75,6 +75,10 @@ def stable_wgs_metrics(path):
             break
     if metrics is None:
         raise SystemExit(f"no WgsMetrics table in {path}")
+    # Picard's theoretical sensitivity is sampled and can differ by a few
+    # last-place digits across otherwise identical benchmark runs.
+    metrics.pop("HET_SNP_SENSITIVITY", None)
+    metrics.pop("HET_SNP_Q", None)
     return metrics, histogram
 
 

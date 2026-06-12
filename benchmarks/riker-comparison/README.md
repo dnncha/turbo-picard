@@ -31,38 +31,12 @@ cargo install riker-ngs
 Without ``--allow-missing-riker``, the helper now fails if ``riker`` is not
 installed so the checked-in evidence cannot silently drop the third tool.
 
-## Atlas / Tailscale run (riker smoke fixture)
+## WGS-scale staging notes
 
-For a Linux box on your tailnet (for example `atlas`), sync the repo and run the
-riker-compatible **HG02675_4x** staging flow: stream the public 1000 Genomes CRAM,
-subsample to ~4× coverage, then benchmark Picard vs turbo-picard vs riker.
-
-```bash
-./tools/run_atlas_riker_benchmark.sh
-```
-
-The remote runner lives at
-`benchmarks/riker-comparison/atlas/setup_and_run.sh`. It:
-
-1. installs `samtools`, `awscli`, `openjdk`, and a `picard=3.4.0` micromamba env;
-2. builds `turbo-picard` and installs `riker-ngs`;
-3. stages `GRCh38_full_analysis_set_plus_decoy_hla.fa` and a subsampled
-   `HG02675_4x` BAM without keeping the full 30× CRAM on disk;
-4. writes evidence to `benchmarks/riker-comparison/evidence/HG02675_4x-atlas/`.
-
-Override the SSH target if needed:
-
-```bash
-export TURBO_PICARD_ATLAS_HOST=root@100.69.16.54
-export TURBO_PICARD_ATLAS_IDENTITY=~/.ssh/tankful_codex
-./tools/run_atlas_riker_benchmark.sh
-```
-
-Re-run benchmarks without re-staging:
-
-```bash
-ssh root@100.69.16.54 'TURBO_PICARD_BENCH_SKIP_STAGE=1 bash /root/turbo-picard/benchmarks/riker-comparison/atlas/setup_and_run.sh'
-```
+For large riker-compatible evidence, run on a controlled Linux host with local
+NVMe and keep host-specific SSH wrappers outside this public repository. Stage
+the public 1000 Genomes CRAM and matching reference with your local
+infrastructure, then run the benchmark helper against the staged BAM.
 
 ## WGS-scale run (riker-compatible fixtures)
 
