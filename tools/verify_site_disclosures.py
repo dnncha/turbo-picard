@@ -27,8 +27,20 @@ def normalize(text: str) -> str:
     return re.sub(r"\s+", " ", text).strip().lower()
 
 
-def validate_site_disclosures(html: str) -> list[str]:
+def workspace_version(root: pathlib.Path = ROOT) -> str:
+    cargo_toml = (root / "Cargo.toml").read_text(encoding="utf-8")
+    match = re.search(
+        r"(?ms)^\[workspace\.package\]\s+.*?^version\s*=\s*\"([^\"]+)\"",
+        cargo_toml,
+    )
+    if not match:
+        raise ValueError("Cargo.toml missing [workspace.package] version")
+    return match.group(1)
+
+
+def validate_site_disclosures(html: str, *, version: str | None = None) -> list[str]:
     text = normalize(html)
+    version = version or workspace_version()
     errors: list[str] = []
     head = html.split("</head>", 1)[0].lower()
     if "current boundaries" not in text:
@@ -65,7 +77,7 @@ def validate_site_disclosures(html: str) -> list[str]:
         errors.append("site missing software-vs-input citation disclosure")
     if (
         "bioconda" not in text
-        or "v0.1.2" not in text
+        or f"v{version}" not in text
         or "python3 tools/bioconda_release_preflight.py" not in text
         or "bioconda-utils lint recipes config.yml --packages turbo-picard turbo-picard-picard-shim" not in text
     ):

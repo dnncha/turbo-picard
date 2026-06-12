@@ -2,6 +2,8 @@
 
 This PR adds `turbo-picard` and a separate optional compatibility shim.
 
+Upstream submission: https://github.com/bioconda/bioconda-recipes/pull/65922
+
 `turbo-picard` installs the `turbo-picard` command. It can be installed next to
 the existing Bioconda `picard` package.
 
@@ -24,7 +26,7 @@ documented, tested against Picard 3.4.0, and kept explicit.
 
 ## Source
 
-- URL: `https://github.com/dnncha/turbo-picard/archive/refs/tags/v0.1.2.tar.gz`
+- URL: `https://github.com/dnncha/turbo-picard/archive/refs/tags/v0.1.3.tar.gz`
 Archive SHA-256:
 `f7af0dc0dfe4169958061d7b967fa610aec188a6e106a5fdfc40409219b9a352`
 

@@ -38,7 +38,7 @@ as Python wheel scripts:
 
    python3 -m pip install turbo-picard
 
-Release ``0.1.2`` publishes a macOS Apple Silicon wheel and a source
+Release ``0.1.3`` publishes a macOS Apple Silicon wheel and a source
 distribution. If ``pip`` builds from source, the machine needs a Rust toolchain
 and native build dependencies. For Linux clusters and shared environments,
 Bioconda is the cleaner target once the recipe is accepted.
@@ -127,7 +127,7 @@ the immutable tagged archive:
 
    python3 tools/bioconda_release_preflight.py
    python3 tools/prepare_bioconda_release.py \
-     --archive ~/Downloads/turbo-picard-0.1.2.tar.gz
+     --archive ~/Downloads/turbo-picard-0.1.3.tar.gz
 
 The preflight command summarizes the checks that are already green and calls out
 the expected wait state while the recipes still use ``source.path``.
@@ -140,8 +140,8 @@ version, contains the expected release files, and carries the citation,
 benchmark, and real-data metadata used by the PR body. If the digest was
 computed elsewhere, pass it with ``--sha256`` only when it came from the
 downloaded GitHub source archive. That fallback skips archive filename and
-content validation. For ``0.1.2``, use ``turbo-picard-0.1.2.tar.gz`` or
-GitHub's ``v0.1.2.tar.gz``.
+content validation. For ``0.1.3``, use ``turbo-picard-0.1.3.tar.gz`` or
+GitHub's ``v0.1.3.tar.gz``.
 
 Then run the release checks:
 

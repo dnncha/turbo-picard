@@ -25,7 +25,7 @@ Before submission, cut the GitHub release, download the source archive, and run:
 ```bash
 python3 tools/bioconda_release_preflight.py
 python3 tools/prepare_bioconda_release.py \
-  --archive ~/Downloads/turbo-picard-0.1.2.tar.gz
+  --archive ~/Downloads/turbo-picard-0.1.3.tar.gz
 python3 tools/verify_bioconda_recipes.py --release-ready
 ```
 

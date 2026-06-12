@@ -35,11 +35,12 @@ class SiteDisclosureTests(unittest.TestCase):
 </section>
 """
 
-        self.assertEqual(verify_site_disclosures.validate_site_disclosures(html), [])
+        self.assertEqual(verify_site_disclosures.validate_site_disclosures(html, version="0.1.2"), [])
 
     def test_site_disclosure_reports_missing_boundaries(self) -> None:
         errors = verify_site_disclosures.validate_site_disclosures(
-            "<section><h2>Benchmarks</h2><p>Fast Picard replacement.</p></section>"
+            "<section><h2>Benchmarks</h2><p>Fast Picard replacement.</p></section>",
+            version="0.1.2",
         )
 
         self.assertIn("site missing current-boundaries section", errors)
@@ -70,7 +71,7 @@ class SiteDisclosureTests(unittest.TestCase):
 
         self.assertIn(
             "site metadata contains unsupported production-genomics overclaim",
-            verify_site_disclosures.validate_site_disclosures(html),
+            verify_site_disclosures.validate_site_disclosures(html, version="0.1.2"),
         )
 
     def test_site_disclosure_requires_bioconda_release_and_lint(self) -> None:
@@ -91,7 +92,7 @@ class SiteDisclosureTests(unittest.TestCase):
 
         self.assertIn(
             "site missing Bioconda release/lint disclosure",
-            verify_site_disclosures.validate_site_disclosures(html),
+            verify_site_disclosures.validate_site_disclosures(html, version="0.1.2"),
         )
 
     def test_site_disclosure_requires_citation_boundary(self) -> None:
@@ -111,7 +112,7 @@ class SiteDisclosureTests(unittest.TestCase):
 
         self.assertIn(
             "site missing software-vs-input citation disclosure",
-            verify_site_disclosures.validate_site_disclosures(html),
+            verify_site_disclosures.validate_site_disclosures(html, version="0.1.2"),
         )
 
 
