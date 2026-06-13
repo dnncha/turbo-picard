@@ -30,22 +30,36 @@ BENCHMARK_EXEMPTIONS: dict[str, str] = {
 def suite_benchmark_commands(text: str) -> set[str]:
     tree = ast.parse(text)
     commands = set()
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.Call):
-            continue
-        if not isinstance(node.func, ast.Name) or node.func.id != "run_benchmark":
-            continue
-        if len(node.args) < 2:
-            continue
-        script_arg = node.args[1]
-        if not isinstance(script_arg, ast.Constant) or not isinstance(script_arg.value, str):
-            continue
-        script_path = ROOT / "tools" / script_arg.value
+    scripts = suite_benchmark_scripts(tree)
+    for script in scripts:
+        script_path = ROOT / "tools" / script
         if not script_path.is_file():
-            commands.add(f"<missing script {script_arg.value}>")
+            commands.add(f"<missing script {script}>")
             continue
         commands.update(benchmark_script_commands(script_path.read_text(encoding="utf-8")))
     return commands
+
+
+def suite_benchmark_scripts(tree: ast.AST) -> list[str]:
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Assign):
+            continue
+        if not any(
+            isinstance(target, ast.Name) and target.id == "BENCHMARK_SPECS"
+            for target in node.targets
+        ):
+            continue
+        scripts: list[str] = []
+        if not isinstance(node.value, ast.List):
+            return scripts
+        for entry in node.value.elts:
+            if not isinstance(entry, ast.Tuple) or len(entry.elts) < 2:
+                continue
+            script_arg = entry.elts[1]
+            if isinstance(script_arg, ast.Constant) and isinstance(script_arg.value, str):
+                scripts.append(script_arg.value)
+        return scripts
+    return []
 
 
 def benchmark_script_commands(text: str) -> set[str]:

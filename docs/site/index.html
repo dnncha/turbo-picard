@@ -652,8 +652,8 @@
           </div>
           <div class="proof-strip" aria-label="Benchmark summary">
             <div class="proof"><strong>32/32</strong><span>benchmark parity checks passing</span></div>
-            <div class="proof"><strong>26.74x</strong><span>geometric mean speedup in the saved suite</span></div>
-            <div class="proof"><strong>8.55x+</strong><span>speedup even at the slow end of the saved suite</span></div>
+            <div class="proof"><strong>24.94x</strong><span>geometric mean speedup in the saved suite</span></div>
+            <div class="proof"><strong>6.86x+</strong><span>speedup even at the slow end of the saved suite</span></div>
             <div class="proof"><strong>2.10x+</strong><span>faster than riker in the saved QC overlap smoke profiles</span></div>
           </div>
         </div>
@@ -676,7 +676,7 @@
               <h3>Better than original Picard for hot steps</h3>
               <p>
                 The saved suite shows every benchmarked native command ahead of Picard 3.4.0 after
-                parity checks pass, with an 8.55x floor and 26.74x geometric mean speedup.
+                parity checks pass, with a 6.86x floor and 24.94x geometric mean speedup.
               </p>
             </article>
             <article class="tile">
@@ -708,8 +708,8 @@
               comparison passes. That makes the story simple: the saved suite shows turbo-picard
               ahead on every benchmarked command, and the checked MarkDuplicates performance run
               shows that the gains are about scheduler-friendly memory use too, not just wall time.
-              The current asset was saved on <code>2026-06-04</code> from
-              <code>python3 tools/bench_suite.py --repeats 1 --skip-build</code>; the raw log is
+              The current asset was saved on <code>2026-06-13</code> from
+              <code>python3 tools/bench_suite.py --repeats 3 --skip-build</code>; the raw log is
               <code>docs/site/assets/bench-suite-output.txt</code>.
               Benchmark note: <code>AccelerationStatus</code>, <code>doctor</code>, and
               <code>explain</code> appear under benchmark exceptions because they are
@@ -724,9 +724,9 @@
           </div>
           <div class="benchmark-highlights" aria-label="Benchmark highlights">
             <div class="benchmark-highlight"><b>32/32 PASS</b><span>All 32 commands in the saved benchmark suite passed parity checks.</span></div>
-            <div class="benchmark-highlight"><b>26.74x</b><span>Geometric mean speedup across the current 32-command suite.</span></div>
-            <div class="benchmark-highlight"><b>84.46x</b><span>UpdateVcfSequenceDictionary is the current top saved speedup.</span></div>
-            <div class="benchmark-highlight"><b>8.55x floor</b><span>Even the slowest saved command is still well ahead of Picard.</span></div>
+            <div class="benchmark-highlight"><b>24.94x</b><span>Geometric mean speedup across the current 32-command suite.</span></div>
+            <div class="benchmark-highlight"><b>94.36x</b><span>UpdateVcfSequenceDictionary is the current top saved speedup.</span></div>
+            <div class="benchmark-highlight"><b>6.86x floor</b><span>Even the slowest saved command is still well ahead of Picard.</span></div>
             <div class="benchmark-highlight"><b>2.10x+ vs riker</b><span>The saved QC overlap smoke profiles put turbo-picard ahead on WGS-only and WGS-bundle profiles.</span></div>
             <div class="benchmark-highlight"><b>Rebuildable</b><span>The chart is rendered from benchmark-data.json with rank and summary stats.</span></div>
           </div>
@@ -1107,7 +1107,7 @@ picard RevertSam I=aligned.bam O=unmapped.bam</pre>
             </div>
             <div class="gate-row">
               <strong>Benchmark suite</strong>
-              <code>printf 'benchmark_date=%s source=python3 tools/bench_suite.py --repeats 1 --skip-build\n' "$(date +%F)" &gt; docs/site/assets/bench-suite-output.txt && python3 tools/bench_suite.py --repeats 1 --skip-build | tee -a docs/site/assets/bench-suite-output.txt</code>
+              <code>printf 'benchmark_date=%s source=python3 tools/bench_suite.py --repeats 3 --skip-build\n' "$(date +%F)" &gt; docs/site/assets/bench-suite-output.txt && python3 tools/bench_suite.py --repeats 3 --skip-build | tee -a docs/site/assets/bench-suite-output.txt</code>
               <span>Regenerates speedup evidence while preserving the dated raw parity-checked suite log.</span>
             </div>
             <div class="gate-row">
@@ -1194,7 +1194,7 @@ picard RevertSam I=aligned.bam O=unmapped.bam</pre>
             <article class="tile">
               <h3>Bioconda path</h3>
               <p>
-                Release <code>v0.1.3</code> has been submitted to Bioconda as
+                Release <code>v0.1.4</code> is prepared for Bioconda submission as
                 <code>turbo-picard</code> plus the optional
                 <code>turbo-picard-picard-shim</code>. The main package keeps the
                 <code>turbo-picard</code> command separate; the shim installs

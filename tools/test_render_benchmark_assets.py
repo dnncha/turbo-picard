@@ -23,16 +23,16 @@ class BenchmarkManifestTests(unittest.TestCase):
         data = render_benchmark_assets.build_benchmark_data()
 
         self.assertEqual(data["source_artifact"], "docs/site/assets/bench-suite-output.txt")
-        self.assertEqual(data["date"], "2026-06-04")
+        self.assertEqual(data["date"], "2026-06-13")
         self.assertEqual(data["parity"], "32/32 PASS")
         self.assertEqual(data["summary"]["command_count"], 32)
         self.assertEqual(data["summary"]["parity_pass_count"], 32)
         self.assertEqual(data["summary"]["top_command"], "UpdateVcfSequenceDictionary")
-        self.assertEqual(data["summary"]["top_speedup"], 84.46)
+        self.assertEqual(data["summary"]["top_speedup"], 94.36)
         self.assertEqual(data["summary"]["floor_command"], "RevertSam")
-        self.assertEqual(data["summary"]["floor_speedup"], 8.55)
-        self.assertEqual(data["summary"]["median_speedup"], 26.82)
-        self.assertEqual(data["summary"]["geometric_mean_speedup"], 26.74)
+        self.assertEqual(data["summary"]["floor_speedup"], 6.86)
+        self.assertEqual(data["summary"]["median_speedup"], 26.72)
+        self.assertEqual(data["summary"]["geometric_mean_speedup"], 24.94)
 
         ranks = [row["rank"] for row in data["benchmarks"]]
         speedups = [row["speedup"] for row in data["benchmarks"]]

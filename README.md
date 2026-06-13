@@ -2,7 +2,7 @@
 
 ![Turbo Picard starship captain accelerating genomic pipeline data streams](docs/site/assets/turbo-picard-readme-hero.png)
 
-**The practical first choice for Picard-shaped pipelines. Rust speed. Up to `84.46x` faster.**
+**The practical first choice for Picard-shaped pipelines. Rust speed. Up to `94.36x` faster.**
 
 If you already run Picard workflows and are evaluating alternatives, the default
 operating decision should be:
@@ -40,7 +40,7 @@ pipeline rewrite, and benchmarked speedups on the native surface.
   because workflow interfaces stay intact while hot commands are accelerated.
 - It has benchmark evidence where the native path is materially faster in the
   same comparison scope (32 command-level metrics pass parity with geometric mean
-  speedup above 20x and worst-case floor above 8x, with larger command-specific
+  speedup above 20x and worst-case floor above 6x, with larger command-specific
   gains on key pipeline steps).
 - It competes against both legacy Picard and QC-only alternatives at the adoption
   layer, not just the runtime layer: the same executable shape can cover
@@ -86,7 +86,7 @@ In teams already moving command by command this is usually the best tradeoff:
 faster hot steps first, then expand only after every switched command is reviewable.
 
 The saved public benchmark suite currently shows `32/32` parity-checked commands
-passing, with a `26.74x` geometric mean speedup and an `84.46x` top speedup
+passing, with a `24.94x` geometric mean speedup and a `94.36x` top speedup
 versus Picard 3.4.0. Details and the full per-command table are below.
 
 Enjoy trying it on one shard before you change a whole workflow.
@@ -337,17 +337,17 @@ noise does not swamp the overlap timings.
 Evidence lives in [`benchmarks/riker-comparison/`](benchmarks/riker-comparison/).
 
 The benchmark suite compares each command with Picard and checks stable output
-before reporting speed. Saved on `2026-06-04` from
-`python3 tools/bench_suite.py --repeats 1 --skip-build`.
+before reporting speed. Saved on `2026-06-13` from
+`python3 tools/bench_suite.py --repeats 3 --skip-build`.
 Raw log: `docs/site/assets/bench-suite-output.txt`.
 
 Summary:
 
 - `32/32` benchmarked commands passed parity checks.
-- `84.46x` top speedup: `UpdateVcfSequenceDictionary`.
-- `8.55x` floor speedup: `RevertSam`.
-- `26.82x` median speedup.
-- `26.74x` geometric mean speedup.
+- `94.36x` top speedup: `UpdateVcfSequenceDictionary`.
+- `6.86x` floor speedup: `RevertSam`.
+- `26.72x` median speedup.
+- `24.94x` geometric mean speedup.
 
 Benchmark note: `AccelerationStatus`, `doctor`, and `explain` are listed under
 benchmark exceptions because they are status/preflight commands with no Picard
@@ -359,38 +359,38 @@ pixel-identical to Picard.
 
 | Command | Speedup | Parity |
 | --- | ---: | --- |
-| UpdateVcfSequenceDictionary | 84.46x | PASS |
-| NormalizeFasta | 68.69x | PASS |
-| GatherVcfs | 63.77x | PASS |
-| MergeVcfs | 56.99x | PASS |
-| CreateSequenceDictionary | 50.86x | PASS |
-| CollectGcBiasMetrics | 50.25x | PASS |
-| SortSam | 47.40x | PASS |
-| CollectInsertSizeMetrics | 46.41x | PASS |
-| BuildBamIndex | 45.49x | PASS |
-| CollectAlignmentSummaryMetrics | 37.50x | PASS |
-| IntervalListTools | 33.01x | PASS |
-| SamToFastq | 30.44x | PASS |
-| ViewSam | 28.64x | PASS |
-| BedToIntervalList | 27.91x | PASS |
-| SortVcf | 27.87x | PASS |
-| CleanSam | 26.82x | PASS |
-| AddOrReplaceReadGroups | 26.17x | PASS |
-| FastqToSam | 24.80x | PASS |
-| CollectQualityYieldMetrics | 24.06x | PASS |
-| MarkDuplicates | 23.19x | PASS |
-| CollectWgsMetrics | 22.42x | PASS |
-| MeanQualityByCycle | 21.66x | PASS |
-| CollectMultipleMetrics | 20.48x | PASS |
-| ValidateSamFile | 19.38x | PASS |
-| LiftoverVcf | 15.13x | PASS |
-| FixMateInformation | 14.54x | PASS |
-| MergeSamFiles | 14.31x | PASS |
-| ReplaceSamHeader | 14.07x | PASS |
-| CollectBaseDistributionByCycle | 12.46x | PASS |
-| QualityScoreDistribution | 11.40x | PASS |
-| SetNmMdAndUqTags | 10.19x | PASS |
-| RevertSam | 8.55x | PASS |
+| UpdateVcfSequenceDictionary | 94.36x | PASS |
+| BuildBamIndex | 69.26x | PASS |
+| NormalizeFasta | 67.11x | PASS |
+| GatherVcfs | 53.80x | PASS |
+| CreateSequenceDictionary | 47.83x | PASS |
+| MergeVcfs | 47.23x | PASS |
+| CollectInsertSizeMetrics | 40.66x | PASS |
+| MeanQualityByCycle | 36.74x | PASS |
+| QualityScoreDistribution | 34.04x | PASS |
+| CollectBaseDistributionByCycle | 33.08x | PASS |
+| SamToFastq | 29.06x | PASS |
+| CollectMultipleMetrics | 28.39x | PASS |
+| IntervalListTools | 27.89x | PASS |
+| CollectGcBiasMetrics | 27.72x | PASS |
+| ValidateSamFile | 27.62x | PASS |
+| SortSam | 26.72x | PASS |
+| SortVcf | 25.67x | PASS |
+| CollectAlignmentSummaryMetrics | 25.63x | PASS |
+| AddOrReplaceReadGroups | 24.48x | PASS |
+| CleanSam | 21.61x | PASS |
+| ViewSam | 21.11x | PASS |
+| BedToIntervalList | 19.89x | PASS |
+| MarkDuplicates | 17.68x | PASS |
+| CollectQualityYieldMetrics | 17.58x | PASS |
+| MergeSamFiles | 17.16x | PASS |
+| CollectWgsMetrics | 15.42x | PASS |
+| ReplaceSamHeader | 14.20x | PASS |
+| LiftoverVcf | 14.17x | PASS |
+| FixMateInformation | 10.35x | PASS |
+| SetNmMdAndUqTags | 9.34x | PASS |
+| FastqToSam | 7.40x | PASS |
+| RevertSam | 6.86x | PASS |
 
 CRAM preprocessing parity checks:
 
@@ -460,7 +460,7 @@ The submission checklist is in [`docs/joss-submission.md`](docs/joss-submission.
 
 ## Bioconda status
 
-Release `v0.1.3` has been submitted to Bioconda as two recipes:
+Release `v0.1.4` is prepared for Bioconda submission as two recipes:
 
 - `turbo-picard` — installs `turbo-picard`.
 - `turbo-picard-picard-shim` — installs the optional `picard` command name.
@@ -470,7 +470,7 @@ Release checks:
 ```bash
 python3 tools/bioconda_release_preflight.py
 python3 tools/prepare_bioconda_release.py \
-  --archive ~/Downloads/turbo-picard-0.1.3.tar.gz
+  --archive ~/Downloads/turbo-picard-0.1.4.tar.gz
 python3 tools/verify_bioconda_recipes.py --release-ready
 ```
 

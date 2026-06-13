@@ -9,8 +9,8 @@ work to a GPU just because one is present.
 They also explain the scalability story. Faster wall time matters, but so does
 the ability to fan out many Picard-shaped tasks without paying Picard-scale JVM
 startup and memory costs on every shard. The saved benchmark suite currently
-shows an ``8.55x`` floor speedup, ``26.74x`` geometric mean speedup, and
-``84.46x`` top speedup against Picard 3.4.0, while the checked
+shows a ``6.86x`` floor speedup, ``24.94x`` geometric mean speedup, and
+``94.36x`` top speedup against Picard 3.4.0, while the checked
 ``MarkDuplicates`` performance run in this repository dropped median RSS from
 about ``1.2 GB`` to about ``8.7 MB``.
 
@@ -108,6 +108,19 @@ The JSON artifact records per-command wall time, wrapper CPU time, observed RSS,
 thread-related environment variables, read count, parity result, and per-repeat
 details. Keep these generated artifacts under ``benchmarks/runs/`` unless a
 specific release evidence bundle is being promoted.
+
+For focused regression work, run only the command family under investigation:
+
+.. code-block:: bash
+
+   python3 tools/bench_suite.py --repeats 5 --skip-build \
+     --only revertsam,setnmmdanduqtags,qualityscoredistribution \
+     --profile-output benchmarks/runs/floor-command-profile.json
+
+``--only`` accepts benchmark labels from ``tools/bench_suite.py`` and can be
+repeated or comma-separated. This is the preferred loop when auditing the saved
+suite floor, because it preserves Picard parity checks while avoiding unrelated
+benchmark setup and runtime.
 
 ``CollectGcBiasMetrics`` loads one reference contig at a time via ``.fai`` seek
 for read-time GC windows and precomputes genome-window counts without keeping

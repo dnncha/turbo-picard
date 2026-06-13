@@ -18,7 +18,7 @@ replace one Picard command at a time, compare outputs with your pipeline,
 then expand once the first boundary is proven.
 
 The current saved benchmark suite reports ``32/32`` parity-checked commands,
-an ``8.55x`` floor speedup, ``26.74x`` geometric mean speedup, and ``84.46x``
+a ``6.86x`` floor speedup, ``24.94x`` geometric mean speedup, and ``94.36x``
 top speedup. The checked ``MarkDuplicates`` performance run in the repository
 also cuts median RSS from about ``1.2 GB`` in Picard 3.4.0 to about ``8.7 MB``
 in ``turbo-picard``. That is why the project is positioned as both faster and

@@ -1,13 +1,13 @@
 {% set name = "turbo-picard-picard-shim" %}
-{% set version = "0.1.3" %}
+{% set version = "0.1.4" %}
 
 package:
   name: {{ name|lower }}
   version: {{ version }}
 
 source:
-  url: https://github.com/dnncha/turbo-picard/archive/refs/tags/v0.1.3.tar.gz
-  sha256: 5aa23e085628114c168ddf9e7df94b5762769c3e6aed2b571eae136d380b0b28
+  url: https://github.com/dnncha/turbo-picard/archive/refs/tags/v0.1.4.tar.gz
+  sha256: <github-v0.1.4-source-archive-sha256>
   patches:
     - rust-htslib-static.patch
 build:

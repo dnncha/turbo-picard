@@ -38,10 +38,10 @@ as Python wheel scripts:
 
    python3 -m pip install turbo-picard
 
-Release ``0.1.3`` publishes a macOS Apple Silicon wheel and a source
-distribution. If ``pip`` builds from source, the machine needs a Rust toolchain
-and native build dependencies. For Linux clusters and shared environments,
-Bioconda is the cleaner target once the recipe is accepted.
+Release ``0.1.4`` is prepared to publish a macOS Apple Silicon wheel and a
+source distribution. If ``pip`` builds from source, the machine needs a Rust
+toolchain and native build dependencies. For Linux clusters and shared
+environments, Bioconda is the cleaner target once the recipe is accepted.
 
 The current wheel exposes both commands from the CLI crate:
 
@@ -102,18 +102,19 @@ commands you need, and adding the shim only to pipeline-specific environments.
 Bioconda release path
 ---------------------
 
-The recipe files intentionally use the local checkout while release artifacts
-are still being prepared:
+Before release tagging, the recipe files may use the local checkout while
+artifacts are still being prepared:
 
 .. code-block:: yaml
 
    source:
      path: ../../..
 
-Do not open a Bioconda PR while the recipes still use ``source.path``. That
-local source block is only for smoke testing this repository. The submission is
-ready to copy into ``bioconda-recipes`` only after the tagged archive URL and
-SHA-256 are written and the release-ready verifier passes.
+Do not open a Bioconda PR while the recipes still use ``source.path`` or a
+source archive SHA-256 placeholder. Those states are only for smoke testing and
+release preparation in this repository. The submission is ready to copy into
+``bioconda-recipes`` only after the tagged archive URL and SHA-256 are written
+and the release-ready verifier passes.
 
 Commit the intended release state before tagging. The preflight command reports
 a dirty worktree as a release wait state so the source archive is not cut from
@@ -127,10 +128,11 @@ the immutable tagged archive:
 
    python3 tools/bioconda_release_preflight.py
    python3 tools/prepare_bioconda_release.py \
-     --archive ~/Downloads/turbo-picard-0.1.3.tar.gz
+     --archive ~/Downloads/turbo-picard-0.1.4.tar.gz
 
 The preflight command summarizes the checks that are already green and calls out
-the expected wait state while the recipes still use ``source.path``.
+the expected wait state while the recipes still use ``source.path`` or a source
+archive SHA-256 placeholder.
 
 The helper computes the archive SHA-256 and writes it into both recipes and
 ``packaging/bioconda/BIOCONDA_PR.md``. Prefer ``--archive`` for release
@@ -140,8 +142,8 @@ version, contains the expected release files, and carries the citation,
 benchmark, and real-data metadata used by the PR body. If the digest was
 computed elsewhere, pass it with ``--sha256`` only when it came from the
 downloaded GitHub source archive. That fallback skips archive filename and
-content validation. For ``0.1.3``, use ``turbo-picard-0.1.3.tar.gz`` or
-GitHub's ``v0.1.3.tar.gz``.
+content validation. For ``0.1.4``, use ``turbo-picard-0.1.4.tar.gz`` or
+GitHub's ``v0.1.4.tar.gz``.
 
 Then run the release checks:
 

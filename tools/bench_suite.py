@@ -15,6 +15,50 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 
+BENCHMARK_SPECS = [
+    ("samtofastq", "bench_samtofastq.py", "samtofastq_reads"),
+    ("fastqtosam", "bench_fastqtosam.py", "fastqtosam_reads"),
+    ("fixmateinformation", "bench_fixmateinformation.py", "fixmateinformation_reads"),
+    ("sortsam", "bench_sortsam.py", "sortsam_reads"),
+    ("buildbamindex", "bench_buildbamindex.py", "buildbamindex_reads"),
+    ("insertsize", "bench_insertsize.py", "insertsize_reads"),
+    ("markduplicates", "bench_markduplicates_synthetic.py", "markduplicates_reads"),
+    ("meanqualitybycycle", "bench_meanqualitybycycle.py", "meanqualitybycycle_reads"),
+    ("mergesamfiles", "bench_mergesamfiles.py", "mergesamfiles_reads"),
+    ("addorreplacereadgroups", "bench_addorreplacereadgroups.py", "addorreplacereadgroups_reads"),
+    ("alignmentmetrics", "bench_alignmentmetrics.py", "alignmentmetrics_reads"),
+    ("cleansam", "bench_cleansam.py", "cleansam_reads"),
+    (
+        "basedistributionbycycle",
+        "bench_collectbasedistributionbycycle.py",
+        "basedistributionbycycle_reads",
+    ),
+    ("collectgcbiasmetrics", "bench_collectgcbiasmetrics.py", "collectgcbiasmetrics_reads"),
+    ("collectwgsmetrics", "bench_collectwgsmetrics.py", "collectwgsmetrics_reads"),
+    (
+        "qualityscoredistribution",
+        "bench_qualityscoredistribution.py",
+        "qualityscoredistribution_reads",
+    ),
+    ("qualityyield", "bench_qualityyield.py", "qualityyield_reads"),
+    ("collectmultiplemetrics", "bench_collectmultiplemetrics.py", "collectmultiplemetrics_reads"),
+    ("revertsam", "bench_revertsam.py", "revertsam_reads"),
+    ("setnmmdanduqtags", "bench_setnmmdanduqtags.py", "setnmmdanduqtags_reads"),
+    ("validatesamfile", "bench_validatesamfile.py", "validatesamfile_reads"),
+    ("createdict", "bench_createdict.py", "createdict_reads"),
+    ("normalizefasta", "bench_normalizefasta.py", "normalizefasta_reads"),
+    ("bedtointervallist", "bench_bedtointervallist.py", "bedtointervallist_reads"),
+    ("intervallisttools", "bench_intervallisttools.py", "intervallisttools_reads"),
+    ("gathervcfs", "bench_gathervcfs.py", "gathervcfs_reads"),
+    ("sortvcf", "bench_sortvcf.py", "sortvcf_reads"),
+    ("mergevcfs", "bench_mergevcfs.py", "mergevcfs_reads"),
+    ("liftovervcf", "bench_liftovervcf.py", "liftovervcf_reads"),
+    ("viewsam", "bench_viewsam.py", "viewsam_reads"),
+    ("replacesamheader", "bench_replacesamheader.py", "replacesamheader_reads"),
+    ("updatevcfdict", "bench_updatevcfsequencedictionary.py", "updatevcfdict_reads"),
+]
+
+
 def run(command):
     stdout, _ = run_profiled(command)
     return stdout
@@ -192,6 +236,16 @@ def main():
         type=Path,
         help="Write per-command benchmark profiling JSON with wall time, CPU, RSS, thread env, and parity.",
     )
+    parser.add_argument(
+        "--only",
+        action="append",
+        default=[],
+        metavar="LABEL[,LABEL...]",
+        help=(
+            "Run only selected benchmark labels. Repeat or comma-separate values; "
+            "labels include revertsam, setnmmdanduqtags, and qualityscoredistribution."
+        ),
+    )
     args = parser.parse_args()
 
     if args.repeats < 1:
@@ -199,144 +253,26 @@ def main():
     if not args.skip_build:
         run(["cargo", "build", "--release", "-p", "turbo-picard-cli", "--bin", "picard"])
 
+    selected_labels = {
+        label.strip().lower()
+        for value in args.only
+        for label in value.split(",")
+        if label.strip()
+    }
+    known_labels = {label for label, _script, _reads_attr in BENCHMARK_SPECS}
+    unknown_labels = selected_labels - known_labels
+    if unknown_labels:
+        raise SystemExit(
+            "--only contains unknown benchmark label(s): "
+            + ", ".join(sorted(unknown_labels))
+            + ". Known labels: "
+            + ", ".join(sorted(known_labels))
+        )
+
     results = [
-        run_benchmark("samtofastq", "bench_samtofastq.py", args.samtofastq_reads, args.repeats),
-        run_benchmark("fastqtosam", "bench_fastqtosam.py", args.fastqtosam_reads, args.repeats),
-        run_benchmark(
-            "fixmateinformation",
-            "bench_fixmateinformation.py",
-            args.fixmateinformation_reads,
-            args.repeats,
-        ),
-        run_benchmark("sortsam", "bench_sortsam.py", args.sortsam_reads, args.repeats),
-        run_benchmark(
-            "buildbamindex",
-            "bench_buildbamindex.py",
-            args.buildbamindex_reads,
-            args.repeats,
-        ),
-        run_benchmark(
-            "insertsize",
-            "bench_insertsize.py",
-            args.insertsize_reads,
-            args.repeats,
-        ),
-        run_benchmark(
-            "markduplicates",
-            "bench_markduplicates_synthetic.py",
-            args.markduplicates_reads,
-            args.repeats,
-        ),
-        run_benchmark(
-            "meanqualitybycycle",
-            "bench_meanqualitybycycle.py",
-            args.meanqualitybycycle_reads,
-            args.repeats,
-        ),
-        run_benchmark(
-            "mergesamfiles",
-            "bench_mergesamfiles.py",
-            args.mergesamfiles_reads,
-            args.repeats,
-        ),
-        run_benchmark(
-            "addorreplacereadgroups",
-            "bench_addorreplacereadgroups.py",
-            args.addorreplacereadgroups_reads,
-            args.repeats,
-        ),
-        run_benchmark(
-            "alignmentmetrics",
-            "bench_alignmentmetrics.py",
-            args.alignmentmetrics_reads,
-            args.repeats,
-        ),
-        run_benchmark("cleansam", "bench_cleansam.py", args.cleansam_reads, args.repeats),
-        run_benchmark(
-            "basedistributionbycycle",
-            "bench_collectbasedistributionbycycle.py",
-            args.basedistributionbycycle_reads,
-            args.repeats,
-        ),
-        run_benchmark(
-            "collectgcbiasmetrics",
-            "bench_collectgcbiasmetrics.py",
-            args.collectgcbiasmetrics_reads,
-            args.repeats,
-        ),
-        run_benchmark(
-            "collectwgsmetrics",
-            "bench_collectwgsmetrics.py",
-            args.collectwgsmetrics_reads,
-            args.repeats,
-        ),
-        run_benchmark(
-            "qualityscoredistribution",
-            "bench_qualityscoredistribution.py",
-            args.qualityscoredistribution_reads,
-            args.repeats,
-        ),
-        run_benchmark("qualityyield", "bench_qualityyield.py", args.qualityyield_reads, args.repeats),
-        run_benchmark(
-            "collectmultiplemetrics",
-            "bench_collectmultiplemetrics.py",
-            args.collectmultiplemetrics_reads,
-            args.repeats,
-        ),
-        run_benchmark("revertsam", "bench_revertsam.py", args.revertsam_reads, args.repeats),
-        run_benchmark(
-            "setnmmdanduqtags",
-            "bench_setnmmdanduqtags.py",
-            args.setnmmdanduqtags_reads,
-            args.repeats,
-        ),
-        run_benchmark(
-            "validatesamfile",
-            "bench_validatesamfile.py",
-            args.validatesamfile_reads,
-            args.repeats,
-        ),
-        run_benchmark("createdict", "bench_createdict.py", args.createdict_reads, args.repeats),
-        run_benchmark(
-            "normalizefasta",
-            "bench_normalizefasta.py",
-            args.normalizefasta_reads,
-            args.repeats,
-        ),
-        run_benchmark(
-            "bedtointervallist",
-            "bench_bedtointervallist.py",
-            args.bedtointervallist_reads,
-            args.repeats,
-        ),
-        run_benchmark(
-            "intervallisttools",
-            "bench_intervallisttools.py",
-            args.intervallisttools_reads,
-            args.repeats,
-        ),
-        run_benchmark("gathervcfs", "bench_gathervcfs.py", args.gathervcfs_reads, args.repeats),
-        run_benchmark("sortvcf", "bench_sortvcf.py", args.sortvcf_reads, args.repeats),
-        run_benchmark("mergevcfs", "bench_mergevcfs.py", args.mergevcfs_reads, args.repeats),
-        run_benchmark(
-            "liftovervcf",
-            "bench_liftovervcf.py",
-            args.liftovervcf_reads,
-            args.repeats,
-        ),
-        run_benchmark("viewsam", "bench_viewsam.py", args.viewsam_reads, args.repeats),
-        run_benchmark(
-            "replacesamheader",
-            "bench_replacesamheader.py",
-            args.replacesamheader_reads,
-            args.repeats,
-        ),
-        run_benchmark(
-            "updatevcfdict",
-            "bench_updatevcfsequencedictionary.py",
-            args.updatevcfdict_reads,
-            args.repeats,
-        ),
+        run_benchmark(label, script, getattr(args, reads_attr), args.repeats)
+        for label, script, reads_attr in BENCHMARK_SPECS
+        if not selected_labels or label in selected_labels
     ]
 
     for rows in results:

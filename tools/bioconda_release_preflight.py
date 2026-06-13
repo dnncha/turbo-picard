@@ -84,6 +84,7 @@ def run_check(command: list[str], root: Path = ROOT) -> tuple[int, list[str]]:
 
 
 def preflight_report(root: Path = ROOT) -> tuple[int, str]:
+    version = workspace_version(root) or "0.1.0"
     checks = [
         ("real-data release evidence", ["python3", "tools/verify_real_data_evidence.py", "--release-ready"]),
         ("release version and citation metadata", ["python3", "tools/verify_release_versions.py"]),
@@ -137,9 +138,12 @@ def preflight_report(root: Path = ROOT) -> tuple[int, str]:
     release_errors = set(release_lines)
     if release_errors and release_errors <= EXPECTED_ARCHIVE_ERRORS:
         output.append("WAIT: Bioconda release-ready source metadata")
-        output.append("  The recipes are still in local source.path mode.")
+        output.append("  The recipes still need immutable release archive metadata.")
         output.append("  After tagging the exact release commit, download the GitHub archive and run:")
-        output.append("  python3 tools/prepare_bioconda_release.py --archive ~/Downloads/turbo-picard-0.1.0.tar.gz")
+        output.append(
+            "  python3 tools/prepare_bioconda_release.py "
+            f"--archive ~/Downloads/turbo-picard-{version}.tar.gz"
+        )
         output.append("  python3 tools/verify_bioconda_recipes.py --release-ready")
         output.append("  Then copy both recipes into bioconda-recipes and run lint plus Docker/mulled builds.")
         return 1, "\n".join(output) + "\n"
