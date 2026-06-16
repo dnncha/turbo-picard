@@ -3131,8 +3131,8 @@ fn collectgcbiasmetrics_writes_detail_summary_and_chart() {
 
     let detail_text = fs::read_to_string(&detail).expect("detail metrics exist");
     assert!(detail_text.contains("## METRICS CLASS\tpicard.analysis.GcBiasDetailMetrics\n"));
-    assert!(detail_text.contains("All Reads\tALL\t0\t19\t1\t0\t1\t1\t\t\t\n"));
-    assert!(detail_text.contains("All Reads\tALL\t100\t19\t1\t0\t1\t1\t\t\t\n"));
+    assert!(detail_text.contains("All Reads\tALL\t0\t19\t1\t37\t1\t1\t\t\t\n"));
+    assert!(detail_text.contains("All Reads\tALL\t100\t19\t1\t37\t1\t1\t\t\t\n"));
     let summary_text = fs::read_to_string(&summary).expect("summary metrics exist");
     assert!(summary_text.contains("## METRICS CLASS\tpicard.analysis.GcBiasSummaryMetrics\n"));
     assert!(summary_text.contains("All Reads\tALL\t20\t2\t2\t0\t0\t1\t0\t0\t0\t1\t\t\t\n"));
@@ -3189,7 +3189,7 @@ fn collectgcbiasmetrics_honors_stop_after_and_assume_sorted_alias() {
         .success();
 
     let detail_text = fs::read_to_string(&detail).expect("detail metrics exist");
-    assert!(detail_text.contains("All Reads\tALL\t0\t19\t1\t0\t2\t2\t\t\t\n"));
+    assert!(detail_text.contains("All Reads\tALL\t0\t19\t1\t37\t2\t2\t\t\t\n"));
     assert!(detail_text.contains("All Reads\tALL\t100\t19\t0\t0\t0\t0\t\t\t\n"));
     let summary_text = fs::read_to_string(&summary).expect("summary metrics exist");
     assert!(summary_text.contains("All Reads\tALL\t20\t1\t1\t0\t50\t2\t0\t0\t0\t0\t\t\t\n"));
@@ -4015,9 +4015,9 @@ fn collectgcbiasmetrics_can_also_emit_unique_duplicate_filtered_metrics() {
         .success();
 
     let detail_text = fs::read_to_string(&detail).expect("detail output exists");
-    assert!(detail_text.contains("All Reads\tALL\t0\t19\t2\t0\t1.333333"));
-    assert!(detail_text.contains("All Reads\tUNIQUE\t0\t19\t1\t0\t1"));
-    assert!(detail_text.contains("All Reads\tUNIQUE\t100\t19\t1\t0\t1"));
+    assert!(detail_text.contains("All Reads\tALL\t0\t19\t2\t18.5\t1.333333"));
+    assert!(detail_text.contains("All Reads\tUNIQUE\t0\t19\t1\t37\t1"));
+    assert!(detail_text.contains("All Reads\tUNIQUE\t100\t19\t1\t37\t1"));
 
     let summary_text = fs::read_to_string(&summary).expect("summary output exists");
     assert!(summary_text.contains("All Reads\tALL\t20\t3\t3\t0\t16.666667"));
@@ -4354,8 +4354,8 @@ fn collectmultiplemetrics_forwards_gc_bias_duplicate_extra_argument() {
 
     let detail = fs::read_to_string(output.with_extension("gc_bias.detail_metrics"))
         .expect("gc bias detail metrics exist");
-    assert!(detail.contains("All Reads\tUNIQUE\t0\t19\t1\t0\t1"));
-    assert!(detail.contains("All Reads\tUNIQUE\t100\t19\t1\t0\t1"));
+    assert!(detail.contains("All Reads\tUNIQUE\t0\t19\t1\t37\t1"));
+    assert!(detail.contains("All Reads\tUNIQUE\t100\t19\t1\t37\t1"));
 }
 
 #[test]

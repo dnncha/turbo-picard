@@ -1040,7 +1040,7 @@ fn print_acceleration_status_lines_for_policy(policy: &str) {
     println!("htslib_reader_threads={reader_threads}");
     println!("htslib_writer_threads={writer_threads}");
     println!("htslib_pipeline_reader_threads={pipeline_reader_threads}");
-    println!("gpu_runtime={}", gpu_runtime.as_deref().unwrap_or("none"));
+    println!("gpu_runtime={}", gpu_runtime.unwrap_or("none"));
     println!("gpu_acceleration=not-enabled");
 }
 
@@ -1961,20 +1961,18 @@ fn append_cleaned_sam_text_record(
     let mut new_cigar: Option<String> = None;
     if flags & 0x4 != 0 {
         new_mapq = Some("0");
-    } else if fields[2] != "*" {
-        if let Some(target_len) = target_lengths.get(fields[2]).copied() {
-            let pos = fields[3]
-                .parse::<u64>()
-                .map_err(|_| "malformed CleanSam SAM position".to_string())?;
-            let start = pos.saturating_sub(1);
-            if start >= target_len {
-                return Err(
-                    "unsupported CleanSam alignment starting beyond reference end".to_string(),
-                );
-            }
-            if let Some(cleaned) = clean_cigar_text(fields[5], start, target_len)? {
-                new_cigar = Some(cleaned);
-            }
+    } else if fields[2] != "*"
+        && let Some(target_len) = target_lengths.get(fields[2]).copied()
+    {
+        let pos = fields[3]
+            .parse::<u64>()
+            .map_err(|_| "malformed CleanSam SAM position".to_string())?;
+        let start = pos.saturating_sub(1);
+        if start >= target_len {
+            return Err("unsupported CleanSam alignment starting beyond reference end".to_string());
+        }
+        if let Some(cleaned) = clean_cigar_text(fields[5], start, target_len)? {
+            new_cigar = Some(cleaned);
         }
     }
 
@@ -2119,11 +2117,11 @@ fn push_text_cigar(cigars: &mut Vec<(u64, char)>, len: u64, op: char) {
     if len == 0 {
         return;
     }
-    if let Some((last_len, last_op)) = cigars.last_mut() {
-        if *last_op == op {
-            *last_len += len;
-            return;
-        }
+    if let Some((last_len, last_op)) = cigars.last_mut()
+        && *last_op == op
+    {
+        *last_len += len;
+        return;
     }
     cigars.push((len, op));
 }
@@ -2147,17 +2145,16 @@ fn run_sortsam_sam_text(input: &str, output: &str, sort_order: SortOrder) -> Res
             break;
         }
         if line.starts_with('@') {
-            if line.starts_with("@SQ\t") {
-                if let Some(name) = line
+            if line.starts_with("@SQ\t")
+                && let Some(name) = line
                     .split('\t')
                     .skip(1)
                     .find_map(|field| field.strip_prefix("SN:"))
-                {
-                    contig_order.insert(
-                        name.trim_end_matches(['\r', '\n']).to_string(),
-                        contig_order.len() as i32,
-                    );
-                }
+            {
+                contig_order.insert(
+                    name.trim_end_matches(['\r', '\n']).to_string(),
+                    contig_order.len() as i32,
+                );
             }
             header_lines.push(line.clone());
         } else if !line.trim().is_empty() {
@@ -2755,16 +2752,14 @@ fn run_fastqtosam(args: &[String]) -> Result<(), String> {
             &mut first_reader_index,
             &mut first_record,
         )? {
-            if let Some(readers) = second_readers.as_mut() {
-                if next_fastq_record_from_readers(
+            if let Some(readers) = second_readers.as_mut()
+                && next_fastq_record_from_readers(
                     readers,
                     &mut second_reader_index,
                     &mut second_record,
-                )? {
-                    return Err(
-                        "malformed FastqToSam FASTQ2 has more records than FASTQ".to_string()
-                    );
-                }
+                )?
+            {
+                return Err("malformed FastqToSam FASTQ2 has more records than FASTQ".to_string());
             }
             break;
         }
@@ -3238,8 +3233,7 @@ fn default_cmm_collector_thread_count(active_collectors: usize) -> usize {
         .map(|parallelism| parallelism.get().saturating_sub(2))
         .unwrap_or(1)
         .min(active_collectors)
-        .min(6)
-        .max(1)
+        .clamp(1, 6)
 }
 
 fn run_collectmultiplemetrics_single_pass(
@@ -3503,10 +3497,10 @@ fn run_collectmultiplemetrics_single_pass(
                 let include_bq_histogram =
                     optional_bool(args, "INCLUDE_BQ_HISTOGRAM")?.unwrap_or(false);
                 let mut summary = WgsMetricsSummary::new(&reference_contigs, None, coverage_cap);
-                if let Some(limit) = optional_i64(args, "STOP_AFTER")? {
-                    if limit >= 0 {
-                        summary.limit_included_loci(limit as usize);
-                    }
+                if let Some(limit) = optional_i64(args, "STOP_AFTER")?
+                    && limit >= 0
+                {
+                    summary.limit_included_loci(limit as usize);
                 }
                 wgs = Some((
                     summary,
@@ -3775,44 +3769,42 @@ fn run_collectmultiplemetrics_single_pass(
             }));
         }
 
-        if !combine_alignment_and_insert_size {
-            if let Some((worker, _)) = &alignment_worker {
-                let worker = Arc::clone(worker);
-                let read_groups = Arc::clone(&read_groups);
-                handlers.push(Box::new(move |batch| {
-                    let mut metrics = worker.lock().expect("alignment collector lock");
-                    for entry in batch {
-                        if !entry.gates.alignment {
-                            continue;
-                        }
-                        let record = &entry.record;
-                        let read_group =
-                            insert_size_read_group_for_bam_record(record, read_groups.as_ref());
-                        metrics.observe(record, read_group.as_ref());
+        if !combine_alignment_and_insert_size && let Some((worker, _)) = &alignment_worker {
+            let worker = Arc::clone(worker);
+            let read_groups = Arc::clone(&read_groups);
+            handlers.push(Box::new(move |batch| {
+                let mut metrics = worker.lock().expect("alignment collector lock");
+                for entry in batch {
+                    if !entry.gates.alignment {
+                        continue;
                     }
-                    Ok(())
-                }));
-            }
+                    let record = &entry.record;
+                    let read_group =
+                        insert_size_read_group_for_bam_record(record, read_groups.as_ref());
+                    metrics.observe(record, read_group.as_ref());
+                }
+                Ok(())
+            }));
         }
-        if !combine_alignment_and_insert_size {
-            if let Some((worker, _, _, include_duplicates, _, _)) = &insert_size_worker {
-                let worker = Arc::clone(worker);
-                let read_groups = Arc::clone(&read_groups);
-                let include_duplicates = *include_duplicates;
-                handlers.push(Box::new(move |batch| {
-                    let mut metrics = worker.lock().expect("insert-size collector lock");
-                    for entry in batch {
-                        if !entry.gates.insert_size {
-                            continue;
-                        }
-                        let record = &entry.record;
-                        let read_group =
-                            insert_size_read_group_for_bam_record(record, read_groups.as_ref());
-                        metrics.observe(record, include_duplicates, read_group.as_ref());
+        if !combine_alignment_and_insert_size
+            && let Some((worker, _, _, include_duplicates, _, _)) = &insert_size_worker
+        {
+            let worker = Arc::clone(worker);
+            let read_groups = Arc::clone(&read_groups);
+            let include_duplicates = *include_duplicates;
+            handlers.push(Box::new(move |batch| {
+                let mut metrics = worker.lock().expect("insert-size collector lock");
+                for entry in batch {
+                    if !entry.gates.insert_size {
+                        continue;
                     }
-                    Ok(())
-                }));
-            }
+                    let record = &entry.record;
+                    let read_group =
+                        insert_size_read_group_for_bam_record(record, read_groups.as_ref());
+                    metrics.observe(record, include_duplicates, read_group.as_ref());
+                }
+                Ok(())
+            }));
         }
         if let Some((worker, _, _, aligned_reads_only, pf_reads_only)) = &base_distribution_worker {
             let worker = Arc::clone(worker);
@@ -5259,7 +5251,7 @@ fn parse_sam_header_record_line(line: &str) -> Option<HeaderRecord<'_>> {
     if !record_type.starts_with('@') {
         return None;
     }
-    let mut record = HeaderRecord::new(&record_type[1..].as_bytes());
+    let mut record = HeaderRecord::new(&record_type.as_bytes()[1..]);
     for field in parts {
         if let Some((tag, value)) = field.split_once(':') {
             record.push_tag(tag.as_bytes(), value);
@@ -5346,10 +5338,6 @@ fn parse_sam_aux_field(tag_field: &str) -> Option<(&[u8], u8, &str)> {
     Some((&bytes[..2], tag_type, &tag_field[5..]))
 }
 
-fn temp_revertsam_sam_path(output: &str) -> String {
-    format!("{output}.tmp.{}.sam", process::id())
-}
-
 fn revert_sam_text_record_line(
     line: &str,
     remove_duplicate_information: bool,
@@ -5370,16 +5358,16 @@ fn revert_sam_text_record_line(
     let mut hardclip_qualities = None::<Vec<u8>>;
 
     for tag_field in &fields[11..] {
-        if tag_field.starts_with("OQ:Z:") {
-            qualities = tag_field[5..].as_bytes().to_vec();
+        if let Some(original_qualities) = tag_field.strip_prefix("OQ:Z:") {
+            qualities = original_qualities.as_bytes().to_vec();
             continue;
         }
-        if restore_hardclips && tag_field.starts_with("XB:Z:") {
-            hardclip_bases = Some(tag_field[5..].as_bytes().to_vec());
+        if restore_hardclips && let Some(bases) = tag_field.strip_prefix("XB:Z:") {
+            hardclip_bases = Some(bases.as_bytes().to_vec());
             continue;
         }
-        if restore_hardclips && tag_field.starts_with("XQ:Z:") {
-            hardclip_qualities = Some(tag_field[5..].as_bytes().to_vec());
+        if restore_hardclips && let Some(qualities) = tag_field.strip_prefix("XQ:Z:") {
+            hardclip_qualities = Some(qualities.as_bytes().to_vec());
             continue;
         }
         if revertsam_default_removed_alignment_tag_field(tag_field) {
@@ -7584,8 +7572,6 @@ fn read_reference_contigs_for_wgs(path: &str) -> Result<Vec<(String, usize)>, St
 struct FaiEntry {
     length: usize,
     offset: u64,
-    line_bases: usize,
-    line_width: usize,
 }
 
 fn read_fai_entry(fai_path: &str, contig: &str) -> Result<FaiEntry, String> {
@@ -7608,22 +7594,17 @@ fn read_fai_entry(fai_path: &str, contig: &str) -> Result<FaiEntry, String> {
             .ok_or_else(|| format!("invalid FAI entry for {contig} in {fai_path}"))?
             .parse::<u64>()
             .map_err(|error| format!("invalid FAI offset for {contig}: {error}"))?;
-        let line_bases = fields
+        fields
             .next()
             .ok_or_else(|| format!("invalid FAI entry for {contig} in {fai_path}"))?
             .parse::<usize>()
             .map_err(|error| format!("invalid FAI bases-per-line for {contig}: {error}"))?;
-        let line_width = fields
+        fields
             .next()
             .ok_or_else(|| format!("invalid FAI entry for {contig} in {fai_path}"))?
             .parse::<usize>()
             .map_err(|error| format!("invalid FAI line width for {contig}: {error}"))?;
-        return Ok(FaiEntry {
-            length,
-            offset,
-            line_bases,
-            line_width,
-        });
+        return Ok(FaiEntry { length, offset });
     }
     Err(format!("FAI index {fai_path} missing contig {contig}"))
 }
@@ -7888,7 +7869,11 @@ fn validate_sam_summary_sam_text(
             }
             if line.starts_with(b"@RG\t") {
                 if let Some(id) = read_group_id(&text) {
-                    let has_platform = text.split('\t').any(|field| field.starts_with("PL:"));
+                    let has_platform = text.split('\t').any(|field| {
+                        field
+                            .strip_prefix("PL:")
+                            .is_some_and(|value| !value.trim_end_matches(['\r', '\n']).is_empty())
+                    });
                     read_groups.insert(id, has_platform);
                 }
             }
@@ -8293,7 +8278,7 @@ fn expected_record_nm(
 
     for cigar in &record.cigar() {
         match *cigar {
-            Cigar::Match(length) | Cigar::Equal(length) | Cigar::Diff(length) => {
+            Cigar::Match(length) => {
                 for _ in 0..length {
                     if read_offset >= read_bases.len() {
                         return Err("ValidateSamFile read sequence shorter than CIGAR".to_string());
@@ -8307,6 +8292,15 @@ fn expected_record_nm(
                     read_offset += 1;
                     ref_offset += 1;
                 }
+            }
+            Cigar::Equal(length) => {
+                read_offset += length as usize;
+                ref_offset += length as usize;
+            }
+            Cigar::Diff(length) => {
+                read_offset += length as usize;
+                ref_offset += length as usize;
+                nm += length as i32;
             }
             Cigar::Ins(length) => {
                 read_offset += length as usize;
@@ -10978,9 +10972,9 @@ fn observe_quality_yield_sam_line(
                 break;
             }
         }
-        preferred
+        sam_quality_bytes(preferred)
     } else {
-        quality_field
+        sam_quality_bytes(quality_field)
     };
     let is_pf = flags & 0x200 == 0;
     metrics.total_reads += 1;
@@ -11193,6 +11187,14 @@ fn parse_u8_bytes(value: &[u8]) -> Result<u8, String> {
     u8::try_from(parsed).map_err(|_| "malformed integer".to_string())
 }
 
+fn sam_sequence_bytes(value: &[u8]) -> &[u8] {
+    if value == b"*" { &[] } else { value }
+}
+
+fn sam_quality_bytes(value: &[u8]) -> &[u8] {
+    if value == b"*" { &[] } else { value }
+}
+
 fn cigar_summary_from_sam(cigar: &[u8], is_reverse: bool) -> Result<CigarSummary, String> {
     if cigar == b"*" {
         return Ok(CigarSummary::default());
@@ -11347,10 +11349,7 @@ impl WgsOverlapBitmap {
         self.words
             .get(index / 64)
             .copied()
-            .unwrap_or(0)
-            .wrapping_shl((index % 64) as u32)
-            .leading_zeros()
-            < 64
+            .is_some_and(|word| word & (1_u64 << (index % 64)) != 0)
     }
 }
 
@@ -11595,12 +11594,6 @@ impl WgsMetricsSummary {
         self.active_contig = Some(contig.to_string());
         self.active_included = metadata.included.clone();
         Ok(())
-    }
-
-    fn is_locus_included(&self, contig: &str, index: usize) -> bool {
-        self.contigs
-            .get(contig)
-            .is_some_and(|metadata| wgs_locus_included(metadata, index))
     }
 
     fn adjust_coverage_histogram(
@@ -12347,9 +12340,11 @@ fn observe_quality_score_distribution_sam_line(
     let qualities = fields
         .next()
         .ok_or_else(|| "malformed QualityScoreDistribution SAM record".to_string())?;
+    let sequence = sam_sequence_bytes(sequence);
+    let qualities = sam_quality_bytes(qualities);
     let original_qualities = fields
         .find(|field| field.starts_with(b"OQ:Z:"))
-        .map(|field| &field[5..]);
+        .map(|field| sam_quality_bytes(&field[5..]));
     for (index, quality) in qualities.iter().copied().enumerate() {
         if !include_no_calls && sequence.get(index).is_some_and(|base| *base == b'N') {
             continue;
@@ -12444,6 +12439,7 @@ fn observe_base_distribution_by_cycle_sam_line(
     let sequence = fields
         .next()
         .ok_or_else(|| "malformed CollectBaseDistributionByCycle SAM record".to_string())?;
+    let sequence = sam_sequence_bytes(sequence);
     let is_second_end = flags & 0x1 != 0 && flags & 0x80 != 0;
     let cycle_offset = if is_second_end { sequence.len() } else { 0 };
     let cycles = if is_second_end {
@@ -12643,7 +12639,6 @@ struct GcBiasMetricsSummary {
     unique_quality_sums: [u64; 101],
     unique_quality_counts: [u64; 101],
     reference_path: String,
-    window_size: usize,
     active_contig: Option<String>,
     active_sequence: Vec<u8>,
     total_clusters: u64,
@@ -12664,7 +12659,6 @@ impl GcBiasMetricsSummary {
             unique_quality_sums: [0; 101],
             unique_quality_counts: [0; 101],
             reference_path: reference_path.to_string(),
-            window_size,
             active_contig: None,
             active_sequence: Vec::new(),
             total_clusters: 0,
@@ -12739,6 +12733,8 @@ impl GcBiasMetricsSummary {
             &mut output,
             "ALL",
             &self.read_starts,
+            &self.quality_sums,
+            &self.quality_counts,
             self.aligned_reads,
             minimum_genome_fraction,
         );
@@ -12747,6 +12743,8 @@ impl GcBiasMetricsSummary {
                 &mut output,
                 "UNIQUE",
                 &self.unique_read_starts,
+                &self.unique_quality_sums,
+                &self.unique_quality_counts,
                 self.unique_aligned_reads,
                 minimum_genome_fraction,
             );
@@ -12759,6 +12757,8 @@ impl GcBiasMetricsSummary {
         output: &mut String,
         reads_used: &str,
         read_starts_by_gc: &[u64; 101],
+        quality_sums_by_gc: &[u64; 101],
+        quality_counts_by_gc: &[u64; 101],
         aligned_reads: u64,
         minimum_genome_fraction: f64,
     ) {
@@ -12789,8 +12789,10 @@ impl GcBiasMetricsSummary {
             } else {
                 normalized_coverage / (read_starts as f64).sqrt()
             };
+            let mean_base_quality = ratio(quality_sums_by_gc[gc], quality_counts_by_gc[gc]);
             output.push_str(&format!(
-                "All Reads\t{reads_used}\t{gc}\t{windows}\t{read_starts}\t0\t{}\t{}\t\t\t\n",
+                "All Reads\t{reads_used}\t{gc}\t{windows}\t{read_starts}\t{}\t{}\t{}\t\t\t\n",
+                format_float(mean_base_quality),
                 format_float(normalized_coverage),
                 format_float(error_bar_width),
             ));
@@ -13039,10 +13041,11 @@ fn observe_mean_quality_by_cycle_sam_line(
     let qualities = fields
         .next()
         .ok_or_else(|| "malformed MeanQualityByCycle SAM record".to_string())?;
+    let qualities = sam_quality_bytes(qualities);
     let mut original_qualities = None::<&[u8]>;
     for field in fields {
         if let Some(value) = field.strip_prefix(b"OQ:Z:") {
-            original_qualities = Some(value);
+            original_qualities = Some(sam_quality_bytes(value));
         }
     }
 
@@ -18070,6 +18073,176 @@ mod tests {
         assert_eq!(summary.coverage_histogram, scanned);
         assert_eq!(summary.coverage_histogram[1], 12);
         assert_eq!(summary.coverage_histogram[0], 0);
+    }
+
+    #[test]
+    fn wgs_overlap_bitmap_get_checks_exact_bit() {
+        let mut bitmap = WgsOverlapBitmap::with_bit_len(130);
+        bitmap.set(0);
+        bitmap.set(65);
+
+        assert!(bitmap.get(0));
+        assert!(!bitmap.get(1));
+        assert!(!bitmap.get(64));
+        assert!(bitmap.get(65));
+        assert!(!bitmap.get(66));
+    }
+
+    #[test]
+    fn quality_yield_sam_missing_quality_has_zero_bases() {
+        let mut summary = QualityYieldSummary::default();
+        observe_quality_yield_sam_line(
+            &mut summary,
+            b"read\t4\t*\t0\t0\t*\t*\t0\t0\t*\t*\n",
+            false,
+            false,
+            false,
+        )
+        .expect("SAM line parses");
+
+        assert_eq!(summary.total_reads, 1);
+        assert_eq!(summary.total_bases, 0);
+        assert_eq!(summary.total_quality, 0);
+    }
+
+    #[test]
+    fn quality_score_distribution_sam_missing_sequence_and_quality_are_empty() {
+        let mut summary = QualityScoreDistributionSummary::default();
+        observe_quality_score_distribution_sam_line(
+            &mut summary,
+            b"read\t4\t*\t0\t0\t*\t*\t0\t0\t*\t*\n",
+            false,
+            false,
+            false,
+        )
+        .expect("SAM line parses");
+
+        assert_eq!(summary.counts.iter().sum::<u64>(), 0);
+    }
+
+    #[test]
+    fn base_distribution_sam_missing_sequence_is_empty() {
+        let mut summary = BaseDistributionByCycleSummary::default();
+        observe_base_distribution_by_cycle_sam_line(
+            &mut summary,
+            b"read\t4\t*\t0\t0\t*\t*\t0\t0\t*\t*\n",
+            false,
+            false,
+        )
+        .expect("SAM line parses");
+
+        assert!(summary.first.is_empty());
+        assert!(summary.second.is_empty());
+    }
+
+    #[test]
+    fn mean_quality_by_cycle_sam_missing_quality_is_empty() {
+        let mut summary = MeanQualityByCycleSummary::default();
+        observe_mean_quality_by_cycle_sam_line(
+            &mut summary,
+            b"read\t4\t*\t0\t0\t*\t*\t0\t0\t*\t*\n",
+            false,
+            false,
+        )
+        .expect("SAM line parses");
+
+        assert_eq!(summary.records, 1);
+        assert!(summary.first.is_empty());
+        assert!(summary.second.is_empty());
+    }
+
+    #[test]
+    fn gc_bias_detail_reports_mean_base_quality() {
+        let summary = GcBiasMetricsSummary {
+            windows: {
+                let mut windows = [0_u64; 101];
+                windows[50] = 2;
+                windows
+            },
+            read_starts: {
+                let mut read_starts = [0_u64; 101];
+                read_starts[50] = 1;
+                read_starts
+            },
+            quality_sums: {
+                let mut quality_sums = [0_u64; 101];
+                quality_sums[50] = 120;
+                quality_sums
+            },
+            quality_counts: {
+                let mut quality_counts = [0_u64; 101];
+                quality_counts[50] = 4;
+                quality_counts
+            },
+            unique_read_starts: [0; 101],
+            unique_quality_sums: [0; 101],
+            unique_quality_counts: [0; 101],
+            reference_path: String::new(),
+            active_contig: None,
+            active_sequence: Vec::new(),
+            total_clusters: 1,
+            aligned_reads: 1,
+            unique_total_clusters: 0,
+            unique_aligned_reads: 0,
+            emit_unique: false,
+        };
+
+        let text = summary.detail_text(100, 0.0);
+        assert!(text.contains("All Reads\tALL\t50\t2\t1\t30\t1\t1"));
+    }
+
+    #[test]
+    fn expected_nm_honors_equal_and_diff_cigar_operators() {
+        let mut equal_record = bam::Record::new();
+        equal_record.set(
+            b"eq",
+            Some(&CigarString(vec![Cigar::Equal(4)])),
+            b"TTTT",
+            b"FFFF",
+        );
+        equal_record.set_tid(0);
+        equal_record.set_pos(0);
+        equal_record.set_flags(0);
+
+        let mut diff_record = bam::Record::new();
+        diff_record.set(
+            b"diff",
+            Some(&CigarString(vec![Cigar::Diff(4)])),
+            b"AAAA",
+            b"FFFF",
+        );
+        diff_record.set_tid(0);
+        diff_record.set_pos(0);
+        diff_record.set_flags(0);
+
+        let reference = [Some(&b"AAAA"[..])];
+        assert_eq!(
+            expected_record_nm(&equal_record, &reference).expect("NM computes"),
+            Some(0)
+        );
+        assert_eq!(
+            expected_record_nm(&diff_record, &reference).expect("NM computes"),
+            Some(4)
+        );
+    }
+
+    #[test]
+    fn validatesam_sam_text_reports_empty_platform_value() {
+        let dir = tempfile::tempdir().expect("tempdir exists");
+        let path = dir.path().join("empty-pl.sam");
+        fs::write(
+            &path,
+            "@HD\tVN:1.6\tSO:unknown\n@SQ\tSN:chr1\tLN:10\n@RG\tID:rg1\tSM:s1\tPL:\n",
+        )
+        .expect("fixture is written");
+
+        let report = validate_sam_summary_sam_text(path.to_str().unwrap(), true)
+            .expect("validation completes");
+
+        assert_eq!(
+            report.counts.get("ERROR:MISSING_PLATFORM_VALUE").copied(),
+            Some(1)
+        );
     }
 
     #[test]

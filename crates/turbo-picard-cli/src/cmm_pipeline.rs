@@ -145,7 +145,6 @@ impl CmmWorkerPool {
         let completion_handle = thread::spawn({
             let completion_job_rx: Receiver<CompletionJob> = completion_job_rx;
             let completion_tx = completion_tx.clone();
-            let worker_count = worker_count;
             move || {
                 while let Ok(job) = completion_job_rx.recv() {
                     for _ in 0..worker_count {
