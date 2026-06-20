@@ -19237,8 +19237,22 @@ mod tests {
 }
 
 fn write_md5_sidecar(output: &str) -> Result<(), String> {
-    let bytes = fs::read(output).map_err(|error| error.to_string())?;
-    let digest = md5::compute(bytes);
+    let mut reader = BufReader::with_capacity(
+        64 * 1024,
+        fs::File::open(output).map_err(|error| error.to_string())?,
+    );
+    let mut context = md5::Context::new();
+    let mut buffer = [0_u8; 64 * 1024];
+    loop {
+        let bytes_read = reader
+            .read(&mut buffer)
+            .map_err(|error| error.to_string())?;
+        if bytes_read == 0 {
+            break;
+        }
+        context.consume(&buffer[..bytes_read]);
+    }
+    let digest = context.compute();
     fs::write(format!("{output}.md5"), format!("{digest:x}")).map_err(|error| error.to_string())
 }
 

@@ -9,6 +9,7 @@ use std::collections::BTreeMap;
 use std::env;
 use std::fmt;
 use std::fs;
+use std::io::{BufReader, Read as IoRead};
 use std::path::Path;
 use turbo_picard_core::external_sort::{ExternalSortConfig, ExternalSorter};
 use turbo_picard_core::hts_io;
@@ -1038,8 +1039,17 @@ fn picard_bai_path(output: &str) -> String {
 }
 
 fn write_md5_sidecar(output: &str) -> Result<(), MarkDuplicatesError> {
-    let bytes = fs::read(output)?;
-    let digest = md5::compute(bytes);
+    let mut reader = BufReader::with_capacity(64 * 1024, fs::File::open(output)?);
+    let mut context = md5::Context::new();
+    let mut buffer = [0_u8; 64 * 1024];
+    loop {
+        let bytes_read = reader.read(&mut buffer)?;
+        if bytes_read == 0 {
+            break;
+        }
+        context.consume(&buffer[..bytes_read]);
+    }
+    let digest = context.finalize();
     fs::write(format!("{output}.md5"), format!("{digest:x}"))?;
     Ok(())
 }
