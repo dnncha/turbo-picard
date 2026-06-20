@@ -34,6 +34,9 @@ vectors, and duplicate-group maps for the input.
 - Qnames and BAM barcode values are interned once during candidate extraction.
   Candidate records and BAM duplicate keys now carry compact integer IDs for
   those identities instead of repeated byte-vector copies.
+- Optical duplicate detection now tracks seen optical read names with an
+  interned-ID hash set, avoiding linear membership scans while preserving the
+  existing unique-read-name metric and per-record SQ tagging behavior.
 
 ## Tests
 

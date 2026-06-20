@@ -706,24 +706,24 @@ fn optical_duplicate_record_indices(
         };
     };
     let pixel_distance = i64::from(config.optical_duplicate_pixel_distance.unwrap_or(100));
-    let mut optical_names = Vec::<&[u8]>::new();
+    let mut optical_names = HashSet::<InternedBytesId>::default();
     let mut record_indices = Vec::<usize>::new();
 
     for index in group.iter().copied() {
         let candidate = &candidates[index];
-        let name = qnames.get(candidate.qname_id);
         if candidate.qname_id == representative_qname_id {
             continue;
         }
-        if optical_names.contains(&name) {
+        if optical_names.contains(&candidate.qname_id) {
             record_indices.push(candidate.record_index);
             continue;
         }
+        let name = qnames.get(candidate.qname_id);
         let Some(location) = parse_read_location(name) else {
             continue;
         };
         if representative_location.is_within(&location, pixel_distance) {
-            optical_names.push(name);
+            optical_names.insert(candidate.qname_id);
             record_indices.push(candidate.record_index);
         }
     }
@@ -1775,15 +1775,22 @@ mod tests {
     }
 
     fn candidates_for_records(records: &[bam::Record]) -> Vec<DuplicateCandidate> {
+        candidates_and_qnames_for_records(records).0
+    }
+
+    fn candidates_and_qnames_for_records(
+        records: &[bam::Record],
+    ) -> (Vec<DuplicateCandidate>, ByteInterner) {
         let mut qnames = ByteInterner::default();
-        records
+        let candidates = records
             .iter()
             .enumerate()
             .map(|(index, record)| {
                 let qname_id = qnames.intern(record.qname());
                 DuplicateCandidate::from_record(index, record, 0, qname_id, None)
             })
-            .collect()
+            .collect();
+        (candidates, qnames)
     }
 
     #[test]
@@ -1892,6 +1899,27 @@ mod tests {
 
         assert!(records[0].aux(b"DI").is_err());
         assert!(records[1].aux(b"DI").is_err());
+    }
+
+    #[test]
+    fn optical_duplicate_records_count_unique_interned_read_names() {
+        let records = [
+            record_with_name_and_flags(b"INST:1:FC:1:1101:100:100", 0x1),
+            record_with_name_and_flags(b"INST:1:FC:1:1101:105:105", 0x1),
+            record_with_name_and_flags(b"INST:1:FC:1:1101:105:105", 0x1),
+        ];
+        let (candidates, qnames) = candidates_and_qnames_for_records(&records);
+        let config = MarkDuplicatesConfig {
+            read_name_regex: None,
+            optical_duplicate_pixel_distance: Some(100),
+            ..sam_markdup_config()
+        };
+
+        let optical =
+            optical_duplicate_record_indices(&[0, 1, 2], &candidates, &qnames, 0, &config);
+
+        assert_eq!(optical.read_names, 1);
+        assert_eq!(optical.record_indices, vec![1, 2]);
     }
 
     #[test]
