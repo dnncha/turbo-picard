@@ -31,6 +31,9 @@ vectors, and duplicate-group maps for the input.
 - Pair and fragment duplicate groups now store candidate indices and map back to
   full records only when applying flags, DS/DI tags, optical duplicate tags, or
   output policies.
+- Qnames and BAM barcode values are interned once during candidate extraction.
+  Candidate records and BAM duplicate keys now carry compact integer IDs for
+  those identities instead of repeated byte-vector copies.
 
 ## Tests
 
@@ -56,8 +59,8 @@ Blocked or not clean:
 Remaining Phase 4 work:
 
 - spill compact duplicate candidates instead of retaining every full record;
+- replace the remaining full-record output pass with a compact decision stream;
 - externally collate distant pairs by qname when needed;
 - externally sort fixed-width duplicate keys and scan groups once;
-- produce a compact decision stream for the final output pass;
 - add adversarial tests for duplicate at EOF, giant duplicate families,
   distant/missing mates, barcodes, optical duplicates, and multi-input sorting.
