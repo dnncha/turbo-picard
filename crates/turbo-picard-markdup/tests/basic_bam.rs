@@ -1061,6 +1061,51 @@ fn marks_duplicate_pairs_across_multiple_bam_inputs() {
 }
 
 #[test]
+fn marks_multi_input_duplicates_with_low_memory_output_sort() {
+    let tempdir = tempfile::tempdir().expect("tempdir exists");
+    let output = tempdir.path().join("output.bam");
+    let metrics = tempdir.path().join("metrics.txt");
+    let fixture_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../fixtures/markduplicates/multi-input");
+    let input1 = fixture_dir.join("input1.bam");
+    let input2 = fixture_dir.join("input2.bam");
+    let config = MarkDuplicatesConfig {
+        input: input1.display().to_string(),
+        inputs: vec![input1.display().to_string(), input2.display().to_string()],
+        output: output.display().to_string(),
+        metrics_file: metrics.display().to_string(),
+        max_records_in_ram: 1,
+        tmp_dirs: vec![tempdir.path().display().to_string()],
+        remove_duplicates: false,
+        remove_sequencing_duplicates: false,
+        assume_sorted: true,
+        assume_sort_order: None,
+        validation_stringency: Some("SILENT".to_string()),
+        quiet: true,
+        create_index: false,
+        create_md5_file: false,
+        add_pg_tag_to_reads: true,
+        tag_duplicate_set_members: false,
+        duplicate_scoring_strategy: None,
+        read_name_regex: Some("null".to_string()),
+        tagging_policy: Some("DontTag".to_string()),
+        barcode_tag: None,
+        read_one_barcode_tag: None,
+        read_two_barcode_tag: None,
+        clear_dt: true,
+        optical_duplicate_pixel_distance: None,
+        compression_level: None,
+        reference_sequence: None,
+    };
+
+    turbo_picard_markdup::run(&config).expect("BAM duplicate marking succeeds");
+
+    assert_eq!(read_flags(&output), vec![99, 1123, 147, 1171]);
+    let metrics_text = std::fs::read_to_string(&metrics).expect("metrics file exists");
+    assert!(metrics_text.contains("lib1\t0\t2\t0\t0\t0\t1\t0\t0.5\t1\n"));
+}
+
+#[test]
 fn keeps_duplicate_positions_separate_by_library() {
     let tempdir = tempfile::tempdir().expect("tempdir exists");
     let output = tempdir.path().join("output.bam");

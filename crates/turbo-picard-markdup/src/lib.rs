@@ -160,6 +160,17 @@ struct RecordDecision {
     duplicate_set_index: Option<i32>,
 }
 
+#[derive(Debug)]
+struct OutputRecordLocator {
+    input_index: u32,
+    record_index: usize,
+    offset: i64,
+    reference_id: i32,
+    position: i64,
+    qname: Vec<u8>,
+    flags: u16,
+}
+
 #[derive(Debug, Default)]
 struct ByteInterner {
     ids: HashMap<Vec<u8>, InternedBytesId>,
@@ -355,8 +366,10 @@ fn run_hts_container(
     let mut qnames = ByteInterner::default();
     let mut barcodes = ByteInterner::default();
     let mut record_count = 0usize;
-    let retain_records = config.inputs.len() > 1;
+    let seekable_multi_bam_output = config.inputs.len() > 1 && all_inputs_are_bam(config);
+    let retain_records = config.inputs.len() > 1 && !seekable_multi_bam_output;
     let mut records = Vec::new();
+    let mut output_locs = Vec::new();
     let mut summary = MarkDuplicatesSummary {
         library,
         unpaired_reads_examined: 0,
@@ -378,6 +391,12 @@ fn run_hts_container(
             } else {
                 None
             },
+            output_locs: if seekable_multi_bam_output {
+                Some(&mut output_locs)
+            } else {
+                None
+            },
+            input_index: 0,
             record_count: &mut record_count,
             candidates: &mut candidates,
             qnames: &mut qnames,
@@ -388,13 +407,27 @@ fn run_hts_container(
         &mut summary,
         config,
     )?;
-    for input in config.inputs.iter().skip(1) {
+    for (input_index, input) in config.inputs.iter().enumerate().skip(1) {
         let mut reader = open_markdup_reader(config, input)?;
         let input_library_lookup = library_lookup(reader.header(), &mut library_registry);
         read_bam_records(
             &mut reader,
             &mut BamRecordSink {
-                records: Some(&mut records),
+                records: if retain_records {
+                    Some(&mut records)
+                } else {
+                    None
+                },
+                output_locs: if seekable_multi_bam_output {
+                    Some(&mut output_locs)
+                } else {
+                    None
+                },
+                input_index: u32::try_from(input_index).map_err(|_| {
+                    MarkDuplicatesError::Operation(
+                        "MarkDuplicates input index exceeds u32".to_string(),
+                    )
+                })?,
                 record_count: &mut record_count,
                 candidates: &mut candidates,
                 qnames: &mut qnames,
@@ -425,11 +458,15 @@ fn run_hts_container(
 
     let mut writer = open_markdup_writer(config, &config.output, &header)?;
     if config.inputs.len() > 1 {
-        let mut marked_records = records.into_iter().zip(decisions).collect::<Vec<_>>();
-        marked_records.sort_by(|(left, left_decision), (right, right_decision)| {
-            compare_bam_output_order(left, *left_decision, right, *right_decision)
-        });
-        write_bam_records(marked_records, config, &mut writer)?;
+        if seekable_multi_bam_output {
+            write_multi_bam_records_by_locator(output_locs, &decisions, config, &mut writer)?;
+        } else {
+            let mut marked_records = records.into_iter().zip(decisions).collect::<Vec<_>>();
+            marked_records.sort_by(|(left, left_decision), (right, right_decision)| {
+                compare_bam_output_order(left, *left_decision, right, *right_decision)
+            });
+            write_bam_records(marked_records, config, &mut writer)?;
+        }
     } else {
         let mut reader = open_markdup_reader(config, first_input)?;
         read_bam_records_for_output(&mut reader, &decisions, config, &mut writer)?;
@@ -456,8 +493,17 @@ fn run_hts_container(
     Ok(summary)
 }
 
+fn all_inputs_are_bam(config: &MarkDuplicatesConfig) -> bool {
+    config
+        .inputs
+        .iter()
+        .all(|input| hts_io::path_format(input) == Some(bam::Format::Bam))
+}
+
 struct BamRecordSink<'a> {
     records: Option<&'a mut Vec<bam::Record>>,
+    output_locs: Option<&'a mut Vec<OutputRecordLocator>>,
+    input_index: u32,
     record_count: &'a mut usize,
     candidates: &'a mut Vec<DuplicateCandidate>,
     qnames: &'a mut ByteInterner,
@@ -472,8 +518,14 @@ fn read_bam_records<R: bam::Read>(
     summary: &mut MarkDuplicatesSummary,
     config: &MarkDuplicatesConfig,
 ) -> Result<(), MarkDuplicatesError> {
-    for result in reader.records() {
-        let mut record = result?;
+    let mut record = bam::Record::new();
+    loop {
+        let offset = sink.output_locs.as_ref().map(|_| reader.tell());
+        let Some(result) = reader.read(&mut record) else {
+            break;
+        };
+        result?;
+        let mut record = std::mem::take(&mut record);
         let flag = record.flags() & !DUPLICATE_FLAG;
         if record.flags() != flag {
             record.set_flags(flag);
@@ -481,6 +533,17 @@ fn read_bam_records<R: bam::Read>(
         let library_id = record_library_id(&record, library_lookup);
         let record_index = *sink.record_count;
         *sink.record_count += 1;
+        if let (Some(output_locs), Some(offset)) = (sink.output_locs.as_deref_mut(), offset) {
+            output_locs.push(OutputRecordLocator {
+                input_index: sink.input_index,
+                record_index,
+                offset,
+                reference_id: record.tid(),
+                position: record.pos(),
+                qname: record.qname().to_vec(),
+                flags: flag,
+            });
+        }
 
         if flag & UNMAPPED_FLAG != 0 {
             summary.unmapped_records += 1;
@@ -562,6 +625,72 @@ fn read_bam_records_for_output<R: bam::Read>(
     Ok(())
 }
 
+fn write_multi_bam_records_by_locator(
+    output_locs: Vec<OutputRecordLocator>,
+    decisions: &[RecordDecision],
+    config: &MarkDuplicatesConfig,
+    writer: &mut bam::Writer,
+) -> Result<(), MarkDuplicatesError> {
+    if output_locs.len() != decisions.len() {
+        return Err(MarkDuplicatesError::Operation(format!(
+            "MarkDuplicates output locator count {} does not match decision count {}",
+            output_locs.len(),
+            decisions.len()
+        )));
+    }
+    let mut sorter =
+        ExternalSorter::new(markdup_sort_config(config, "turbo-picard-markdup-output"))
+            .map_err(MarkDuplicatesError::Operation)?;
+    for locator in &output_locs {
+        let decision = decisions
+            .get(locator.record_index)
+            .copied()
+            .ok_or_else(|| MarkDuplicatesError::Operation("missing duplicate decision".into()))?;
+        sorter
+            .push(output_sort_key(locator, decision), locator_payload(locator))
+            .map_err(MarkDuplicatesError::Operation)?;
+    }
+
+    let mut readers = config
+        .inputs
+        .iter()
+        .map(|input| open_markdup_reader(config, input))
+        .collect::<Result<Vec<_>, _>>()?;
+    let mut record = bam::Record::new();
+    sorter
+        .finish_into(|item| {
+            let locator =
+                decode_locator_payload(&item.payload).map_err(|error| error.to_string())?;
+            let reader = readers
+                .get_mut(
+                    usize::try_from(locator.input_index).map_err(|_| {
+                        "MarkDuplicates output input index exceeds usize".to_string()
+                    })?,
+                )
+                .ok_or_else(|| "MarkDuplicates output input index is out of range".to_string())?;
+            reader
+                .seek(locator.offset)
+                .map_err(|error| error.to_string())?;
+            match reader.read(&mut record) {
+                Some(Ok(())) => {
+                    let decision =
+                        decisions
+                            .get(locator.record_index)
+                            .copied()
+                            .ok_or_else(|| {
+                                "missing duplicate decision for sorted output record".to_string()
+                            })?;
+                    write_bam_record(std::mem::take(&mut record), decision, config, writer)
+                        .map_err(|error| error.to_string())
+                }
+                Some(Err(error)) => Err(error.to_string()),
+                None => Err("MarkDuplicates output seek did not read a record".to_string()),
+            }
+        })
+        .map_err(MarkDuplicatesError::Operation)?;
+    Ok(())
+}
+
 fn compare_bam_output_order(
     left: &bam::Record,
     left_decision: RecordDecision,
@@ -584,6 +713,60 @@ fn effective_record_flags(record: &bam::Record, decision: RecordDecision) -> u16
     } else {
         record.flags()
     }
+}
+
+fn output_sort_key(locator: &OutputRecordLocator, decision: RecordDecision) -> Vec<u8> {
+    let mut bytes = Vec::with_capacity(15 + locator.qname.len());
+    bytes.extend_from_slice(&sortable_i32(locator.reference_id));
+    bytes.extend_from_slice(&sortable_i64(locator.position));
+    bytes.extend_from_slice(&locator.qname);
+    bytes.push(0);
+    bytes.extend_from_slice(&effective_locator_flags(locator, decision).to_be_bytes());
+    bytes
+}
+
+fn effective_locator_flags(locator: &OutputRecordLocator, decision: RecordDecision) -> u16 {
+    if decision.duplicate {
+        locator.flags | DUPLICATE_FLAG
+    } else {
+        locator.flags
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct OutputLocatorPayload {
+    input_index: u32,
+    record_index: usize,
+    offset: i64,
+}
+
+fn locator_payload(locator: &OutputRecordLocator) -> Vec<u8> {
+    let mut payload = Vec::with_capacity(20);
+    payload.extend_from_slice(&locator.input_index.to_le_bytes());
+    payload.extend_from_slice(
+        &u64::try_from(locator.record_index)
+            .unwrap_or(u64::MAX)
+            .to_le_bytes(),
+    );
+    payload.extend_from_slice(&locator.offset.to_le_bytes());
+    payload
+}
+
+fn decode_locator_payload(payload: &[u8]) -> Result<OutputLocatorPayload, MarkDuplicatesError> {
+    if payload.len() != 20 {
+        return Err(MarkDuplicatesError::Operation(format!(
+            "invalid MarkDuplicates output locator payload length: {}",
+            payload.len()
+        )));
+    }
+    let input_index = u32::from_le_bytes(payload[0..4].try_into().expect("slice length checked"));
+    let record_index = decode_payload_index(&payload[4..12])?;
+    let offset = i64::from_le_bytes(payload[12..20].try_into().expect("slice length checked"));
+    Ok(OutputLocatorPayload {
+        input_index,
+        record_index,
+        offset,
+    })
 }
 
 fn write_bam_records(

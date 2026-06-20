@@ -78,6 +78,11 @@ vectors, and duplicate-group maps for the input.
   candidate_index)` rows through the shared external sorter. Very displaced
   mate workloads no longer require an in-memory compact qname sort once the
   bounded pending-mate cache overflows.
+- Multi-BAM input output now stores compact seek locators and externally sorts
+  those locators by final output order before seeking back to write marked
+  records. This removes the resident `Vec<bam::Record>` for seekable multi-BAM
+  output while preserving the older full-record fallback for CRAM or mixed
+  multi-input paths.
 
 ## Tests
 
@@ -96,6 +101,8 @@ bash tools/verify_basic_picard_parity.sh
 Additional adversarial MarkDuplicates coverage now includes duplicate pairs
 first appearing at EOF and large duplicate-pair families forced through low
 `MAX_RECORDS_IN_RAM` temp-run paths.
+Multi-BAM coverage also forces a one-record output locator sort through
+`TMP_DIR`.
 
 Blocked or not clean:
 
@@ -106,8 +113,8 @@ Blocked or not clean:
 
 Remaining Phase 4 work:
 
-- spill compact duplicate candidates instead of retaining every full record;
-- extend the sequential reread/output pass to multi-input MarkDuplicates output
-  once its merge-order application can be driven by compact decisions;
+- spill compact duplicate candidates instead of retaining all candidates;
+- extend the compact-locator multi-input output path to CRAM or mixed
+  multi-inputs without weakening reference handling;
 - add more adversarial tests for distant/missing mates, barcodes, optical
   duplicates, multi-input sorting, and randomized equivalence.
