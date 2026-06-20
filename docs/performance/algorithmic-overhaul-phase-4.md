@@ -49,6 +49,9 @@ vectors, and duplicate-group maps for the input.
 - Optical tile/x/y coordinates are now parsed once during BAM candidate
   extraction and stored on `DuplicateCandidate`; optical duplicate detection no
   longer reparses qnames while scanning duplicate groups.
+- Pair collation now consumes adjacent qname runs before using the displaced
+  qname map, preserving the previous map-only pairing order while avoiding hash
+  lookups for queryname-grouped candidates.
 
 ## Tests
 

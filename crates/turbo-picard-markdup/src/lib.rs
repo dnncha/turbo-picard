@@ -916,29 +916,118 @@ fn parse_sam_integer(
 }
 
 fn duplicate_groups(candidates: &[DuplicateCandidate]) -> Vec<Vec<usize>> {
+    let mut keyed_pairs = collate_pair_key_rows(candidates);
+    keyed_pairs.sort_by(|left, right| left.0.cmp(&right.0));
+    collect_sorted_pair_groups(keyed_pairs)
+}
+
+fn collate_pair_key_rows(candidates: &[DuplicateCandidate]) -> Vec<(BamDuplicateKey, [usize; 2])> {
+    let mut paired_by_name = HashMap::<InternedBytesId, usize>::default();
+    let mut keyed_pairs = Vec::<(BamDuplicateKey, [usize; 2])>::new();
+    let mut candidate_index = 0usize;
+
+    while candidate_index < candidates.len() {
+        if !candidates[candidate_index].is_pair() {
+            candidate_index += 1;
+            continue;
+        }
+        let qname_id = candidates[candidate_index].qname_id;
+        let mut run_end = candidate_index + 1;
+        while run_end < candidates.len() && candidates[run_end].qname_id == qname_id {
+            run_end += 1;
+        }
+        if run_end > candidate_index + 1 && !paired_by_name.contains_key(&qname_id) {
+            if let Some(unpaired_index) =
+                collate_adjacent_pair_run(candidate_index..run_end, candidates, &mut keyed_pairs)
+            {
+                paired_by_name.insert(qname_id, unpaired_index);
+            }
+        } else {
+            for index in candidate_index..run_end {
+                if candidates[index].is_pair() {
+                    collate_displaced_pair_candidate(
+                        index,
+                        candidates,
+                        &mut paired_by_name,
+                        &mut keyed_pairs,
+                    );
+                }
+            }
+        }
+        candidate_index = run_end;
+    }
+
+    keyed_pairs
+}
+
+fn collate_adjacent_pair_run(
+    candidate_indices: std::ops::Range<usize>,
+    candidates: &[DuplicateCandidate],
+    keyed_pairs: &mut Vec<(BamDuplicateKey, [usize; 2])>,
+) -> Option<usize> {
+    let mut first_index = None::<usize>;
+    for candidate_index in candidate_indices {
+        if !candidates[candidate_index].is_pair() {
+            continue;
+        }
+        if let Some(first) = first_index.take() {
+            push_pair_key_row(first, candidate_index, candidates, keyed_pairs);
+        } else {
+            first_index = Some(candidate_index);
+        }
+    }
+    first_index
+}
+
+fn collate_displaced_pair_candidate(
+    candidate_index: usize,
+    candidates: &[DuplicateCandidate],
+    paired_by_name: &mut HashMap<InternedBytesId, usize>,
+    keyed_pairs: &mut Vec<(BamDuplicateKey, [usize; 2])>,
+) {
+    let candidate = &candidates[candidate_index];
+    if let Some(first_index) = paired_by_name.remove(&candidate.qname_id) {
+        push_pair_key_row(first_index, candidate_index, candidates, keyed_pairs);
+    } else {
+        paired_by_name.insert(candidate.qname_id, candidate_index);
+    }
+}
+
+fn push_pair_key_row(
+    first_index: usize,
+    second_index: usize,
+    candidates: &[DuplicateCandidate],
+    keyed_pairs: &mut Vec<(BamDuplicateKey, [usize; 2])>,
+) {
+    let candidate_indices = [first_index, second_index];
+    let barcode = first_barcode(candidates, &candidate_indices);
+    let key = pair_duplicate_key_bam(
+        &candidates[first_index],
+        &candidates[second_index],
+        candidates[first_index].library_id,
+        barcode,
+    );
+    keyed_pairs.push((key, candidate_indices));
+}
+
+#[cfg(test)]
+fn collate_pair_key_rows_legacy(
+    candidates: &[DuplicateCandidate],
+) -> Vec<(BamDuplicateKey, [usize; 2])> {
     let mut paired_by_name = HashMap::<InternedBytesId, usize>::default();
     let mut keyed_pairs = Vec::<(BamDuplicateKey, [usize; 2])>::new();
 
     for (candidate_index, candidate) in candidates.iter().enumerate() {
         if candidate.is_pair() {
             if let Some(first_index) = paired_by_name.remove(&candidate.qname_id) {
-                let candidate_indices = [first_index, candidate_index];
-                let barcode = first_barcode(candidates, &candidate_indices);
-                let key = pair_duplicate_key_bam(
-                    &candidates[first_index],
-                    candidate,
-                    candidates[first_index].library_id,
-                    barcode,
-                );
-                keyed_pairs.push((key, candidate_indices));
+                push_pair_key_row(first_index, candidate_index, candidates, &mut keyed_pairs);
             } else {
                 paired_by_name.insert(candidate.qname_id, candidate_index);
             }
         }
     }
 
-    keyed_pairs.sort_by(|left, right| left.0.cmp(&right.0));
-    collect_sorted_pair_groups(keyed_pairs)
+    keyed_pairs
 }
 
 fn collect_sorted_pair_groups(keyed_pairs: Vec<(BamDuplicateKey, [usize; 2])>) -> Vec<Vec<usize>> {
@@ -1924,6 +2013,42 @@ mod tests {
         let groups = duplicate_groups(&candidates);
 
         assert_eq!(groups, vec![vec![0, 1, 2, 3], vec![4, 5]]);
+    }
+
+    #[test]
+    fn pair_collation_matches_legacy_for_adjacent_and_displaced_qnames() {
+        let records = [
+            record_with_name_flags_and_position(b"displaced", 0x1, 10),
+            record_with_name_flags_and_position(b"adjacent", 0x1, 30),
+            record_with_name_flags_and_position(b"adjacent", 0x1, 40),
+            record_with_name_flags_and_position(b"mixed", 0x1, 50),
+            record_with_name_flags_and_position(b"mixed", 0x0, 55),
+            record_with_name_flags_and_position(b"mixed", 0x1, 60),
+            record_with_name_flags_and_position(b"other", 0x1, 70),
+            record_with_name_flags_and_position(b"displaced", 0x1, 20),
+        ];
+        let candidates = candidates_for_records(&records);
+
+        assert_eq!(
+            collate_pair_key_rows(&candidates),
+            collate_pair_key_rows_legacy(&candidates)
+        );
+    }
+
+    #[test]
+    fn pair_collation_preserves_prior_unresolved_candidate_before_adjacent_run() {
+        let records = [
+            record_with_name_flags_and_position(b"repeat", 0x1, 10),
+            record_with_name_flags_and_position(b"other", 0x1, 30),
+            record_with_name_flags_and_position(b"repeat", 0x1, 20),
+            record_with_name_flags_and_position(b"repeat", 0x1, 25),
+        ];
+        let candidates = candidates_for_records(&records);
+
+        assert_eq!(
+            collate_pair_key_rows(&candidates),
+            collate_pair_key_rows_legacy(&candidates)
+        );
     }
 
     #[test]
