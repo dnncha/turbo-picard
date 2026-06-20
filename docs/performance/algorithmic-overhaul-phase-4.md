@@ -62,6 +62,9 @@ vectors, and duplicate-group maps for the input.
   sorter with compact binary duplicate keys and candidate-index payloads. Forced
   one-record runs spill to `TMP_DIR`, merge deterministically, and clean up temp
   files after sorting.
+- Sorted pair and fragment duplicate-key rows are now streamed from the external
+  sorter into duplicate-group scanners instead of being collected back into a
+  full sorted row vector before grouping.
 
 ## Tests
 
@@ -91,7 +94,6 @@ Remaining Phase 4 work:
   the compact decision stream;
 - replace the in-memory compact qname fallback with temporary-run qname
   collation for very large distant-mate workloads;
-- stream sorted duplicate key rows directly into group scanning instead of
-  collecting the merged rows back into memory;
+- avoid collecting all duplicate groups in memory before decisions are applied;
 - add adversarial tests for duplicate at EOF, giant duplicate families,
   distant/missing mates, barcodes, optical duplicates, and multi-input sorting.

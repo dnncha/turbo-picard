@@ -923,8 +923,7 @@ fn duplicate_groups(
     config: &MarkDuplicatesConfig,
 ) -> Result<Vec<Vec<usize>>, MarkDuplicatesError> {
     let keyed_pairs = collate_pair_key_rows(candidates, config.max_records_in_ram);
-    let sorted_pairs = sort_pair_key_rows(keyed_pairs, config)?;
-    Ok(collect_sorted_pair_groups(sorted_pairs))
+    scan_pair_key_rows(keyed_pairs, config)
 }
 
 fn collate_pair_key_rows(
@@ -1105,29 +1104,29 @@ fn collate_pair_key_rows_legacy(
     keyed_pairs
 }
 
-fn collect_sorted_pair_groups(keyed_pairs: Vec<(BamDuplicateKey, [usize; 2])>) -> Vec<Vec<usize>> {
-    let mut groups = Vec::<Vec<usize>>::new();
-    let mut current_key = None::<BamDuplicateKey>;
-
-    for (key, pair_indices) in keyed_pairs {
-        if current_key.as_ref() == Some(&key) {
-            groups
-                .last_mut()
-                .expect("current key has a group")
-                .extend(pair_indices);
-        } else {
-            groups.push(pair_indices.into());
-            current_key = Some(key);
-        }
+fn append_pair_group(
+    groups: &mut Vec<Vec<usize>>,
+    current_key: &mut Option<BamDuplicateKey>,
+    key: BamDuplicateKey,
+    pair_indices: [usize; 2],
+) {
+    if current_key.as_ref() == Some(&key) {
+        groups
+            .last_mut()
+            .expect("current key has a group")
+            .extend(pair_indices);
+    } else {
+        groups.push(pair_indices.into());
+        *current_key = Some(key);
     }
-
-    groups
 }
 
-fn sort_pair_key_rows(
+fn scan_pair_key_rows(
     keyed_pairs: Vec<(BamDuplicateKey, [usize; 2])>,
     config: &MarkDuplicatesConfig,
-) -> Result<Vec<(BamDuplicateKey, [usize; 2])>, MarkDuplicatesError> {
+) -> Result<Vec<Vec<usize>>, MarkDuplicatesError> {
+    let mut groups = Vec::<Vec<usize>>::new();
+    let mut current_key = None::<BamDuplicateKey>;
     let mut sorter = ExternalSorter::new(markdup_sort_config(config, "turbo-picard-markdup-pairs"))
         .map_err(MarkDuplicatesError::Operation)?;
     for (key, pair_indices) in keyed_pairs {
@@ -1135,15 +1134,16 @@ fn sort_pair_key_rows(
             .push(duplicate_sort_key(&key), pair_payload(pair_indices))
             .map_err(MarkDuplicatesError::Operation)?;
     }
-    let (items, _) = sorter.finish().map_err(MarkDuplicatesError::Operation)?;
-    items
-        .into_iter()
-        .map(|item| {
-            let key = decode_duplicate_sort_key(&item.key)?;
-            let pair = decode_pair_payload(&item.payload)?;
-            Ok((key, pair))
+
+    sorter
+        .finish_into(|item| {
+            let key = decode_duplicate_sort_key(&item.key).map_err(|error| error.to_string())?;
+            let pair = decode_pair_payload(&item.payload).map_err(|error| error.to_string())?;
+            append_pair_group(&mut groups, &mut current_key, key, pair);
+            Ok(())
         })
-        .collect()
+        .map_err(MarkDuplicatesError::Operation)?;
+    Ok(groups)
 }
 
 fn fragment_duplicate_groups(
@@ -1157,14 +1157,15 @@ fn fragment_duplicate_groups(
             (fragment_duplicate_key_bam(candidate), candidate_index)
         })
         .collect::<Vec<_>>();
-    let sorted_fragments = sort_fragment_key_rows(keyed_fragments, config)?;
-    Ok(collect_sorted_fragment_groups(sorted_fragments))
+    scan_fragment_key_rows(keyed_fragments, config)
 }
 
-fn sort_fragment_key_rows(
+fn scan_fragment_key_rows(
     keyed_fragments: Vec<(BamDuplicateKey, usize)>,
     config: &MarkDuplicatesConfig,
-) -> Result<Vec<(BamDuplicateKey, usize)>, MarkDuplicatesError> {
+) -> Result<Vec<Vec<usize>>, MarkDuplicatesError> {
+    let mut groups = Vec::<Vec<usize>>::new();
+    let mut current_key = None::<BamDuplicateKey>;
     let mut sorter = ExternalSorter::new(markdup_sort_config(
         config,
         "turbo-picard-markdup-fragments",
@@ -1175,15 +1176,15 @@ fn sort_fragment_key_rows(
             .push(duplicate_sort_key(&key), index_payload(candidate_index))
             .map_err(MarkDuplicatesError::Operation)?;
     }
-    let (items, _) = sorter.finish().map_err(MarkDuplicatesError::Operation)?;
-    items
-        .into_iter()
-        .map(|item| {
-            let key = decode_duplicate_sort_key(&item.key)?;
-            let index = decode_index_payload(&item.payload)?;
-            Ok((key, index))
+    sorter
+        .finish_into(|item| {
+            let key = decode_duplicate_sort_key(&item.key).map_err(|error| error.to_string())?;
+            let index = decode_index_payload(&item.payload).map_err(|error| error.to_string())?;
+            append_fragment_group(&mut groups, &mut current_key, key, index);
+            Ok(())
         })
-        .collect()
+        .map_err(MarkDuplicatesError::Operation)?;
+    Ok(groups)
 }
 
 fn markdup_sort_config(config: &MarkDuplicatesConfig, prefix: &str) -> ExternalSortConfig {
@@ -1334,25 +1335,21 @@ fn decode_payload_index(payload: &[u8]) -> Result<usize, MarkDuplicatesError> {
     })
 }
 
-fn collect_sorted_fragment_groups(
-    keyed_fragments: Vec<(BamDuplicateKey, usize)>,
-) -> Vec<Vec<usize>> {
-    let mut groups = Vec::<Vec<usize>>::new();
-    let mut current_key = None::<BamDuplicateKey>;
-
-    for (key, candidate_index) in keyed_fragments {
-        if current_key.as_ref() == Some(&key) {
-            groups
-                .last_mut()
-                .expect("current key has a group")
-                .push(candidate_index);
-        } else {
-            groups.push(vec![candidate_index]);
-            current_key = Some(key);
-        }
+fn append_fragment_group(
+    groups: &mut Vec<Vec<usize>>,
+    current_key: &mut Option<BamDuplicateKey>,
+    key: BamDuplicateKey,
+    candidate_index: usize,
+) {
+    if current_key.as_ref() == Some(&key) {
+        groups
+            .last_mut()
+            .expect("current key has a group")
+            .push(candidate_index);
+    } else {
+        groups.push(vec![candidate_index]);
+        *current_key = Some(key);
     }
-
-    groups
 }
 
 fn mark_fragment_duplicate_groups(

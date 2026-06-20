@@ -110,24 +110,40 @@ impl ExternalSorter {
         Ok(ordinal)
     }
 
-    pub fn finish(mut self) -> Result<(Vec<SortItem>, ExternalSortMetrics), String> {
+    pub fn finish(self) -> Result<(Vec<SortItem>, ExternalSortMetrics), String> {
+        let mut items = Vec::new();
+        let metrics = self.finish_into(|item| {
+            items.push(item);
+            Ok(())
+        })?;
+        Ok((items, metrics))
+    }
+
+    pub fn finish_into(
+        mut self,
+        mut emit: impl FnMut(SortItem) -> Result<(), String>,
+    ) -> Result<ExternalSortMetrics, String> {
         if self.runs.is_empty() {
             sort_items(&mut self.items);
             let items = std::mem::take(&mut self.items);
             self.metrics.run_count = usize::from(!items.is_empty());
-            return Ok((items, self.metrics));
+            for item in items {
+                emit(item)?;
+            }
+            return Ok(self.metrics);
         }
 
         self.spill_current_run()?;
-        let mut runs = std::mem::take(&mut self.runs);
-        while runs.len() > self.config.merge_fan_in.max(2) {
-            runs = self.merge_pass(runs)?;
+        while self.runs.len() > self.config.merge_fan_in.max(2) {
+            let runs = std::mem::take(&mut self.runs);
+            self.runs = self.merge_pass(runs)?;
         }
-        let items = self.read_merged_runs(&runs)?;
+        merge_runs(&self.runs, emit)?;
+        let runs = std::mem::take(&mut self.runs);
         for run in runs {
             remove_if_exists(&run)?;
         }
-        Ok((items, self.metrics))
+        Ok(self.metrics)
     }
 
     pub fn metrics(&self) -> ExternalSortMetrics {
@@ -170,15 +186,6 @@ impl ExternalSorter {
             }
         }
         Ok(merged)
-    }
-
-    fn read_merged_runs(&self, runs: &[PathBuf]) -> Result<Vec<SortItem>, String> {
-        let mut output = Vec::new();
-        merge_runs(runs, |item| {
-            output.push(item);
-            Ok(())
-        })?;
-        Ok(output)
     }
 
     fn create_run_path(&mut self) -> Result<PathBuf, String> {
@@ -397,6 +404,55 @@ mod tests {
         assert_eq!(payloads, (0_u8..=9).collect::<Vec<_>>());
         assert!(metrics.run_count > metrics.spills);
         assert!(metrics.bytes_written > 0);
+        fs::remove_dir_all(tmp).expect("temp dir removed");
+    }
+
+    #[test]
+    fn finish_into_streams_sorted_items_without_collecting() {
+        let tmp = temp_dir("external-sort-stream");
+        let mut sorter = ExternalSorter::new(config(&tmp, 1)).expect("sorter is created");
+        for key in [3_u8, 1, 2, 1] {
+            sorter.push(vec![key], vec![key]).unwrap();
+        }
+        let mut payloads = Vec::new();
+        let metrics = sorter
+            .finish_into(|item| {
+                payloads.push(item.payload[0]);
+                Ok(())
+            })
+            .expect("sort succeeds");
+
+        assert_eq!(payloads, vec![1, 1, 2, 3]);
+        assert_eq!(metrics.max_resident_records, 1);
+        assert!(metrics.spills >= 4);
+        assert!(
+            fs::read_dir(&tmp)
+                .expect("temp dir readable")
+                .next()
+                .is_none()
+        );
+        fs::remove_dir_all(tmp).expect("temp dir removed");
+    }
+
+    #[test]
+    fn finish_into_cleans_runs_after_emit_error() {
+        let tmp = temp_dir("external-sort-stream-error");
+        let mut sorter = ExternalSorter::new(config(&tmp, 1)).expect("sorter is created");
+        for key in [3_u8, 1, 2] {
+            sorter.push(vec![key], vec![key]).unwrap();
+        }
+
+        let error = sorter
+            .finish_into(|_| Err("injected emit failure".to_string()))
+            .expect_err("emit error is returned");
+
+        assert_eq!(error, "injected emit failure");
+        assert!(
+            fs::read_dir(&tmp)
+                .expect("temp dir readable")
+                .next()
+                .is_none()
+        );
         fs::remove_dir_all(tmp).expect("temp dir removed");
     }
 
