@@ -24,6 +24,10 @@ sidecar generation across the native CLI helpers and the MarkDuplicates crate.
   retaining only one parsed record per input plus the merge heap. If any input is
   discovered to be unsorted, the same-directory temporary output is discarded and
   the existing shared external-sort path is used unchanged.
+- The `MergeVcfs` external-sort fallback now also scans plain or gzip inputs
+  line-by-line into the shared sorter and streams sorted output through the
+  temp-file writer, preserving stable input-order ties without retaining every
+  parsed VCF document or final output text.
 - `SortVcf` now scans headers and pushes records into the shared external sorter
   line-by-line from plain or gzip inputs, then emits sorted records directly to a
   same-directory temporary output. Index offsets are accumulated during output

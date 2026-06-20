@@ -6255,15 +6255,18 @@ fn run_mergevcfs_external_sort(
     tmp_dir: PathBuf,
     max_records_in_ram: usize,
 ) -> Result<(), String> {
-    let mut documents = Vec::with_capacity(inputs.len());
+    let mut headers = Vec::with_capacity(inputs.len());
+    let mut streams = Vec::with_capacity(inputs.len());
     for input in inputs {
-        documents.push(read_vcf_document(input)?);
+        let (header, stream) = open_streaming_vcf_input(input)?;
+        headers.push(header);
+        streams.push(stream);
     }
-    let first = documents
+    let first = headers
         .first()
         .ok_or_else(|| "missing required MergeVcfs argument: INPUT".to_string())?;
-    for document in documents.iter().skip(1) {
-        if document.column_header != first.column_header {
+    for header in headers.iter().skip(1) {
+        if header.column_header != first.column_header {
             return Err("unsupported MergeVcfs inputs with different sample columns".to_string());
         }
     }
@@ -6272,41 +6275,35 @@ fn run_mergevcfs_external_sort(
         let dictionary_text =
             fs::read_to_string(dictionary_path).map_err(|error| error.to_string())?;
         let contig_lines = vcf_contig_lines_from_dictionary(&dictionary_text)?;
-        validate_vcf_sequence_dictionaries(&documents, &contig_lines, "MergeVcfs")?;
+        validate_streaming_vcf_sequence_dictionaries(&headers, &contig_lines, "MergeVcfs")?;
         (
             dictionary_contig_order(&dictionary_text),
             Some(contig_lines),
         )
     } else {
         let contig_lines = first.contig_lines();
-        validate_vcf_sequence_dictionaries(&documents, &contig_lines, "MergeVcfs")?;
+        validate_streaming_vcf_sequence_dictionaries(&headers, &contig_lines, "MergeVcfs")?;
         (first.contig_order(), None)
     };
     if contig_order.is_empty() {
         return Err("unsupported MergeVcfs input without sequence dictionary".to_string());
     }
 
-    let mut text = vcf_header_text_with_contigs(first, contig_lines.as_deref())?;
     let mut sort_config = ExternalSortConfig::new(tmp_dir);
     sort_config.max_records_in_ram = max_records_in_ram.max(1);
     sort_config.prefix = "turbo-picard-mergevcfs".to_string();
     let mut sorter = ExternalSorter::new(sort_config)?;
-    for document in documents {
-        for record in document.records {
-            let Some(contig_rank) = contig_order.get(&record.contig).copied() else {
-                return Err(format!(
-                    "VCF contig {} is not present in sequence dictionary",
-                    record.contig
-                ));
-            };
-            sorter.push(
-                vcf_sort_key(contig_rank, record.position),
-                record.line.into_bytes(),
-            )?;
-        }
+    for stream in &mut streams {
+        push_streaming_vcf_records_to_sorter(stream, &contig_order, &mut sorter)?;
     }
-    let (records, _metrics) = sorter.finish()?;
-    for record in records {
+
+    let header_text = streaming_vcf_header_text_with_contigs(first, contig_lines.as_deref())?;
+    let mut writer = StreamingTextOutput::create(output, "mergevcfs")?;
+    let mut index = (create_index && has_extension(output, "vcf")).then(VcfIndexOffsets::default);
+    for line in header_text.lines() {
+        writer.write_line(line, false, index.as_mut())?;
+    }
+    sorter.finish_into(|record| {
         let line = String::from_utf8(record.payload)
             .map_err(|_| "MergeVcfs record payload is not UTF-8".to_string())?;
         if line.is_empty() {
@@ -6315,12 +6312,11 @@ fn run_mergevcfs_external_sort(
                 record.ordinal
             ));
         }
-        text.push_str(&line);
-        text.push('\n');
-    }
-    write_text_or_gzip(output, &text)?;
-    if create_index && has_extension(output, "vcf") {
-        write_vcf_idx_sidecar(output, &text)?;
+        writer.write_line(&line, true, index.as_mut())
+    })?;
+    writer.persist()?;
+    if let Some(index) = index {
+        index.write_sidecar(output)?;
     }
     Ok(())
 }
@@ -6663,76 +6659,6 @@ fn reject_unsupported_mergevcfs_args(args: &BTreeMap<String, Vec<String>>) -> Re
         }
     }
     Ok(())
-}
-
-#[derive(Debug, Clone)]
-struct VcfDocument {
-    meta_lines: Vec<String>,
-    column_header: String,
-    records: Vec<VcfRecord>,
-}
-
-impl VcfDocument {
-    fn header_text(&self) -> String {
-        let mut text = String::new();
-        for line in &self.meta_lines {
-            text.push_str(line);
-            text.push('\n');
-        }
-        text.push_str(&self.column_header);
-        text.push('\n');
-        text
-    }
-
-    fn contig_ids(&self) -> Vec<String> {
-        self.contig_lines()
-            .iter()
-            .filter_map(|line| parse_vcf_contig_id(line.as_str()))
-            .collect()
-    }
-
-    fn contig_lines(&self) -> Vec<String> {
-        self.meta_lines
-            .iter()
-            .filter(|line| line.starts_with("##contig=<"))
-            .cloned()
-            .collect()
-    }
-
-    fn contig_order(&self) -> BTreeMap<String, usize> {
-        self.contig_ids()
-            .into_iter()
-            .enumerate()
-            .map(|(index, contig)| (contig, index))
-            .collect()
-    }
-}
-
-fn validate_vcf_sequence_dictionaries(
-    documents: &[VcfDocument],
-    expected_contig_lines: &[String],
-    command: &str,
-) -> Result<(), String> {
-    for document in documents {
-        if document.contig_lines() != expected_contig_lines {
-            return Err(format!(
-                "unsupported {command} input sequence dictionary differs from expected dictionary"
-            ));
-        }
-    }
-    Ok(())
-}
-
-fn vcf_header_text_with_contigs(
-    document: &VcfDocument,
-    contig_lines: Option<&[String]>,
-) -> Result<String, String> {
-    let header_text = document.header_text();
-    if let Some(contig_lines) = contig_lines {
-        replace_vcf_contig_header(&header_text, contig_lines)
-    } else {
-        Ok(header_text)
-    }
 }
 
 #[derive(Debug, Clone)]
@@ -7388,51 +7314,6 @@ fn streaming_vcf_header_text_with_contigs(
     } else {
         Ok(header_text)
     }
-}
-
-fn read_vcf_document(path: &str) -> Result<VcfDocument, String> {
-    let text = read_text_or_gzip(path)?;
-    parse_vcf_document(&text, path)
-}
-
-fn parse_vcf_document(text: &str, source: &str) -> Result<VcfDocument, String> {
-    let mut meta_lines = Vec::new();
-    let mut column_header = None;
-    let mut records = Vec::new();
-
-    for (line_index, line) in text.lines().enumerate() {
-        if line.starts_with("##") {
-            if column_header.is_some() {
-                return Err(format!("malformed VCF header in {source}"));
-            }
-            meta_lines.push(line.to_string());
-        } else if line.starts_with("#CHROM") {
-            column_header = Some(line.to_string());
-        } else if line.starts_with('#') {
-            return Err(format!(
-                "unsupported VCF header line {} in {source}",
-                line_index + 1
-            ));
-        } else if !line.trim().is_empty() {
-            if column_header.is_none() {
-                return Err(format!("VCF input {source} is missing #CHROM header"));
-            }
-            records.push(parse_vcf_record(
-                line,
-                records.len(),
-                source,
-                line_index + 1,
-            )?);
-        }
-    }
-
-    let column_header =
-        column_header.ok_or_else(|| format!("VCF input {source} is missing #CHROM header"))?;
-    Ok(VcfDocument {
-        meta_lines,
-        column_header,
-        records,
-    })
 }
 
 fn parse_vcf_record(
@@ -19918,19 +19799,6 @@ fn write_md5_sidecar(output: &str) -> Result<(), String> {
     }
     let digest = context.compute();
     fs::write(format!("{output}.md5"), format!("{digest:x}")).map_err(|error| error.to_string())
-}
-
-fn write_vcf_idx_sidecar(output: &str, text: &str) -> Result<(), String> {
-    let mut offset = 0usize;
-    let mut index = String::from("# turbo-picard VCF record offsets\n");
-    for line in text.split_inclusive('\n') {
-        if !line.starts_with('#') {
-            index.push_str(&offset.to_string());
-            index.push('\n');
-        }
-        offset += line.len();
-    }
-    fs::write(format!("{output}.idx"), index).map_err(|error| error.to_string())
 }
 
 fn picard_reference_command_names() -> &'static [&'static str] {
