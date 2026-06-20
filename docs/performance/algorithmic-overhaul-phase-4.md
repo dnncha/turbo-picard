@@ -46,6 +46,9 @@ vectors, and duplicate-group maps for the input.
   candidate index)` rows, stable-sort them by `BamDuplicateKey`, and scan the
   sorted rows into groups. This removes the duplicate-key hash-grouping step and
   matches the shape needed for a later external fixed-width key sorter.
+- Optical tile/x/y coordinates are now parsed once during BAM candidate
+  extraction and stored on `DuplicateCandidate`; optical duplicate detection no
+  longer reparses qnames while scanning duplicate groups.
 
 ## Tests
 

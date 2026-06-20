@@ -113,6 +113,7 @@ struct DuplicateCandidate {
     _mate_position: i64,
     _template_length: i64,
     duplicate_score: u64,
+    optical_location: Option<ReadLocation>,
     barcode_id: Option<InternedBytesId>,
 }
 
@@ -135,6 +136,7 @@ impl DuplicateCandidate {
             _mate_position: record.mpos(),
             _template_length: record.insert_size(),
             duplicate_score: quality_score(record),
+            optical_location: parse_read_location(record.qname()),
             barcode_id,
         }
     }
@@ -172,10 +174,6 @@ impl ByteInterner {
         self.values.push(owned.clone());
         self.ids.insert(owned, id);
         id
-    }
-
-    fn get(&self, id: InternedBytesId) -> &[u8] {
-        &self.values[id as usize]
     }
 }
 
@@ -425,13 +423,8 @@ fn run_hts_container(
         let representative_candidate_index =
             best_duplicate_representative_index(group, &candidates);
         let representative_qname_id = candidates[representative_candidate_index].qname_id;
-        let optical_duplicates = optical_duplicate_record_indices(
-            group,
-            &candidates,
-            &qnames,
-            representative_qname_id,
-            config,
-        );
+        let optical_duplicates =
+            optical_duplicate_record_indices(group, &candidates, representative_qname_id, config);
         if let Some(set_size) = paired_set_size {
             let optical_names = u64::try_from(optical_duplicates.read_names).unwrap_or(u64::MAX);
             let non_optical_size = (optical_names < set_size).then_some(set_size - optical_names);
@@ -707,7 +700,6 @@ struct OpticalDuplicateRecords {
 fn optical_duplicate_record_indices(
     group: &[usize],
     candidates: &[DuplicateCandidate],
-    qnames: &ByteInterner,
     representative_qname_id: InternedBytesId,
     config: &MarkDuplicatesConfig,
 ) -> OpticalDuplicateRecords {
@@ -717,8 +709,10 @@ fn optical_duplicate_record_indices(
             record_indices: Vec::new(),
         };
     }
-    let Some(representative_location) =
-        read_location_for_name(group, candidates, qnames, representative_qname_id)
+    let Some(representative_location) = group
+        .iter()
+        .find(|index| candidates[**index].qname_id == representative_qname_id)
+        .and_then(|index| candidates[*index].optical_location)
     else {
         return OpticalDuplicateRecords {
             read_names: 0,
@@ -738,8 +732,7 @@ fn optical_duplicate_record_indices(
             record_indices.push(candidate.record_index);
             continue;
         }
-        let name = qnames.get(candidate.qname_id);
-        let Some(location) = parse_read_location(name) else {
+        let Some(location) = candidate.optical_location else {
             continue;
         };
         if representative_location.is_within(&location, pixel_distance) {
@@ -754,19 +747,7 @@ fn optical_duplicate_record_indices(
     }
 }
 
-fn read_location_for_name(
-    group: &[usize],
-    candidates: &[DuplicateCandidate],
-    qnames: &ByteInterner,
-    qname_id: InternedBytesId,
-) -> Option<ReadLocation> {
-    group
-        .iter()
-        .find(|index| candidates[**index].qname_id == qname_id)
-        .and_then(|index| parse_read_location(qnames.get(candidates[*index].qname_id)))
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct ReadLocation {
     tile: i64,
     x: i64,
@@ -2006,15 +1987,22 @@ mod tests {
             record_with_name_and_flags(b"INST:1:FC:1:1101:105:105", 0x1),
             record_with_name_and_flags(b"INST:1:FC:1:1101:105:105", 0x1),
         ];
-        let (candidates, qnames) = candidates_and_qnames_for_records(&records);
+        let candidates = candidates_for_records(&records);
         let config = MarkDuplicatesConfig {
             read_name_regex: None,
             optical_duplicate_pixel_distance: Some(100),
             ..sam_markdup_config()
         };
 
-        let optical =
-            optical_duplicate_record_indices(&[0, 1, 2], &candidates, &qnames, 0, &config);
+        assert_eq!(
+            candidates[0].optical_location,
+            Some(ReadLocation {
+                tile: 1101,
+                x: 100,
+                y: 100
+            })
+        );
+        let optical = optical_duplicate_record_indices(&[0, 1, 2], &candidates, 0, &config);
 
         assert_eq!(optical.read_names, 1);
         assert_eq!(optical.record_indices, vec![1, 2]);
