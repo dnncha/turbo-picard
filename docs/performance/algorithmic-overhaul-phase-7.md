@@ -16,6 +16,10 @@ sidecar generation across the native CLI helpers and the MarkDuplicates crate.
   write `{output}.md5` after the primary output is complete.
 - No new runtime dependency was added; the existing `md5` crate contexts are
   used in each crate.
+- `GatherVcfs` now validates headers and streams records line-by-line from
+  plain or gzip inputs into a same-directory temporary output, then renames it
+  only after successful completion. Plain VCF index offsets are accumulated
+  incrementally, so the command no longer builds one full output `String`.
 
 ## Tests
 
@@ -25,6 +29,7 @@ Passing:
 cargo fmt --check
 cargo test -p turbo-picard-markdup creates_md5_sidecar -- --nocapture
 cargo test -p turbo-picard-cli md5 -- --nocapture
+cargo test -p turbo-picard-cli gathervcfs -- --nocapture
 cargo clippy -p turbo-picard-markdup --all-targets --all-features -- -D warnings
 ```
 
@@ -35,7 +40,6 @@ Blocked or not clean:
 
 Remaining Phase 7 work:
 
-- stream `GatherVcfs` header/body handling;
 - implement sorted `MergeVcfs` k-way streaming where compatible;
 - keep `SortVcf`/`LiftoverVcf` on compact external-sort records while reducing
   remaining full-document VCF materialization.

@@ -8333,6 +8333,116 @@ fn gathervcfs_concatenates_records_with_first_header() {
 }
 
 #[test]
+fn gathervcfs_streams_gzip_input_and_output() {
+    let tempdir = tempfile::tempdir().expect("tempdir exists");
+    let first = tempdir.path().join("first.vcf.gz");
+    let second = tempdir.path().join("second.vcf.gz");
+    let output = tempdir.path().join("gathered.vcf.gz");
+    for (path, record) in [
+        (&first, "chr1\t1\t.\tA\tC\t.\tPASS\t.\n"),
+        (&second, "chr1\t5\t.\tG\tT\t.\tPASS\t.\n"),
+    ] {
+        let file = fs::File::create(path).expect("gzip VCF can be created");
+        let mut encoder = flate2::write::GzEncoder::new(file, flate2::Compression::default());
+        encoder
+            .write_all(
+                format!(
+                    "##fileformat=VCFv4.2\n\
+                     ##contig=<ID=chr1,length=1000>\n\
+                     #CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\n\
+                     {record}"
+                )
+                .as_bytes(),
+            )
+            .expect("gzip VCF fixture is written");
+        encoder.finish().expect("gzip VCF is finished");
+    }
+
+    Command::cargo_bin("picard")
+        .expect("binary exists")
+        .args([
+            "GatherVcfs",
+            &format!("I={}", first.display()),
+            &format!("I={}", second.display()),
+            &format!("O={}", output.display()),
+            "VALIDATION_STRINGENCY=SILENT",
+            "QUIET=true",
+        ])
+        .assert()
+        .success();
+
+    let file = fs::File::open(&output).expect("gzip gathered VCF exists");
+    let mut decoder = GzDecoder::new(file);
+    let mut text = String::new();
+    decoder
+        .read_to_string(&mut text)
+        .expect("gzip gathered VCF decodes");
+    assert_eq!(
+        text,
+        concat!(
+            "##fileformat=VCFv4.2\n",
+            "##contig=<ID=chr1,length=1000>\n",
+            "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\n",
+            "chr1\t1\t.\tA\tC\t.\tPASS\t.\n",
+            "chr1\t5\t.\tG\tT\t.\tPASS\t.\n",
+        )
+    );
+}
+
+#[test]
+fn gathervcfs_removes_temp_output_after_header_mismatch() {
+    let tempdir = tempfile::tempdir().expect("tempdir exists");
+    let first = tempdir.path().join("first.vcf");
+    let second = tempdir.path().join("second.vcf");
+    let output = tempdir.path().join("gathered.vcf");
+    fs::write(
+        &first,
+        concat!(
+            "##fileformat=VCFv4.2\n",
+            "##contig=<ID=chr1,length=1000>\n",
+            "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tSAMPLE_A\n",
+            "chr1\t1\t.\tA\tC\t.\tPASS\t.\t0/1\n",
+        ),
+    )
+    .expect("first VCF is written");
+    fs::write(
+        &second,
+        concat!(
+            "##fileformat=VCFv4.2\n",
+            "##contig=<ID=chr1,length=1000>\n",
+            "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tSAMPLE_B\n",
+            "chr1\t5\t.\tG\tT\t.\tPASS\t.\t0/1\n",
+        ),
+    )
+    .expect("second VCF is written");
+
+    Command::cargo_bin("picard")
+        .expect("binary exists")
+        .args([
+            "GatherVcfs",
+            &format!("I={}", first.display()),
+            &format!("I={}", second.display()),
+            &format!("O={}", output.display()),
+            "VALIDATION_STRINGENCY=SILENT",
+            "QUIET=true",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("different sample columns"));
+
+    assert!(!output.exists());
+    assert!(
+        fs::read_dir(tempdir.path())
+            .expect("tempdir can be read")
+            .all(|entry| !entry
+                .expect("dir entry exists")
+                .file_name()
+                .to_string_lossy()
+                .starts_with(".turbo-picard-gathervcfs-"))
+    );
+}
+
+#[test]
 fn gathervcfs_writes_index_for_vcf_when_requested() {
     let tempdir = tempfile::tempdir().expect("tempdir exists");
     let first = tempdir.path().join("first.vcf");

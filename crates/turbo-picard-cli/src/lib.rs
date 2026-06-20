@@ -6099,34 +6099,26 @@ fn run_gathervcfs(args: &[String]) -> Result<(), String> {
     let output = required_scalar_for(&args, "OUTPUT", "GatherVcfs")?;
     let create_index = optional_bool(&args, "CREATE_INDEX")?.unwrap_or(false);
 
-    let mut documents = Vec::with_capacity(inputs.len());
-    for input in &inputs {
-        documents.push(read_vcf_document(input)?);
-    }
-    let first = documents
-        .first()
-        .ok_or_else(|| "missing required GatherVcfs argument: INPUT".to_string())?;
-    for document in documents.iter().skip(1) {
-        if document.column_header != first.column_header {
-            return Err("unsupported GatherVcfs inputs with different sample columns".to_string());
-        }
-        if document.contig_ids() != first.contig_ids() {
-            return Err(
-                "unsupported GatherVcfs inputs with different sequence dictionaries".to_string(),
-            );
+    let mut writer = StreamingTextOutput::create(&output, "gathervcfs")?;
+    let mut index = (create_index && has_extension(&output, "vcf")).then(VcfIndexOffsets::default);
+    let mut first_header = None::<GatherVcfHeader>;
+    for (input_index, input) in inputs.iter().enumerate() {
+        let header = stream_gathervcf_input(
+            input,
+            input_index == 0,
+            first_header.as_ref(),
+            &mut writer,
+            index.as_mut(),
+        )?;
+        if first_header.is_none() {
+            first_header = Some(header);
         }
     }
-
-    let mut text = first.header_text();
-    for document in documents {
-        for record in document.records {
-            text.push_str(&record.line);
-            text.push('\n');
-        }
-    }
-    write_text_or_gzip(&output, &text)?;
+    writer.persist()?;
     if create_index && has_extension(&output, "vcf") {
-        write_vcf_idx_sidecar(&output, &text)?;
+        if let Some(index) = index {
+            index.write_sidecar(&output)?;
+        }
     }
     Ok(())
 }
@@ -6717,6 +6709,248 @@ struct VcfRecord {
     contig: String,
     position: u64,
     serial: usize,
+}
+
+#[derive(Debug, Clone)]
+struct GatherVcfHeader {
+    column_header: String,
+    contig_ids: Vec<String>,
+}
+
+struct StreamingTextOutput {
+    output: String,
+    temp_path: PathBuf,
+    writer: Option<StreamingTextOutputWriter>,
+}
+
+enum StreamingTextOutputWriter {
+    Plain(BufWriter<fs::File>),
+    Gzip(GzEncoder<BufWriter<fs::File>>),
+}
+
+impl StreamingTextOutput {
+    fn create(output: &str, prefix: &str) -> Result<Self, String> {
+        let output_path = Path::new(output);
+        let output_dir = output_path.parent().unwrap_or_else(|| Path::new("."));
+        let temp_path = create_unique_temp_path(output_dir, prefix)?;
+        let file = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temp_path)
+            .map_err(|error| error.to_string())?;
+        let output = output.to_string();
+        let writer = BufWriter::with_capacity(64 * 1024, file);
+        let writer = if has_gzip_extension(&output) {
+            StreamingTextOutputWriter::Gzip(GzEncoder::new(writer, Compression::default()))
+        } else {
+            StreamingTextOutputWriter::Plain(writer)
+        };
+        Ok(Self {
+            output,
+            temp_path,
+            writer: Some(writer),
+        })
+    }
+
+    fn write_line(
+        &mut self,
+        line: &str,
+        is_record: bool,
+        index: Option<&mut VcfIndexOffsets>,
+    ) -> Result<(), String> {
+        match self
+            .writer
+            .as_mut()
+            .ok_or_else(|| "GatherVcfs output writer is already closed".to_string())?
+        {
+            StreamingTextOutputWriter::Plain(writer) => {
+                writer
+                    .write_all(line.as_bytes())
+                    .and_then(|_| writer.write_all(b"\n"))
+                    .map_err(|error| error.to_string())?;
+            }
+            StreamingTextOutputWriter::Gzip(writer) => {
+                writer
+                    .write_all(line.as_bytes())
+                    .and_then(|_| writer.write_all(b"\n"))
+                    .map_err(|error| error.to_string())?;
+            }
+        }
+        if let Some(index) = index {
+            index.observe_line(line, is_record);
+        }
+        Ok(())
+    }
+
+    fn persist(mut self) -> Result<(), String> {
+        let writer = self
+            .writer
+            .take()
+            .ok_or_else(|| "GatherVcfs output writer is already closed".to_string())?;
+        match writer {
+            StreamingTextOutputWriter::Plain(writer) => {
+                writer.into_inner().map_err(|error| error.to_string())?;
+            }
+            StreamingTextOutputWriter::Gzip(writer) => {
+                let writer = writer.finish().map_err(|error| error.to_string())?;
+                writer.into_inner().map_err(|error| error.to_string())?;
+            }
+        }
+        fs::rename(&self.temp_path, &self.output).map_err(|error| error.to_string())?;
+        self.temp_path.clear();
+        Ok(())
+    }
+}
+
+impl Drop for StreamingTextOutput {
+    fn drop(&mut self) {
+        if !self.temp_path.as_os_str().is_empty() {
+            let _ = fs::remove_file(&self.temp_path);
+        }
+    }
+}
+
+fn create_unique_temp_path(output_dir: &Path, prefix: &str) -> Result<PathBuf, String> {
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|error| error.to_string())?
+        .as_nanos();
+    for attempt in 0..100_u32 {
+        let path = output_dir.join(format!(
+            ".turbo-picard-{prefix}-{}-{timestamp}-{attempt}.tmp",
+            process::id()
+        ));
+        if !path.exists() {
+            return Ok(path);
+        }
+    }
+    Err("could not allocate temporary GatherVcfs output path".to_string())
+}
+
+#[derive(Debug, Default)]
+struct VcfIndexOffsets {
+    offset: usize,
+    record_offsets: Vec<usize>,
+}
+
+impl VcfIndexOffsets {
+    fn observe_line(&mut self, line: &str, is_record: bool) {
+        if is_record {
+            self.record_offsets.push(self.offset);
+        }
+        self.offset += line.len() + 1;
+    }
+
+    fn write_sidecar(self, output: &str) -> Result<(), String> {
+        let mut index = String::from("# turbo-picard VCF record offsets\n");
+        for offset in self.record_offsets {
+            index.push_str(&offset.to_string());
+            index.push('\n');
+        }
+        fs::write(format!("{output}.idx"), index).map_err(|error| error.to_string())
+    }
+}
+
+fn open_text_or_gzip_reader(path: &str) -> Result<Box<dyn BufRead>, String> {
+    let file = fs::File::open(path).map_err(|error| error.to_string())?;
+    if has_gzip_extension(path) {
+        Ok(Box::new(BufReader::new(GzDecoder::new(file))))
+    } else {
+        Ok(Box::new(BufReader::new(file)))
+    }
+}
+
+fn stream_gathervcf_input(
+    input: &str,
+    write_header: bool,
+    expected_header: Option<&GatherVcfHeader>,
+    writer: &mut StreamingTextOutput,
+    mut index: Option<&mut VcfIndexOffsets>,
+) -> Result<GatherVcfHeader, String> {
+    let mut reader = open_text_or_gzip_reader(input)?;
+    let mut line = String::new();
+    let mut line_number = 0usize;
+    let mut meta_lines = Vec::new();
+    let mut column_header = None::<String>;
+    let mut records_seen = 0usize;
+
+    loop {
+        line.clear();
+        let bytes_read = reader
+            .read_line(&mut line)
+            .map_err(|error| error.to_string())?;
+        if bytes_read == 0 {
+            break;
+        }
+        line_number += 1;
+        let trimmed = line.trim_end_matches(['\r', '\n']);
+        if trimmed.starts_with("##") {
+            if column_header.is_some() {
+                return Err(format!("malformed VCF header in {input}"));
+            }
+            meta_lines.push(trimmed.to_string());
+            if write_header {
+                writer.write_line(trimmed, false, index.as_deref_mut())?;
+            }
+        } else if trimmed.starts_with("#CHROM") {
+            column_header = Some(trimmed.to_string());
+            let header = GatherVcfHeader {
+                column_header: trimmed.to_string(),
+                contig_ids: meta_lines
+                    .iter()
+                    .filter_map(|line| parse_vcf_contig_id(line.as_str()))
+                    .collect(),
+            };
+            validate_gathervcf_header(&header, expected_header)?;
+            if write_header {
+                writer.write_line(trimmed, false, index.as_deref_mut())?;
+            }
+        } else if trimmed.starts_with('#') {
+            return Err(format!(
+                "unsupported VCF header line {} in {input}",
+                line_number
+            ));
+        } else if !trimmed.trim().is_empty() {
+            if column_header.is_none() {
+                return Err(format!("VCF input {input} is missing #CHROM header"));
+            }
+            parse_vcf_record(trimmed, records_seen, input, line_number)?;
+            records_seen += 1;
+            writer.write_line(trimmed, true, index.as_deref_mut())?;
+        }
+    }
+
+    let column_header =
+        column_header.ok_or_else(|| format!("VCF input {input} is missing #CHROM header"))?;
+    let header = GatherVcfHeader {
+        column_header,
+        contig_ids: meta_lines
+            .iter()
+            .filter_map(|line| parse_vcf_contig_id(line.as_str()))
+            .collect(),
+    };
+    if let Some(expected) = expected_header {
+        validate_gathervcf_header(&header, Some(expected))?;
+    }
+    Ok(header)
+}
+
+fn validate_gathervcf_header(
+    header: &GatherVcfHeader,
+    expected: Option<&GatherVcfHeader>,
+) -> Result<(), String> {
+    let Some(expected) = expected else {
+        return Ok(());
+    };
+    if header.column_header != expected.column_header {
+        return Err("unsupported GatherVcfs inputs with different sample columns".to_string());
+    }
+    if header.contig_ids != expected.contig_ids {
+        return Err(
+            "unsupported GatherVcfs inputs with different sequence dictionaries".to_string(),
+        );
+    }
+    Ok(())
 }
 
 fn read_vcf_document(path: &str) -> Result<VcfDocument, String> {
