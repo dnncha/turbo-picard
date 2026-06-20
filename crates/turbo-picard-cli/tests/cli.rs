@@ -913,6 +913,71 @@ fn mergesamfiles_falls_back_to_full_sort_for_unsorted_inputs() {
 }
 
 #[test]
+fn mergesamfiles_unsorted_fallback_uses_bounded_temp_runs() {
+    let tempdir = tempfile::tempdir().expect("tempdir exists");
+    let input_a = tempdir.path().join("a.sam");
+    let input_b = tempdir.path().join("b.sam");
+    let output = tempdir.path().join("merged.sam");
+    let sort_tmp = tempdir.path().join("merge-tmp");
+    fs::create_dir(&sort_tmp).expect("sort tmp exists");
+    fs::write(
+        &input_a,
+        concat!(
+            "@HD\tVN:1.6\tSO:unsorted\n",
+            "@SQ\tSN:chr1\tLN:1000\n",
+            "late\t0\tchr1\t90\t60\t4M\t*\t0\t0\tCCCC\tFFFF\n",
+            "dup\t0\tchr1\t20\t60\t4M\t*\t0\t0\tAAAA\tFFFF\n",
+        ),
+    )
+    .expect("first input fixture is written");
+    fs::write(
+        &input_b,
+        concat!(
+            "@HD\tVN:1.6\tSO:coordinate\n",
+            "@SQ\tSN:chr1\tLN:1000\n",
+            "dup\t0\tchr1\t20\t60\t4M\t*\t0\t0\tTTTT\tFFFF\n",
+            "early\t0\tchr1\t10\t60\t4M\t*\t0\t0\tGGGG\tFFFF\n",
+        ),
+    )
+    .expect("second input fixture is written");
+
+    Command::cargo_bin("picard")
+        .expect("binary exists")
+        .args([
+            "MergeSamFiles",
+            &format!("I={}", input_a.display()),
+            &format!("I={}", input_b.display()),
+            &format!("O={}", output.display()),
+            "SORT_ORDER=coordinate",
+            "MAX_RECORDS_IN_RAM=1",
+            &format!("TMP_DIR={}", sort_tmp.display()),
+        ])
+        .assert()
+        .success();
+
+    let output_sam = fs::read_to_string(&output).expect("output SAM exists");
+    assert_eq!(
+        record_names(&output_sam),
+        vec!["early", "dup", "dup", "late"]
+    );
+    assert_eq!(
+        output_sam
+            .lines()
+            .filter(|line| !line.starts_with('@'))
+            .map(|line| line.split('\t').nth(9).expect("sequence field"))
+            .collect::<Vec<_>>(),
+        vec!["GGGG", "AAAA", "TTTT", "CCCC"]
+    );
+    assert!(
+        fs::read_dir(&sort_tmp)
+            .expect("merge tmp readable")
+            .next()
+            .is_none(),
+        "MergeSamFiles fallback should clean temporary runs"
+    );
+}
+
+#[test]
 fn mergesamfiles_assume_sorted_uses_streaming_merge() {
     let tempdir = tempfile::tempdir().expect("tempdir exists");
     let input_a = tempdir.path().join("a.sam");

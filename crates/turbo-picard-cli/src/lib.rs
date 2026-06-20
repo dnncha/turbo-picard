@@ -2300,6 +2300,12 @@ fn run_mergesamfiles(args: &[String]) -> Result<(), String> {
     let create_index = optional_bool(&args, "CREATE_INDEX")?.unwrap_or(false);
     let create_md5_file = optional_bool(&args, "CREATE_MD5_FILE")?.unwrap_or(false);
     let assume_sorted = optional_bool(&args, "ASSUME_SORTED")?.unwrap_or(false);
+    let tmp_dir = optional_scalar(&args, "TMP_DIR")?
+        .map(PathBuf::from)
+        .unwrap_or_else(env::temp_dir);
+    let max_records_in_ram = optional_u32(&args, "MAX_RECORDS_IN_RAM")?
+        .map(|value| value as usize)
+        .unwrap_or(500_000);
     let sort_order = match optional_scalar(&args, "SORT_ORDER")?
         .unwrap_or_else(|| "coordinate".to_string())
         .as_str()
@@ -2344,19 +2350,18 @@ fn run_mergesamfiles(args: &[String]) -> Result<(), String> {
             interval_filter.as_ref(),
         )?;
     } else {
-        let mut records = collect_merge_records(
+        write_merge_records_bounded(
+            &mut writer,
+            &header,
             &merge_plan.inputs,
-            reference.as_deref(),
-            interval_filter.as_ref(),
+            MergeRecordWriteOptions {
+                reference: reference.as_deref(),
+                interval_filter: interval_filter.as_ref(),
+                sort_order,
+                tmp_dir: &tmp_dir,
+                max_records_in_ram,
+            },
         )?;
-        match sort_order {
-            SortOrder::Coordinate => records.sort_by(compare_coordinate),
-            SortOrder::QueryName => records.sort_by(compare_queryname),
-            SortOrder::Unsorted => {}
-        }
-        for record in records {
-            writer.write(&record).map_err(|error| error.to_string())?;
-        }
     }
     drop(writer);
 
@@ -17549,12 +17554,40 @@ fn build_merge_plan(
     })
 }
 
-fn collect_merge_records(
+fn write_merge_records_bounded(
+    writer: &mut bam::Writer,
+    header: &bam::Header,
     input_plans: &[MergeInputPlan],
-    reference: Option<&str>,
-    interval_filter: Option<&BTreeMap<i32, Vec<(u64, u64)>>>,
-) -> Result<Vec<bam::Record>, String> {
-    let mut records = Vec::new();
+    options: MergeRecordWriteOptions<'_>,
+) -> Result<(), String> {
+    let MergeRecordWriteOptions {
+        reference,
+        interval_filter,
+        sort_order,
+        tmp_dir,
+        max_records_in_ram,
+    } = options;
+    if sort_order == SortOrder::Unsorted {
+        for input in input_plans {
+            let mut reader = open_bam_reader_with_reference(&input.path, reference)
+                .map_err(|error| error.to_string())?;
+            for record in reader.records() {
+                let mut record = record.map_err(|error| error.to_string())?;
+                if !record_overlaps_intervals(&record, interval_filter) {
+                    continue;
+                }
+                rewrite_record_read_group(&mut record, &input.read_group_renames)?;
+                writer.write(&record).map_err(|error| error.to_string())?;
+            }
+        }
+        return Ok(());
+    }
+
+    let max_records_in_ram = max_records_in_ram.max(1);
+    let mut run_set = SortSamTempRuns::new(tmp_dir.to_path_buf());
+    let mut records = Vec::<(bam::Record, u64)>::with_capacity(max_records_in_ram.min(8192));
+    let mut next_ordinal = 0_u64;
+
     for input in input_plans {
         let mut reader = open_bam_reader_with_reference(&input.path, reference)
             .map_err(|error| error.to_string())?;
@@ -17564,10 +17597,33 @@ fn collect_merge_records(
                 continue;
             }
             rewrite_record_read_group(&mut record, &input.read_group_renames)?;
-            records.push(record);
+            records.push((record, next_ordinal));
+            next_ordinal += 1;
+            if records.len() >= max_records_in_ram {
+                write_sortsam_temp_run(&mut run_set, header, sort_order, &mut records)?;
+            }
         }
     }
-    Ok(records)
+    if run_set.paths.is_empty() {
+        stable_sort_bam_records(&mut records, sort_order);
+        for (record, _) in records {
+            writer.write(&record).map_err(|error| error.to_string())?;
+        }
+        return Ok(());
+    }
+    if !records.is_empty() {
+        write_sortsam_temp_run(&mut run_set, header, sort_order, &mut records)?;
+    }
+    coalesce_sortsam_runs(&mut run_set, header, sort_order)?;
+    write_sortsam_merged_runs(writer, &run_set.paths, sort_order)
+}
+
+struct MergeRecordWriteOptions<'a> {
+    reference: Option<&'a str>,
+    interval_filter: Option<&'a BTreeMap<i32, Vec<(u64, u64)>>>,
+    sort_order: SortOrder,
+    tmp_dir: &'a Path,
+    max_records_in_ram: usize,
 }
 
 fn header_declares_sort_order(header: &bam::HeaderView, sort_order: SortOrder) -> bool {
