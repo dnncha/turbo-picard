@@ -8,6 +8,7 @@ pub struct MarkDuplicatesConfig {
     pub output: String,
     pub metrics_file: String,
     pub max_records_in_ram: usize,
+    pub tmp_dirs: Vec<String>,
     pub remove_duplicates: bool,
     pub remove_sequencing_duplicates: bool,
     pub assume_sorted: bool,
@@ -78,6 +79,7 @@ impl MarkDuplicatesConfig {
             max_records_in_ram: optional_u32(args, "MAX_RECORDS_IN_RAM")?
                 .unwrap_or(500_000)
                 .max(1) as usize,
+            tmp_dirs: args.get("TMP_DIR").cloned().unwrap_or_default(),
             remove_duplicates: optional_bool(args, "REMOVE_DUPLICATES")?.unwrap_or(false),
             remove_sequencing_duplicates: optional_bool(args, "REMOVE_SEQUENCING_DUPLICATES")?
                 .unwrap_or(false),

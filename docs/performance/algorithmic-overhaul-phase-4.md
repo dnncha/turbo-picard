@@ -56,6 +56,12 @@ vectors, and duplicate-group maps for the input.
   displaced-pair cache. When unresolved distant mates exceed that cap, the
   native engine falls back to compact qname-id collation instead of silently
   growing the cache without bound.
+- `TMP_DIR` is now retained in `MarkDuplicatesConfig` and used by the native
+  MarkDuplicates duplicate-key sorter.
+- Pair and fragment duplicate key rows now sort through the shared external
+  sorter with compact binary duplicate keys and candidate-index payloads. Forced
+  one-record runs spill to `TMP_DIR`, merge deterministically, and clean up temp
+  files after sorting.
 
 ## Tests
 
@@ -85,6 +91,7 @@ Remaining Phase 4 work:
   the compact decision stream;
 - replace the in-memory compact qname fallback with temporary-run qname
   collation for very large distant-mate workloads;
-- externally sort fixed-width duplicate keys and scan groups once;
+- stream sorted duplicate key rows directly into group scanning instead of
+  collecting the merged rows back into memory;
 - add adversarial tests for duplicate at EOF, giant duplicate families,
   distant/missing mates, barcodes, optical duplicates, and multi-input sorting.

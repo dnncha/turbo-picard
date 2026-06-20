@@ -6,9 +6,11 @@ use rust_htslib::bam::{self, Read, index};
 use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
+use std::env;
 use std::fmt;
 use std::fs;
 use std::path::Path;
+use turbo_picard_core::external_sort::{ExternalSortConfig, ExternalSorter};
 use turbo_picard_core::hts_io;
 use turbo_picard_core::markdup_config::MarkDuplicatesConfig;
 
@@ -398,7 +400,7 @@ fn run_hts_container(
         )?;
     }
 
-    let duplicate_groups = duplicate_groups(&candidates, config.max_records_in_ram);
+    let duplicate_groups = duplicate_groups(&candidates, config)?;
     let mut decisions = vec![RecordDecision::default(); records.len()];
 
     for group in &duplicate_groups {
@@ -478,7 +480,8 @@ fn run_hts_container(
         &mut decisions,
         &mut summary,
         &mut library_registry,
-    );
+        config,
+    )?;
 
     {
         if config.inputs.len() > 1 {
@@ -917,11 +920,11 @@ fn parse_sam_integer(
 
 fn duplicate_groups(
     candidates: &[DuplicateCandidate],
-    max_displaced_pair_records: usize,
-) -> Vec<Vec<usize>> {
-    let mut keyed_pairs = collate_pair_key_rows(candidates, max_displaced_pair_records);
-    keyed_pairs.sort_by(|left, right| left.0.cmp(&right.0));
-    collect_sorted_pair_groups(keyed_pairs)
+    config: &MarkDuplicatesConfig,
+) -> Result<Vec<Vec<usize>>, MarkDuplicatesError> {
+    let keyed_pairs = collate_pair_key_rows(candidates, config.max_records_in_ram);
+    let sorted_pairs = sort_pair_key_rows(keyed_pairs, config)?;
+    Ok(collect_sorted_pair_groups(sorted_pairs))
 }
 
 fn collate_pair_key_rows(
@@ -1121,16 +1124,214 @@ fn collect_sorted_pair_groups(keyed_pairs: Vec<(BamDuplicateKey, [usize; 2])>) -
     groups
 }
 
-fn fragment_duplicate_groups(candidates: &[DuplicateCandidate]) -> Vec<Vec<usize>> {
-    let mut keyed_fragments = candidates
+fn sort_pair_key_rows(
+    keyed_pairs: Vec<(BamDuplicateKey, [usize; 2])>,
+    config: &MarkDuplicatesConfig,
+) -> Result<Vec<(BamDuplicateKey, [usize; 2])>, MarkDuplicatesError> {
+    let mut sorter = ExternalSorter::new(markdup_sort_config(config, "turbo-picard-markdup-pairs"))
+        .map_err(MarkDuplicatesError::Operation)?;
+    for (key, pair_indices) in keyed_pairs {
+        sorter
+            .push(duplicate_sort_key(&key), pair_payload(pair_indices))
+            .map_err(MarkDuplicatesError::Operation)?;
+    }
+    let (items, _) = sorter.finish().map_err(MarkDuplicatesError::Operation)?;
+    items
+        .into_iter()
+        .map(|item| {
+            let key = decode_duplicate_sort_key(&item.key)?;
+            let pair = decode_pair_payload(&item.payload)?;
+            Ok((key, pair))
+        })
+        .collect()
+}
+
+fn fragment_duplicate_groups(
+    candidates: &[DuplicateCandidate],
+    config: &MarkDuplicatesConfig,
+) -> Result<Vec<Vec<usize>>, MarkDuplicatesError> {
+    let keyed_fragments = candidates
         .iter()
         .enumerate()
         .map(|(candidate_index, candidate)| {
             (fragment_duplicate_key_bam(candidate), candidate_index)
         })
         .collect::<Vec<_>>();
-    keyed_fragments.sort_by(|left, right| left.0.cmp(&right.0));
-    collect_sorted_fragment_groups(keyed_fragments)
+    let sorted_fragments = sort_fragment_key_rows(keyed_fragments, config)?;
+    Ok(collect_sorted_fragment_groups(sorted_fragments))
+}
+
+fn sort_fragment_key_rows(
+    keyed_fragments: Vec<(BamDuplicateKey, usize)>,
+    config: &MarkDuplicatesConfig,
+) -> Result<Vec<(BamDuplicateKey, usize)>, MarkDuplicatesError> {
+    let mut sorter = ExternalSorter::new(markdup_sort_config(
+        config,
+        "turbo-picard-markdup-fragments",
+    ))
+    .map_err(MarkDuplicatesError::Operation)?;
+    for (key, candidate_index) in keyed_fragments {
+        sorter
+            .push(duplicate_sort_key(&key), index_payload(candidate_index))
+            .map_err(MarkDuplicatesError::Operation)?;
+    }
+    let (items, _) = sorter.finish().map_err(MarkDuplicatesError::Operation)?;
+    items
+        .into_iter()
+        .map(|item| {
+            let key = decode_duplicate_sort_key(&item.key)?;
+            let index = decode_index_payload(&item.payload)?;
+            Ok((key, index))
+        })
+        .collect()
+}
+
+fn markdup_sort_config(config: &MarkDuplicatesConfig, prefix: &str) -> ExternalSortConfig {
+    let tmp_dir = config
+        .tmp_dirs
+        .first()
+        .map(Path::new)
+        .map(Path::to_path_buf)
+        .unwrap_or_else(env::temp_dir);
+    let mut sort_config = ExternalSortConfig::new(tmp_dir);
+    sort_config.max_records_in_ram = config.max_records_in_ram.max(1);
+    sort_config.prefix = prefix.to_string();
+    sort_config
+}
+
+fn duplicate_sort_key(key: &BamDuplicateKey) -> Vec<u8> {
+    let mut bytes = Vec::with_capacity(42);
+    bytes.extend_from_slice(&key.library_id.to_be_bytes());
+    bytes.extend_from_slice(&sortable_i32(key.reference_id));
+    bytes.extend_from_slice(&sortable_i64(key.position));
+    bytes.extend_from_slice(&sortable_i32(key.mate_reference_id));
+    bytes.extend_from_slice(&sortable_i64(key.mate_position));
+    bytes.extend_from_slice(&sortable_i64(key.template_length));
+    bytes.push(u8::from(key.reverse_strand));
+    match key.barcode_id {
+        Some(barcode_id) => {
+            bytes.push(1);
+            bytes.extend_from_slice(&barcode_id.to_be_bytes());
+        }
+        None => {
+            bytes.push(0);
+            bytes.extend_from_slice(&0_u32.to_be_bytes());
+        }
+    }
+    bytes
+}
+
+fn decode_duplicate_sort_key(bytes: &[u8]) -> Result<BamDuplicateKey, MarkDuplicatesError> {
+    if bytes.len() != 42 {
+        return Err(MarkDuplicatesError::Operation(format!(
+            "invalid MarkDuplicates duplicate-key sort payload length: {}",
+            bytes.len()
+        )));
+    }
+    let library_id = u32::from_be_bytes(bytes[0..4].try_into().expect("slice length checked"));
+    let reference_id = unsortable_i32(bytes[4..8].try_into().expect("slice length checked"));
+    let position = unsortable_i64(bytes[8..16].try_into().expect("slice length checked"));
+    let mate_reference_id = unsortable_i32(bytes[16..20].try_into().expect("slice length checked"));
+    let mate_position = unsortable_i64(bytes[20..28].try_into().expect("slice length checked"));
+    let template_length = unsortable_i64(bytes[28..36].try_into().expect("slice length checked"));
+    let reverse_strand = match bytes[36] {
+        0 => false,
+        1 => true,
+        value => {
+            return Err(MarkDuplicatesError::Operation(format!(
+                "invalid MarkDuplicates duplicate-key strand byte: {value}"
+            )));
+        }
+    };
+    let barcode_id = match bytes[37] {
+        0 => None,
+        1 => Some(u32::from_be_bytes(
+            bytes[38..42].try_into().expect("slice length checked"),
+        )),
+        value => {
+            return Err(MarkDuplicatesError::Operation(format!(
+                "invalid MarkDuplicates duplicate-key barcode tag: {value}"
+            )));
+        }
+    };
+    Ok(BamDuplicateKey {
+        library_id,
+        reference_id,
+        position,
+        mate_reference_id,
+        mate_position,
+        template_length,
+        reverse_strand,
+        barcode_id,
+    })
+}
+
+fn sortable_i32(value: i32) -> [u8; 4] {
+    ((value as u32) ^ 0x8000_0000).to_be_bytes()
+}
+
+fn sortable_i64(value: i64) -> [u8; 8] {
+    ((value as u64) ^ 0x8000_0000_0000_0000).to_be_bytes()
+}
+
+fn unsortable_i32(bytes: [u8; 4]) -> i32 {
+    (u32::from_be_bytes(bytes) ^ 0x8000_0000) as i32
+}
+
+fn unsortable_i64(bytes: [u8; 8]) -> i64 {
+    (u64::from_be_bytes(bytes) ^ 0x8000_0000_0000_0000) as i64
+}
+
+fn pair_payload(pair_indices: [usize; 2]) -> Vec<u8> {
+    let mut payload = Vec::with_capacity(16);
+    payload.extend_from_slice(
+        &u64::try_from(pair_indices[0])
+            .unwrap_or(u64::MAX)
+            .to_le_bytes(),
+    );
+    payload.extend_from_slice(
+        &u64::try_from(pair_indices[1])
+            .unwrap_or(u64::MAX)
+            .to_le_bytes(),
+    );
+    payload
+}
+
+fn decode_pair_payload(payload: &[u8]) -> Result<[usize; 2], MarkDuplicatesError> {
+    if payload.len() != 16 {
+        return Err(MarkDuplicatesError::Operation(format!(
+            "invalid MarkDuplicates pair sort payload length: {}",
+            payload.len()
+        )));
+    }
+    Ok([
+        decode_payload_index(&payload[0..8])?,
+        decode_payload_index(&payload[8..16])?,
+    ])
+}
+
+fn index_payload(index: usize) -> Vec<u8> {
+    u64::try_from(index)
+        .unwrap_or(u64::MAX)
+        .to_le_bytes()
+        .to_vec()
+}
+
+fn decode_index_payload(payload: &[u8]) -> Result<usize, MarkDuplicatesError> {
+    if payload.len() != 8 {
+        return Err(MarkDuplicatesError::Operation(format!(
+            "invalid MarkDuplicates fragment sort payload length: {}",
+            payload.len()
+        )));
+    }
+    decode_payload_index(payload)
+}
+
+fn decode_payload_index(payload: &[u8]) -> Result<usize, MarkDuplicatesError> {
+    let value = u64::from_le_bytes(payload.try_into().expect("slice length checked"));
+    usize::try_from(value).map_err(|_| {
+        MarkDuplicatesError::Operation("MarkDuplicates candidate index exceeds usize".to_string())
+    })
 }
 
 fn collect_sorted_fragment_groups(
@@ -1159,8 +1360,9 @@ fn mark_fragment_duplicate_groups(
     decisions: &mut [RecordDecision],
     summary: &mut MarkDuplicatesSummary,
     library_registry: &mut LibraryRegistry,
-) {
-    let fragment_groups = fragment_duplicate_groups(candidates);
+    config: &MarkDuplicatesConfig,
+) -> Result<(), MarkDuplicatesError> {
+    let fragment_groups = fragment_duplicate_groups(candidates, config)?;
 
     for group in &fragment_groups {
         if group.len() < 2 || !has_multiple_read_names(group, candidates) {
@@ -1201,6 +1403,7 @@ fn mark_fragment_duplicate_groups(
             );
         }
     }
+    Ok(())
 }
 
 fn mark_unpaired_duplicate_record(
@@ -1915,6 +2118,7 @@ mod tests {
             output: String::new(),
             metrics_file: String::new(),
             max_records_in_ram: 500_000,
+            tmp_dirs: Vec::new(),
             remove_duplicates: false,
             remove_sequencing_duplicates: false,
             assume_sorted: true,
@@ -2083,9 +2287,40 @@ mod tests {
         ];
         let candidates = candidates_for_records(&records);
 
-        let groups = duplicate_groups(&candidates, 500_000);
+        let groups = duplicate_groups(&candidates, &sam_markdup_config())
+            .expect("pair duplicate-key sorting succeeds");
 
         assert_eq!(groups, vec![vec![0, 1, 2, 3], vec![4, 5]]);
+    }
+
+    #[test]
+    fn duplicate_groups_uses_external_sorter_for_forced_pair_runs() {
+        let records = [
+            record_with_name_flags_and_position(b"z-pair", 0x1, 10),
+            record_with_name_flags_and_position(b"z-pair", 0x1, 20),
+            record_with_name_flags_and_position(b"a-pair", 0x1, 10),
+            record_with_name_flags_and_position(b"a-pair", 0x1, 20),
+            record_with_name_flags_and_position(b"later-pair", 0x1, 30),
+            record_with_name_flags_and_position(b"later-pair", 0x1, 40),
+        ];
+        let candidates = candidates_for_records(&records);
+        let tmp = tempfile::tempdir().expect("tempdir exists");
+        let config = MarkDuplicatesConfig {
+            max_records_in_ram: 1,
+            tmp_dirs: vec![tmp.path().display().to_string()],
+            ..sam_markdup_config()
+        };
+
+        let groups = duplicate_groups(&candidates, &config).expect("pair sorting succeeds");
+
+        assert_eq!(groups, vec![vec![0, 1, 2, 3], vec![4, 5]]);
+        assert!(
+            fs::read_dir(tmp.path())
+                .expect("tmp dir remains readable")
+                .next()
+                .is_none(),
+            "external sorter cleans MarkDuplicates pair runs"
+        );
     }
 
     #[test]
@@ -2142,6 +2377,73 @@ mod tests {
     }
 
     #[test]
+    fn duplicate_sort_key_preserves_bam_duplicate_key_order() {
+        let mut keys = vec![
+            BamDuplicateKey {
+                library_id: 1,
+                reference_id: -1,
+                position: 0,
+                mate_reference_id: 2,
+                mate_position: -10,
+                template_length: 10,
+                reverse_strand: false,
+                barcode_id: None,
+            },
+            BamDuplicateKey {
+                library_id: 1,
+                reference_id: 0,
+                position: -5,
+                mate_reference_id: 2,
+                mate_position: -10,
+                template_length: 10,
+                reverse_strand: false,
+                barcode_id: None,
+            },
+            BamDuplicateKey {
+                library_id: 1,
+                reference_id: 0,
+                position: -5,
+                mate_reference_id: 2,
+                mate_position: -10,
+                template_length: 10,
+                reverse_strand: true,
+                barcode_id: None,
+            },
+            BamDuplicateKey {
+                library_id: 1,
+                reference_id: 0,
+                position: -5,
+                mate_reference_id: 2,
+                mate_position: -10,
+                template_length: 10,
+                reverse_strand: true,
+                barcode_id: Some(1),
+            },
+            BamDuplicateKey {
+                library_id: 0,
+                reference_id: i32::MAX,
+                position: i64::MAX,
+                mate_reference_id: i32::MIN,
+                mate_position: i64::MIN,
+                template_length: -1,
+                reverse_strand: true,
+                barcode_id: Some(2),
+            },
+        ];
+        let mut encoded = keys.clone();
+
+        keys.sort();
+        encoded.sort_by_key(duplicate_sort_key);
+
+        assert_eq!(encoded, keys);
+        for key in keys {
+            let decoded =
+                decode_duplicate_sort_key(&duplicate_sort_key(&key)).expect("key decodes");
+            assert_eq!(decoded, key);
+        }
+    }
+
+    #[test]
     fn fragment_duplicate_groups_sorts_keys_and_preserves_equal_key_order() {
         let records = [
             record_with_name_flags_and_position(b"later-a", 0x0, 30),
@@ -2151,9 +2453,39 @@ mod tests {
         ];
         let candidates = candidates_for_records(&records);
 
-        let groups = fragment_duplicate_groups(&candidates);
+        let groups = fragment_duplicate_groups(&candidates, &sam_markdup_config())
+            .expect("fragment duplicate-key sorting succeeds");
 
         assert_eq!(groups, vec![vec![1, 2], vec![0, 3]]);
+    }
+
+    #[test]
+    fn fragment_duplicate_groups_uses_external_sorter_for_forced_runs() {
+        let records = [
+            record_with_name_flags_and_position(b"later-a", 0x0, 30),
+            record_with_name_flags_and_position(b"dup-a", 0x0, 10),
+            record_with_name_flags_and_position(b"dup-b", 0x0, 10),
+            record_with_name_flags_and_position(b"later-b", 0x0, 30),
+        ];
+        let candidates = candidates_for_records(&records);
+        let tmp = tempfile::tempdir().expect("tempdir exists");
+        let config = MarkDuplicatesConfig {
+            max_records_in_ram: 1,
+            tmp_dirs: vec![tmp.path().display().to_string()],
+            ..sam_markdup_config()
+        };
+
+        let groups =
+            fragment_duplicate_groups(&candidates, &config).expect("fragment sorting succeeds");
+
+        assert_eq!(groups, vec![vec![1, 2], vec![0, 3]]);
+        assert!(
+            fs::read_dir(tmp.path())
+                .expect("tmp dir remains readable")
+                .next()
+                .is_none(),
+            "external sorter cleans MarkDuplicates fragment runs"
+        );
     }
 
     #[test]
