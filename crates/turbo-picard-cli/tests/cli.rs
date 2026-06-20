@@ -6974,6 +6974,72 @@ fn liftovervcf_honors_tmp_dir_and_forced_external_runs_for_lifted_output() {
 }
 
 #[test]
+fn liftovervcf_streams_gzip_input_output_and_reject() {
+    let tempdir = tempfile::tempdir().expect("tempdir exists");
+    let input = tempdir.path().join("input.vcf.gz");
+    let output = tempdir.path().join("lifted.vcf.gz");
+    let reject = tempdir.path().join("reject.vcf.gz");
+    let reference = tempdir.path().join("ref.fa");
+    let dictionary = tempdir.path().join("ref.dict");
+    let chain = tempdir.path().join("identity.chain");
+    {
+        let file = fs::File::create(&input).expect("gzip VCF can be created");
+        let mut encoder = flate2::write::GzEncoder::new(file, flate2::Compression::default());
+        encoder
+            .write_all(
+                concat!(
+                    "##fileformat=VCFv4.2\n",
+                    "##contig=<ID=chr1,length=100>\n",
+                    "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\n",
+                    "chr1\t20\tlifted\tA\tC\t.\tPASS\t.\n",
+                    "chr1\t21\trejected\tG\tT\t.\tPASS\t.\n",
+                )
+                .as_bytes(),
+            )
+            .expect("gzip VCF fixture is written");
+        encoder.finish().expect("gzip VCF is finished");
+    }
+    fs::write(
+        &reference,
+        ">chr1\nAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\n",
+    )
+    .expect("reference is written");
+    fs::write(&dictionary, "@HD\tVN:1.6\n@SQ\tSN:chr1\tLN:100\n").expect("dict is written");
+    fs::write(
+        &chain,
+        "chain 100 chr1 100 + 0 100 chr1 100 + 0 100 1\n100\n",
+    )
+    .expect("chain is written");
+
+    Command::cargo_bin("picard")
+        .expect("binary exists")
+        .args([
+            "LiftoverVcf",
+            &format!("I={}", input.display()),
+            &format!("O={}", output.display()),
+            &format!("CHAIN={}", chain.display()),
+            &format!("REJECT={}", reject.display()),
+            &format!("R={}", reference.display()),
+            "MAX_RECORDS_IN_RAM=1",
+            "VALIDATION_STRINGENCY=SILENT",
+            "QUIET=true",
+        ])
+        .assert()
+        .success();
+
+    let lifted = read_gzip_to_string(output);
+    assert!(lifted.contains("##INFO=<ID=ReverseComplementedAlleles"));
+    assert!(lifted.contains("chr1\t20\tlifted\tA\tC\t.\tPASS\t.\n"));
+    assert!(!lifted.contains("chr1\t21\trejected"));
+
+    let rejected = read_gzip_to_string(reject);
+    assert!(rejected.contains("##FILTER=<ID=MismatchedRefAllele"));
+    assert!(rejected.contains(
+        "chr1\t21\trejected\tG\tT\t.\tMismatchedRefAllele\tAttemptedAlleles=G*->T;AttemptedLocus=chr1:21-21\n"
+    ));
+}
+
+#[test]
 fn liftovervcf_delegates_reverse_chain_to_fallback() {
     let tempdir = tempfile::tempdir().expect("tempdir exists");
     let fallback = fallback_script(tempdir.path(), 0);

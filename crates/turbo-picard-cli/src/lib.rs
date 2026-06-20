@@ -6048,7 +6048,7 @@ fn run_liftovervcf(args: &[String]) -> Result<(), String> {
         .unwrap_or(500_000);
 
     let mappings = read_simple_chain_mappings(&chain)?;
-    let document = read_vcf_document(&input)?;
+    let (input_header, mut input_stream) = open_streaming_vcf_input(&input)?;
     let reference_sequences = reference_sequences_by_name(&reference)?;
     let dictionary_text = fs::read_to_string(reference_dictionary_path(&reference)?)
         .map_err(|error| error.to_string())?;
@@ -6056,39 +6056,58 @@ fn run_liftovervcf(args: &[String]) -> Result<(), String> {
     let contig_order = dictionary_contig_order(&dictionary_text);
     let reference_line = format!("##reference=file:{}", reference);
 
-    let mut lifted = Vec::new();
-    let mut rejected = Vec::new();
-    for record in document.records.iter().cloned() {
+    let mut sort_config = ExternalSortConfig::new(tmp_dir);
+    sort_config.max_records_in_ram = max_records_in_ram.max(1);
+    sort_config.prefix = "turbo-picard-liftovervcf".to_string();
+    let mut sorter = ExternalSorter::new(sort_config)?;
+    let mut reject_writer = StreamingTextOutput::create(&reject, "liftovervcf-reject")?;
+    write_liftover_reject_header(&input_header, &contig_lines, &mut reject_writer)?;
+
+    while let Some(record) = next_raw_streaming_vcf_record(&mut input_stream)? {
         match liftover_vcf_record(record, &mappings, &reference_sequences)? {
-            LiftoverRecordResult::Lifted(record) => lifted.push(record),
-            LiftoverRecordResult::Rejected(record) => rejected.push(record),
+            LiftoverRecordResult::Lifted(record) => {
+                let Some(contig_rank) = contig_order.get(&record.contig).copied() else {
+                    return Err(format!(
+                        "VCF contig {} is not present in sequence dictionary",
+                        record.contig
+                    ));
+                };
+                sorter.push(
+                    vcf_sort_key(contig_rank, record.position),
+                    record.line.into_bytes(),
+                )?;
+            }
+            LiftoverRecordResult::Rejected(record) => {
+                reject_writer.write_line(&record.line, true, None)?;
+            }
         }
     }
 
-    for record in &lifted {
-        if !contig_order.contains_key(&record.contig) {
+    let mut output_writer = StreamingTextOutput::create(&output, "liftovervcf")?;
+    let mut index = (create_index && has_extension(&output, "vcf")).then(VcfIndexOffsets::default);
+    write_liftover_output_header(
+        &input_header,
+        &contig_lines,
+        &reference_line,
+        &mut output_writer,
+        index.as_mut(),
+    )?;
+    sorter.finish_into(|record| {
+        let line = String::from_utf8(record.payload)
+            .map_err(|_| "LiftoverVcf record payload is not UTF-8".to_string())?;
+        if line.is_empty() {
             return Err(format!(
-                "VCF contig {} is not present in sequence dictionary",
-                record.contig
+                "malformed LiftoverVcf sorted record from ordinal {}",
+                record.ordinal
             ));
         }
+        output_writer.write_line(&line, true, index.as_mut())
+    })?;
+    output_writer.persist()?;
+    if let Some(index) = index {
+        index.write_sidecar(&output)?;
     }
-    let lifted = sort_vcf_records_with_external_sort(
-        lifted,
-        &contig_order,
-        tmp_dir,
-        max_records_in_ram,
-        "turbo-picard-liftovervcf",
-        "LiftoverVcf",
-    )?;
-
-    let output_text = liftover_output_vcf_text(&document, &contig_lines, &reference_line, &lifted);
-    let reject_text = liftover_reject_vcf_text(&document, &contig_lines, &rejected);
-    write_text_or_gzip(&output, &output_text)?;
-    if create_index && has_extension(&output, "vcf") {
-        write_vcf_idx_sidecar(&output, &output_text)?;
-    }
-    write_text_or_gzip(&reject, &reject_text)
+    reject_writer.persist()
 }
 
 fn run_gathervcfs(args: &[String]) -> Result<(), String> {
@@ -7316,6 +7335,40 @@ fn push_streaming_vcf_records_to_sorter(
     }
 }
 
+fn next_raw_streaming_vcf_record(
+    input: &mut StreamingVcfInput,
+) -> Result<Option<VcfRecord>, String> {
+    loop {
+        input.line.clear();
+        let bytes_read = input
+            .reader
+            .read_line(&mut input.line)
+            .map_err(|error| error.to_string())?;
+        if bytes_read == 0 {
+            return Ok(None);
+        }
+        input.line_number += 1;
+        let trimmed = input.line.trim_end_matches(['\r', '\n']);
+        if trimmed.trim().is_empty() {
+            continue;
+        }
+        if trimmed.starts_with('#') {
+            return Err(format!(
+                "unsupported VCF header line {} in {}",
+                input.line_number, input.source
+            ));
+        }
+        let record = parse_vcf_record(
+            trimmed,
+            input.record_serial,
+            &input.source,
+            input.line_number,
+        )?;
+        input.record_serial += 1;
+        return Ok(Some(record));
+    }
+}
+
 fn validate_streaming_vcf_sequence_dictionaries(
     headers: &[StreamingVcfHeader],
     expected_contig_lines: &[String],
@@ -7416,42 +7469,6 @@ fn vcf_sort_key(contig_rank: usize, position: u64) -> Vec<u8> {
     key.extend_from_slice(&(contig_rank as u64).to_be_bytes());
     key.extend_from_slice(&position.to_be_bytes());
     key
-}
-
-fn sort_vcf_records_with_external_sort(
-    records: Vec<VcfRecord>,
-    contig_order: &BTreeMap<String, usize>,
-    tmp_dir: PathBuf,
-    max_records_in_ram: usize,
-    prefix: &str,
-    command: &str,
-) -> Result<Vec<VcfRecord>, String> {
-    let mut sort_config = ExternalSortConfig::new(tmp_dir);
-    sort_config.max_records_in_ram = max_records_in_ram.max(1);
-    sort_config.prefix = prefix.to_string();
-    let mut sorter = ExternalSorter::new(sort_config)?;
-    for record in records {
-        let Some(contig_rank) = contig_order.get(&record.contig).copied() else {
-            return Err(format!(
-                "VCF contig {} is not present in sequence dictionary",
-                record.contig
-            ));
-        };
-        sorter.push(
-            vcf_sort_key(contig_rank, record.position),
-            record.line.into_bytes(),
-        )?;
-    }
-    let (items, _metrics) = sorter.finish()?;
-    items
-        .into_iter()
-        .enumerate()
-        .map(|(serial, item)| {
-            let line = String::from_utf8(item.payload)
-                .map_err(|_| format!("{command} record payload is not UTF-8"))?;
-            parse_vcf_record(&line, serial, command, serial + 1)
-        })
-        .collect()
 }
 
 #[derive(Debug, Clone)]
@@ -7632,14 +7649,14 @@ fn reject_liftover_record(record: &VcfRecord, filter: &str, info: &str) -> VcfRe
     }
 }
 
-fn liftover_output_vcf_text(
-    document: &VcfDocument,
+fn write_liftover_output_header(
+    header: &StreamingVcfHeader,
     contig_lines: &[String],
     reference_line: &str,
-    records: &[VcfRecord],
-) -> String {
-    let mut text = String::new();
-    for line in &document.meta_lines {
+    writer: &mut StreamingTextOutput,
+    mut index: Option<&mut VcfIndexOffsets>,
+) -> Result<(), String> {
+    for line in &header.meta_lines {
         if line.starts_with("##contig=<")
             || line.starts_with("##reference=")
             || line.starts_with("##INFO=<ID=ReverseComplementedAlleles,")
@@ -7647,35 +7664,25 @@ fn liftover_output_vcf_text(
         {
             continue;
         }
-        text.push_str(line);
-        text.push('\n');
+        writer.write_line(line, false, index.as_deref_mut())?;
         if line.starts_with("##fileformat=") {
-            text.push_str("##INFO=<ID=ReverseComplementedAlleles,Number=0,Type=Flag,Description=\"The REF and the ALT alleles have been reverse complemented in liftover since the mapping from the previous reference to the current one was on the negative strand.\">\n");
-            text.push_str("##INFO=<ID=SwappedAlleles,Number=0,Type=Flag,Description=\"The REF and the ALT alleles have been swapped in liftover due to changes in the reference. It is possible that not all INFO annotations reflect this swap, and in the genotypes, only the GT, PL, and AD fields have been modified. You should check the TAGS_TO_REVERSE parameter that was used during the LiftOver to be sure.\">\n");
+            writer.write_line("##INFO=<ID=ReverseComplementedAlleles,Number=0,Type=Flag,Description=\"The REF and the ALT alleles have been reverse complemented in liftover since the mapping from the previous reference to the current one was on the negative strand.\">", false, index.as_deref_mut())?;
+            writer.write_line("##INFO=<ID=SwappedAlleles,Number=0,Type=Flag,Description=\"The REF and the ALT alleles have been swapped in liftover due to changes in the reference. It is possible that not all INFO annotations reflect this swap, and in the genotypes, only the GT, PL, and AD fields have been modified. You should check the TAGS_TO_REVERSE parameter that was used during the LiftOver to be sure.\">", false, index.as_deref_mut())?;
         }
     }
     for line in contig_lines {
-        text.push_str(line);
-        text.push('\n');
+        writer.write_line(line, false, index.as_deref_mut())?;
     }
-    text.push_str(reference_line);
-    text.push('\n');
-    text.push_str(&document.column_header);
-    text.push('\n');
-    for record in records {
-        text.push_str(&record.line);
-        text.push('\n');
-    }
-    text
+    writer.write_line(reference_line, false, index.as_deref_mut())?;
+    writer.write_line(&header.column_header, false, index.as_deref_mut())
 }
 
-fn liftover_reject_vcf_text(
-    document: &VcfDocument,
+fn write_liftover_reject_header(
+    header: &StreamingVcfHeader,
     contig_lines: &[String],
-    records: &[VcfRecord],
-) -> String {
-    let mut text = String::new();
-    for line in &document.meta_lines {
+    writer: &mut StreamingTextOutput,
+) -> Result<(), String> {
+    for line in &header.meta_lines {
         if line.starts_with("##contig=<")
             || line.starts_with("##FILTER=<ID=CannotLiftOver,")
             || line.starts_with("##FILTER=<ID=IndelStraddlesMultipleIntervals,")
@@ -7686,28 +7693,20 @@ fn liftover_reject_vcf_text(
         {
             continue;
         }
-        text.push_str(line);
-        text.push('\n');
+        writer.write_line(line, false, None)?;
         if line.starts_with("##fileformat=") {
-            text.push_str("##FILTER=<ID=CannotLiftOver,Description=\"Liftover of a variant that needed reverse-complementing failed for unknown reasons.\">\n");
-            text.push_str("##FILTER=<ID=IndelStraddlesMultipleIntervals,Description=\"Reference allele in Indel is straddling multiple intervals in the chain, and so the results are not well defined.\">\n");
-            text.push_str("##FILTER=<ID=MismatchedRefAllele,Description=\"Reference allele does not match reference genome sequence after liftover.\">\n");
-            text.push_str("##FILTER=<ID=NoTarget,Description=\"Variant could not be lifted between genome builds.\">\n");
-            text.push_str("##INFO=<ID=AttemptedAlleles,Number=1,Type=String,Description=\"The alleles of the variant in the TARGET prior to failing due to reference allele mismatching to the target reference.\">\n");
-            text.push_str("##INFO=<ID=AttemptedLocus,Number=1,Type=String,Description=\"The locus of the variant in the TARGET prior to failing due to reference allele mismatching to the target reference.\">\n");
+            writer.write_line("##FILTER=<ID=CannotLiftOver,Description=\"Liftover of a variant that needed reverse-complementing failed for unknown reasons.\">", false, None)?;
+            writer.write_line("##FILTER=<ID=IndelStraddlesMultipleIntervals,Description=\"Reference allele in Indel is straddling multiple intervals in the chain, and so the results are not well defined.\">", false, None)?;
+            writer.write_line("##FILTER=<ID=MismatchedRefAllele,Description=\"Reference allele does not match reference genome sequence after liftover.\">", false, None)?;
+            writer.write_line("##FILTER=<ID=NoTarget,Description=\"Variant could not be lifted between genome builds.\">", false, None)?;
+            writer.write_line("##INFO=<ID=AttemptedAlleles,Number=1,Type=String,Description=\"The alleles of the variant in the TARGET prior to failing due to reference allele mismatching to the target reference.\">", false, None)?;
+            writer.write_line("##INFO=<ID=AttemptedLocus,Number=1,Type=String,Description=\"The locus of the variant in the TARGET prior to failing due to reference allele mismatching to the target reference.\">", false, None)?;
         }
     }
     for line in contig_lines {
-        text.push_str(line);
-        text.push('\n');
+        writer.write_line(line, false, None)?;
     }
-    text.push_str(&document.column_header);
-    text.push('\n');
-    for record in records {
-        text.push_str(&record.line);
-        text.push('\n');
-    }
-    text
+    writer.write_line(&header.column_header, false, None)
 }
 
 fn reference_dictionary_path(reference: &str) -> Result<String, String> {

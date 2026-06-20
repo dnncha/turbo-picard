@@ -28,6 +28,10 @@ sidecar generation across the native CLI helpers and the MarkDuplicates crate.
   line-by-line from plain or gzip inputs, then emits sorted records directly to a
   same-directory temporary output. Index offsets are accumulated during output
   writes instead of from a fully materialized output string.
+- `LiftoverVcf` now reads input records line-by-line, streams rejected records to
+  a same-directory temporary reject file, pushes lifted record payloads into the
+  shared external sorter, and streams sorted lifted output with incremental index
+  offsets.
 
 ## Tests
 
@@ -40,6 +44,7 @@ cargo test -p turbo-picard-cli md5 -- --nocapture
 cargo test -p turbo-picard-cli gathervcfs -- --nocapture
 cargo test -p turbo-picard-cli mergevcfs -- --nocapture
 cargo test -p turbo-picard-cli sortvcf -- --nocapture
+cargo test -p turbo-picard-cli liftovervcf -- --nocapture
 cargo clippy -p turbo-picard-markdup --all-targets --all-features -- -D warnings
 ```
 
@@ -50,5 +55,5 @@ Blocked or not clean:
 
 Remaining Phase 7 work:
 
-- keep `LiftoverVcf` on compact external-sort records while reducing remaining
-  full-document VCF materialization.
+- continue replacing smaller VCF whole-output helpers, including
+  `UpdateVcfSequenceDictionary`, with streaming temp-file writers where safe.
