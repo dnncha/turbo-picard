@@ -963,7 +963,7 @@ fn keeps_duplicate_positions_separate_by_library() {
 }
 
 #[test]
-fn copies_single_bam_when_no_duplicates_and_no_rewrite_options_are_requested() {
+fn leaves_single_bam_unmarked_when_no_duplicates_are_present() {
     let tempdir = tempfile::tempdir().expect("tempdir exists");
     let output = tempdir.path().join("output.bam");
     let metrics = tempdir.path().join("metrics.txt");
@@ -998,10 +998,7 @@ fn copies_single_bam_when_no_duplicates_and_no_rewrite_options_are_requested() {
 
     turbo_picard_markdup::run(&config).expect("BAM duplicate marking succeeds");
 
-    assert_eq!(
-        std::fs::read(&output).expect("output BAM exists"),
-        std::fs::read(&input).expect("input BAM exists")
-    );
+    assert_eq!(read_flags(&output), read_flags(&input));
     let metrics_text = std::fs::read_to_string(&metrics).expect("metrics file exists");
     assert!(metrics_text.contains("libA\t0\t1\t0\t0\t0\t0\t0\t0\t\n"));
     assert!(metrics_text.contains("libB\t0\t1\t0\t0\t0\t0\t0\t0\t\n"));

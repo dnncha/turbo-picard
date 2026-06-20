@@ -1,0 +1,55 @@
+# Algorithmic Overhaul Phase 4 Notes
+
+Date: 2026-06-20
+Branch: `perf/algorithmic-overhaul`
+
+## Scope
+
+Phase 4 targets `MarkDuplicates` memory use and duplicate-decision structure.
+The first slice removes the speculative single-BAM no-duplicate fast path. That
+path could stream or copy a near-complete output, discover a duplicate or
+out-of-order duplicate key near EOF, delete the output, and restart through the
+full in-memory engine.
+
+This commit does not yet implement the compact candidate pipeline. The current
+general engine still materializes full `bam::Record` values, parallel metadata
+vectors, and duplicate-group maps for the input.
+
+## Implemented
+
+- Removed the late-fallback no-duplicate fast path and its private compact-key
+  probe helpers.
+- `MarkDuplicates` now enters the single general engine path for HTS container
+  inputs, avoiding speculative output files that may be discarded.
+- The no-duplicate test now verifies observable behavior, record flags, and
+  metrics rather than byte-for-byte copying from the removed optimization.
+
+## Tests
+
+Passing:
+
+```bash
+cargo fmt --check
+cargo test -p turbo-picard-markdup
+cargo test -p turbo-picard-cli markduplicates -- --nocapture
+cargo test --workspace
+python3 tools/verify_command_matrix.py
+cargo build --release -p turbo-picard-cli --bin picard --bin turbo-picard
+bash tools/verify_basic_picard_parity.sh
+```
+
+Blocked or not clean:
+
+- `bash tools/verify_markdup_cram_parity.sh` could not start because `samtools`
+  was not installed in the local environment.
+- `cargo clippy --workspace --all-targets --all-features -- -D warnings` still
+  fails in the existing `turbo-picard-cli` lint backlog.
+
+Remaining Phase 4 work:
+
+- extract compact duplicate candidates instead of retaining every full record;
+- externally collate distant pairs by qname when needed;
+- externally sort fixed-width duplicate keys and scan groups once;
+- produce a compact decision stream for the final output pass;
+- add adversarial tests for duplicate at EOF, giant duplicate families,
+  distant/missing mates, barcodes, optical duplicates, and multi-input sorting.
