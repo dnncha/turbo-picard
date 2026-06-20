@@ -37,6 +37,9 @@ vectors, and duplicate-group maps for the input.
 - Optical duplicate detection now tracks seen optical read names with an
   interned-ID hash set, avoiding linear membership scans while preserving the
   existing unique-read-name metric and per-record SQ tagging behavior.
+- Duplicate flags, optical duplicate state, and DS/DI duplicate-set tags now
+  flow through an ordinal-indexed `RecordDecision` stream. Full BAM records are
+  mutated only in the final output application pass.
 
 ## Tests
 
@@ -62,7 +65,8 @@ Blocked or not clean:
 Remaining Phase 4 work:
 
 - spill compact duplicate candidates instead of retaining every full record;
-- replace the remaining full-record output pass with a compact decision stream;
+- replace retained full records with a sequential reread/output pass driven by
+  the compact decision stream;
 - externally collate distant pairs by qname when needed;
 - externally sort fixed-width duplicate keys and scan groups once;
 - add adversarial tests for duplicate at EOF, giant duplicate families,

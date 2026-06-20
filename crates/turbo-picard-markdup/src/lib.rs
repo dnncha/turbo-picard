@@ -148,6 +148,14 @@ impl DuplicateCandidate {
     }
 }
 
+#[derive(Debug, Clone, Copy, Default)]
+struct RecordDecision {
+    duplicate: bool,
+    optical_duplicate: bool,
+    duplicate_set_size: Option<i32>,
+    duplicate_set_index: Option<i32>,
+}
+
 #[derive(Debug, Default)]
 struct ByteInterner {
     ids: HashMap<Vec<u8>, InternedBytesId>,
@@ -396,7 +404,7 @@ fn run_hts_container(
     }
 
     let duplicate_groups = duplicate_groups(&candidates);
-    let mut optical_duplicate_records = vec![false; records.len()];
+    let mut decisions = vec![RecordDecision::default(); records.len()];
 
     for group in duplicate_groups.values() {
         if group.len() < 2 {
@@ -446,15 +454,15 @@ fn run_hts_container(
                 .read_pair_optical_duplicates += optical_duplicates.read_names as u64;
         }
         for index in optical_duplicates.record_indices {
-            optical_duplicate_records[index] = true;
+            decisions[index].optical_duplicate = true;
         }
         if config.tag_duplicate_set_members && !config.remove_duplicates {
             add_duplicate_set_member_tags(
                 group,
                 &candidates,
-                &mut records,
+                &mut decisions,
                 representative_qname_id,
-            )?;
+            );
         }
 
         for candidate_index in group.iter().copied() {
@@ -474,31 +482,26 @@ fn run_hts_container(
                     .summary_mut(record_libraries[index])
                     .unpaired_duplicate_records += 1;
             }
-            records[index].set_flags(flag | DUPLICATE_FLAG);
+            decisions[index].duplicate = true;
         }
     }
     mark_fragment_duplicate_groups(
-        &mut records,
         &record_libraries,
         &candidates,
+        &mut decisions,
         &mut summary,
         &mut library_registry,
     );
 
     {
         if config.inputs.len() > 1 {
-            let mut marked_records = records
-                .into_iter()
-                .zip(optical_duplicate_records)
-                .collect::<Vec<_>>();
-            marked_records.sort_by(|(left, _), (right, _)| compare_bam_output_order(left, right));
+            let mut marked_records = records.into_iter().zip(decisions).collect::<Vec<_>>();
+            marked_records.sort_by(|(left, left_decision), (right, right_decision)| {
+                compare_bam_output_order(left, *left_decision, right, *right_decision)
+            });
             write_bam_records(marked_records, config, &mut writer)?;
         } else {
-            write_bam_records(
-                records.into_iter().zip(optical_duplicate_records),
-                config,
-                &mut writer,
-            )?;
+            write_bam_records(records.into_iter().zip(decisions), config, &mut writer)?;
         }
     }
     drop(writer);
@@ -596,42 +599,69 @@ fn read_bam_records<R: bam::Read>(
     Ok(())
 }
 
-fn compare_bam_output_order(left: &bam::Record, right: &bam::Record) -> Ordering {
+fn compare_bam_output_order(
+    left: &bam::Record,
+    left_decision: RecordDecision,
+    right: &bam::Record,
+    right_decision: RecordDecision,
+) -> Ordering {
     left.tid()
         .cmp(&right.tid())
         .then_with(|| left.pos().cmp(&right.pos()))
         .then_with(|| left.qname().cmp(right.qname()))
-        .then_with(|| left.flags().cmp(&right.flags()))
+        .then_with(|| {
+            effective_record_flags(left, left_decision)
+                .cmp(&effective_record_flags(right, right_decision))
+        })
+}
+
+fn effective_record_flags(record: &bam::Record, decision: RecordDecision) -> u16 {
+    if decision.duplicate {
+        record.flags() | DUPLICATE_FLAG
+    } else {
+        record.flags()
+    }
 }
 
 fn write_bam_records(
-    records: impl IntoIterator<Item = (bam::Record, bool)>,
+    records: impl IntoIterator<Item = (bam::Record, RecordDecision)>,
     config: &MarkDuplicatesConfig,
     writer: &mut bam::Writer,
 ) -> Result<(), MarkDuplicatesError> {
-    for (record, is_optical_duplicate) in records {
-        write_bam_record(record, is_optical_duplicate, config, writer)?;
+    for (record, decision) in records {
+        write_bam_record(record, decision, config, writer)?;
     }
     Ok(())
 }
 
 fn write_bam_record(
     mut record: bam::Record,
-    is_optical_duplicate: bool,
+    decision: RecordDecision,
     config: &MarkDuplicatesConfig,
     writer: &mut bam::Writer,
 ) -> Result<(), MarkDuplicatesError> {
-    let is_duplicate = record.flags() & DUPLICATE_FLAG != 0;
-    if (config.remove_duplicates && is_duplicate)
-        || (config.remove_sequencing_duplicates && is_optical_duplicate)
+    let flags = effective_record_flags(&record, decision);
+    if (config.remove_duplicates && decision.duplicate)
+        || (config.remove_sequencing_duplicates && decision.optical_duplicate)
     {
         return Ok(());
+    }
+    if flags != record.flags() {
+        record.set_flags(flags);
     }
     if config.clear_dt {
         clear_duplicate_type_tag(&mut record)?;
     }
-    if let Some(duplicate_type) = duplicate_type_tag(config, record.flags(), is_optical_duplicate) {
+    if let Some(duplicate_type) =
+        duplicate_type_tag(config, record.flags(), decision.optical_duplicate)
+    {
         add_duplicate_type_tag(&mut record, duplicate_type)?;
+    }
+    if let Some(duplicate_set_size) = decision.duplicate_set_size {
+        replace_i32_aux(&mut record, b"DS", duplicate_set_size)?;
+    }
+    if let Some(duplicate_set_index) = decision.duplicate_set_index {
+        replace_i32_aux(&mut record, b"DI", duplicate_set_index)?;
     }
     if config.add_pg_tag_to_reads {
         add_program_group_to_bam_record(&mut record)?;
@@ -773,11 +803,11 @@ fn parse_read_location(name: &[u8]) -> Option<ReadLocation> {
 fn add_duplicate_set_member_tags(
     group: &[usize],
     candidates: &[DuplicateCandidate],
-    records: &mut [bam::Record],
+    decisions: &mut [RecordDecision],
     representative_qname_id: InternedBytesId,
-) -> Result<(), MarkDuplicatesError> {
+) {
     if !group.iter().any(|index| candidates[*index].is_pair()) {
-        return Ok(());
+        return;
     }
 
     let mut member_names = HashSet::<InternedBytesId>::default();
@@ -785,7 +815,7 @@ fn add_duplicate_set_member_tags(
         member_names.insert(candidates[index].qname_id);
     }
     if member_names.len() < 2 {
-        return Ok(());
+        return;
     }
 
     let duplicate_set_index = group
@@ -800,11 +830,9 @@ fn add_duplicate_set_member_tags(
 
     for index in group.iter().copied() {
         let record_index = candidates[index].record_index;
-        replace_i32_aux(&mut records[record_index], b"DS", duplicate_set_size)?;
-        replace_i32_aux(&mut records[record_index], b"DI", duplicate_set_index)?;
+        decisions[record_index].duplicate_set_size = Some(duplicate_set_size);
+        decisions[record_index].duplicate_set_index = Some(duplicate_set_index);
     }
-
-    Ok(())
 }
 
 fn replace_i32_aux(
@@ -942,9 +970,9 @@ fn duplicate_groups(candidates: &[DuplicateCandidate]) -> HashMap<BamDuplicateKe
 }
 
 fn mark_fragment_duplicate_groups(
-    records: &mut [bam::Record],
     record_libraries: &[LibraryId],
     candidates: &[DuplicateCandidate],
+    decisions: &mut [RecordDecision],
     summary: &mut MarkDuplicatesSummary,
     library_registry: &mut LibraryRegistry,
 ) {
@@ -973,8 +1001,8 @@ fn mark_fragment_duplicate_groups(
                 let index = candidates[candidate_index].record_index;
                 mark_unpaired_duplicate_record(
                     index,
-                    records,
                     record_libraries,
+                    decisions,
                     summary,
                     library_registry,
                 );
@@ -991,8 +1019,8 @@ fn mark_fragment_duplicate_groups(
             }
             mark_unpaired_duplicate_record(
                 index,
-                records,
                 record_libraries,
+                decisions,
                 summary,
                 library_registry,
             );
@@ -1002,20 +1030,19 @@ fn mark_fragment_duplicate_groups(
 
 fn mark_unpaired_duplicate_record(
     index: usize,
-    records: &mut [bam::Record],
     record_libraries: &[LibraryId],
+    decisions: &mut [RecordDecision],
     summary: &mut MarkDuplicatesSummary,
     library_registry: &mut LibraryRegistry,
 ) {
-    let flag = records[index].flags();
-    if flag & DUPLICATE_FLAG != 0 {
+    if decisions[index].duplicate {
         return;
     }
     summary.unpaired_duplicate_records += 1;
     library_registry
         .summary_mut(record_libraries[index])
         .unpaired_duplicate_records += 1;
-    records[index].set_flags(flag | DUPLICATE_FLAG);
+    decisions[index].duplicate = true;
 }
 
 fn sam_barcode(fields: &[String], config: &MarkDuplicatesConfig) -> Option<Vec<u8>> {
@@ -1862,43 +1889,41 @@ mod tests {
 
     #[test]
     fn add_duplicate_set_member_tags_uses_unique_read_names_for_duplicate_set_size() {
-        let mut records = [
+        let records = [
             record_with_name_and_flags(b"dup-a", 0x1),
             record_with_name_and_flags(b"dup-a", 0x1),
             record_with_name_and_flags(b"dup-b", 0x1),
             record_with_name_and_flags(b"dup-c", 0x1),
         ];
         let candidates = candidates_for_records(&records);
+        let mut decisions = vec![RecordDecision::default(); records.len()];
 
         add_duplicate_set_member_tags(
             &[0, 1, 2, 3],
             &candidates,
-            &mut records,
+            &mut decisions,
             candidates[0].qname_id,
-        )
-        .expect("tags applied");
+        );
 
         for index in [0usize, 1, 2, 3] {
-            let di = records[index].aux(b"DI").expect("DI tag exists");
-            let ds = records[index].aux(b"DS").expect("DS tag exists");
-            assert!(matches!(di, Aux::I32(0)));
-            assert!(matches!(ds, Aux::I32(3)));
+            assert_eq!(decisions[index].duplicate_set_index, Some(0));
+            assert_eq!(decisions[index].duplicate_set_size, Some(3));
         }
     }
 
     #[test]
     fn add_duplicate_set_member_tags_skips_groups_without_paired_record() {
-        let mut records = [
+        let records = [
             record_with_name_and_flags(b"dup-a", 0x0),
             record_with_name_and_flags(b"dup-a", 0x0),
         ];
         let candidates = candidates_for_records(&records);
+        let mut decisions = vec![RecordDecision::default(); records.len()];
 
-        add_duplicate_set_member_tags(&[0, 1], &candidates, &mut records, candidates[0].qname_id)
-            .expect("returns");
+        add_duplicate_set_member_tags(&[0, 1], &candidates, &mut decisions, candidates[0].qname_id);
 
-        assert!(records[0].aux(b"DI").is_err());
-        assert!(records[1].aux(b"DI").is_err());
+        assert!(decisions[0].duplicate_set_index.is_none());
+        assert!(decisions[1].duplicate_set_index.is_none());
     }
 
     #[test]
