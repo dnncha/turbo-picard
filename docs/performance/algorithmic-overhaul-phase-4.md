@@ -65,6 +65,9 @@ vectors, and duplicate-group maps for the input.
 - Sorted pair and fragment duplicate-key rows are now streamed from the external
   sorter into duplicate-group scanners instead of being collected back into a
   full sorted row vector before grouping.
+- Pair and fragment duplicate-group decisions are now applied as each sorted
+  group is completed. The production path no longer retains the complete list of
+  duplicate groups before updating the ordinal-indexed decision stream.
 
 ## Tests
 
@@ -94,6 +97,5 @@ Remaining Phase 4 work:
   the compact decision stream;
 - replace the in-memory compact qname fallback with temporary-run qname
   collation for very large distant-mate workloads;
-- avoid collecting all duplicate groups in memory before decisions are applied;
 - add adversarial tests for duplicate at EOF, giant duplicate families,
   distant/missing mates, barcodes, optical duplicates, and multi-input sorting.

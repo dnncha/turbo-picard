@@ -400,81 +400,14 @@ fn run_hts_container(
         )?;
     }
 
-    let duplicate_groups = duplicate_groups(&candidates, config)?;
     let mut decisions = vec![RecordDecision::default(); records.len()];
-
-    for group in &duplicate_groups {
-        if group.len() < 2 {
-            continue;
-        }
-        let paired_set_size = paired_duplicate_set_size(group, &candidates);
-        if !has_multiple_read_names(group, &candidates) {
-            if let Some(set_size) = paired_set_size {
-                add_duplicate_set(&mut summary, set_size, Some(set_size));
-                if let Some(candidate_index) = group.first() {
-                    add_duplicate_set(
-                        library_registry.summary_mut(candidates[*candidate_index].library_id),
-                        set_size,
-                        Some(set_size),
-                    );
-                }
-            }
-            continue;
-        }
-
-        let representative_candidate_index =
-            best_duplicate_representative_index(group, &candidates);
-        let representative_qname_id = candidates[representative_candidate_index].qname_id;
-        let optical_duplicates =
-            optical_duplicate_record_indices(group, &candidates, representative_qname_id, config);
-        if let Some(set_size) = paired_set_size {
-            let optical_names = u64::try_from(optical_duplicates.read_names).unwrap_or(u64::MAX);
-            let non_optical_size = (optical_names < set_size).then_some(set_size - optical_names);
-            add_duplicate_set(&mut summary, set_size, non_optical_size);
-            if let Some(candidate_index) = group.first() {
-                let library_summary =
-                    library_registry.summary_mut(candidates[*candidate_index].library_id);
-                add_duplicate_set(library_summary, set_size, non_optical_size);
-            }
-        }
-        summary.read_pair_optical_duplicates += optical_duplicates.read_names as u64;
-        if let Some(candidate_index) = group.first() {
-            library_registry
-                .summary_mut(candidates[*candidate_index].library_id)
-                .read_pair_optical_duplicates += optical_duplicates.read_names as u64;
-        }
-        for index in optical_duplicates.record_indices {
-            decisions[index].optical_duplicate = true;
-        }
-        if config.tag_duplicate_set_members && !config.remove_duplicates {
-            add_duplicate_set_member_tags(
-                group,
-                &candidates,
-                &mut decisions,
-                representative_qname_id,
-            );
-        }
-
-        for candidate_index in group.iter().copied() {
-            if candidates[candidate_index].qname_id == representative_qname_id {
-                continue;
-            }
-            let candidate = &candidates[candidate_index];
-            let index = candidate.record_index;
-            if candidate.is_pair() {
-                summary.duplicate_pair_records += 1;
-                library_registry
-                    .summary_mut(candidate.library_id)
-                    .duplicate_pair_records += 1;
-            } else {
-                summary.unpaired_duplicate_records += 1;
-                library_registry
-                    .summary_mut(candidate.library_id)
-                    .unpaired_duplicate_records += 1;
-            }
-            decisions[index].duplicate = true;
-        }
-    }
+    process_pair_duplicate_groups(
+        &candidates,
+        &mut decisions,
+        &mut summary,
+        &mut library_registry,
+        config,
+    )?;
     mark_fragment_duplicate_groups(
         &candidates,
         &mut decisions,
@@ -918,12 +851,109 @@ fn parse_sam_integer(
         })
 }
 
+#[cfg(test)]
 fn duplicate_groups(
     candidates: &[DuplicateCandidate],
     config: &MarkDuplicatesConfig,
 ) -> Result<Vec<Vec<usize>>, MarkDuplicatesError> {
     let keyed_pairs = collate_pair_key_rows(candidates, config.max_records_in_ram);
-    scan_pair_key_rows(keyed_pairs, config)
+    let mut groups = Vec::<Vec<usize>>::new();
+    scan_pair_key_rows(keyed_pairs, config, |group| groups.push(group.to_vec()))?;
+    Ok(groups)
+}
+
+fn process_pair_duplicate_groups(
+    candidates: &[DuplicateCandidate],
+    decisions: &mut [RecordDecision],
+    summary: &mut MarkDuplicatesSummary,
+    library_registry: &mut LibraryRegistry,
+    config: &MarkDuplicatesConfig,
+) -> Result<(), MarkDuplicatesError> {
+    let keyed_pairs = collate_pair_key_rows(candidates, config.max_records_in_ram);
+    scan_pair_key_rows(keyed_pairs, config, |group| {
+        apply_pair_duplicate_group(
+            group,
+            candidates,
+            decisions,
+            summary,
+            library_registry,
+            config,
+        );
+    })
+}
+
+fn apply_pair_duplicate_group(
+    group: &[usize],
+    candidates: &[DuplicateCandidate],
+    decisions: &mut [RecordDecision],
+    summary: &mut MarkDuplicatesSummary,
+    library_registry: &mut LibraryRegistry,
+    config: &MarkDuplicatesConfig,
+) {
+    if group.len() < 2 {
+        return;
+    }
+    let paired_set_size = paired_duplicate_set_size(group, candidates);
+    if !has_multiple_read_names(group, candidates) {
+        if let Some(set_size) = paired_set_size {
+            add_duplicate_set(summary, set_size, Some(set_size));
+            if let Some(candidate_index) = group.first() {
+                add_duplicate_set(
+                    library_registry.summary_mut(candidates[*candidate_index].library_id),
+                    set_size,
+                    Some(set_size),
+                );
+            }
+        }
+        return;
+    }
+
+    let representative_candidate_index = best_duplicate_representative_index(group, candidates);
+    let representative_qname_id = candidates[representative_candidate_index].qname_id;
+    let optical_duplicates =
+        optical_duplicate_record_indices(group, candidates, representative_qname_id, config);
+    if let Some(set_size) = paired_set_size {
+        let optical_names = u64::try_from(optical_duplicates.read_names).unwrap_or(u64::MAX);
+        let non_optical_size = (optical_names < set_size).then_some(set_size - optical_names);
+        add_duplicate_set(summary, set_size, non_optical_size);
+        if let Some(candidate_index) = group.first() {
+            let library_summary =
+                library_registry.summary_mut(candidates[*candidate_index].library_id);
+            add_duplicate_set(library_summary, set_size, non_optical_size);
+        }
+    }
+    summary.read_pair_optical_duplicates += optical_duplicates.read_names as u64;
+    if let Some(candidate_index) = group.first() {
+        library_registry
+            .summary_mut(candidates[*candidate_index].library_id)
+            .read_pair_optical_duplicates += optical_duplicates.read_names as u64;
+    }
+    for index in optical_duplicates.record_indices {
+        decisions[index].optical_duplicate = true;
+    }
+    if config.tag_duplicate_set_members && !config.remove_duplicates {
+        add_duplicate_set_member_tags(group, candidates, decisions, representative_qname_id);
+    }
+
+    for candidate_index in group.iter().copied() {
+        if candidates[candidate_index].qname_id == representative_qname_id {
+            continue;
+        }
+        let candidate = &candidates[candidate_index];
+        let index = candidate.record_index;
+        if candidate.is_pair() {
+            summary.duplicate_pair_records += 1;
+            library_registry
+                .summary_mut(candidate.library_id)
+                .duplicate_pair_records += 1;
+        } else {
+            summary.unpaired_duplicate_records += 1;
+            library_registry
+                .summary_mut(candidate.library_id)
+                .unpaired_duplicate_records += 1;
+        }
+        decisions[index].duplicate = true;
+    }
 }
 
 fn collate_pair_key_rows(
@@ -1104,19 +1134,21 @@ fn collate_pair_key_rows_legacy(
     keyed_pairs
 }
 
-fn append_pair_group(
-    groups: &mut Vec<Vec<usize>>,
+fn emit_completed_pair_group(
+    emit_group: &mut impl FnMut(&[usize]),
     current_key: &mut Option<BamDuplicateKey>,
+    current_group: &mut Vec<usize>,
     key: BamDuplicateKey,
     pair_indices: [usize; 2],
 ) {
     if current_key.as_ref() == Some(&key) {
-        groups
-            .last_mut()
-            .expect("current key has a group")
-            .extend(pair_indices);
+        current_group.extend(pair_indices);
     } else {
-        groups.push(pair_indices.into());
+        if !current_group.is_empty() {
+            emit_group(current_group);
+        }
+        current_group.clear();
+        current_group.extend(pair_indices);
         *current_key = Some(key);
     }
 }
@@ -1124,9 +1156,10 @@ fn append_pair_group(
 fn scan_pair_key_rows(
     keyed_pairs: Vec<(BamDuplicateKey, [usize; 2])>,
     config: &MarkDuplicatesConfig,
-) -> Result<Vec<Vec<usize>>, MarkDuplicatesError> {
-    let mut groups = Vec::<Vec<usize>>::new();
+    mut emit_group: impl FnMut(&[usize]),
+) -> Result<(), MarkDuplicatesError> {
     let mut current_key = None::<BamDuplicateKey>;
+    let mut current_group = Vec::<usize>::new();
     let mut sorter = ExternalSorter::new(markdup_sort_config(config, "turbo-picard-markdup-pairs"))
         .map_err(MarkDuplicatesError::Operation)?;
     for (key, pair_indices) in keyed_pairs {
@@ -1139,13 +1172,23 @@ fn scan_pair_key_rows(
         .finish_into(|item| {
             let key = decode_duplicate_sort_key(&item.key).map_err(|error| error.to_string())?;
             let pair = decode_pair_payload(&item.payload).map_err(|error| error.to_string())?;
-            append_pair_group(&mut groups, &mut current_key, key, pair);
+            emit_completed_pair_group(
+                &mut emit_group,
+                &mut current_key,
+                &mut current_group,
+                key,
+                pair,
+            );
             Ok(())
         })
         .map_err(MarkDuplicatesError::Operation)?;
-    Ok(groups)
+    if !current_group.is_empty() {
+        emit_group(&current_group);
+    }
+    Ok(())
 }
 
+#[cfg(test)]
 fn fragment_duplicate_groups(
     candidates: &[DuplicateCandidate],
     config: &MarkDuplicatesConfig,
@@ -1157,15 +1200,20 @@ fn fragment_duplicate_groups(
             (fragment_duplicate_key_bam(candidate), candidate_index)
         })
         .collect::<Vec<_>>();
-    scan_fragment_key_rows(keyed_fragments, config)
+    let mut groups = Vec::<Vec<usize>>::new();
+    scan_fragment_key_rows(keyed_fragments, config, |group| {
+        groups.push(group.to_vec());
+    })?;
+    Ok(groups)
 }
 
 fn scan_fragment_key_rows(
     keyed_fragments: Vec<(BamDuplicateKey, usize)>,
     config: &MarkDuplicatesConfig,
-) -> Result<Vec<Vec<usize>>, MarkDuplicatesError> {
-    let mut groups = Vec::<Vec<usize>>::new();
+    mut emit_group: impl FnMut(&[usize]),
+) -> Result<(), MarkDuplicatesError> {
     let mut current_key = None::<BamDuplicateKey>;
+    let mut current_group = Vec::<usize>::new();
     let mut sorter = ExternalSorter::new(markdup_sort_config(
         config,
         "turbo-picard-markdup-fragments",
@@ -1180,11 +1228,20 @@ fn scan_fragment_key_rows(
         .finish_into(|item| {
             let key = decode_duplicate_sort_key(&item.key).map_err(|error| error.to_string())?;
             let index = decode_index_payload(&item.payload).map_err(|error| error.to_string())?;
-            append_fragment_group(&mut groups, &mut current_key, key, index);
+            emit_completed_fragment_group(
+                &mut emit_group,
+                &mut current_key,
+                &mut current_group,
+                key,
+                index,
+            );
             Ok(())
         })
         .map_err(MarkDuplicatesError::Operation)?;
-    Ok(groups)
+    if !current_group.is_empty() {
+        emit_group(&current_group);
+    }
+    Ok(())
 }
 
 fn markdup_sort_config(config: &MarkDuplicatesConfig, prefix: &str) -> ExternalSortConfig {
@@ -1335,60 +1392,42 @@ fn decode_payload_index(payload: &[u8]) -> Result<usize, MarkDuplicatesError> {
     })
 }
 
-fn append_fragment_group(
-    groups: &mut Vec<Vec<usize>>,
+fn emit_completed_fragment_group(
+    emit_group: &mut impl FnMut(&[usize]),
     current_key: &mut Option<BamDuplicateKey>,
+    current_group: &mut Vec<usize>,
     key: BamDuplicateKey,
     candidate_index: usize,
 ) {
     if current_key.as_ref() == Some(&key) {
-        groups
-            .last_mut()
-            .expect("current key has a group")
-            .push(candidate_index);
+        current_group.push(candidate_index);
     } else {
-        groups.push(vec![candidate_index]);
+        if !current_group.is_empty() {
+            emit_group(current_group);
+        }
+        current_group.clear();
+        current_group.push(candidate_index);
         *current_key = Some(key);
     }
 }
 
-fn mark_fragment_duplicate_groups(
+fn apply_fragment_duplicate_group(
+    group: &[usize],
     candidates: &[DuplicateCandidate],
     decisions: &mut [RecordDecision],
     summary: &mut MarkDuplicatesSummary,
     library_registry: &mut LibraryRegistry,
-    config: &MarkDuplicatesConfig,
-) -> Result<(), MarkDuplicatesError> {
-    let fragment_groups = fragment_duplicate_groups(candidates, config)?;
+) {
+    if group.len() < 2 || !has_multiple_read_names(group, candidates) {
+        return;
+    }
 
-    for group in &fragment_groups {
-        if group.len() < 2 || !has_multiple_read_names(group, candidates) {
-            continue;
-        }
-
-        let contains_complete_pair = group
-            .iter()
-            .any(|candidate_index| candidates[*candidate_index].is_pair());
-        if contains_complete_pair {
-            for candidate_index in group.iter().copied() {
-                if candidates[candidate_index].is_pair() {
-                    continue;
-                }
-                mark_unpaired_duplicate_record(
-                    candidate_index,
-                    candidates,
-                    decisions,
-                    summary,
-                    library_registry,
-                );
-            }
-            continue;
-        }
-
-        let representative_index = best_duplicate_representative_index(group, candidates);
-        let representative_qname_id = candidates[representative_index].qname_id;
+    let contains_complete_pair = group
+        .iter()
+        .any(|candidate_index| candidates[*candidate_index].is_pair());
+    if contains_complete_pair {
         for candidate_index in group.iter().copied() {
-            if candidates[candidate_index].qname_id == representative_qname_id {
+            if candidates[candidate_index].is_pair() {
                 continue;
             }
             mark_unpaired_duplicate_record(
@@ -1399,8 +1438,42 @@ fn mark_fragment_duplicate_groups(
                 library_registry,
             );
         }
+        return;
     }
-    Ok(())
+
+    let representative_index = best_duplicate_representative_index(group, candidates);
+    let representative_qname_id = candidates[representative_index].qname_id;
+    for candidate_index in group.iter().copied() {
+        if candidates[candidate_index].qname_id == representative_qname_id {
+            continue;
+        }
+        mark_unpaired_duplicate_record(
+            candidate_index,
+            candidates,
+            decisions,
+            summary,
+            library_registry,
+        );
+    }
+}
+
+fn mark_fragment_duplicate_groups(
+    candidates: &[DuplicateCandidate],
+    decisions: &mut [RecordDecision],
+    summary: &mut MarkDuplicatesSummary,
+    library_registry: &mut LibraryRegistry,
+    config: &MarkDuplicatesConfig,
+) -> Result<(), MarkDuplicatesError> {
+    let keyed_fragments = candidates
+        .iter()
+        .enumerate()
+        .map(|(candidate_index, candidate)| {
+            (fragment_duplicate_key_bam(candidate), candidate_index)
+        })
+        .collect::<Vec<_>>();
+    scan_fragment_key_rows(keyed_fragments, config, |group| {
+        apply_fragment_duplicate_group(group, candidates, decisions, summary, library_registry);
+    })
 }
 
 fn mark_unpaired_duplicate_record(
