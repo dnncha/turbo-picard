@@ -14,8 +14,8 @@ ordering semantics into keys while the sorter owns bounded memory, temporary
 runs, deterministic merging, cleanup, and metrics.
 
 The first command integrations are `SortVcf`, `MergeVcfs`, sorted
-`LiftoverVcf` lifted output, `SortSam`, and the unsorted `MergeSamFiles`
-fallback. VCF and SAM-text adapters feed
+`LiftoverVcf` lifted output, `SortSam`, the unsorted `MergeSamFiles` fallback,
+and coordinate-output `FixMateInformation`. VCF and SAM-text adapters feed
 compact ordering keys and raw record-line payloads through the shared sorter.
 Existing header validation is preserved. Full streaming VCF parsing is still
 deferred to the later VCF streaming phase.
@@ -33,6 +33,11 @@ rewrites before spilling, and uses the same temporary-BAM run sorting path for
 coordinate/queryname output instead of collecting all records in memory. For
 `SO=unsorted`, it streams records directly in input order.
 
+`FixMateInformation` still requires queryname-grouped input for the native path.
+For coordinate output, completed queryname groups are fixed and spilled into
+temporary BAM runs instead of appending every fixed record to one in-memory
+vector. Queryname and unsorted output continue to stream fixed groups directly.
+
 ## Implemented
 
 - record-count spill limit;
@@ -46,6 +51,8 @@ coordinate/queryname output instead of collecting all records in memory. For
   `MAX_RECORDS_IN_RAM`.
 - bounded temporary-BAM run sorting for unsorted `MergeSamFiles` fallback while
   preserving the sorted-input k-way fast path.
+- bounded temporary-BAM run sorting for `FixMateInformation SORT_ORDER=coordinate`
+  output while preserving queryname-grouped mate repair.
 
 ## Tests
 
@@ -59,8 +66,8 @@ Covered in `crates/turbo-picard-core/src/external_sort.rs`:
 - byte-limit spill instrumentation;
 - cleanup after dropping a sorter with partial runs.
 
-Additional `SortVcf`, `MergeVcfs`, `LiftoverVcf`, `SortSam`, and
-`MergeSamFiles` CLI coverage
+Additional `SortVcf`, `MergeVcfs`, `LiftoverVcf`, `SortSam`, `MergeSamFiles`,
+and `FixMateInformation` CLI coverage
 forces one-record external runs with `MAX_RECORDS_IN_RAM=1`, uses custom
 `TMP_DIR` values, verifies stable/sorted output ordering, and asserts temporary
 run cleanup. The `SortSam` BAM test includes an inversion at the final record and
@@ -74,6 +81,7 @@ cargo test -p turbo-picard-core external_sort -- --nocapture
 cargo test -p turbo-picard-cli sortvcf -- --nocapture
 cargo test -p turbo-picard-cli mergevcfs -- --nocapture
 cargo test -p turbo-picard-cli mergesamfiles -- --nocapture
+cargo test -p turbo-picard-cli fixmateinformation -- --nocapture
 cargo test -p turbo-picard-cli liftovervcf -- --nocapture
 cargo test -p turbo-picard-cli sortsam -- --nocapture
 cargo clippy -p turbo-picard-core --all-targets --all-features -- -D warnings
@@ -92,6 +100,7 @@ bash tools/verify_basic_sortvcf_parity.sh
 bash tools/verify_basic_mergevcfs_parity.sh
 bash tools/verify_basic_liftovervcf_parity.sh
 bash tools/verify_basic_sortsam_parity.sh
+bash tools/verify_basic_fixmateinformation_parity.sh
 ```
 
 This found `mamba`, but the configured Picard prefix
@@ -214,3 +223,26 @@ Result:
 
 This is also an adversarial bounded-memory stress run rather than a normal
 performance claim.
+
+Release command shape:
+
+```bash
+./target/release/picard FixMateInformation \
+  I=input.sam \
+  O=fixed.sam \
+  ASSUME_SORTED=true \
+  SORT_ORDER=coordinate \
+  MAX_RECORDS_IN_RAM=1 \
+  TMP_DIR=sort-tmp \
+  VALIDATION_STRINGENCY=SILENT \
+  QUIET=true
+```
+
+Synthetic input: 1,000 queryname-grouped read pairs in reverse coordinate order.
+The forced one-record cap sends each fixed record through temporary BAM sorting.
+
+Result:
+
+| Pairs | Records | MAX_RECORDS_IN_RAM | Wall seconds | Max RSS bytes | Temp cleanup |
+| ---: | ---: | ---: | ---: | ---: | --- |
+| 1000 | 2000 | 1 | 0.56 | 8,912,896 | PASS |

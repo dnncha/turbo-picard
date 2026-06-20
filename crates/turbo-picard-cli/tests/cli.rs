@@ -5396,6 +5396,61 @@ fn fixmateinformation_can_coordinate_sort_and_index_bam() {
 }
 
 #[test]
+fn fixmateinformation_coordinate_output_uses_bounded_temp_runs() {
+    let tempdir = tempfile::tempdir().expect("tempdir exists");
+    let input = tempdir.path().join("input.sam");
+    let output = tempdir.path().join("fixed.sam");
+    let sort_tmp = tempdir.path().join("fixmate-tmp");
+    fs::create_dir(&sort_tmp).expect("sort tmp exists");
+    fs::write(
+        &input,
+        concat!(
+            "@HD\tVN:1.6\tSO:queryname\n",
+            "@SQ\tSN:chr1\tLN:1000\n",
+            "pair-c\t99\tchr1\t80\t60\t4M\t*\t0\t0\tCCCC\tFFFF\n",
+            "pair-c\t147\tchr1\t90\t60\t4M\t*\t0\t0\tGGGG\tFFFF\n",
+            "pair-a\t99\tchr1\t10\t60\t4M\t*\t0\t0\tAAAA\tFFFF\n",
+            "pair-a\t147\tchr1\t30\t60\t4M\t*\t0\t0\tTTTT\tFFFF\n",
+            "pair-b\t99\tchr1\t50\t60\t4M\t*\t0\t0\tACGT\tFFFF\n",
+            "pair-b\t147\tchr1\t70\t60\t4M\t*\t0\t0\tTGCA\tFFFF\n",
+        ),
+    )
+    .expect("input fixture is written");
+
+    Command::cargo_bin("picard")
+        .expect("binary exists")
+        .args([
+            "FixMateInformation",
+            &format!("I={}", input.display()),
+            &format!("O={}", output.display()),
+            "ASSUME_SORTED=true",
+            "SORT_ORDER=coordinate",
+            "MAX_RECORDS_IN_RAM=1",
+            &format!("TMP_DIR={}", sort_tmp.display()),
+            "VALIDATION_STRINGENCY=SILENT",
+            "QUIET=true",
+        ])
+        .assert()
+        .success();
+
+    let fixed = fs::read_to_string(&output).expect("fixed SAM exists");
+    assert_eq!(
+        record_names(&fixed),
+        vec!["pair-a", "pair-a", "pair-b", "pair-b", "pair-c", "pair-c"]
+    );
+    assert!(
+        fixed.contains("pair-a\t99\tchr1\t10\t60\t4M\t=\t30\t24\tAAAA\tFFFF\tMC:Z:4M\tMQ:i:60\n")
+    );
+    assert!(
+        fs::read_dir(&sort_tmp)
+            .expect("fixmate tmp readable")
+            .next()
+            .is_none(),
+        "FixMateInformation coordinate output should clean temporary runs"
+    );
+}
+
+#[test]
 fn fixmateinformation_can_write_unsorted_output() {
     let tempdir = tempfile::tempdir().expect("tempdir exists");
     let input = tempdir.path().join("input.sam");

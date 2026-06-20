@@ -4522,6 +4522,12 @@ fn run_fixmateinformation(args: &[String]) -> Result<(), String> {
     let create_index = optional_bool(&args, "CREATE_INDEX")?.unwrap_or(false);
     let reference = picard_reference(&args)?;
     let compression_level = optional_u32(&args, "COMPRESSION_LEVEL")?;
+    let tmp_dir = optional_scalar(&args, "TMP_DIR")?
+        .map(PathBuf::from)
+        .unwrap_or_else(env::temp_dir);
+    let max_records_in_ram = optional_u32(&args, "MAX_RECORDS_IN_RAM")?
+        .map(|value| value as usize)
+        .unwrap_or(500_000);
     let mut reader = open_bam_reader_with_reference(&inputs[0], reference.as_deref())
         .map_err(|error| error.to_string())?;
     let first_input_sort_order = header_sort_order(reader.header());
@@ -4578,46 +4584,37 @@ fn run_fixmateinformation(args: &[String]) -> Result<(), String> {
         compression_level,
     )?;
     let mut pending = Vec::<bam::Record>::new();
-    let mut fixed_records = Vec::<bam::Record>::new();
+    let mut coordinate_sorter = (sort_order == SortOrder::Coordinate)
+        .then(|| FixMateCoordinateSorter::new(tmp_dir, max_records_in_ram));
 
-    process_fixmate_reader(
-        &mut reader,
-        &mut writer,
-        &mut pending,
-        &mut fixed_records,
-        sort_order,
+    let mut context = FixMateProcessContext {
+        writer: &mut writer,
+        header: &header,
+        pending: &mut pending,
+        coordinate_sorter: &mut coordinate_sorter,
         add_mate_cigar,
         ignore_missing_mates,
-    )?;
+    };
+    process_fixmate_reader(&mut reader, &mut context)?;
     for input in inputs.iter().skip(1) {
         let mut reader = open_bam_reader_with_reference(input, reference.as_deref())
             .map_err(|error| error.to_string())?;
-        process_fixmate_reader(
-            &mut reader,
-            &mut writer,
-            &mut pending,
-            &mut fixed_records,
-            sort_order,
-            add_mate_cigar,
-            ignore_missing_mates,
-        )?;
+        process_fixmate_reader(&mut reader, &mut context)?;
     }
-    if sort_order == SortOrder::Coordinate {
-        fixed_records.extend(drain_fixed_mate_group(
-            &mut pending,
-            add_mate_cigar,
-            ignore_missing_mates,
-        )?);
-        fixed_records.sort_by(compare_coordinate);
-        for record in fixed_records {
-            writer.write(&record).map_err(|error| error.to_string())?;
-        }
+    if let Some(sorter) = context.coordinate_sorter.as_mut() {
+        let records = drain_fixed_mate_group(
+            context.pending,
+            context.add_mate_cigar,
+            context.ignore_missing_mates,
+        )?;
+        sorter.push_records(context.header, records)?;
+        sorter.finish(context.writer, context.header)?;
     } else {
         write_fixed_mate_group(
-            &mut writer,
-            &mut pending,
-            add_mate_cigar,
-            ignore_missing_mates,
+            context.writer,
+            context.pending,
+            context.add_mate_cigar,
+            context.ignore_missing_mates,
         )?;
     }
     drop(writer);
@@ -4627,51 +4624,108 @@ fn run_fixmateinformation(args: &[String]) -> Result<(), String> {
 
 fn process_fixmate_reader(
     reader: &mut bam::Reader,
-    writer: &mut bam::Writer,
-    pending: &mut Vec<bam::Record>,
-    fixed_records: &mut Vec<bam::Record>,
-    sort_order: SortOrder,
-    add_mate_cigar: bool,
-    ignore_missing_mates: bool,
+    context: &mut FixMateProcessContext<'_>,
 ) -> Result<(), String> {
     for record in reader.records() {
-        process_fixmate_record(
-            record.map_err(|error| error.to_string())?,
-            writer,
-            pending,
-            fixed_records,
-            sort_order,
-            add_mate_cigar,
-            ignore_missing_mates,
-        )?;
+        process_fixmate_record(record.map_err(|error| error.to_string())?, context)?;
     }
     Ok(())
 }
 
-fn process_fixmate_record(
-    record: bam::Record,
-    writer: &mut bam::Writer,
-    pending: &mut Vec<bam::Record>,
-    fixed_records: &mut Vec<bam::Record>,
-    sort_order: SortOrder,
+struct FixMateProcessContext<'a> {
+    writer: &'a mut bam::Writer,
+    header: &'a bam::Header,
+    pending: &'a mut Vec<bam::Record>,
+    coordinate_sorter: &'a mut Option<FixMateCoordinateSorter>,
     add_mate_cigar: bool,
     ignore_missing_mates: bool,
+}
+
+struct FixMateCoordinateSorter {
+    run_set: SortSamTempRuns,
+    records: Vec<(bam::Record, u64)>,
+    next_ordinal: u64,
+    max_records_in_ram: usize,
+}
+
+impl FixMateCoordinateSorter {
+    fn new(tmp_dir: PathBuf, max_records_in_ram: usize) -> Self {
+        let max_records_in_ram = max_records_in_ram.max(1);
+        Self {
+            run_set: SortSamTempRuns::new(tmp_dir),
+            records: Vec::with_capacity(max_records_in_ram.min(8192)),
+            next_ordinal: 0,
+            max_records_in_ram,
+        }
+    }
+
+    fn push_records(
+        &mut self,
+        header: &bam::Header,
+        records: Vec<bam::Record>,
+    ) -> Result<(), String> {
+        for record in records {
+            self.records.push((record, self.next_ordinal));
+            self.next_ordinal += 1;
+            if self.records.len() >= self.max_records_in_ram {
+                write_sortsam_temp_run(
+                    &mut self.run_set,
+                    header,
+                    SortOrder::Coordinate,
+                    &mut self.records,
+                )?;
+            }
+        }
+        Ok(())
+    }
+
+    fn finish(&mut self, writer: &mut bam::Writer, header: &bam::Header) -> Result<(), String> {
+        if self.run_set.paths.is_empty() {
+            stable_sort_bam_records(&mut self.records, SortOrder::Coordinate);
+            for (record, _) in self.records.drain(..) {
+                writer.write(&record).map_err(|error| error.to_string())?;
+            }
+            return Ok(());
+        }
+        if !self.records.is_empty() {
+            write_sortsam_temp_run(
+                &mut self.run_set,
+                header,
+                SortOrder::Coordinate,
+                &mut self.records,
+            )?;
+        }
+        coalesce_sortsam_runs(&mut self.run_set, header, SortOrder::Coordinate)?;
+        write_sortsam_merged_runs(writer, &self.run_set.paths, SortOrder::Coordinate)
+    }
+}
+
+fn process_fixmate_record(
+    record: bam::Record,
+    context: &mut FixMateProcessContext<'_>,
 ) -> Result<(), String> {
-    if pending
+    if context
+        .pending
         .first()
         .is_some_and(|first| first.qname() != record.qname())
     {
-        if sort_order == SortOrder::Coordinate {
-            fixed_records.extend(drain_fixed_mate_group(
-                pending,
-                add_mate_cigar,
-                ignore_missing_mates,
-            )?);
+        if let Some(sorter) = context.coordinate_sorter.as_mut() {
+            let records = drain_fixed_mate_group(
+                context.pending,
+                context.add_mate_cigar,
+                context.ignore_missing_mates,
+            )?;
+            sorter.push_records(context.header, records)?;
         } else {
-            write_fixed_mate_group(writer, pending, add_mate_cigar, ignore_missing_mates)?;
+            write_fixed_mate_group(
+                context.writer,
+                context.pending,
+                context.add_mate_cigar,
+                context.ignore_missing_mates,
+            )?;
         }
     }
-    pending.push(record);
+    context.pending.push(record);
     Ok(())
 }
 
