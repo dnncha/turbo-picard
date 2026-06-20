@@ -5986,6 +5986,12 @@ fn run_liftovervcf(args: &[String]) -> Result<(), String> {
     let reject = required_scalar_for(&args, "REJECT", "LiftoverVcf")?;
     let reference = required_scalar_for(&args, "REFERENCE_SEQUENCE", "LiftoverVcf")?;
     let create_index = optional_bool(&args, "CREATE_INDEX")?.unwrap_or(false);
+    let tmp_dir = optional_scalar(&args, "TMP_DIR")?
+        .map(PathBuf::from)
+        .unwrap_or_else(env::temp_dir);
+    let max_records_in_ram = optional_u32(&args, "MAX_RECORDS_IN_RAM")?
+        .map(|value| value as usize)
+        .unwrap_or(500_000);
 
     let mappings = read_simple_chain_mappings(&chain)?;
     let document = read_vcf_document(&input)?;
@@ -6013,12 +6019,14 @@ fn run_liftovervcf(args: &[String]) -> Result<(), String> {
             ));
         }
     }
-    lifted.sort_by(|left, right| {
-        contig_order[&left.contig]
-            .cmp(&contig_order[&right.contig])
-            .then_with(|| left.position.cmp(&right.position))
-            .then_with(|| left.serial.cmp(&right.serial))
-    });
+    let lifted = sort_vcf_records_with_external_sort(
+        lifted,
+        &contig_order,
+        tmp_dir,
+        max_records_in_ram,
+        "turbo-picard-liftovervcf",
+        "LiftoverVcf",
+    )?;
 
     let output_text = liftover_output_vcf_text(&document, &contig_lines, &reference_line, &lifted);
     let reject_text = liftover_reject_vcf_text(&document, &contig_lines, &rejected);
@@ -6730,6 +6738,42 @@ fn vcf_sort_key(contig_rank: usize, position: u64) -> Vec<u8> {
     key.extend_from_slice(&(contig_rank as u64).to_be_bytes());
     key.extend_from_slice(&position.to_be_bytes());
     key
+}
+
+fn sort_vcf_records_with_external_sort(
+    records: Vec<VcfRecord>,
+    contig_order: &BTreeMap<String, usize>,
+    tmp_dir: PathBuf,
+    max_records_in_ram: usize,
+    prefix: &str,
+    command: &str,
+) -> Result<Vec<VcfRecord>, String> {
+    let mut sort_config = ExternalSortConfig::new(tmp_dir);
+    sort_config.max_records_in_ram = max_records_in_ram.max(1);
+    sort_config.prefix = prefix.to_string();
+    let mut sorter = ExternalSorter::new(sort_config)?;
+    for record in records {
+        let Some(contig_rank) = contig_order.get(&record.contig).copied() else {
+            return Err(format!(
+                "VCF contig {} is not present in sequence dictionary",
+                record.contig
+            ));
+        };
+        sorter.push(
+            vcf_sort_key(contig_rank, record.position),
+            record.line.into_bytes(),
+        )?;
+    }
+    let (items, _metrics) = sorter.finish()?;
+    items
+        .into_iter()
+        .enumerate()
+        .map(|(serial, item)| {
+            let line = String::from_utf8(item.payload)
+                .map_err(|_| format!("{command} record payload is not UTF-8"))?;
+            parse_vcf_record(&line, serial, command, serial + 1)
+        })
+        .collect()
 }
 
 #[derive(Debug, Clone)]

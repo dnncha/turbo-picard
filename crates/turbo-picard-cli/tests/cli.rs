@@ -6541,6 +6541,79 @@ fn liftovervcf_writes_index_for_lifted_vcf_when_requested() {
 }
 
 #[test]
+fn liftovervcf_honors_tmp_dir_and_forced_external_runs_for_lifted_output() {
+    let tempdir = tempfile::tempdir().expect("tempdir exists");
+    let sort_tmp = tempdir.path().join("liftover-tmp");
+    fs::create_dir(&sort_tmp).expect("liftover temp dir is created");
+    let input = tempdir.path().join("input.vcf");
+    let output = tempdir.path().join("lifted.vcf");
+    let reject = tempdir.path().join("reject.vcf");
+    let reference = tempdir.path().join("ref.fa");
+    let dictionary = tempdir.path().join("ref.dict");
+    let chain = tempdir.path().join("identity.chain");
+    fs::write(
+        &input,
+        concat!(
+            "##fileformat=VCFv4.2\n",
+            "##contig=<ID=chr1,length=100>\n",
+            "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\n",
+            "chr1\t30\tlate\tA\tC\t.\tPASS\t.\n",
+            "chr1\t10\tearly\tA\tG\t.\tPASS\t.\n",
+            "chr1\t20\tmiddle\tA\tT\t.\tPASS\t.\n",
+        ),
+    )
+    .expect("input VCF is written");
+    fs::write(
+        &reference,
+        ">chr1\nAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\n",
+    )
+    .expect("reference is written");
+    fs::write(&dictionary, "@HD\tVN:1.6\n@SQ\tSN:chr1\tLN:100\n").expect("dict is written");
+    fs::write(
+        &chain,
+        "chain 100 chr1 100 + 0 100 chr1 100 + 0 100 1\n100\n",
+    )
+    .expect("chain is written");
+
+    Command::cargo_bin("picard")
+        .expect("binary exists")
+        .args([
+            "LiftoverVcf",
+            &format!("I={}", input.display()),
+            &format!("O={}", output.display()),
+            &format!("CHAIN={}", chain.display()),
+            &format!("REJECT={}", reject.display()),
+            &format!("R={}", reference.display()),
+            "MAX_RECORDS_IN_RAM=1",
+            &format!("TMP_DIR={}", sort_tmp.display()),
+            "VALIDATION_STRINGENCY=SILENT",
+            "QUIET=true",
+        ])
+        .assert()
+        .success();
+
+    let lifted = fs::read_to_string(output).expect("lifted VCF exists");
+    assert_eq!(
+        lifted
+            .lines()
+            .filter(|line| !line.starts_with('#'))
+            .collect::<Vec<_>>(),
+        vec![
+            "chr1\t10\tearly\tA\tG\t.\tPASS\t.",
+            "chr1\t20\tmiddle\tA\tT\t.\tPASS\t.",
+            "chr1\t30\tlate\tA\tC\t.\tPASS\t.",
+        ]
+    );
+    assert!(
+        fs::read_dir(&sort_tmp)
+            .expect("liftover temp readable")
+            .next()
+            .is_none(),
+        "external liftover sort should clean temporary runs"
+    );
+}
+
+#[test]
 fn liftovervcf_delegates_reverse_chain_to_fallback() {
     let tempdir = tempfile::tempdir().expect("tempdir exists");
     let fallback = fallback_script(tempdir.path(), 0);
