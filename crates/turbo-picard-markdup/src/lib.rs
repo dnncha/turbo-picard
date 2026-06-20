@@ -353,7 +353,6 @@ fn run_hts_container(
     }
     let mut writer = open_markdup_writer(config, &config.output, &header)?;
     let mut records = Vec::new();
-    let mut record_libraries = Vec::new();
     let mut candidates = Vec::new();
     let mut qnames = ByteInterner::default();
     let mut barcodes = ByteInterner::default();
@@ -374,7 +373,6 @@ fn run_hts_container(
         &mut reader,
         &mut BamRecordSink {
             records: &mut records,
-            record_libraries: &mut record_libraries,
             candidates: &mut candidates,
             qnames: &mut qnames,
             barcodes: &mut barcodes,
@@ -391,7 +389,6 @@ fn run_hts_container(
             &mut reader,
             &mut BamRecordSink {
                 records: &mut records,
-                record_libraries: &mut record_libraries,
                 candidates: &mut candidates,
                 qnames: &mut qnames,
                 barcodes: &mut barcodes,
@@ -415,9 +412,8 @@ fn run_hts_container(
             if let Some(set_size) = paired_set_size {
                 add_duplicate_set(&mut summary, set_size, Some(set_size));
                 if let Some(candidate_index) = group.first() {
-                    let index = candidates[*candidate_index].record_index;
                     add_duplicate_set(
-                        library_registry.summary_mut(record_libraries[index]),
+                        library_registry.summary_mut(candidates[*candidate_index].library_id),
                         set_size,
                         Some(set_size),
                     );
@@ -441,16 +437,15 @@ fn run_hts_container(
             let non_optical_size = (optical_names < set_size).then_some(set_size - optical_names);
             add_duplicate_set(&mut summary, set_size, non_optical_size);
             if let Some(candidate_index) = group.first() {
-                let index = candidates[*candidate_index].record_index;
-                let library_summary = library_registry.summary_mut(record_libraries[index]);
+                let library_summary =
+                    library_registry.summary_mut(candidates[*candidate_index].library_id);
                 add_duplicate_set(library_summary, set_size, non_optical_size);
             }
         }
         summary.read_pair_optical_duplicates += optical_duplicates.read_names as u64;
         if let Some(candidate_index) = group.first() {
-            let index = candidates[*candidate_index].record_index;
             library_registry
-                .summary_mut(record_libraries[index])
+                .summary_mut(candidates[*candidate_index].library_id)
                 .read_pair_optical_duplicates += optical_duplicates.read_names as u64;
         }
         for index in optical_duplicates.record_indices {
@@ -469,24 +464,23 @@ fn run_hts_container(
             if candidates[candidate_index].qname_id == representative_qname_id {
                 continue;
             }
-            let index = candidates[candidate_index].record_index;
-            let flag = records[index].flags();
-            if duplicate_candidate_is_pair(flag) {
+            let candidate = &candidates[candidate_index];
+            let index = candidate.record_index;
+            if candidate.is_pair() {
                 summary.duplicate_pair_records += 1;
                 library_registry
-                    .summary_mut(record_libraries[index])
+                    .summary_mut(candidate.library_id)
                     .duplicate_pair_records += 1;
             } else {
                 summary.unpaired_duplicate_records += 1;
                 library_registry
-                    .summary_mut(record_libraries[index])
+                    .summary_mut(candidate.library_id)
                     .unpaired_duplicate_records += 1;
             }
             decisions[index].duplicate = true;
         }
     }
     mark_fragment_duplicate_groups(
-        &record_libraries,
         &candidates,
         &mut decisions,
         &mut summary,
@@ -528,7 +522,6 @@ fn run_hts_container(
 
 struct BamRecordSink<'a> {
     records: &'a mut Vec<bam::Record>,
-    record_libraries: &'a mut Vec<LibraryId>,
     candidates: &'a mut Vec<DuplicateCandidate>,
     qnames: &'a mut ByteInterner,
     barcodes: &'a mut ByteInterner,
@@ -554,7 +547,6 @@ fn read_bam_records<R: bam::Read>(
         if flag & UNMAPPED_FLAG != 0 {
             summary.unmapped_records += 1;
             library_registry.summary_mut(library_id).unmapped_records += 1;
-            sink.record_libraries.push(library_id);
             sink.records.push(record);
             continue;
         }
@@ -563,7 +555,6 @@ fn read_bam_records<R: bam::Read>(
             library_registry
                 .summary_mut(library_id)
                 .secondary_or_supplementary_records += 1;
-            sink.record_libraries.push(library_id);
             sink.records.push(record);
             continue;
         }
@@ -592,7 +583,6 @@ fn read_bam_records<R: bam::Read>(
             qname_id,
             barcode_id,
         ));
-        sink.record_libraries.push(library_id);
         sink.records.push(record);
     }
 
@@ -970,7 +960,6 @@ fn duplicate_groups(candidates: &[DuplicateCandidate]) -> HashMap<BamDuplicateKe
 }
 
 fn mark_fragment_duplicate_groups(
-    record_libraries: &[LibraryId],
     candidates: &[DuplicateCandidate],
     decisions: &mut [RecordDecision],
     summary: &mut MarkDuplicatesSummary,
@@ -998,10 +987,9 @@ fn mark_fragment_duplicate_groups(
                 if candidates[candidate_index].is_pair() {
                     continue;
                 }
-                let index = candidates[candidate_index].record_index;
                 mark_unpaired_duplicate_record(
-                    index,
-                    record_libraries,
+                    candidate_index,
+                    candidates,
                     decisions,
                     summary,
                     library_registry,
@@ -1013,13 +1001,12 @@ fn mark_fragment_duplicate_groups(
         let representative_index = best_duplicate_representative_index(group, candidates);
         let representative_qname_id = candidates[representative_index].qname_id;
         for candidate_index in group.iter().copied() {
-            let index = candidates[candidate_index].record_index;
             if candidates[candidate_index].qname_id == representative_qname_id {
                 continue;
             }
             mark_unpaired_duplicate_record(
-                index,
-                record_libraries,
+                candidate_index,
+                candidates,
                 decisions,
                 summary,
                 library_registry,
@@ -1029,20 +1016,22 @@ fn mark_fragment_duplicate_groups(
 }
 
 fn mark_unpaired_duplicate_record(
-    index: usize,
-    record_libraries: &[LibraryId],
+    candidate_index: usize,
+    candidates: &[DuplicateCandidate],
     decisions: &mut [RecordDecision],
     summary: &mut MarkDuplicatesSummary,
     library_registry: &mut LibraryRegistry,
 ) {
-    if decisions[index].duplicate {
+    let candidate = &candidates[candidate_index];
+    let record_index = candidate.record_index;
+    if decisions[record_index].duplicate {
         return;
     }
     summary.unpaired_duplicate_records += 1;
     library_registry
-        .summary_mut(record_libraries[index])
+        .summary_mut(candidate.library_id)
         .unpaired_duplicate_records += 1;
-    decisions[index].duplicate = true;
+    decisions[record_index].duplicate = true;
 }
 
 fn sam_barcode(fields: &[String], config: &MarkDuplicatesConfig) -> Option<Vec<u8>> {

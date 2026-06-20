@@ -40,6 +40,8 @@ vectors, and duplicate-group maps for the input.
 - Duplicate flags, optical duplicate state, and DS/DI duplicate-set tags now
   flow through an ordinal-indexed `RecordDecision` stream. Full BAM records are
   mutated only in the final output application pass.
+- Duplicate metric updates now use the compact candidate `library_id` directly,
+  eliminating the previous full-record-length `record_libraries` side vector.
 
 ## Tests
 
