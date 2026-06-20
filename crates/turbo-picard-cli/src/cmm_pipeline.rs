@@ -76,6 +76,7 @@ pub struct CmmBatchRecord {
 }
 
 pub type CmmBatchHandler = Box<dyn Fn(&[CmmBatchRecord]) -> Result<(), String> + Send>;
+type CmmWorkerGroup = Vec<CmmBatchHandler>;
 
 struct WorkerJob {
     batch: Arc<Vec<CmmBatchRecord>>,
@@ -103,8 +104,9 @@ pub struct CmmWorkerPool {
 }
 
 impl CmmWorkerPool {
-    pub fn new(handlers: Vec<CmmBatchHandler>) -> Self {
-        let worker_count = handlers.len();
+    pub fn new(handlers: Vec<CmmBatchHandler>, worker_cap: usize) -> Self {
+        let worker_groups = worker_groups_for_handlers(handlers, worker_cap);
+        let worker_count = worker_groups.len();
         let (batch_return, batch_pool) = bounded(BATCH_POOL_DEPTH);
         let (completion_tx, completion_rx) = crossbeam_channel::unbounded::<Vec<CmmBatchRecord>>();
         let (error_tx, error_rx) = bounded(1);
@@ -114,27 +116,31 @@ impl CmmWorkerPool {
         let mut handles = Vec::with_capacity(worker_count);
         let (completion_job_tx, completion_job_rx) = bounded(BATCH_POOL_DEPTH);
 
-        for handler in handlers {
+        for handlers in worker_groups {
             let (work_tx, work_rx) = bounded::<WorkerJob>(BATCH_POOL_DEPTH);
             let error_tx = error_tx.clone();
             let poison = Arc::clone(&poison);
             work_txs.push(work_tx);
             handles.push(thread::spawn(move || {
                 while let Ok(WorkerJob { batch, ack }) = work_rx.recv() {
-                    let result =
-                        panic::catch_unwind(AssertUnwindSafe(|| handler(batch.as_slice())));
-                    match result {
-                        Ok(Ok(())) => {}
-                        Ok(Err(error)) => {
-                            poison.store(true, Ordering::Release);
-                            let _ = error_tx.try_send(error);
-                        }
-                        Err(error) => {
-                            poison.store(true, Ordering::Release);
-                            let _ = error_tx.try_send(format!(
-                                "CMM batch handler panicked: {}",
-                                panic_message(&*error)
-                            ));
+                    for handler in &handlers {
+                        let result =
+                            panic::catch_unwind(AssertUnwindSafe(|| handler(batch.as_slice())));
+                        match result {
+                            Ok(Ok(())) => {}
+                            Ok(Err(error)) => {
+                                poison.store(true, Ordering::Release);
+                                let _ = error_tx.try_send(error);
+                                break;
+                            }
+                            Err(error) => {
+                                poison.store(true, Ordering::Release);
+                                let _ = error_tx.try_send(format!(
+                                    "CMM batch handler panicked: {}",
+                                    panic_message(&*error)
+                                ));
+                                break;
+                            }
                         }
                     }
                     let _ = ack.send(());
@@ -180,6 +186,11 @@ impl CmmWorkerPool {
             error_rx,
             poison,
         }
+    }
+
+    #[cfg(test)]
+    fn worker_count(&self) -> usize {
+        self.worker_count
     }
 
     fn take_batch_vec(&self) -> Vec<CmmBatchRecord> {
@@ -345,6 +356,21 @@ fn panic_message(error: &dyn Any) -> String {
     }
 }
 
+fn worker_groups_for_handlers(
+    handlers: Vec<CmmBatchHandler>,
+    worker_cap: usize,
+) -> Vec<CmmWorkerGroup> {
+    if handlers.is_empty() {
+        return Vec::new();
+    }
+    let worker_count = worker_cap.max(1).min(handlers.len());
+    let mut groups = (0..worker_count).map(|_| Vec::new()).collect::<Vec<_>>();
+    for (index, handler) in handlers.into_iter().enumerate() {
+        groups[index % worker_count].push(handler);
+    }
+    groups
+}
+
 impl Drop for CmmWorkerPool {
     fn drop(&mut self) {
         self.work_txs.clear();
@@ -446,7 +472,7 @@ mod tests {
         write_basic_sam(&input, "mapped\t0\tchr1\t1\t60\t4M\t*\t0\t0\tACGT\tFFFF\n");
         let reader = bam::Reader::from_path(&input).expect("sam input opens");
 
-        let pool = CmmWorkerPool::new(vec![Box::new(|_| Err("handler failure".to_string()))]);
+        let pool = CmmWorkerPool::new(vec![Box::new(|_| Err("handler failure".to_string()))], 1);
 
         let err = pool
             .run_parallel_bam_pass(reader, 0, false, false, false, false)
@@ -461,9 +487,12 @@ mod tests {
         write_basic_sam(&input, "mapped\t0\tchr1\t1\t60\t4M\t*\t0\t0\tACGT\tFFFF\n");
         let reader = bam::Reader::from_path(&input).expect("sam input opens");
 
-        let pool = CmmWorkerPool::new(vec![Box::new(|_| {
-            panic!("simulated handler panic");
-        })]);
+        let pool = CmmWorkerPool::new(
+            vec![Box::new(|_| {
+                panic!("simulated handler panic");
+            })],
+            1,
+        );
 
         let err = pool
             .run_parallel_bam_pass(reader, 0, false, false, false, false)
@@ -489,10 +518,13 @@ mod tests {
 
         let observed = Arc::new(AtomicUsize::new(0));
         let observed_ref = Arc::clone(&observed);
-        let pool = CmmWorkerPool::new(vec![Box::new(move |batch| {
-            observed_ref.fetch_add(batch.len(), Ordering::Relaxed);
-            Ok(())
-        })]);
+        let pool = CmmWorkerPool::new(
+            vec![Box::new(move |batch| {
+                observed_ref.fetch_add(batch.len(), Ordering::Relaxed);
+                Ok(())
+            })],
+            1,
+        );
 
         pool.run_parallel_bam_pass(reader, 0, false, false, false, false)
             .expect("cmm parallel run succeeds");
@@ -611,7 +643,7 @@ mod tests {
 
     #[test]
     fn cmm_worker_pool_requires_at_least_one_handler() {
-        let pool = CmmWorkerPool::new(vec![]);
+        let pool = CmmWorkerPool::new(vec![], 1);
         let tempdir = tempdir().expect("tempdir exists");
         let input = tempdir.path().join("empty.sam");
         std::fs::write(
@@ -625,6 +657,32 @@ mod tests {
             .run_parallel_bam_pass(reader, 0, false, false, false, false)
             .expect_err("expected no-handler error");
         assert_eq!(err, "CMM worker pool has no handlers");
+    }
+
+    #[test]
+    fn cmm_worker_pool_caps_workers_below_handler_count() {
+        fn ok_handler(_: &[CmmBatchRecord]) -> Result<(), String> {
+            Ok(())
+        }
+
+        let handlers: Vec<CmmBatchHandler> = (0..5)
+            .map(|_| Box::new(ok_handler) as CmmBatchHandler)
+            .collect();
+        let pool = CmmWorkerPool::new(handlers, 2);
+        assert_eq!(pool.worker_count(), 2);
+    }
+
+    #[test]
+    fn cmm_worker_pool_one_thread_cap_creates_one_worker() {
+        fn ok_handler(_: &[CmmBatchRecord]) -> Result<(), String> {
+            Ok(())
+        }
+
+        let handlers: Vec<CmmBatchHandler> = (0..4)
+            .map(|_| Box::new(ok_handler) as CmmBatchHandler)
+            .collect();
+        let pool = CmmWorkerPool::new(handlers, 1);
+        assert_eq!(pool.worker_count(), 1);
     }
 
     #[test]

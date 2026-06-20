@@ -3543,6 +3543,7 @@ fn run_collectmultiplemetrics_single_pass(
     .filter(|enabled| *enabled)
     .count();
     let thread_count = cmm_collector_thread_count(active_collectors);
+    let has_order_dependent_wgs = wgs.is_some();
 
     let mut observe_record = |record: &bam::Record| -> Result<(), String> {
         let read_group = if alignment.is_some() || insert_size.is_some() {
@@ -3611,7 +3612,7 @@ fn run_collectmultiplemetrics_single_pass(
         Ok(())
     };
 
-    if thread_count <= 1 {
+    if thread_count <= 1 || has_order_dependent_wgs {
         for record in limited_records(&mut reader, stop_after) {
             let record = record.map_err(|error| error.to_string())?;
             observe_record(&record)?;
@@ -3948,7 +3949,7 @@ fn run_collectmultiplemetrics_single_pass(
         // Quality collectors each own their own ALIGNED_READS_ONLY / PF_READS_ONLY flags.
         // Use conservative pre-filters here and keep per-collector filtering in the
         // collector logic via each command's captured settings.
-        cmm_pipeline::CmmWorkerPool::new(handlers).run_parallel_bam_pass(
+        cmm_pipeline::CmmWorkerPool::new(handlers, thread_count).run_parallel_bam_pass(
             reader,
             stop_after,
             false,
