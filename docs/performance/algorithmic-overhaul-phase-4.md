@@ -52,6 +52,10 @@ vectors, and duplicate-group maps for the input.
 - Pair collation now consumes adjacent qname runs before using the displaced
   qname map, preserving the previous map-only pairing order while avoiding hash
   lookups for queryname-grouped candidates.
+- `MAX_RECORDS_IN_RAM` is now retained in `MarkDuplicatesConfig` and caps the
+  displaced-pair cache. When unresolved distant mates exceed that cap, the
+  native engine returns an explicit external qname collation not-implemented
+  error instead of silently growing the cache without bound.
 
 ## Tests
 

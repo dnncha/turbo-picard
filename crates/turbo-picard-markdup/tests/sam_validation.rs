@@ -12,6 +12,7 @@ fn sam_config(
         inputs: vec![input.display().to_string()],
         output: output.display().to_string(),
         metrics_file: metrics.display().to_string(),
+        max_records_in_ram: 500_000,
         remove_duplicates: false,
         remove_sequencing_duplicates: false,
         assume_sorted: true,

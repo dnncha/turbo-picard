@@ -37,6 +37,7 @@ fn marks_duplicates_on_cram_input_and_output() {
         inputs: vec![input_cram.display().to_string()],
         output: output_cram.display().to_string(),
         metrics_file: metrics.display().to_string(),
+        max_records_in_ram: 500_000,
         remove_duplicates: false,
         remove_sequencing_duplicates: false,
         assume_sorted: true,
