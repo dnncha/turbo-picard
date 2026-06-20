@@ -27,6 +27,11 @@ separate local defaults.
   reader budget across simultaneously open inputs, so merge-style paths no
   longer assign every input the full default reader pool.
   `TURBO_PICARD_READER_THREADS` remains an explicit per-reader override.
+- External sorters now share a deterministic byte-budget resolver. `doctor`
+  reports `resource_plan_memory_budget_bytes` and
+  `resource_plan_sorter_max_bytes_in_ram`; `TURBO_PICARD_MEMORY_BYTES` caps the
+  implicit sorter run buffer at one quarter of the command memory budget, while
+  `TURBO_PICARD_SORTER_MAX_BYTES` remains an explicit sorter override.
 
 ## Tests
 
@@ -35,6 +40,7 @@ Passing:
 ```bash
 cargo fmt --check
 cargo test -p turbo-picard-cli resource_plan -- --nocapture
+cargo test -p turbo-picard-core external_sort -- --nocapture
 cargo test -p turbo-picard-core bgzf_threads -- --nocapture
 cargo test -p turbo-picard-cli mergesamfiles -- --nocapture
 cargo test -p turbo-picard-cli doctor -- --nocapture
@@ -54,10 +60,21 @@ wall_seconds=0.606000,0.084408,0.088589
 record_count_check=PASS
 ```
 
+```text
+command=SortVcf
+records=2000
+TURBO_PICARD_SORTER_MAX_BYTES=1024
+repeats=3
+median_wall_seconds=0.034978
+wall_seconds=0.547148,0.034356,0.034978
+sorted_output_check=PASS
+temp_run_cleanup_check=PASS
+```
+
 The Picard-backed `tools/verify_basic_mergesamfiles_parity.sh` comparison was
 not available in this worktree because `.conda-turbo-picard` did not exist.
 
 Remaining Phase 8 work:
 
-- Add command-specific planning for sorter buffers, memory budgets, and mate
-  caches.
+- Add command-specific planning for mate caches and propagate the memory plan
+  into BAM-record temporary-run sorters that still use command-local run code.

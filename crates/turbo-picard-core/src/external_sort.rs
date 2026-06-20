@@ -5,7 +5,7 @@
 //! final tie-breaker so equal command keys preserve input order.
 
 use std::cmp::Ordering;
-use std::collections::BinaryHeap;
+use std::collections::{BTreeMap, BinaryHeap};
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, BufReader, BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
@@ -14,8 +14,9 @@ use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
 
 static SORTER_ID: AtomicU64 = AtomicU64::new(0);
 
-const DEFAULT_MAX_RECORDS: usize = 500_000;
-const DEFAULT_MAX_BYTES: usize = 256 * 1024 * 1024;
+pub const DEFAULT_MAX_RECORDS: usize = 500_000;
+pub const DEFAULT_MEMORY_BUDGET_BYTES: usize = 1024 * 1024 * 1024;
+pub const DEFAULT_MAX_BYTES_IN_RAM: usize = 256 * 1024 * 1024;
 const DEFAULT_MERGE_FAN_IN: usize = 32;
 
 #[derive(Debug, Clone)]
@@ -32,11 +33,43 @@ impl ExternalSortConfig {
         Self {
             tmp_dir: tmp_dir.into(),
             max_records_in_ram: DEFAULT_MAX_RECORDS,
-            max_bytes_in_ram: DEFAULT_MAX_BYTES,
+            max_bytes_in_ram: sorter_max_bytes_in_ram(),
             merge_fan_in: DEFAULT_MERGE_FAN_IN,
             prefix: "turbo-picard-sort".to_string(),
         }
     }
+}
+
+pub fn memory_budget_bytes() -> usize {
+    let env = std::env::vars().collect::<BTreeMap<_, _>>();
+    memory_budget_bytes_from_env(&env)
+}
+
+pub fn memory_budget_bytes_from_env(env: &BTreeMap<String, String>) -> usize {
+    positive_env_usize(env, "TURBO_PICARD_MEMORY_BYTES")
+        .unwrap_or(DEFAULT_MEMORY_BUDGET_BYTES)
+        .max(1)
+}
+
+pub fn sorter_max_bytes_in_ram() -> usize {
+    let env = std::env::vars().collect::<BTreeMap<_, _>>();
+    sorter_max_bytes_in_ram_from_env(&env)
+}
+
+pub fn sorter_max_bytes_in_ram_from_env(env: &BTreeMap<String, String>) -> usize {
+    if let Some(explicit) = positive_env_usize(env, "TURBO_PICARD_SORTER_MAX_BYTES") {
+        return explicit.max(1);
+    }
+    memory_budget_bytes_from_env(env)
+        .checked_div(4)
+        .unwrap_or(DEFAULT_MAX_BYTES_IN_RAM)
+        .clamp(1, DEFAULT_MAX_BYTES_IN_RAM)
+}
+
+fn positive_env_usize(env: &BTreeMap<String, String>, name: &str) -> Option<usize> {
+    env.get(name)
+        .and_then(|value| value.trim().parse::<usize>().ok())
+        .filter(|value| *value > 0)
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -491,5 +524,43 @@ mod tests {
             "sorter drop should remove run files"
         );
         fs::remove_dir_all(tmp).expect("temp dir removed");
+    }
+
+    #[test]
+    fn sorter_byte_plan_uses_default_memory_fraction() {
+        let env = BTreeMap::new();
+        assert_eq!(
+            memory_budget_bytes_from_env(&env),
+            DEFAULT_MEMORY_BUDGET_BYTES
+        );
+        assert_eq!(
+            sorter_max_bytes_in_ram_from_env(&env),
+            DEFAULT_MAX_BYTES_IN_RAM
+        );
+    }
+
+    #[test]
+    fn memory_budget_caps_implicit_sorter_bytes() {
+        let env = BTreeMap::from([(
+            "TURBO_PICARD_MEMORY_BYTES".to_string(),
+            (128 * 1024 * 1024).to_string(),
+        )]);
+        assert_eq!(memory_budget_bytes_from_env(&env), 128 * 1024 * 1024);
+        assert_eq!(sorter_max_bytes_in_ram_from_env(&env), 32 * 1024 * 1024);
+    }
+
+    #[test]
+    fn explicit_sorter_bytes_supersede_memory_fraction() {
+        let env = BTreeMap::from([
+            (
+                "TURBO_PICARD_MEMORY_BYTES".to_string(),
+                (128 * 1024 * 1024).to_string(),
+            ),
+            (
+                "TURBO_PICARD_SORTER_MAX_BYTES".to_string(),
+                (96 * 1024 * 1024).to_string(),
+            ),
+        ]);
+        assert_eq!(sorter_max_bytes_in_ram_from_env(&env), 96 * 1024 * 1024);
     }
 }

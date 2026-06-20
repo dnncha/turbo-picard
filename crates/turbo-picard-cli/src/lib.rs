@@ -1029,6 +1029,14 @@ fn print_resource_plan_lines() {
         "resource_plan_application_worker_budget={}",
         plan.application_worker_budget
     );
+    println!(
+        "resource_plan_memory_budget_bytes={}",
+        plan.memory_budget_bytes
+    );
+    println!(
+        "resource_plan_sorter_max_bytes_in_ram={}",
+        plan.sorter_max_bytes_in_ram
+    );
     println!("resource_plan_cmm_batch_size={}", plan.cmm_batch_size);
     println!("resource_plan_cmm_queue_depth={}", plan.cmm_queue_depth);
 }

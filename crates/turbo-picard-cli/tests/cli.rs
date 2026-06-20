@@ -77,6 +77,8 @@ fn doctor_reports_runtime_and_fallback_state() {
         )
         .env("TURBO_PICARD_THREADS", "2")
         .env("TURBO_PICARD_MAX_THREADS", "6")
+        .env("TURBO_PICARD_MEMORY_BYTES", "134217728")
+        .env("TURBO_PICARD_SORTER_MAX_BYTES", "33554432")
         .env("TURBO_PICARD_CMM_BATCH_SIZE", "1024")
         .env("TURBO_PICARD_CMM_QUEUE_DEPTH", "4")
         .assert()
@@ -90,6 +92,12 @@ fn doctor_reports_runtime_and_fallback_state() {
         ))
         .stdout(predicate::str::contains(
             "resource_plan_bgzf_reader_threads=2",
+        ))
+        .stdout(predicate::str::contains(
+            "resource_plan_memory_budget_bytes=134217728",
+        ))
+        .stdout(predicate::str::contains(
+            "resource_plan_sorter_max_bytes_in_ram=33554432",
         ))
         .stdout(predicate::str::contains(
             "resource_plan_cmm_batch_size=1024",

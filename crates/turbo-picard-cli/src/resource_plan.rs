@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 use std::env;
 use turbo_picard_core::bgzf_threads::{self, HtsThreadRole, bgzf_threads_for_env};
+use turbo_picard_core::external_sort;
 
 const DEFAULT_CMM_BATCH_SIZE: usize = 512;
 const DEFAULT_CMM_QUEUE_DEPTH: usize = 16;
@@ -14,6 +15,8 @@ pub struct ResourcePlan {
     pub bgzf_index_threads: usize,
     pub bgzf_pipeline_reader_threads: usize,
     pub application_worker_budget: usize,
+    pub memory_budget_bytes: usize,
+    pub sorter_max_bytes_in_ram: usize,
     pub cmm_batch_size: usize,
     pub cmm_queue_depth: usize,
 }
@@ -36,6 +39,8 @@ fn resolve_from_env(reported_cpus: usize, env: &BTreeMap<String, String>) -> Res
         .min(global_thread_ceiling)
         .saturating_sub(bgzf_pipeline_reader_threads.min(reported_cpus.saturating_sub(1)))
         .max(1);
+    let memory_budget_bytes = external_sort::memory_budget_bytes_from_env(env);
+    let sorter_max_bytes_in_ram = external_sort::sorter_max_bytes_in_ram_from_env(env);
     let cmm_batch_size =
         positive_env_usize(env, "TURBO_PICARD_CMM_BATCH_SIZE").unwrap_or(DEFAULT_CMM_BATCH_SIZE);
     let cmm_queue_depth =
@@ -48,6 +53,8 @@ fn resolve_from_env(reported_cpus: usize, env: &BTreeMap<String, String>) -> Res
         bgzf_index_threads,
         bgzf_pipeline_reader_threads,
         application_worker_budget,
+        memory_budget_bytes,
+        sorter_max_bytes_in_ram,
         cmm_batch_size,
         cmm_queue_depth,
     }
@@ -96,6 +103,14 @@ mod tests {
             assert_eq!(plan.bgzf_index_threads, expected_index);
             assert_eq!(plan.bgzf_pipeline_reader_threads, expected_pipeline);
             assert_eq!(plan.application_worker_budget, expected_app_budget);
+            assert_eq!(
+                plan.memory_budget_bytes,
+                external_sort::DEFAULT_MEMORY_BUDGET_BYTES
+            );
+            assert_eq!(
+                plan.sorter_max_bytes_in_ram,
+                external_sort::DEFAULT_MAX_BYTES_IN_RAM
+            );
         }
     }
 
@@ -142,6 +157,34 @@ mod tests {
         let plan = resolve_from_env(8, &env);
         assert_eq!(plan.cmm_batch_size, 1024);
         assert_eq!(plan.cmm_queue_depth, 8);
+    }
+
+    #[test]
+    fn memory_budget_caps_implicit_sorter_run_bytes() {
+        let env = BTreeMap::from([(
+            "TURBO_PICARD_MEMORY_BYTES".to_string(),
+            (128 * 1024 * 1024).to_string(),
+        )]);
+        let plan = resolve_from_env(8, &env);
+        assert_eq!(plan.memory_budget_bytes, 128 * 1024 * 1024);
+        assert_eq!(plan.sorter_max_bytes_in_ram, 32 * 1024 * 1024);
+    }
+
+    #[test]
+    fn explicit_sorter_bytes_override_memory_fraction() {
+        let env = BTreeMap::from([
+            (
+                "TURBO_PICARD_MEMORY_BYTES".to_string(),
+                (128 * 1024 * 1024).to_string(),
+            ),
+            (
+                "TURBO_PICARD_SORTER_MAX_BYTES".to_string(),
+                (96 * 1024 * 1024).to_string(),
+            ),
+        ]);
+        let plan = resolve_from_env(8, &env);
+        assert_eq!(plan.memory_budget_bytes, 128 * 1024 * 1024);
+        assert_eq!(plan.sorter_max_bytes_in_ram, 96 * 1024 * 1024);
     }
 
     #[test]

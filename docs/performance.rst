@@ -62,6 +62,14 @@ parallelism. Reader defaults still cap at eight workers, writer and index
 defaults cap at twelve workers, and pipelined readers cap lower because the
 command is already overlapping I/O with application-level processing.
 
+External sorters use a byte budget in addition to ``MAX_RECORDS_IN_RAM``. The
+default sorter run buffer cap is 256 MiB. Set ``TURBO_PICARD_MEMORY_BYTES`` to
+lower the implicit sorter cap to one quarter of a command-level memory budget,
+or set ``TURBO_PICARD_SORTER_MAX_BYTES`` as an explicit sorter-run override
+when profiling supports a different buffer size. ``doctor`` reports both
+resolved values as ``resource_plan_memory_budget_bytes`` and
+``resource_plan_sorter_max_bytes_in_ram``.
+
 ``SortSam`` streams BAM/CRAM inputs without loading them into memory when the
 ``@HD`` sort order already matches the requested ``SORT_ORDER``. Inputs with
 ``SO:unsorted`` or a mismatched header still get verified (or sorted) the same
