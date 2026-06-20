@@ -20,6 +20,10 @@ sidecar generation across the native CLI helpers and the MarkDuplicates crate.
   plain or gzip inputs into a same-directory temporary output, then renames it
   only after successful completion. Plain VCF index offsets are accumulated
   incrementally, so the command no longer builds one full output `String`.
+- `MergeVcfs` now attempts a k-way streaming merge for sorted compatible inputs,
+  retaining only one parsed record per input plus the merge heap. If any input is
+  discovered to be unsorted, the same-directory temporary output is discarded and
+  the existing shared external-sort path is used unchanged.
 
 ## Tests
 
@@ -30,6 +34,7 @@ cargo fmt --check
 cargo test -p turbo-picard-markdup creates_md5_sidecar -- --nocapture
 cargo test -p turbo-picard-cli md5 -- --nocapture
 cargo test -p turbo-picard-cli gathervcfs -- --nocapture
+cargo test -p turbo-picard-cli mergevcfs -- --nocapture
 cargo clippy -p turbo-picard-markdup --all-targets --all-features -- -D warnings
 ```
 
@@ -40,6 +45,5 @@ Blocked or not clean:
 
 Remaining Phase 7 work:
 
-- implement sorted `MergeVcfs` k-way streaming where compatible;
 - keep `SortVcf`/`LiftoverVcf` on compact external-sort records while reducing
   remaining full-document VCF materialization.

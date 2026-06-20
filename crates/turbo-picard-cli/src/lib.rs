@@ -6223,8 +6223,31 @@ fn run_mergevcfs(args: &[String]) -> Result<(), String> {
         .map(|value| value as usize)
         .unwrap_or(500_000);
 
+    match try_stream_mergevcfs(&inputs, &output, dictionary_path.as_deref(), create_index)? {
+        MergeVcfStreamOutcome::Streamed => return Ok(()),
+        MergeVcfStreamOutcome::NeedsExternalSort => {}
+    }
+
+    run_mergevcfs_external_sort(
+        &inputs,
+        &output,
+        dictionary_path.as_deref(),
+        create_index,
+        tmp_dir,
+        max_records_in_ram,
+    )
+}
+
+fn run_mergevcfs_external_sort(
+    inputs: &[String],
+    output: &str,
+    dictionary_path: Option<&str>,
+    create_index: bool,
+    tmp_dir: PathBuf,
+    max_records_in_ram: usize,
+) -> Result<(), String> {
     let mut documents = Vec::with_capacity(inputs.len());
-    for input in &inputs {
+    for input in inputs {
         documents.push(read_vcf_document(input)?);
     }
     let first = documents
@@ -6286,9 +6309,9 @@ fn run_mergevcfs(args: &[String]) -> Result<(), String> {
         text.push_str(&line);
         text.push('\n');
     }
-    write_text_or_gzip(&output, &text)?;
-    if create_index && has_extension(&output, "vcf") {
-        write_vcf_idx_sidecar(&output, &text)?;
+    write_text_or_gzip(output, &text)?;
+    if create_index && has_extension(output, "vcf") {
+        write_vcf_idx_sidecar(output, &text)?;
     }
     Ok(())
 }
@@ -6712,6 +6735,106 @@ struct VcfRecord {
 }
 
 #[derive(Debug, Clone)]
+struct StreamingVcfHeader {
+    meta_lines: Vec<String>,
+    column_header: String,
+}
+
+impl StreamingVcfHeader {
+    fn header_text(&self) -> String {
+        let mut text = String::new();
+        for line in &self.meta_lines {
+            text.push_str(line);
+            text.push('\n');
+        }
+        text.push_str(&self.column_header);
+        text.push('\n');
+        text
+    }
+
+    fn contig_ids(&self) -> Vec<String> {
+        self.contig_lines()
+            .iter()
+            .filter_map(|line| parse_vcf_contig_id(line.as_str()))
+            .collect()
+    }
+
+    fn contig_lines(&self) -> Vec<String> {
+        self.meta_lines
+            .iter()
+            .filter(|line| line.starts_with("##contig=<"))
+            .cloned()
+            .collect()
+    }
+
+    fn contig_order(&self) -> BTreeMap<String, usize> {
+        self.contig_ids()
+            .into_iter()
+            .enumerate()
+            .map(|(index, contig)| (contig, index))
+            .collect()
+    }
+}
+
+enum MergeVcfStreamOutcome {
+    Streamed,
+    NeedsExternalSort,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+struct VcfRecordOrderKey {
+    contig_rank: usize,
+    position: u64,
+}
+
+struct StreamingVcfInput {
+    source: String,
+    reader: Box<dyn BufRead>,
+    line: String,
+    line_number: usize,
+    record_serial: usize,
+    last_key: Option<VcfRecordOrderKey>,
+}
+
+enum StreamingVcfRecord {
+    Record(VcfRecord, VcfRecordOrderKey),
+    End,
+    Unsorted,
+}
+
+struct MergeVcfHeapItem {
+    key: VcfRecordOrderKey,
+    input_index: usize,
+    record: VcfRecord,
+}
+
+impl PartialEq for MergeVcfHeapItem {
+    fn eq(&self, other: &Self) -> bool {
+        self.key == other.key
+            && self.input_index == other.input_index
+            && self.record.serial == other.record.serial
+    }
+}
+
+impl Eq for MergeVcfHeapItem {}
+
+impl PartialOrd for MergeVcfHeapItem {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for MergeVcfHeapItem {
+    fn cmp(&self, other: &Self) -> Ordering {
+        other
+            .key
+            .cmp(&self.key)
+            .then_with(|| other.input_index.cmp(&self.input_index))
+            .then_with(|| other.record.serial.cmp(&self.record.serial))
+    }
+}
+
+#[derive(Debug, Clone)]
 struct GatherVcfHeader {
     column_header: String,
     contig_ids: Vec<String>,
@@ -6761,7 +6884,7 @@ impl StreamingTextOutput {
         match self
             .writer
             .as_mut()
-            .ok_or_else(|| "GatherVcfs output writer is already closed".to_string())?
+            .ok_or_else(|| "streaming text output writer is already closed".to_string())?
         {
             StreamingTextOutputWriter::Plain(writer) => {
                 writer
@@ -6786,7 +6909,7 @@ impl StreamingTextOutput {
         let writer = self
             .writer
             .take()
-            .ok_or_else(|| "GatherVcfs output writer is already closed".to_string())?;
+            .ok_or_else(|| "streaming text output writer is already closed".to_string())?;
         match writer {
             StreamingTextOutputWriter::Plain(writer) => {
                 writer.into_inner().map_err(|error| error.to_string())?;
@@ -6824,7 +6947,7 @@ fn create_unique_temp_path(output_dir: &Path, prefix: &str) -> Result<PathBuf, S
             return Ok(path);
         }
     }
-    Err("could not allocate temporary GatherVcfs output path".to_string())
+    Err("could not allocate temporary streaming text output path".to_string())
 }
 
 #[derive(Debug, Default)]
@@ -6951,6 +7074,232 @@ fn validate_gathervcf_header(
         );
     }
     Ok(())
+}
+
+fn try_stream_mergevcfs(
+    inputs: &[String],
+    output: &str,
+    dictionary_path: Option<&str>,
+    create_index: bool,
+) -> Result<MergeVcfStreamOutcome, String> {
+    let mut headers = Vec::with_capacity(inputs.len());
+    let mut streams = Vec::with_capacity(inputs.len());
+    for input in inputs {
+        let (header, stream) = open_streaming_vcf_input(input)?;
+        headers.push(header);
+        streams.push(stream);
+    }
+    let first = headers
+        .first()
+        .ok_or_else(|| "missing required MergeVcfs argument: INPUT".to_string())?;
+    for header in headers.iter().skip(1) {
+        if header.column_header != first.column_header {
+            return Err("unsupported MergeVcfs inputs with different sample columns".to_string());
+        }
+    }
+
+    let (contig_order, contig_lines) = if let Some(dictionary_path) = dictionary_path {
+        let dictionary_text =
+            fs::read_to_string(dictionary_path).map_err(|error| error.to_string())?;
+        let contig_lines = vcf_contig_lines_from_dictionary(&dictionary_text)?;
+        validate_streaming_vcf_sequence_dictionaries(&headers, &contig_lines, "MergeVcfs")?;
+        (
+            dictionary_contig_order(&dictionary_text),
+            Some(contig_lines),
+        )
+    } else {
+        let contig_lines = first.contig_lines();
+        validate_streaming_vcf_sequence_dictionaries(&headers, &contig_lines, "MergeVcfs")?;
+        (first.contig_order(), None)
+    };
+    if contig_order.is_empty() {
+        return Err("unsupported MergeVcfs input without sequence dictionary".to_string());
+    }
+
+    stream_sorted_mergevcfs(
+        streams,
+        first,
+        contig_lines.as_deref(),
+        &contig_order,
+        output,
+        create_index,
+    )
+}
+
+fn stream_sorted_mergevcfs(
+    mut streams: Vec<StreamingVcfInput>,
+    first_header: &StreamingVcfHeader,
+    contig_lines: Option<&[String]>,
+    contig_order: &BTreeMap<String, usize>,
+    output: &str,
+    create_index: bool,
+) -> Result<MergeVcfStreamOutcome, String> {
+    let header_text = streaming_vcf_header_text_with_contigs(first_header, contig_lines)?;
+    let mut writer = StreamingTextOutput::create(output, "mergevcfs")?;
+    let mut index = if create_index && has_extension(output, "vcf") {
+        Some(VcfIndexOffsets::default())
+    } else {
+        None
+    };
+    for line in header_text.lines() {
+        writer.write_line(line, false, index.as_mut())?;
+    }
+
+    let mut heap = BinaryHeap::new();
+    for input_index in 0..streams.len() {
+        match next_streaming_vcf_record(&mut streams[input_index], contig_order)? {
+            StreamingVcfRecord::Record(record, key) => {
+                heap.push(MergeVcfHeapItem {
+                    key,
+                    input_index,
+                    record,
+                });
+            }
+            StreamingVcfRecord::End => {}
+            StreamingVcfRecord::Unsorted => return Ok(MergeVcfStreamOutcome::NeedsExternalSort),
+        }
+    }
+
+    while let Some(item) = heap.pop() {
+        writer.write_line(&item.record.line, true, index.as_mut())?;
+        match next_streaming_vcf_record(&mut streams[item.input_index], contig_order)? {
+            StreamingVcfRecord::Record(record, key) => {
+                heap.push(MergeVcfHeapItem {
+                    key,
+                    input_index: item.input_index,
+                    record,
+                });
+            }
+            StreamingVcfRecord::End => {}
+            StreamingVcfRecord::Unsorted => return Ok(MergeVcfStreamOutcome::NeedsExternalSort),
+        }
+    }
+
+    writer.persist()?;
+    if let Some(index) = index {
+        index.write_sidecar(output)?;
+    }
+    Ok(MergeVcfStreamOutcome::Streamed)
+}
+
+fn open_streaming_vcf_input(
+    input: &str,
+) -> Result<(StreamingVcfHeader, StreamingVcfInput), String> {
+    let mut reader = open_text_or_gzip_reader(input)?;
+    let mut line = String::new();
+    let mut line_number = 0usize;
+    let mut meta_lines = Vec::new();
+
+    loop {
+        line.clear();
+        let bytes_read = reader
+            .read_line(&mut line)
+            .map_err(|error| error.to_string())?;
+        if bytes_read == 0 {
+            return Err(format!("VCF input {input} is missing #CHROM header"));
+        }
+        line_number += 1;
+        let trimmed = line.trim_end_matches(['\r', '\n']);
+        if trimmed.starts_with("##") {
+            meta_lines.push(trimmed.to_string());
+        } else if trimmed.starts_with("#CHROM") {
+            let header = StreamingVcfHeader {
+                meta_lines,
+                column_header: trimmed.to_string(),
+            };
+            let stream = StreamingVcfInput {
+                source: input.to_string(),
+                reader,
+                line: String::new(),
+                line_number,
+                record_serial: 0,
+                last_key: None,
+            };
+            return Ok((header, stream));
+        } else if trimmed.starts_with('#') {
+            return Err(format!(
+                "unsupported VCF header line {line_number} in {input}"
+            ));
+        } else if !trimmed.trim().is_empty() {
+            return Err(format!("VCF input {input} is missing #CHROM header"));
+        }
+    }
+}
+
+fn next_streaming_vcf_record(
+    input: &mut StreamingVcfInput,
+    contig_order: &BTreeMap<String, usize>,
+) -> Result<StreamingVcfRecord, String> {
+    loop {
+        input.line.clear();
+        let bytes_read = input
+            .reader
+            .read_line(&mut input.line)
+            .map_err(|error| error.to_string())?;
+        if bytes_read == 0 {
+            return Ok(StreamingVcfRecord::End);
+        }
+        input.line_number += 1;
+        let trimmed = input.line.trim_end_matches(['\r', '\n']);
+        if trimmed.trim().is_empty() {
+            continue;
+        }
+        if trimmed.starts_with('#') {
+            return Err(format!(
+                "unsupported VCF header line {} in {}",
+                input.line_number, input.source
+            ));
+        }
+        let record = parse_vcf_record(
+            trimmed,
+            input.record_serial,
+            &input.source,
+            input.line_number,
+        )?;
+        input.record_serial += 1;
+        let Some(contig_rank) = contig_order.get(&record.contig).copied() else {
+            return Err(format!(
+                "VCF contig {} is not present in sequence dictionary",
+                record.contig
+            ));
+        };
+        let key = VcfRecordOrderKey {
+            contig_rank,
+            position: record.position,
+        };
+        if input.last_key.is_some_and(|last_key| key < last_key) {
+            return Ok(StreamingVcfRecord::Unsorted);
+        }
+        input.last_key = Some(key);
+        return Ok(StreamingVcfRecord::Record(record, key));
+    }
+}
+
+fn validate_streaming_vcf_sequence_dictionaries(
+    headers: &[StreamingVcfHeader],
+    expected_contig_lines: &[String],
+    command: &str,
+) -> Result<(), String> {
+    for header in headers {
+        if header.contig_lines() != expected_contig_lines {
+            return Err(format!(
+                "unsupported {command} input sequence dictionary differs from expected dictionary"
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn streaming_vcf_header_text_with_contigs(
+    header: &StreamingVcfHeader,
+    contig_lines: Option<&[String]>,
+) -> Result<String, String> {
+    let header_text = header.header_text();
+    if let Some(contig_lines) = contig_lines {
+        replace_vcf_contig_header(&header_text, contig_lines)
+    } else {
+        Ok(header_text)
+    }
 }
 
 fn read_vcf_document(path: &str) -> Result<VcfDocument, String> {

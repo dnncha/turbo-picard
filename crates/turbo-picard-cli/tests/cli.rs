@@ -8806,6 +8806,59 @@ fn mergevcfs_merges_compatible_inputs_by_coordinate() {
 }
 
 #[test]
+fn mergevcfs_streams_gzip_inputs_and_output() {
+    let tempdir = tempfile::tempdir().expect("tempdir exists");
+    let first = tempdir.path().join("first.vcf.gz");
+    let second = tempdir.path().join("second.vcf.gz");
+    let output = tempdir.path().join("merged.vcf.gz");
+    for (path, record) in [
+        (&first, "chr1\t5\tfirst\tA\tC\t.\tPASS\t.\n"),
+        (&second, "chr2\t1\tsecond\tG\tT\t.\tPASS\t.\n"),
+    ] {
+        let file = fs::File::create(path).expect("gzip VCF can be created");
+        let mut encoder = flate2::write::GzEncoder::new(file, flate2::Compression::default());
+        encoder
+            .write_all(
+                format!(
+                    "##fileformat=VCFv4.2\n\
+                     ##contig=<ID=chr1,length=1000>\n\
+                     ##contig=<ID=chr2,length=1000>\n\
+                     #CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\n\
+                     {record}"
+                )
+                .as_bytes(),
+            )
+            .expect("gzip VCF fixture is written");
+        encoder.finish().expect("gzip VCF is finished");
+    }
+
+    Command::cargo_bin("picard")
+        .expect("binary exists")
+        .args([
+            "MergeVcfs",
+            &format!("I={}", first.display()),
+            &format!("I={}", second.display()),
+            &format!("O={}", output.display()),
+            "VALIDATION_STRINGENCY=SILENT",
+            "QUIET=true",
+        ])
+        .assert()
+        .success();
+
+    assert_eq!(
+        read_gzip_to_string(output),
+        concat!(
+            "##fileformat=VCFv4.2\n",
+            "##contig=<ID=chr1,length=1000>\n",
+            "##contig=<ID=chr2,length=1000>\n",
+            "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\n",
+            "chr1\t5\tfirst\tA\tC\t.\tPASS\t.\n",
+            "chr2\t1\tsecond\tG\tT\t.\tPASS\t.\n",
+        )
+    );
+}
+
+#[test]
 fn mergevcfs_honors_tmp_dir_and_forced_external_runs() {
     let tempdir = tempfile::tempdir().expect("tempdir exists");
     let sort_tmp = tempdir.path().join("merge-tmp");
