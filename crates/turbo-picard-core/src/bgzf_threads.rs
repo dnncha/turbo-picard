@@ -1,3 +1,7 @@
+use std::collections::BTreeMap;
+
+pub const DEFAULT_MAX_THREADS: usize = 16;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HtsThreadRole {
     Reader,
@@ -12,42 +16,72 @@ pub fn bgzf_threads() -> Option<usize> {
 }
 
 pub fn bgzf_threads_for(role: HtsThreadRole) -> Option<usize> {
-    if let Some(threads) = explicit_threads(role) {
+    let env = std::env::vars().collect::<BTreeMap<_, _>>();
+    Some(bgzf_threads_for_env(role, current_reported_cpus(), &env))
+}
+
+pub fn current_reported_cpus() -> usize {
+    std::thread::available_parallelism()
+        .ok()
+        .map(|parallelism| parallelism.get())
+        .unwrap_or(1)
+        .max(1)
+}
+
+pub fn global_thread_ceiling_from_env(env: &BTreeMap<String, String>) -> usize {
+    positive_env_usize(env, "TURBO_PICARD_MAX_THREADS")
+        .unwrap_or(DEFAULT_MAX_THREADS)
+        .max(1)
+}
+
+pub fn bgzf_threads_for_env(
+    role: HtsThreadRole,
+    reported_cpus: usize,
+    env: &BTreeMap<String, String>,
+) -> usize {
+    if let Some(threads) = explicit_threads(role, reported_cpus.max(1), env) {
         return threads;
     }
 
-    default_threads(role)
+    default_threads(role, reported_cpus, env)
 }
 
-fn explicit_threads(role: HtsThreadRole) -> Option<Option<usize>> {
+fn explicit_threads(
+    role: HtsThreadRole,
+    reported_cpus: usize,
+    env: &BTreeMap<String, String>,
+) -> Option<usize> {
     let role_var = match role {
         HtsThreadRole::Reader => "TURBO_PICARD_READER_THREADS",
         HtsThreadRole::Writer => "TURBO_PICARD_WRITER_THREADS",
         HtsThreadRole::Index => "TURBO_PICARD_INDEX_THREADS",
         HtsThreadRole::PipelineReader => "TURBO_PICARD_PIPELINE_READER_THREADS",
     };
-    std::env::var(role_var)
-        .ok()
-        .map(|value| parse_thread_override(role, &value))
+    env.get(role_var)
+        .and_then(|value| parse_thread_override(role, reported_cpus, env, value))
         .or_else(|| {
             if role == HtsThreadRole::PipelineReader {
-                return std::env::var("TURBO_PICARD_READER_THREADS")
-                    .ok()
-                    .map(|value| parse_thread_override(role, &value));
+                return env
+                    .get("TURBO_PICARD_READER_THREADS")
+                    .and_then(|value| parse_thread_override(role, reported_cpus, env, value));
             }
             None
         })
         .or_else(|| {
-            std::env::var("TURBO_PICARD_THREADS")
-                .ok()
-                .map(|value| parse_thread_override(role, &value))
+            env.get("TURBO_PICARD_THREADS")
+                .and_then(|value| parse_thread_override(role, reported_cpus, env, value))
         })
 }
 
-fn parse_thread_override(role: HtsThreadRole, value: &str) -> Option<usize> {
+fn parse_thread_override(
+    role: HtsThreadRole,
+    reported_cpus: usize,
+    env: &BTreeMap<String, String>,
+    value: &str,
+) -> Option<usize> {
     let value = value.trim();
     if value.eq_ignore_ascii_case("auto") || value.is_empty() {
-        return default_threads(role);
+        return Some(default_threads(role, reported_cpus, env));
     }
     value
         .parse::<usize>()
@@ -55,16 +89,13 @@ fn parse_thread_override(role: HtsThreadRole, value: &str) -> Option<usize> {
         .and_then(|threads| (threads > 0).then_some(threads))
 }
 
-fn default_threads(role: HtsThreadRole) -> Option<usize> {
-    let available = std::thread::available_parallelism()
-        .ok()
-        .map(|parallelism| parallelism.get())
-        .unwrap_or(1);
-    let max_threads = std::env::var("TURBO_PICARD_MAX_THREADS")
-        .ok()
-        .and_then(|value| value.parse::<usize>().ok())
-        .filter(|threads| *threads > 0)
-        .unwrap_or(16);
+fn default_threads(
+    role: HtsThreadRole,
+    reported_cpus: usize,
+    env: &BTreeMap<String, String>,
+) -> usize {
+    let reported_cpus = reported_cpus.max(1);
+    let max_threads = global_thread_ceiling_from_env(env);
     let reserved = match role {
         HtsThreadRole::PipelineReader => 2,
         _ => 1,
@@ -75,12 +106,17 @@ fn default_threads(role: HtsThreadRole) -> Option<usize> {
         HtsThreadRole::Index => 12,
         HtsThreadRole::PipelineReader => 2,
     };
-    let threads = available
+    reported_cpus
         .saturating_sub(reserved)
         .min(role_cap)
         .min(max_threads)
-        .max(1);
-    Some(threads)
+        .max(1)
+}
+
+fn positive_env_usize(env: &BTreeMap<String, String>, name: &str) -> Option<usize> {
+    env.get(name)
+        .and_then(|value| value.trim().parse::<usize>().ok())
+        .filter(|threads| *threads > 0)
 }
 
 /// Thread count for HTSlib index construction and other multi-threaded HTSlib work.
@@ -102,5 +138,70 @@ mod tests {
         assert!(bgzf_threads_for(HtsThreadRole::Reader).unwrap_or(1) >= 1);
         assert!(bgzf_threads_for(HtsThreadRole::Writer).unwrap_or(1) >= 1);
         assert!(bgzf_threads_for(HtsThreadRole::PipelineReader).unwrap_or(1) >= 1);
+    }
+
+    #[test]
+    fn env_plan_is_deterministic_for_reported_cpu_counts() {
+        let env = BTreeMap::new();
+        let cases = [
+            (1, (1, 1, 1, 1)),
+            (2, (1, 1, 1, 1)),
+            (4, (3, 3, 3, 2)),
+            (8, (7, 7, 7, 2)),
+            (16, (8, 12, 12, 2)),
+            (64, (8, 12, 12, 2)),
+        ];
+        for (cpus, (expected_reader, expected_writer, expected_index, expected_pipeline)) in cases {
+            assert_eq!(
+                bgzf_threads_for_env(HtsThreadRole::Reader, cpus, &env),
+                expected_reader
+            );
+            assert_eq!(
+                bgzf_threads_for_env(HtsThreadRole::Writer, cpus, &env),
+                expected_writer
+            );
+            assert_eq!(
+                bgzf_threads_for_env(HtsThreadRole::Index, cpus, &env),
+                expected_index
+            );
+            assert_eq!(
+                bgzf_threads_for_env(HtsThreadRole::PipelineReader, cpus, &env),
+                expected_pipeline
+            );
+        }
+    }
+
+    #[test]
+    fn explicit_role_threads_supersede_global_ceiling() {
+        let env = BTreeMap::from([
+            ("TURBO_PICARD_MAX_THREADS".to_string(), "4".to_string()),
+            ("TURBO_PICARD_READER_THREADS".to_string(), "9".to_string()),
+            ("TURBO_PICARD_WRITER_THREADS".to_string(), "3".to_string()),
+            ("TURBO_PICARD_INDEX_THREADS".to_string(), "2".to_string()),
+            (
+                "TURBO_PICARD_PIPELINE_READER_THREADS".to_string(),
+                "1".to_string(),
+            ),
+        ]);
+        assert_eq!(global_thread_ceiling_from_env(&env), 4);
+        assert_eq!(bgzf_threads_for_env(HtsThreadRole::Reader, 16, &env), 9);
+        assert_eq!(bgzf_threads_for_env(HtsThreadRole::Writer, 16, &env), 3);
+        assert_eq!(bgzf_threads_for_env(HtsThreadRole::Index, 16, &env), 2);
+        assert_eq!(
+            bgzf_threads_for_env(HtsThreadRole::PipelineReader, 16, &env),
+            1
+        );
+    }
+
+    #[test]
+    fn global_thread_override_sets_all_bgzf_roles() {
+        let env = BTreeMap::from([("TURBO_PICARD_THREADS".to_string(), "5".to_string())]);
+        assert_eq!(bgzf_threads_for_env(HtsThreadRole::Reader, 16, &env), 5);
+        assert_eq!(bgzf_threads_for_env(HtsThreadRole::Writer, 16, &env), 5);
+        assert_eq!(bgzf_threads_for_env(HtsThreadRole::Index, 16, &env), 5);
+        assert_eq!(
+            bgzf_threads_for_env(HtsThreadRole::PipelineReader, 16, &env),
+            5
+        );
     }
 }

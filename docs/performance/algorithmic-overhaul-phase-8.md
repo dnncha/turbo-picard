@@ -19,6 +19,10 @@ separate local defaults.
   override fallback, and CMM batch/queue environment overrides.
 - `turbo-picard doctor` now prints `resource_plan_*` lines so the resolved
   resource plan is visible without running a data-processing command.
+- Core BGZF thread selection now exposes deterministic environment-based
+  helpers, and runtime reader/writer/index configuration plus `doctor` use the
+  same role resolution. Explicit role overrides continue to supersede the
+  global default ceiling.
 
 ## Tests
 
@@ -27,13 +31,12 @@ Passing:
 ```bash
 cargo fmt --check
 cargo test -p turbo-picard-cli resource_plan -- --nocapture
+cargo test -p turbo-picard-core bgzf_threads -- --nocapture
 cargo test -p turbo-picard-cli doctor -- --nocapture
 cargo test -p turbo-picard-cli acceleration_status -- --nocapture
 ```
 
 Remaining Phase 8 work:
 
-- Integrate the resource plan into HTS reader/writer/index configuration so
-  command execution uses the same resolved budget that `doctor` reports.
 - Add command-specific planning for merge commands, sorter buffers, and
   simultaneous input readers.
