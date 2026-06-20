@@ -1770,6 +1770,12 @@ fn run_sortsam(args: &[String]) -> Result<(), String> {
     if create_index && sort_order != SortOrder::Coordinate {
         return Err("SortSam CREATE_INDEX=true requires SORT_ORDER=coordinate".to_string());
     }
+    let tmp_dir = optional_scalar(&args, "TMP_DIR")?
+        .map(PathBuf::from)
+        .unwrap_or_else(env::temp_dir);
+    let max_records_in_ram = optional_u32(&args, "MAX_RECORDS_IN_RAM")?
+        .map(|value| value as usize)
+        .unwrap_or(500_000);
 
     if has_sam_extension(&input)
         && has_sam_extension(&output)
@@ -1777,7 +1783,7 @@ fn run_sortsam(args: &[String]) -> Result<(), String> {
         && !create_md5_file
         && compression_level.is_none()
     {
-        return run_sortsam_sam_text(&input, &output, sort_order);
+        return run_sortsam_sam_text(&input, &output, sort_order, tmp_dir, max_records_in_ram);
     }
 
     let reference = picard_reference(&args)?;
@@ -2127,14 +2133,22 @@ fn push_text_cigar(cigars: &mut Vec<(u64, char)>, len: u64, op: char) {
     cigars.push((len, op));
 }
 
-fn run_sortsam_sam_text(input: &str, output: &str, sort_order: SortOrder) -> Result<(), String> {
+fn run_sortsam_sam_text(
+    input: &str,
+    output: &str,
+    sort_order: SortOrder,
+    tmp_dir: PathBuf,
+    max_records_in_ram: usize,
+) -> Result<(), String> {
     let file = fs::File::open(input).map_err(|error| error.to_string())?;
     let mut reader = BufReader::with_capacity(1024 * 1024, file);
     let mut header_lines = Vec::<String>::new();
     let mut contig_order = BTreeMap::<String, i32>::new();
-    let mut records = Vec::<SamTextSortRecord>::new();
+    let mut sort_config = ExternalSortConfig::new(tmp_dir);
+    sort_config.max_records_in_ram = max_records_in_ram.max(1);
+    sort_config.prefix = "turbo-picard-sortsam-sam".to_string();
+    let mut sorter = ExternalSorter::new(sort_config)?;
     let mut line = String::new();
-    let mut serial = 0usize;
 
     loop {
         line.clear();
@@ -2159,20 +2173,12 @@ fn run_sortsam_sam_text(input: &str, output: &str, sort_order: SortOrder) -> Res
             }
             header_lines.push(line.clone());
         } else if !line.trim().is_empty() {
-            records.push(SamTextSortRecord::parse(
-                line.clone(),
-                &contig_order,
-                serial,
-            )?);
-            serial += 1;
+            let record = SamTextSortRecord::parse(&line, &contig_order)?;
+            let key = record.sort_key(sort_order);
+            sorter.push(key, line.as_bytes().to_vec())?;
         }
     }
-
-    match sort_order {
-        SortOrder::Coordinate => records.sort_unstable_by(compare_sam_text_coordinate),
-        SortOrder::QueryName => records.sort_unstable_by(compare_sam_text_queryname),
-        SortOrder::Unsorted => unreachable!("SortSam rejects SORT_ORDER=unsorted"),
-    }
+    let (records, _metrics) = sorter.finish()?;
 
     let mut writer = BufWriter::with_capacity(
         1024 * 1024,
@@ -2181,7 +2187,7 @@ fn run_sortsam_sam_text(input: &str, output: &str, sort_order: SortOrder) -> Res
     write_sorted_sam_text_header(&mut writer, &header_lines, sort_order)?;
     for record in records {
         writer
-            .write_all(record.line.as_bytes())
+            .write_all(&record.payload)
             .map_err(|error| error.to_string())?;
     }
     writer.flush().map_err(|error| error.to_string())
@@ -2189,20 +2195,14 @@ fn run_sortsam_sam_text(input: &str, output: &str, sort_order: SortOrder) -> Res
 
 #[derive(Debug)]
 struct SamTextSortRecord {
-    line: String,
     qname: String,
     flags: u16,
     tid: i32,
     pos: i64,
-    serial: usize,
 }
 
 impl SamTextSortRecord {
-    fn parse(
-        line: String,
-        contig_order: &BTreeMap<String, i32>,
-        serial: usize,
-    ) -> Result<Self, String> {
+    fn parse(line: &str, contig_order: &BTreeMap<String, i32>) -> Result<Self, String> {
         let mut fields = line.trim_end_matches(['\r', '\n']).split('\t');
         let qname = fields
             .next()
@@ -2230,30 +2230,44 @@ impl SamTextSortRecord {
             .map_err(|_| "malformed SortSam SAM position".to_string())?
             - 1;
         Ok(Self {
-            line,
             qname,
             flags,
             tid,
             pos,
-            serial,
         })
+    }
+
+    fn sort_key(&self, sort_order: SortOrder) -> Vec<u8> {
+        let mut key = Vec::with_capacity(self.qname.len() * 4 + 32);
+        match sort_order {
+            SortOrder::Coordinate => self.push_coordinate_key(&mut key),
+            SortOrder::QueryName => {
+                push_lex_bytes(&mut key, self.qname.as_bytes());
+                self.push_coordinate_key(&mut key);
+            }
+            SortOrder::Unsorted => unreachable!("SortSam rejects SORT_ORDER=unsorted"),
+        }
+        key
+    }
+
+    fn push_coordinate_key(&self, key: &mut Vec<u8>) {
+        push_i64_sort_key(key, i64::from(self.tid));
+        push_i64_sort_key(key, self.pos);
+        push_lex_bytes(key, self.qname.as_bytes());
+        key.extend_from_slice(&self.flags.to_be_bytes());
     }
 }
 
-fn compare_sam_text_coordinate(left: &SamTextSortRecord, right: &SamTextSortRecord) -> Ordering {
-    left.tid
-        .cmp(&right.tid)
-        .then_with(|| left.pos.cmp(&right.pos))
-        .then_with(|| left.qname.as_bytes().cmp(right.qname.as_bytes()))
-        .then_with(|| left.flags.cmp(&right.flags))
-        .then_with(|| left.serial.cmp(&right.serial))
+fn push_i64_sort_key(key: &mut Vec<u8>, value: i64) {
+    key.extend_from_slice(&((value as u64) ^ (1_u64 << 63)).to_be_bytes());
 }
 
-fn compare_sam_text_queryname(left: &SamTextSortRecord, right: &SamTextSortRecord) -> Ordering {
-    left.qname
-        .as_bytes()
-        .cmp(right.qname.as_bytes())
-        .then_with(|| compare_sam_text_coordinate(left, right))
+fn push_lex_bytes(key: &mut Vec<u8>, bytes: &[u8]) {
+    for byte in bytes {
+        key.push(1);
+        key.push(*byte);
+    }
+    key.push(0);
 }
 
 fn write_sorted_sam_text_header(

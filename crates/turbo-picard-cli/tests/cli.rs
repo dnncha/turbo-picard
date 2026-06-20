@@ -408,6 +408,61 @@ fn sortsam_sorts_sam_by_queryname() {
 }
 
 #[test]
+fn sortsam_sam_text_uses_external_sorter_for_forced_runs() {
+    let tempdir = tempfile::tempdir().expect("tempdir exists");
+    let input = tempdir.path().join("input.sam");
+    let output = tempdir.path().join("coordinate.sam");
+    let sort_tmp = tempdir.path().join("sort-tmp");
+    fs::create_dir(&sort_tmp).expect("sort tmp exists");
+    fs::write(
+        &input,
+        concat!(
+            "@HD\tVN:1.6\tSO:unsorted\n",
+            "@SQ\tSN:chr1\tLN:1000\n",
+            "late\t0\tchr1\t90\t60\t4M\t*\t0\t0\tCCCC\tFFFF\n",
+            "dup\t0\tchr1\t20\t60\t4M\t*\t0\t0\tAAAA\tFFFF\n",
+            "dup\t0\tchr1\t20\t60\t4M\t*\t0\t0\tTTTT\tFFFF\n",
+            "early\t0\tchr1\t10\t60\t4M\t*\t0\t0\tGGGG\tFFFF\n",
+        ),
+    )
+    .expect("input fixture is written");
+
+    Command::cargo_bin("picard")
+        .expect("binary exists")
+        .args([
+            "SortSam",
+            &format!("I={}", input.display()),
+            &format!("O={}", output.display()),
+            "SO=coordinate",
+            "MAX_RECORDS_IN_RAM=1",
+            &format!("TMP_DIR={}", sort_tmp.display()),
+        ])
+        .assert()
+        .success();
+
+    let output_sam = fs::read_to_string(&output).expect("output SAM exists");
+    assert_eq!(
+        record_names(&output_sam),
+        vec!["early", "dup", "dup", "late"]
+    );
+    assert_eq!(
+        output_sam
+            .lines()
+            .filter(|line| !line.starts_with('@'))
+            .map(|line| line.split('\t').nth(9).expect("sequence field"))
+            .collect::<Vec<_>>(),
+        vec!["GGGG", "AAAA", "TTTT", "CCCC"]
+    );
+    assert!(
+        fs::read_dir(&sort_tmp)
+            .expect("sort tmp readable")
+            .next()
+            .is_none(),
+        "SortSam SAM text external sort should clean temporary runs"
+    );
+}
+
+#[test]
 fn cleansam_sets_unmapped_mapq_to_zero_and_preserves_valid_records() {
     let tempdir = tempfile::tempdir().expect("tempdir exists");
     let input = tempdir.path().join("input.sam");

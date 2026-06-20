@@ -13,11 +13,16 @@ tie-breaking and opaque payload bytes. Command adapters can encode BAM/SAM/VCF
 ordering semantics into keys while the sorter owns bounded memory, temporary
 runs, deterministic merging, cleanup, and metrics.
 
-The first command integrations are `SortVcf`, `MergeVcfs`, and sorted
-`LiftoverVcf` lifted output, which now feed compact dictionary-rank/position keys
-and raw record-line payloads through the shared sorter. Existing header
-validation is preserved. Full streaming VCF parsing is still deferred to the
-later VCF streaming phase.
+The first command integrations are `SortVcf`, `MergeVcfs`, sorted
+`LiftoverVcf` lifted output, and the SAM-text `SortSam` fast path. These feed
+compact ordering keys and raw record-line payloads through the shared sorter.
+Existing header validation is preserved. Full streaming VCF parsing is still
+deferred to the later VCF streaming phase.
+
+`SortSam` BAM/CRAM sorting still uses the previous full-record vector path.
+Replacing it without violating `#![forbid(unsafe_code)]` needs a safe temporary
+BAM/CRAM run-file merge adapter, because rust-htslib does not expose raw BAM
+record bytes as a public safe API for opaque sorter payloads.
 
 ## Implemented
 
@@ -41,10 +46,10 @@ Covered in `crates/turbo-picard-core/src/external_sort.rs`:
 - byte-limit spill instrumentation;
 - cleanup after dropping a sorter with partial runs.
 
-Additional `SortVcf`, `MergeVcfs`, and `LiftoverVcf` CLI coverage forces
-one-record external runs with `MAX_RECORDS_IN_RAM=1`, uses custom `TMP_DIR`
-values, verifies stable/sorted output ordering, and asserts temporary run
-cleanup.
+Additional `SortVcf`, `MergeVcfs`, `LiftoverVcf`, and SAM-text `SortSam` CLI
+coverage forces one-record external runs with `MAX_RECORDS_IN_RAM=1`, uses
+custom `TMP_DIR` values, verifies stable/sorted output ordering, and asserts
+temporary run cleanup.
 
 Passing:
 
@@ -54,6 +59,7 @@ cargo test -p turbo-picard-core external_sort -- --nocapture
 cargo test -p turbo-picard-cli sortvcf -- --nocapture
 cargo test -p turbo-picard-cli mergevcfs -- --nocapture
 cargo test -p turbo-picard-cli liftovervcf -- --nocapture
+cargo test -p turbo-picard-cli sortsam -- --nocapture
 cargo clippy -p turbo-picard-core --all-targets --all-features -- -D warnings
 cargo test --workspace
 python3 tools/verify_command_matrix.py
@@ -69,6 +75,7 @@ Blocked:
 bash tools/verify_basic_sortvcf_parity.sh
 bash tools/verify_basic_mergevcfs_parity.sh
 bash tools/verify_basic_liftovervcf_parity.sh
+bash tools/verify_basic_sortsam_parity.sh
 ```
 
 This found `mamba`, but the configured Picard prefix
@@ -119,3 +126,23 @@ Result:
 
 `LiftoverVcf` has forced-run CLI test coverage for lifted output sorting and
 temp cleanup, but no release timing was recorded for this slice.
+
+Release command shape:
+
+```bash
+./target/release/picard SortSam \
+  I=input.sam \
+  O=sorted.sam \
+  SO=coordinate \
+  MAX_RECORDS_IN_RAM=1 \
+  TMP_DIR=sort-tmp \
+  QUIET=true
+```
+
+Synthetic input: 5,000 reverse-position SAM text records on one contig.
+
+Result:
+
+| Records | MAX_RECORDS_IN_RAM | Wall seconds | Max RSS bytes | Temp cleanup |
+| ---: | ---: | ---: | ---: | --- |
+| 5000 | 1 | 1.00 | 9,781,248 | PASS |
