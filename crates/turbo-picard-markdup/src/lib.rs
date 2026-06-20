@@ -403,7 +403,7 @@ fn run_hts_container(
     let duplicate_groups = duplicate_groups(&candidates);
     let mut decisions = vec![RecordDecision::default(); records.len()];
 
-    for group in duplicate_groups.values() {
+    for group in &duplicate_groups {
         if group.len() < 2 {
             continue;
         }
@@ -934,29 +934,82 @@ fn parse_sam_integer(
         })
 }
 
-fn duplicate_groups(candidates: &[DuplicateCandidate]) -> HashMap<BamDuplicateKey, Vec<usize>> {
+fn duplicate_groups(candidates: &[DuplicateCandidate]) -> Vec<Vec<usize>> {
     let mut paired_by_name = HashMap::<InternedBytesId, usize>::default();
-    let mut duplicate_groups = HashMap::<BamDuplicateKey, Vec<usize>>::default();
+    let mut keyed_pairs = Vec::<(BamDuplicateKey, [usize; 2])>::new();
 
     for (candidate_index, candidate) in candidates.iter().enumerate() {
         if candidate.is_pair() {
             if let Some(first_index) = paired_by_name.remove(&candidate.qname_id) {
-                let indices = [first_index, candidate_index];
-                let barcode = first_barcode(candidates, &indices);
+                let candidate_indices = [first_index, candidate_index];
+                let barcode = first_barcode(candidates, &candidate_indices);
                 let key = pair_duplicate_key_bam(
                     &candidates[first_index],
                     candidate,
                     candidates[first_index].library_id,
                     barcode,
                 );
-                duplicate_groups.entry(key).or_default().extend(indices);
+                keyed_pairs.push((key, candidate_indices));
             } else {
                 paired_by_name.insert(candidate.qname_id, candidate_index);
             }
         }
     }
 
-    duplicate_groups
+    keyed_pairs.sort_by(|left, right| left.0.cmp(&right.0));
+    collect_sorted_pair_groups(keyed_pairs)
+}
+
+fn collect_sorted_pair_groups(keyed_pairs: Vec<(BamDuplicateKey, [usize; 2])>) -> Vec<Vec<usize>> {
+    let mut groups = Vec::<Vec<usize>>::new();
+    let mut current_key = None::<BamDuplicateKey>;
+
+    for (key, pair_indices) in keyed_pairs {
+        if current_key.as_ref() == Some(&key) {
+            groups
+                .last_mut()
+                .expect("current key has a group")
+                .extend(pair_indices);
+        } else {
+            groups.push(pair_indices.into());
+            current_key = Some(key);
+        }
+    }
+
+    groups
+}
+
+fn fragment_duplicate_groups(candidates: &[DuplicateCandidate]) -> Vec<Vec<usize>> {
+    let mut keyed_fragments = candidates
+        .iter()
+        .enumerate()
+        .map(|(candidate_index, candidate)| {
+            (fragment_duplicate_key_bam(candidate), candidate_index)
+        })
+        .collect::<Vec<_>>();
+    keyed_fragments.sort_by(|left, right| left.0.cmp(&right.0));
+    collect_sorted_fragment_groups(keyed_fragments)
+}
+
+fn collect_sorted_fragment_groups(
+    keyed_fragments: Vec<(BamDuplicateKey, usize)>,
+) -> Vec<Vec<usize>> {
+    let mut groups = Vec::<Vec<usize>>::new();
+    let mut current_key = None::<BamDuplicateKey>;
+
+    for (key, candidate_index) in keyed_fragments {
+        if current_key.as_ref() == Some(&key) {
+            groups
+                .last_mut()
+                .expect("current key has a group")
+                .push(candidate_index);
+        } else {
+            groups.push(vec![candidate_index]);
+            current_key = Some(key);
+        }
+    }
+
+    groups
 }
 
 fn mark_fragment_duplicate_groups(
@@ -965,16 +1018,9 @@ fn mark_fragment_duplicate_groups(
     summary: &mut MarkDuplicatesSummary,
     library_registry: &mut LibraryRegistry,
 ) {
-    let mut fragment_groups = HashMap::<BamDuplicateKey, Vec<usize>>::default();
-    for (candidate_index, candidate) in candidates.iter().enumerate() {
-        let key = fragment_duplicate_key_bam(candidate);
-        fragment_groups
-            .entry(key)
-            .or_default()
-            .push(candidate_index);
-    }
+    let fragment_groups = fragment_duplicate_groups(candidates);
 
-    for group in fragment_groups.values() {
+    for group in &fragment_groups {
         if group.len() < 2 || !has_multiple_read_names(group, candidates) {
             continue;
         }
@@ -1874,6 +1920,44 @@ mod tests {
         record.set_mpos(-1);
         record.set_insert_size(0);
         record
+    }
+
+    fn record_with_name_flags_and_position(qname: &[u8], flags: u16, pos: i64) -> bam::Record {
+        let mut record = record_with_name_and_flags(qname, flags);
+        record.set_pos(pos);
+        record
+    }
+
+    #[test]
+    fn duplicate_groups_sorts_pair_keys_and_preserves_equal_key_order() {
+        let records = [
+            record_with_name_flags_and_position(b"z-pair", 0x1, 10),
+            record_with_name_flags_and_position(b"z-pair", 0x1, 20),
+            record_with_name_flags_and_position(b"a-pair", 0x1, 10),
+            record_with_name_flags_and_position(b"a-pair", 0x1, 20),
+            record_with_name_flags_and_position(b"later-pair", 0x1, 30),
+            record_with_name_flags_and_position(b"later-pair", 0x1, 40),
+        ];
+        let candidates = candidates_for_records(&records);
+
+        let groups = duplicate_groups(&candidates);
+
+        assert_eq!(groups, vec![vec![0, 1, 2, 3], vec![4, 5]]);
+    }
+
+    #[test]
+    fn fragment_duplicate_groups_sorts_keys_and_preserves_equal_key_order() {
+        let records = [
+            record_with_name_flags_and_position(b"later-a", 0x0, 30),
+            record_with_name_flags_and_position(b"dup-a", 0x0, 10),
+            record_with_name_flags_and_position(b"dup-b", 0x0, 10),
+            record_with_name_flags_and_position(b"later-b", 0x0, 30),
+        ];
+        let candidates = candidates_for_records(&records);
+
+        let groups = fragment_duplicate_groups(&candidates);
+
+        assert_eq!(groups, vec![vec![1, 2], vec![0, 3]]);
     }
 
     #[test]

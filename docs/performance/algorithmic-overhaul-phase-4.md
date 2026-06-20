@@ -42,6 +42,10 @@ vectors, and duplicate-group maps for the input.
   mutated only in the final output application pass.
 - Duplicate metric updates now use the compact candidate `library_id` directly,
   eliminating the previous full-record-length `record_libraries` side vector.
+- Pair and fragment duplicate grouping now emit compact `(duplicate key,
+  candidate index)` rows, stable-sort them by `BamDuplicateKey`, and scan the
+  sorted rows into groups. This removes the duplicate-key hash-grouping step and
+  matches the shape needed for a later external fixed-width key sorter.
 
 ## Tests
 
