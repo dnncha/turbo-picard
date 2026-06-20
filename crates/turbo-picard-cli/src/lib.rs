@@ -8876,7 +8876,7 @@ fn apply_interval_padding(
 fn collectwgs_interval_masks(
     interval_paths: Option<&Vec<String>>,
     reference_contigs: &[(String, usize)],
-) -> Result<Option<BTreeMap<String, Vec<bool>>>, String> {
+) -> Result<Option<BTreeMap<String, Vec<WgsIntervalRange>>>, String> {
     let Some(interval_paths) = interval_paths else {
         return Ok(None);
     };
@@ -8889,9 +8889,9 @@ fn collectwgs_interval_masks(
         .enumerate()
         .map(|(index, (name, _))| (name.clone(), index))
         .collect::<BTreeMap<_, _>>();
-    let mut masks = reference_contigs
+    let mut ranges_by_contig = reference_contigs
         .iter()
-        .map(|(name, length)| (name.clone(), vec![false; *length]))
+        .map(|(name, _)| (name.clone(), Vec::<WgsIntervalRange>::new()))
         .collect::<BTreeMap<_, _>>();
 
     for interval_path in interval_paths {
@@ -8913,18 +8913,19 @@ fn collectwgs_interval_masks(
                     interval.contig, interval.start, interval.end
                 ));
             }
-            let mask = masks.get_mut(&interval.contig).ok_or_else(|| {
-                format!(
-                    "CollectWgsMetrics missing interval contig {}",
-                    interval.contig
-                )
-            })?;
-            for included in &mut mask[(interval.start as usize - 1)..interval.end as usize] {
-                *included = true;
-            }
+            ranges_by_contig
+                .entry(interval.contig)
+                .or_default()
+                .push(WgsIntervalRange {
+                    start: interval.start as usize - 1,
+                    end: interval.end as usize,
+                });
         }
     }
-    Ok(Some(masks))
+    for ranges in ranges_by_contig.values_mut() {
+        WgsIntervalRange::merge_sorted(ranges);
+    }
+    Ok(Some(ranges_by_contig))
 }
 
 fn sort_intervals(intervals: &mut [BedInterval]) {
@@ -11455,6 +11456,52 @@ fn bam_cigar_reference_len(record: &bam::Record) -> usize {
         .sum()
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct WgsIntervalRange {
+    start: usize,
+    end: usize,
+}
+
+impl WgsIntervalRange {
+    fn merge_sorted(ranges: &mut Vec<Self>) {
+        ranges.sort_by(|left, right| {
+            left.start
+                .cmp(&right.start)
+                .then_with(|| left.end.cmp(&right.end))
+        });
+        let mut merged = Vec::<Self>::with_capacity(ranges.len());
+        for range in ranges.drain(..) {
+            if range.start >= range.end {
+                continue;
+            }
+            let Some(last) = merged.last_mut() else {
+                merged.push(range);
+                continue;
+            };
+            if range.start <= last.end {
+                last.end = last.end.max(range.end);
+            } else {
+                merged.push(range);
+            }
+        }
+        *ranges = merged;
+    }
+
+    fn contains(ranges: &[Self], index: usize) -> bool {
+        ranges
+            .binary_search_by(|range| {
+                if index < range.start {
+                    Ordering::Greater
+                } else if index >= range.end {
+                    Ordering::Less
+                } else {
+                    Ordering::Equal
+                }
+            })
+            .is_ok()
+    }
+}
+
 #[derive(Debug, Default)]
 struct WgsOverlapBitmap {
     words: Vec<u64>,
@@ -11593,21 +11640,25 @@ impl WgsOverlapMode<'_> {
     }
 }
 
-fn wgs_locus_included(contig: &WgsContigMetadata, index: usize) -> bool {
-    wgs_locus_included_at(contig.included.as_deref(), index, contig.length)
-}
-
 #[inline]
-fn wgs_locus_included_at(mask: Option<&[bool]>, index: usize, contig_length: usize) -> bool {
-    mask.map_or(true, |included| {
-        included.get(index).copied().unwrap_or(false)
-    }) && index < contig_length
+fn wgs_locus_included_at(
+    ranges: Option<&[WgsIntervalRange]>,
+    index: usize,
+    contig_length: usize,
+) -> bool {
+    index < contig_length && ranges.map_or(true, |ranges| WgsIntervalRange::contains(ranges, index))
 }
 
 fn wgs_included_loci(contig: &WgsContigMetadata) -> usize {
-    contig.included.as_ref().map_or(contig.length, |mask| {
-        mask.iter().filter(|included| **included).count()
-    })
+    contig
+        .included_ranges
+        .as_ref()
+        .map_or(contig.length, |ranges| {
+            ranges
+                .iter()
+                .map(|range| range.end.saturating_sub(range.start))
+                .sum()
+        })
 }
 
 #[derive(Debug)]
@@ -11625,7 +11676,7 @@ struct WgsMetricsSummary {
     sensitivity_base_quality_histogram: Vec<u64>,
     coverage_histogram: Vec<u64>,
     active_contig: Option<String>,
-    active_included: Option<Arc<[bool]>>,
+    active_included_ranges: Option<Arc<[WgsIntervalRange]>>,
     active_depths: Vec<u16>,
     processed_contigs: HashSet<String>,
     mate_buffer: WgsMateBuffer,
@@ -11634,28 +11685,28 @@ struct WgsMetricsSummary {
 #[derive(Debug)]
 struct WgsContigMetadata {
     length: usize,
-    /// `None` when every position is included (avoids allocating a full-genome mask).
-    included: Option<Arc<[bool]>>,
+    /// `None` when every position is included; otherwise sorted half-open ranges.
+    included_ranges: Option<Arc<[WgsIntervalRange]>>,
 }
 
 impl WgsMetricsSummary {
     fn new(
         reference_contigs: &[(String, usize)],
-        interval_masks: Option<BTreeMap<String, Vec<bool>>>,
+        interval_masks: Option<BTreeMap<String, Vec<WgsIntervalRange>>>,
         coverage_cap: u32,
     ) -> Self {
         let contigs = reference_contigs
             .iter()
             .map(|(name, length)| {
-                let included = interval_masks
+                let included_ranges = interval_masks
                     .as_ref()
                     .and_then(|masks| masks.get(name).cloned())
-                    .map(Arc::<[bool]>::from);
+                    .map(Arc::<[WgsIntervalRange]>::from);
                 (
                     name.clone(),
                     WgsContigMetadata {
                         length: *length,
-                        included,
+                        included_ranges,
                     },
                 )
             })
@@ -11682,7 +11733,7 @@ impl WgsMetricsSummary {
             sensitivity_base_quality_histogram: vec![0; 256.max(coverage_cap as usize + 1)],
             coverage_histogram,
             active_contig: None,
-            active_included: None,
+            active_included_ranges: None,
             active_depths: Vec::new(),
             processed_contigs: HashSet::new(),
             mate_buffer: WgsMateBuffer::default(),
@@ -11693,7 +11744,7 @@ impl WgsMetricsSummary {
         if let Some(contig) = self.active_contig.take() {
             self.processed_contigs.insert(contig);
         }
-        self.active_included = None;
+        self.active_included_ranges = None;
         self.mate_buffer.clear();
         self.active_depths.clear();
     }
@@ -11710,7 +11761,7 @@ impl WgsMetricsSummary {
         if let Some(previous) = self.active_contig.take() {
             self.processed_contigs.insert(previous);
             self.active_depths.clear();
-            self.active_included = None;
+            self.active_included_ranges = None;
             self.mate_buffer.clear();
         }
         let Some(metadata) = self.contigs.get(contig) else {
@@ -11720,7 +11771,7 @@ impl WgsMetricsSummary {
         };
         self.active_depths.resize(metadata.length, 0);
         self.active_contig = Some(contig.to_string());
-        self.active_included = metadata.included.clone();
+        self.active_included_ranges = metadata.included_ranges.clone();
         Ok(())
     }
 
@@ -11905,7 +11956,7 @@ impl WgsMetricsSummary {
         let low_mapq = mapq < minimum_mapping_quality;
         let locus_accumulation_cap = locus_accumulation_cap.min(u16::MAX as u32) as u16;
 
-        let locus_mask = self.active_included.clone();
+        let locus_ranges = self.active_included_ranges.clone();
         for cigar in cigars {
             let (len, op) = match bam_cigar_to_op(cigar) {
                 Some(op) => op,
@@ -11922,8 +11973,11 @@ impl WgsMetricsSummary {
                                 "CollectWgsMetrics alignment extends beyond reference".to_string()
                             );
                         }
-                        if !wgs_locus_included_at(locus_mask.as_deref(), reference_index, depth_len)
-                        {
+                        if !wgs_locus_included_at(
+                            locus_ranges.as_deref(),
+                            reference_index,
+                            depth_len,
+                        ) {
                             continue;
                         }
                         self.total_aligned_bases += 1;
@@ -11987,22 +12041,36 @@ impl WgsMetricsSummary {
         let mut remaining = limit;
         let mut excluded_loci = 0usize;
         for contig in self.contigs.values_mut() {
-            for index in 0..contig.length {
-                if !wgs_locus_included(contig, index) {
-                    continue;
-                }
+            let before = wgs_included_loci(contig);
+            let source_ranges = contig
+                .included_ranges
+                .as_ref()
+                .map(|ranges| ranges.to_vec())
+                .unwrap_or_else(|| {
+                    vec![WgsIntervalRange {
+                        start: 0,
+                        end: contig.length,
+                    }]
+                });
+            let mut clipped = Vec::<WgsIntervalRange>::new();
+            for range in source_ranges {
                 if remaining == 0 {
-                    if contig.included.is_none() {
-                        contig.included = Some(Arc::<[bool]>::from(vec![true; contig.length]));
-                    }
-                    if let Some(mask) = contig.included.as_mut() {
-                        Arc::make_mut(mask)[index] = false;
-                    }
-                    excluded_loci += 1;
+                    break;
+                }
+                let len = range.end.saturating_sub(range.start);
+                if len <= remaining {
+                    clipped.push(range);
+                    remaining -= len;
                 } else {
-                    remaining -= 1;
+                    clipped.push(WgsIntervalRange {
+                        start: range.start,
+                        end: range.start + remaining,
+                    });
+                    remaining = 0;
                 }
             }
+            contig.included_ranges = Some(Arc::<[WgsIntervalRange]>::from(clipped));
+            excluded_loci += before.saturating_sub(wgs_included_loci(contig));
         }
         for _ in 0..excluded_loci {
             self.exclude_locus_from_histograms(0);
@@ -18318,6 +18386,31 @@ fn write_requested_sidecars(
 mod tests {
     use super::*;
     use turbo_picard_core::picard_args::normalize_picard_args;
+
+    #[test]
+    fn wgs_interval_ranges_merge_and_support_membership() {
+        let mut ranges = vec![
+            WgsIntervalRange { start: 10, end: 12 },
+            WgsIntervalRange { start: 2, end: 5 },
+            WgsIntervalRange { start: 4, end: 8 },
+            WgsIntervalRange { start: 12, end: 12 },
+        ];
+        WgsIntervalRange::merge_sorted(&mut ranges);
+
+        assert_eq!(
+            ranges,
+            vec![
+                WgsIntervalRange { start: 2, end: 8 },
+                WgsIntervalRange { start: 10, end: 12 },
+            ]
+        );
+        assert!(!WgsIntervalRange::contains(&ranges, 1));
+        assert!(WgsIntervalRange::contains(&ranges, 2));
+        assert!(WgsIntervalRange::contains(&ranges, 7));
+        assert!(!WgsIntervalRange::contains(&ranges, 8));
+        assert!(WgsIntervalRange::contains(&ranges, 11));
+        assert!(!WgsIntervalRange::contains(&ranges, 12));
+    }
 
     #[test]
     fn collectmultiplemetrics_single_pass_requires_hts_container_and_multiple_programs() {
