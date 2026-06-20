@@ -93,6 +93,10 @@ cargo build --release -p turbo-picard-cli --bin picard --bin turbo-picard
 bash tools/verify_basic_picard_parity.sh
 ```
 
+Additional adversarial MarkDuplicates coverage now includes duplicate pairs
+first appearing at EOF and large duplicate-pair families forced through low
+`MAX_RECORDS_IN_RAM` temp-run paths.
+
 Blocked or not clean:
 
 - `bash tools/verify_markdup_cram_parity.sh` could not start because `samtools`
@@ -105,5 +109,5 @@ Remaining Phase 4 work:
 - spill compact duplicate candidates instead of retaining every full record;
 - extend the sequential reread/output pass to multi-input MarkDuplicates output
   once its merge-order application can be driven by compact decisions;
-- add adversarial tests for duplicate at EOF, giant duplicate families,
-  distant/missing mates, barcodes, optical duplicates, and multi-input sorting.
+- add more adversarial tests for distant/missing mates, barcodes, optical
+  duplicates, multi-input sorting, and randomized equivalence.

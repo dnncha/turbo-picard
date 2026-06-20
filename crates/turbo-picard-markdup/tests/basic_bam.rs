@@ -350,6 +350,102 @@ fn duplicate_scoring_ignores_bases_below_q15() {
 }
 
 #[test]
+fn marks_duplicate_pair_first_seen_at_eof() {
+    let tempdir = tempfile::tempdir().expect("tempdir exists");
+    let input = tempdir.path().join("input.bam");
+    let output = tempdir.path().join("output.bam");
+    let metrics = tempdir.path().join("metrics.txt");
+    write_duplicate_pair_family_fixture(&input, 2, true);
+    let config = MarkDuplicatesConfig {
+        input: input.display().to_string(),
+        inputs: vec![input.display().to_string()],
+        output: output.display().to_string(),
+        metrics_file: metrics.display().to_string(),
+        max_records_in_ram: 1,
+        tmp_dirs: vec![tempdir.path().display().to_string()],
+        remove_duplicates: false,
+        remove_sequencing_duplicates: false,
+        assume_sorted: true,
+        assume_sort_order: None,
+        validation_stringency: Some("SILENT".to_string()),
+        quiet: true,
+        create_index: false,
+        create_md5_file: false,
+        add_pg_tag_to_reads: true,
+        tag_duplicate_set_members: false,
+        duplicate_scoring_strategy: None,
+        read_name_regex: Some("null".to_string()),
+        tagging_policy: Some("DontTag".to_string()),
+        barcode_tag: None,
+        read_one_barcode_tag: None,
+        read_two_barcode_tag: None,
+        clear_dt: true,
+        optical_duplicate_pixel_distance: None,
+        compression_level: None,
+        reference_sequence: None,
+    };
+
+    turbo_picard_markdup::run(&config).expect("BAM duplicate marking succeeds");
+
+    assert_eq!(read_flags(&output), vec![99, 147, 99, 147, 1123, 1171]);
+    let metrics_text = std::fs::read_to_string(&metrics).expect("metrics file exists");
+    assert!(
+        metrics_text.contains("lib1\t0\t3\t0\t0\t0\t1\t0\t0.333333\t3\n"),
+        "{metrics_text}"
+    );
+}
+
+#[test]
+fn marks_large_duplicate_pair_family() {
+    let tempdir = tempfile::tempdir().expect("tempdir exists");
+    let input = tempdir.path().join("input.bam");
+    let output = tempdir.path().join("output.bam");
+    let metrics = tempdir.path().join("metrics.txt");
+    write_duplicate_pair_family_fixture(&input, 40, false);
+    let config = MarkDuplicatesConfig {
+        input: input.display().to_string(),
+        inputs: vec![input.display().to_string()],
+        output: output.display().to_string(),
+        metrics_file: metrics.display().to_string(),
+        max_records_in_ram: 3,
+        tmp_dirs: vec![tempdir.path().display().to_string()],
+        remove_duplicates: false,
+        remove_sequencing_duplicates: false,
+        assume_sorted: true,
+        assume_sort_order: None,
+        validation_stringency: Some("SILENT".to_string()),
+        quiet: true,
+        create_index: false,
+        create_md5_file: false,
+        add_pg_tag_to_reads: true,
+        tag_duplicate_set_members: true,
+        duplicate_scoring_strategy: None,
+        read_name_regex: Some("null".to_string()),
+        tagging_policy: Some("DontTag".to_string()),
+        barcode_tag: None,
+        read_one_barcode_tag: None,
+        read_two_barcode_tag: None,
+        clear_dt: true,
+        optical_duplicate_pixel_distance: None,
+        compression_level: None,
+        reference_sequence: None,
+    };
+
+    turbo_picard_markdup::run(&config).expect("BAM duplicate marking succeeds");
+
+    let flags = read_flags(&output);
+    assert_eq!(flags.len(), 80);
+    assert_eq!(flags.iter().filter(|flag| **flag & 0x400 != 0).count(), 78);
+    let tags = duplicate_set_member_tags(&output);
+    assert!(tags.iter().all(|(_, tag)| *tag == Some((40, 0))));
+    let metrics_text = std::fs::read_to_string(&metrics).expect("metrics file exists");
+    assert!(
+        metrics_text.contains("lib1\t0\t40\t0\t0\t0\t39\t0\t0.975\t1\n"),
+        "{metrics_text}"
+    );
+}
+
+#[test]
 fn paired_records_without_an_eligible_mate_are_not_marked_as_singleton_duplicates() {
     let tempdir = tempfile::tempdir().expect("tempdir exists");
     let input = tempdir.path().join("input.bam");
@@ -1201,6 +1297,59 @@ fn write_orphaned_pair_fixture(path: &std::path::Path) {
     let mut writer = duplicate_fixture_writer(path);
     for qname in [b"orphan-a".as_slice(), b"orphan-b".as_slice()] {
         write_mapped_pair_record(&mut writer, qname, 0x63, 10, 80, 74, b"ACGT", b"FFFF");
+    }
+}
+
+fn write_duplicate_pair_family_fixture(
+    path: &std::path::Path,
+    duplicate_pairs: usize,
+    duplicate_family_at_eof: bool,
+) {
+    let mut writer = duplicate_fixture_writer(path);
+    if duplicate_family_at_eof {
+        write_mapped_pair_record(
+            &mut writer,
+            b"unique-leading",
+            0x63,
+            100,
+            180,
+            84,
+            b"ACGT",
+            b"FFFF",
+        );
+        write_mapped_pair_record(
+            &mut writer,
+            b"unique-leading",
+            0x93,
+            180,
+            100,
+            -84,
+            b"TGCA",
+            b"FFFF",
+        );
+    }
+    for index in 0..duplicate_pairs {
+        let qname = format!("dup-family-{index:03}");
+        write_mapped_pair_record(
+            &mut writer,
+            qname.as_bytes(),
+            0x63,
+            10,
+            80,
+            74,
+            b"ACGT",
+            b"FFFF",
+        );
+        write_mapped_pair_record(
+            &mut writer,
+            qname.as_bytes(),
+            0x93,
+            80,
+            10,
+            -74,
+            b"TGCA",
+            b"FFFF",
+        );
     }
 }
 
