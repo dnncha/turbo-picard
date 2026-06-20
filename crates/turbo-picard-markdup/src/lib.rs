@@ -398,7 +398,7 @@ fn run_hts_container(
         )?;
     }
 
-    let duplicate_groups = duplicate_groups(&candidates, config.max_records_in_ram)?;
+    let duplicate_groups = duplicate_groups(&candidates, config.max_records_in_ram);
     let mut decisions = vec![RecordDecision::default(); records.len()];
 
     for group in &duplicate_groups {
@@ -918,16 +918,16 @@ fn parse_sam_integer(
 fn duplicate_groups(
     candidates: &[DuplicateCandidate],
     max_displaced_pair_records: usize,
-) -> Result<Vec<Vec<usize>>, MarkDuplicatesError> {
-    let mut keyed_pairs = collate_pair_key_rows(candidates, max_displaced_pair_records)?;
+) -> Vec<Vec<usize>> {
+    let mut keyed_pairs = collate_pair_key_rows(candidates, max_displaced_pair_records);
     keyed_pairs.sort_by(|left, right| left.0.cmp(&right.0));
-    Ok(collect_sorted_pair_groups(keyed_pairs))
+    collect_sorted_pair_groups(keyed_pairs)
 }
 
 fn collate_pair_key_rows(
     candidates: &[DuplicateCandidate],
     max_displaced_pair_records: usize,
-) -> Result<Vec<(BamDuplicateKey, [usize; 2])>, MarkDuplicatesError> {
+) -> Vec<(BamDuplicateKey, [usize; 2])> {
     let mut paired_by_name = HashMap::<InternedBytesId, usize>::default();
     let mut keyed_pairs = Vec::<(BamDuplicateKey, [usize; 2])>::new();
     let mut candidate_index = 0usize;
@@ -946,31 +946,34 @@ fn collate_pair_key_rows(
         if run_end > candidate_index + 1 && !paired_by_name.contains_key(&qname_id) {
             if let Some(unpaired_index) =
                 collate_adjacent_pair_run(candidate_index..run_end, candidates, &mut keyed_pairs)
-            {
-                insert_pending_pair_candidate(
+                && !insert_pending_pair_candidate(
                     qname_id,
                     unpaired_index,
                     &mut paired_by_name,
                     max_displaced_pair_records,
-                )?;
+                )
+            {
+                return collate_pair_key_rows_by_qname(candidates);
             }
         } else {
             for index in candidate_index..run_end {
-                if candidates[index].is_pair() {
-                    collate_displaced_pair_candidate(
+                if candidates[index].is_pair()
+                    && !collate_displaced_pair_candidate(
                         index,
                         candidates,
                         &mut paired_by_name,
                         &mut keyed_pairs,
                         max_displaced_pair_records,
-                    )?;
+                    )
+                {
+                    return collate_pair_key_rows_by_qname(candidates);
                 }
             }
         }
         candidate_index = run_end;
     }
 
-    Ok(keyed_pairs)
+    keyed_pairs
 }
 
 fn collate_adjacent_pair_run(
@@ -992,25 +995,61 @@ fn collate_adjacent_pair_run(
     first_index
 }
 
+fn collate_pair_key_rows_by_qname(
+    candidates: &[DuplicateCandidate],
+) -> Vec<(BamDuplicateKey, [usize; 2])> {
+    let mut pair_indices = candidates
+        .iter()
+        .enumerate()
+        .filter_map(|(index, candidate)| candidate.is_pair().then_some(index))
+        .collect::<Vec<_>>();
+    pair_indices.sort_by_key(|&index| (candidates[index].qname_id, index));
+
+    let mut pairs = Vec::<[usize; 2]>::new();
+    let mut first_index = None::<usize>;
+    let mut current_qname_id = None::<InternedBytesId>;
+
+    for candidate_index in pair_indices {
+        let qname_id = candidates[candidate_index].qname_id;
+        if current_qname_id != Some(qname_id) {
+            current_qname_id = Some(qname_id);
+            first_index = Some(candidate_index);
+            continue;
+        }
+        if let Some(first) = first_index.take() {
+            pairs.push([first, candidate_index]);
+        } else {
+            first_index = Some(candidate_index);
+        }
+    }
+
+    pairs.sort_by_key(|pair| pair[1]);
+    let mut keyed_pairs = Vec::<(BamDuplicateKey, [usize; 2])>::with_capacity(pairs.len());
+    for [first_index, second_index] in pairs {
+        push_pair_key_row(first_index, second_index, candidates, &mut keyed_pairs);
+    }
+    keyed_pairs
+}
+
 fn collate_displaced_pair_candidate(
     candidate_index: usize,
     candidates: &[DuplicateCandidate],
     paired_by_name: &mut HashMap<InternedBytesId, usize>,
     keyed_pairs: &mut Vec<(BamDuplicateKey, [usize; 2])>,
     max_displaced_pair_records: usize,
-) -> Result<(), MarkDuplicatesError> {
+) -> bool {
     let candidate = &candidates[candidate_index];
     if let Some(first_index) = paired_by_name.remove(&candidate.qname_id) {
         push_pair_key_row(first_index, candidate_index, candidates, keyed_pairs);
+        true
     } else {
         insert_pending_pair_candidate(
             candidate.qname_id,
             candidate_index,
             paired_by_name,
             max_displaced_pair_records,
-        )?;
+        )
     }
-    Ok(())
 }
 
 fn insert_pending_pair_candidate(
@@ -1018,14 +1057,12 @@ fn insert_pending_pair_candidate(
     candidate_index: usize,
     paired_by_name: &mut HashMap<InternedBytesId, usize>,
     max_displaced_pair_records: usize,
-) -> Result<(), MarkDuplicatesError> {
+) -> bool {
     if paired_by_name.len() >= max_displaced_pair_records {
-        return Err(MarkDuplicatesError::Operation(format!(
-            "MarkDuplicates displaced pair cache exceeded MAX_RECORDS_IN_RAM={max_displaced_pair_records}; external qname collation is not implemented yet"
-        )));
+        return false;
     }
     paired_by_name.insert(qname_id, candidate_index);
-    Ok(())
+    true
 }
 
 fn push_pair_key_row(
@@ -2046,7 +2083,7 @@ mod tests {
         ];
         let candidates = candidates_for_records(&records);
 
-        let groups = duplicate_groups(&candidates, 500_000).expect("pair grouping succeeds");
+        let groups = duplicate_groups(&candidates, 500_000);
 
         assert_eq!(groups, vec![vec![0, 1, 2, 3], vec![4, 5]]);
     }
@@ -2066,7 +2103,7 @@ mod tests {
         let candidates = candidates_for_records(&records);
 
         assert_eq!(
-            collate_pair_key_rows(&candidates, 500_000).expect("pair collation succeeds"),
+            collate_pair_key_rows(&candidates, 500_000),
             collate_pair_key_rows_legacy(&candidates)
         );
     }
@@ -2082,26 +2119,25 @@ mod tests {
         let candidates = candidates_for_records(&records);
 
         assert_eq!(
-            collate_pair_key_rows(&candidates, 500_000).expect("pair collation succeeds"),
+            collate_pair_key_rows(&candidates, 500_000),
             collate_pair_key_rows_legacy(&candidates)
         );
     }
 
     #[test]
-    fn pair_collation_errors_when_displaced_cache_exceeds_limit() {
+    fn pair_collation_falls_back_to_compact_qname_sort_when_cache_limit_is_reached() {
         let records = [
             record_with_name_flags_and_position(b"pending-a", 0x1, 10),
             record_with_name_flags_and_position(b"pending-b", 0x1, 20),
-            record_with_name_flags_and_position(b"pending-c", 0x1, 30),
+            record_with_name_flags_and_position(b"pending-c", 0x1, 50),
+            record_with_name_flags_and_position(b"pending-b", 0x1, 30),
+            record_with_name_flags_and_position(b"pending-a", 0x1, 40),
         ];
         let candidates = candidates_for_records(&records);
 
-        let error = collate_pair_key_rows(&candidates, 2).expect_err("cache limit is enforced");
-
-        assert!(
-            error
-                .to_string()
-                .contains("external qname collation is not implemented yet")
+        assert_eq!(
+            collate_pair_key_rows(&candidates, 2),
+            collate_pair_key_rows_legacy(&candidates)
         );
     }
 

@@ -54,8 +54,8 @@ vectors, and duplicate-group maps for the input.
   lookups for queryname-grouped candidates.
 - `MAX_RECORDS_IN_RAM` is now retained in `MarkDuplicatesConfig` and caps the
   displaced-pair cache. When unresolved distant mates exceed that cap, the
-  native engine returns an explicit external qname collation not-implemented
-  error instead of silently growing the cache without bound.
+  native engine falls back to compact qname-id collation instead of silently
+  growing the cache without bound.
 
 ## Tests
 
@@ -83,7 +83,8 @@ Remaining Phase 4 work:
 - spill compact duplicate candidates instead of retaining every full record;
 - replace retained full records with a sequential reread/output pass driven by
   the compact decision stream;
-- externally collate distant pairs by qname when needed;
+- replace the in-memory compact qname fallback with temporary-run qname
+  collation for very large distant-mate workloads;
 - externally sort fixed-width duplicate keys and scan groups once;
 - add adversarial tests for duplicate at EOF, giant duplicate families,
   distant/missing mates, barcodes, optical duplicates, and multi-input sorting.
