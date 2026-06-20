@@ -103,6 +103,9 @@ first appearing at EOF and large duplicate-pair families forced through low
 `MAX_RECORDS_IN_RAM` temp-run paths.
 Multi-BAM coverage also forces a one-record output locator sort through
 `TMP_DIR`.
+Additional low-memory pair-collation coverage now includes distant mates that
+must fall back to qname sorting, missing mates in the same stream, and repeated
+records sharing one qname.
 
 Blocked or not clean:
 
@@ -116,5 +119,5 @@ Remaining Phase 4 work:
 - spill compact duplicate candidates instead of retaining all candidates;
 - extend the compact-locator multi-input output path to CRAM or mixed
   multi-inputs without weakening reference handling;
-- add more adversarial tests for distant/missing mates, barcodes, optical
-  duplicates, multi-input sorting, and randomized equivalence.
+- add more adversarial tests for barcodes, optical duplicates, multi-input
+  sorting, tagging/removal combinations, and randomized equivalence.
