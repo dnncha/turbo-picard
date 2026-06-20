@@ -65,6 +65,27 @@ pub fn resolve_reference_sequence(
 }
 
 pub fn open_reader(path: impl AsRef<Path>, reference: Option<&str>) -> Result<bam::Reader, String> {
+    let mut reader = open_reader_without_threads(path, reference)?;
+    configure_reader_threads(&mut reader)?;
+    Ok(reader)
+}
+
+pub fn open_reader_with_threads(
+    path: impl AsRef<Path>,
+    reference: Option<&str>,
+    threads: usize,
+) -> Result<bam::Reader, String> {
+    let mut reader = open_reader_without_threads(path, reference)?;
+    reader
+        .set_threads(threads.max(1))
+        .map_err(|error| error.to_string())?;
+    Ok(reader)
+}
+
+fn open_reader_without_threads(
+    path: impl AsRef<Path>,
+    reference: Option<&str>,
+) -> Result<bam::Reader, String> {
     let path = path.as_ref();
     let path_text = path.to_string_lossy();
     let reference = resolve_reference_sequence(&path_text, reference)?;
@@ -74,7 +95,6 @@ pub fn open_reader(path: impl AsRef<Path>, reference: Option<&str>) -> Result<ba
             .set_reference(reference)
             .map_err(|error| error.to_string())?;
     }
-    configure_reader_threads(&mut reader)?;
     Ok(reader)
 }
 

@@ -46,6 +46,30 @@ pub fn bgzf_threads_for_env(
     default_threads(role, reported_cpus, env)
 }
 
+pub fn bgzf_reader_threads_per_input(simultaneous_readers: usize) -> Option<usize> {
+    let env = std::env::vars().collect::<BTreeMap<_, _>>();
+    Some(bgzf_reader_threads_per_input_for_env(
+        simultaneous_readers,
+        current_reported_cpus(),
+        &env,
+    ))
+}
+
+pub fn bgzf_reader_threads_per_input_for_env(
+    simultaneous_readers: usize,
+    reported_cpus: usize,
+    env: &BTreeMap<String, String>,
+) -> usize {
+    if positive_env_usize(env, "TURBO_PICARD_READER_THREADS").is_some() {
+        return bgzf_threads_for_env(HtsThreadRole::Reader, reported_cpus, env);
+    }
+    let reader_budget = bgzf_threads_for_env(HtsThreadRole::Reader, reported_cpus, env);
+    reader_budget
+        .checked_div(simultaneous_readers.max(1))
+        .unwrap_or(reader_budget)
+        .max(1)
+}
+
 fn explicit_threads(
     role: HtsThreadRole,
     reported_cpus: usize,
@@ -203,5 +227,26 @@ mod tests {
             bgzf_threads_for_env(HtsThreadRole::PipelineReader, 16, &env),
             5
         );
+    }
+
+    #[test]
+    fn broad_reader_budget_is_divided_across_simultaneous_inputs() {
+        let env = BTreeMap::new();
+        assert_eq!(bgzf_reader_threads_per_input_for_env(1, 16, &env), 8);
+        assert_eq!(bgzf_reader_threads_per_input_for_env(2, 16, &env), 4);
+        assert_eq!(bgzf_reader_threads_per_input_for_env(3, 16, &env), 2);
+        assert_eq!(bgzf_reader_threads_per_input_for_env(8, 16, &env), 1);
+
+        let env = BTreeMap::from([("TURBO_PICARD_THREADS".to_string(), "6".to_string())]);
+        assert_eq!(bgzf_reader_threads_per_input_for_env(3, 16, &env), 2);
+    }
+
+    #[test]
+    fn explicit_reader_override_is_per_reader() {
+        let env = BTreeMap::from([
+            ("TURBO_PICARD_THREADS".to_string(), "6".to_string()),
+            ("TURBO_PICARD_READER_THREADS".to_string(), "5".to_string()),
+        ]);
+        assert_eq!(bgzf_reader_threads_per_input_for_env(4, 16, &env), 5);
     }
 }

@@ -45,6 +45,11 @@ a dedicated application reader thread, such as large WGS/QC paths, use a smaller
 pipeline thread for the same CPU budget. Set
 ``TURBO_PICARD_PIPELINE_READER_THREADS`` only when profiling shows that this
 specialized path needs a different value from ``TURBO_PICARD_READER_THREADS``.
+When a command keeps multiple BAM/CRAM readers open at once, such as a k-way
+``MergeSamFiles`` stream merge, broad/default reader budgets are divided across
+those readers. ``TURBO_PICARD_READER_THREADS`` remains an explicit per-reader
+override for runs where profiling supports spending that many BGZF workers per
+open input.
 
 This helps most when the command is spending real time in BAM or CRAM
 compression, decompression, reference-backed CRAM work, or BAI generation after

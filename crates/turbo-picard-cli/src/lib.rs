@@ -17441,6 +17441,14 @@ fn open_bam_reader_with_reference(
     hts_io::open_reader(path, reference)
 }
 
+fn open_bam_reader_with_reference_and_threads(
+    path: impl AsRef<Path>,
+    reference: Option<&str>,
+    threads: usize,
+) -> Result<bam::Reader, String> {
+    hts_io::open_reader_with_threads(path, reference, threads)
+}
+
 fn open_bam_reader_for_args(
     path: impl AsRef<Path>,
     args: &BTreeMap<String, Vec<String>>,
@@ -18630,9 +18638,14 @@ fn write_sortsam_merged_runs(
     paths: &[PathBuf],
     sort_order: SortOrder,
 ) -> Result<(), String> {
+    let reader_threads =
+        turbo_picard_core::bgzf_threads::bgzf_reader_threads_per_input(paths.len()).unwrap_or(1);
     let mut readers = paths
         .iter()
-        .map(|path| open_bam_reader_with_reference(path, None).map_err(|error| error.to_string()))
+        .map(|path| {
+            open_bam_reader_with_reference_and_threads(path, None, reader_threads)
+                .map_err(|error| error.to_string())
+        })
         .collect::<Result<Vec<_>, _>>()?;
     let mut heap = BinaryHeap::new();
 
@@ -18790,10 +18803,13 @@ fn write_kway_merged_records(
     reference: Option<&str>,
     interval_filter: Option<&BTreeMap<i32, Vec<(u64, u64)>>>,
 ) -> Result<(), String> {
+    let reader_threads =
+        turbo_picard_core::bgzf_threads::bgzf_reader_threads_per_input(input_plans.len())
+            .unwrap_or(1);
     let mut readers = input_plans
         .iter()
         .map(|input| {
-            open_bam_reader_with_reference(&input.path, reference)
+            open_bam_reader_with_reference_and_threads(&input.path, reference, reader_threads)
                 .map_err(|error| error.to_string())
         })
         .collect::<Result<Vec<_>, _>>()?;
