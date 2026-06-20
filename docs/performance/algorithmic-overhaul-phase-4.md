@@ -68,6 +68,9 @@ vectors, and duplicate-group maps for the input.
 - Pair and fragment duplicate-group decisions are now applied as each sorted
   group is completed. The production path no longer retains the complete list of
   duplicate groups before updating the ordinal-indexed decision stream.
+- Duplicate-group scans now compute unique read-name counts, paired set size,
+  and duplicate representative selection in one qname-score pass per group
+  rather than rebuilding separate maps and rescanning qnames for each metric.
 
 ## Tests
 

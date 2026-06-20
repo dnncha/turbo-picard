@@ -893,9 +893,9 @@ fn apply_pair_duplicate_group(
     if group.len() < 2 {
         return;
     }
-    let paired_set_size = paired_duplicate_set_size(group, candidates);
-    if !has_multiple_read_names(group, candidates) {
-        if let Some(set_size) = paired_set_size {
+    let stats = DuplicateGroupStats::from_group(group, candidates);
+    if !stats.has_multiple_read_names {
+        if let Some(set_size) = stats.paired_set_size {
             add_duplicate_set(summary, set_size, Some(set_size));
             if let Some(candidate_index) = group.first() {
                 add_duplicate_set(
@@ -908,11 +908,10 @@ fn apply_pair_duplicate_group(
         return;
     }
 
-    let representative_candidate_index = best_duplicate_representative_index(group, candidates);
-    let representative_qname_id = candidates[representative_candidate_index].qname_id;
+    let representative_qname_id = candidates[stats.representative_candidate_index].qname_id;
     let optical_duplicates =
         optical_duplicate_record_indices(group, candidates, representative_qname_id, config);
-    if let Some(set_size) = paired_set_size {
+    if let Some(set_size) = stats.paired_set_size {
         let optical_names = u64::try_from(optical_duplicates.read_names).unwrap_or(u64::MAX);
         let non_optical_size = (optical_names < set_size).then_some(set_size - optical_names);
         add_duplicate_set(summary, set_size, non_optical_size);
@@ -1418,7 +1417,11 @@ fn apply_fragment_duplicate_group(
     summary: &mut MarkDuplicatesSummary,
     library_registry: &mut LibraryRegistry,
 ) {
-    if group.len() < 2 || !has_multiple_read_names(group, candidates) {
+    if group.len() < 2 {
+        return;
+    }
+    let stats = DuplicateGroupStats::from_group(group, candidates);
+    if !stats.has_multiple_read_names {
         return;
     }
 
@@ -1441,8 +1444,7 @@ fn apply_fragment_duplicate_group(
         return;
     }
 
-    let representative_index = best_duplicate_representative_index(group, candidates);
-    let representative_qname_id = candidates[representative_index].qname_id;
+    let representative_qname_id = candidates[stats.representative_candidate_index].qname_id;
     for candidate_index in group.iter().copied() {
         if candidates[candidate_index].qname_id == representative_qname_id {
             continue;
@@ -1752,53 +1754,63 @@ fn quality_score(record: &bam::Record) -> u64 {
         .sum()
 }
 
-fn has_multiple_read_names(group: &[usize], candidates: &[DuplicateCandidate]) -> bool {
-    let Some(first_index) = group.first() else {
-        return false;
-    };
-    let first_name = candidates[*first_index].qname_id;
-    group
-        .iter()
-        .skip(1)
-        .any(|index| candidates[*index].qname_id != first_name)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct DuplicateGroupStats {
+    has_multiple_read_names: bool,
+    paired_set_size: Option<u64>,
+    representative_candidate_index: usize,
 }
 
+impl DuplicateGroupStats {
+    fn from_group(group: &[usize], candidates: &[DuplicateCandidate]) -> Self {
+        let mut scores_by_name = HashMap::<InternedBytesId, (usize, u64)>::default();
+        let mut has_pair = false;
+
+        for index in group.iter().copied() {
+            let candidate = &candidates[index];
+            has_pair |= candidate.is_pair();
+            let entry = scores_by_name
+                .entry(candidate.qname_id)
+                .or_insert((index, 0));
+            entry.1 += candidate.duplicate_score;
+        }
+
+        let unique_name_count = scores_by_name.len();
+        let representative_candidate_index = scores_by_name
+            .into_values()
+            .max_by(|left, right| {
+                left.1.cmp(&right.1).then_with(|| {
+                    candidates[right.0]
+                        .record_index
+                        .cmp(&candidates[left.0].record_index)
+                })
+            })
+            .map(|(index, _)| index)
+            .expect("non-empty duplicate group");
+        let paired_set_size = has_pair
+            .then(|| u64::try_from(unique_name_count).ok())
+            .flatten()
+            .filter(|size| *size > 0);
+
+        Self {
+            has_multiple_read_names: unique_name_count > 1,
+            paired_set_size,
+            representative_candidate_index,
+        }
+    }
+}
+
+#[cfg(test)]
 fn paired_duplicate_set_size(group: &[usize], candidates: &[DuplicateCandidate]) -> Option<u64> {
-    if !group.iter().any(|index| candidates[*index].is_pair()) {
-        return None;
-    }
-    let mut names = HashSet::<InternedBytesId>::default();
-    for index in group.iter().copied() {
-        names.insert(candidates[index].qname_id);
-    }
-    u64::try_from(names.len()).ok().filter(|size| *size > 0)
+    DuplicateGroupStats::from_group(group, candidates).paired_set_size
 }
 
+#[cfg(test)]
 fn best_duplicate_representative_index(
     group: &[usize],
     candidates: &[DuplicateCandidate],
 ) -> usize {
-    let mut scores_by_name = HashMap::<InternedBytesId, (usize, u64)>::default();
-
-    for index in group.iter().copied() {
-        let candidate = &candidates[index];
-        let score = candidate.duplicate_score;
-        let name = candidate.qname_id;
-        let entry = scores_by_name.entry(name).or_insert((index, 0));
-        entry.1 += score;
-    }
-
-    scores_by_name
-        .into_values()
-        .max_by(|left, right| {
-            left.1.cmp(&right.1).then_with(|| {
-                candidates[right.0]
-                    .record_index
-                    .cmp(&candidates[left.0].record_index)
-            })
-        })
-        .map(|(index, _)| index)
-        .expect("non-empty duplicate group")
+    DuplicateGroupStats::from_group(group, candidates).representative_candidate_index
 }
 
 fn add_duplicate_set(
@@ -2313,6 +2325,23 @@ mod tests {
             paired_duplicate_set_size(&[0, 1, 2, 3], &candidates),
             Some(2)
         );
+    }
+
+    #[test]
+    fn duplicate_group_stats_computes_name_metrics_in_one_pass() {
+        let records = [
+            record_with_name_and_qualities(b"dup-a", &[10], 0x1),
+            record_with_name_and_qualities(b"dup-a", &[20], 0x1),
+            record_with_name_and_qualities(b"dup-b", &[35], 0x1),
+            record_with_name_and_qualities(b"dup-c", &[5], 0x0),
+        ];
+        let candidates = candidates_for_records(&records);
+
+        let stats = DuplicateGroupStats::from_group(&[0, 1, 2, 3], &candidates);
+
+        assert!(stats.has_multiple_read_names);
+        assert_eq!(stats.paired_set_size, Some(3));
+        assert_eq!(stats.representative_candidate_index, 2);
     }
 
     #[test]
