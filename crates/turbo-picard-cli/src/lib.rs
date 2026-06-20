@@ -2,6 +2,7 @@
 
 mod cmm_pipeline;
 mod hs_metrics;
+mod resource_plan;
 
 const PICARD_REFERENCE_COMMANDS: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
@@ -821,6 +822,7 @@ fn run_doctor(program_name: &str) {
     println!("cpu_arch={}", env::consts::ARCH);
     println!("cpu_os={}", env::consts::OS);
     print_acceleration_status_lines();
+    print_resource_plan_lines();
     match env::var("TURBO_PICARD_REFERENCE")
         .ok()
         .filter(|value| !value.trim().is_empty())
@@ -998,6 +1000,37 @@ Output fields:
   gpu_runtime             Detected GPU runtime, if visible
   gpu_acceleration        Whether production GPU acceleration is enabled"
     );
+}
+
+fn print_resource_plan_lines() {
+    let plan = resource_plan::resolve_current();
+    println!("resource_plan_reported_cpus={}", plan.reported_cpus);
+    println!(
+        "resource_plan_global_thread_ceiling={}",
+        plan.global_thread_ceiling
+    );
+    println!(
+        "resource_plan_bgzf_reader_threads={}",
+        plan.bgzf_reader_threads
+    );
+    println!(
+        "resource_plan_bgzf_writer_threads={}",
+        plan.bgzf_writer_threads
+    );
+    println!(
+        "resource_plan_bgzf_index_threads={}",
+        plan.bgzf_index_threads
+    );
+    println!(
+        "resource_plan_bgzf_pipeline_reader_threads={}",
+        plan.bgzf_pipeline_reader_threads
+    );
+    println!(
+        "resource_plan_application_worker_budget={}",
+        plan.application_worker_budget
+    );
+    println!("resource_plan_cmm_batch_size={}", plan.cmm_batch_size);
+    println!("resource_plan_cmm_queue_depth={}", plan.cmm_queue_depth);
 }
 
 fn run_acceleration_status() -> Result<(), String> {

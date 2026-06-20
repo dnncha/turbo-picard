@@ -76,12 +76,25 @@ fn doctor_reports_runtime_and_fallback_state() {
             fallback.display().to_string(),
         )
         .env("TURBO_PICARD_THREADS", "2")
+        .env("TURBO_PICARD_MAX_THREADS", "6")
+        .env("TURBO_PICARD_CMM_BATCH_SIZE", "1024")
+        .env("TURBO_PICARD_CMM_QUEUE_DEPTH", "4")
         .assert()
         .success()
         .stdout(predicate::str::contains("turbo_picard_version="))
         .stdout(predicate::str::contains("picard_reference_version=3.4.0"))
         .stdout(predicate::str::contains("backend=cpu"))
         .stdout(predicate::str::contains("htslib_worker_threads=2"))
+        .stdout(predicate::str::contains(
+            "resource_plan_global_thread_ceiling=6",
+        ))
+        .stdout(predicate::str::contains(
+            "resource_plan_bgzf_reader_threads=2",
+        ))
+        .stdout(predicate::str::contains(
+            "resource_plan_cmm_batch_size=1024",
+        ))
+        .stdout(predicate::str::contains("resource_plan_cmm_queue_depth=4"))
         .stdout(predicate::str::contains(format!(
             "fallback_command={}",
             fallback.display()
