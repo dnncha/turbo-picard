@@ -1787,42 +1787,12 @@ fn run_sortsam(args: &[String]) -> Result<(), String> {
     }
 
     let reference = picard_reference(&args)?;
-    let reader = open_bam_reader_with_reference(&input, reference.as_deref())
+    let mut reader = open_bam_reader_with_reference(&input, reference.as_deref())
         .map_err(|error| error.to_string())?;
     let header = sorted_header(reader.header(), sort_order);
     let format = output_format(&output)?;
     if create_index && format != bam::Format::Bam {
         return Err("SortSam CREATE_INDEX=true requires BAM output".to_string());
-    }
-
-    if input_is_sorted(&input, sort_order, reference.as_deref())? {
-        let mut reader = open_bam_reader_with_reference(&input, reference.as_deref())?;
-        let mut writer = bam_writer_for_path_with_reference(
-            &output,
-            &header,
-            format,
-            reference.as_deref(),
-            compression_level,
-        )?;
-        for record in reader.records() {
-            let record = record.map_err(|error| error.to_string())?;
-            writer.write(&record).map_err(|error| error.to_string())?;
-        }
-        drop(writer);
-        write_requested_sidecars(&output, create_md5_file, create_index)?;
-        return Ok(());
-    }
-
-    let mut reader = open_bam_reader_with_reference(&input, reference.as_deref())?;
-    let mut records = reader
-        .records()
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|error| error.to_string())?;
-
-    match sort_order {
-        SortOrder::Coordinate => records.sort_unstable_by(compare_coordinate),
-        SortOrder::QueryName => records.sort_unstable_by(compare_queryname),
-        SortOrder::Unsorted => unreachable!("SortSam rejects SORT_ORDER=unsorted"),
     }
 
     let mut writer = bam_writer_for_path_with_reference(
@@ -1832,9 +1802,14 @@ fn run_sortsam(args: &[String]) -> Result<(), String> {
         reference.as_deref(),
         compression_level,
     )?;
-    for record in records {
-        writer.write(&record).map_err(|error| error.to_string())?;
-    }
+    write_sortsam_bounded_records(
+        &mut reader,
+        &mut writer,
+        &header,
+        sort_order,
+        &tmp_dir,
+        max_records_in_ram,
+    )?;
     drop(writer);
 
     write_requested_sidecars(&output, create_md5_file, create_index)
@@ -17602,18 +17577,257 @@ fn header_declares_sort_order(header: &bam::HeaderView, sort_order: SortOrder) -
     )
 }
 
-fn input_is_sorted(
-    path: &str,
+const SORTSAM_MERGE_FAN_IN: usize = 32;
+
+fn write_sortsam_bounded_records(
+    reader: &mut bam::Reader,
+    writer: &mut bam::Writer,
+    header: &bam::Header,
     sort_order: SortOrder,
-    reference: Option<&str>,
-) -> Result<bool, String> {
-    let mut reader =
-        open_bam_reader_with_reference(path, reference).map_err(|error| error.to_string())?;
-    if header_declares_sort_order(reader.header(), sort_order) {
-        return Ok(true);
+    tmp_dir: &Path,
+    max_records_in_ram: usize,
+) -> Result<(), String> {
+    let max_records_in_ram = max_records_in_ram.max(1);
+    let mut run_set = SortSamTempRuns::new(tmp_dir.to_path_buf());
+    let mut records = Vec::<(bam::Record, u64)>::with_capacity(max_records_in_ram.min(8192));
+    let mut previous = None::<bam::Record>;
+    let mut monotonic = true;
+
+    for (ordinal, record) in reader.records().enumerate() {
+        let record = record.map_err(|error| error.to_string())?;
+        if let Some(previous) = previous.as_ref()
+            && compare_for_sort_order(previous, &record, sort_order) == Ordering::Greater
+        {
+            monotonic = false;
+        }
+        previous = Some(record.clone());
+        records.push((record, ordinal as u64));
+        if records.len() >= max_records_in_ram {
+            write_sortsam_temp_run(&mut run_set, header, sort_order, &mut records)?;
+        }
     }
-    input_reader_is_sorted(&mut reader, sort_order)
+
+    if run_set.paths.is_empty() {
+        if !monotonic {
+            stable_sort_bam_records(&mut records, sort_order);
+        }
+        for (record, _) in records {
+            writer.write(&record).map_err(|error| error.to_string())?;
+        }
+        return Ok(());
+    }
+
+    if !records.is_empty() {
+        write_sortsam_temp_run(&mut run_set, header, sort_order, &mut records)?;
+    }
+    if monotonic {
+        write_sortsam_runs_sequentially(writer, &run_set.paths)
+    } else {
+        coalesce_sortsam_runs(&mut run_set, header, sort_order)?;
+        write_sortsam_merged_runs(writer, &run_set.paths, sort_order)
+    }
 }
+
+fn write_sortsam_temp_run(
+    run_set: &mut SortSamTempRuns,
+    header: &bam::Header,
+    sort_order: SortOrder,
+    records: &mut Vec<(bam::Record, u64)>,
+) -> Result<(), String> {
+    stable_sort_bam_records(records, sort_order);
+    let path = run_set.create_registered_path()?;
+    {
+        let mut writer = bam_writer_for_temp_run(&path, header)?;
+        for (record, _) in records.iter() {
+            writer.write(record).map_err(|error| error.to_string())?;
+        }
+    }
+    records.clear();
+    Ok(())
+}
+
+fn stable_sort_bam_records(records: &mut [(bam::Record, u64)], sort_order: SortOrder) {
+    records.sort_by(|left, right| {
+        compare_for_sort_order(&left.0, &right.0, sort_order).then_with(|| left.1.cmp(&right.1))
+    });
+}
+
+fn coalesce_sortsam_runs(
+    run_set: &mut SortSamTempRuns,
+    header: &bam::Header,
+    sort_order: SortOrder,
+) -> Result<(), String> {
+    while run_set.paths.len() > SORTSAM_MERGE_FAN_IN {
+        let old_paths = run_set.paths.clone();
+        let mut new_paths = Vec::new();
+        for chunk in old_paths.chunks(SORTSAM_MERGE_FAN_IN) {
+            let output = run_set.create_registered_path()?;
+            {
+                let mut writer = bam_writer_for_temp_run(&output, header)?;
+                write_sortsam_merged_runs(&mut writer, chunk, sort_order)?;
+            }
+            new_paths.push(output);
+            for path in chunk {
+                remove_sortsam_run_if_exists(path)?;
+            }
+        }
+        run_set.paths = new_paths;
+    }
+    Ok(())
+}
+
+fn write_sortsam_runs_sequentially(
+    writer: &mut bam::Writer,
+    paths: &[PathBuf],
+) -> Result<(), String> {
+    for path in paths {
+        let mut reader =
+            open_bam_reader_with_reference(path, None).map_err(|error| error.to_string())?;
+        while let Some(record) = read_next_sortsam_run_record(&mut reader)? {
+            writer.write(&record).map_err(|error| error.to_string())?;
+        }
+    }
+    Ok(())
+}
+
+fn write_sortsam_merged_runs(
+    writer: &mut bam::Writer,
+    paths: &[PathBuf],
+    sort_order: SortOrder,
+) -> Result<(), String> {
+    let mut readers = paths
+        .iter()
+        .map(|path| open_bam_reader_with_reference(path, None).map_err(|error| error.to_string()))
+        .collect::<Result<Vec<_>, _>>()?;
+    let mut heap = BinaryHeap::new();
+
+    for (run_index, reader) in readers.iter_mut().enumerate() {
+        if let Some(record) = read_next_sortsam_run_record(reader)? {
+            heap.push(SortSamRunRecord {
+                record,
+                run_index,
+                sort_order,
+            });
+        }
+    }
+
+    while let Some(item) = heap.pop() {
+        let run_index = item.run_index;
+        writer
+            .write(&item.record)
+            .map_err(|error| error.to_string())?;
+        if let Some(record) = read_next_sortsam_run_record(&mut readers[run_index])? {
+            heap.push(SortSamRunRecord {
+                record,
+                run_index,
+                sort_order,
+            });
+        }
+    }
+    Ok(())
+}
+
+fn read_next_sortsam_run_record(reader: &mut bam::Reader) -> Result<Option<bam::Record>, String> {
+    let mut record = bam::Record::new();
+    match reader.read(&mut record) {
+        Some(Ok(())) => Ok(Some(record)),
+        Some(Err(error)) => Err(error.to_string()),
+        None => Ok(None),
+    }
+}
+
+fn bam_writer_for_temp_run(path: &Path, header: &bam::Header) -> Result<bam::Writer, String> {
+    let output = path
+        .to_str()
+        .ok_or_else(|| "SortSam temporary path is not valid UTF-8".to_string())?;
+    bam_writer_for_path(output, header, bam::Format::Bam, None)
+}
+
+struct SortSamTempRuns {
+    tmp_dir: PathBuf,
+    paths: Vec<PathBuf>,
+    next_index: u64,
+}
+
+impl SortSamTempRuns {
+    fn new(tmp_dir: PathBuf) -> Self {
+        Self {
+            tmp_dir,
+            paths: Vec::new(),
+            next_index: 0,
+        }
+    }
+
+    fn create_registered_path(&mut self) -> Result<PathBuf, String> {
+        fs::create_dir_all(&self.tmp_dir).map_err(|error| error.to_string())?;
+        loop {
+            let path = self.tmp_dir.join(format!(
+                "turbo-picard-sortsam-{}-{}.bam",
+                process::id(),
+                self.next_index
+            ));
+            self.next_index += 1;
+            match fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&path)
+            {
+                Ok(_) => {
+                    self.paths.push(path.clone());
+                    return Ok(path);
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(error) => return Err(error.to_string()),
+            }
+        }
+    }
+}
+
+impl Drop for SortSamTempRuns {
+    fn drop(&mut self) {
+        for path in self.paths.drain(..) {
+            let _ = remove_sortsam_run_if_exists(&path);
+        }
+    }
+}
+
+fn remove_sortsam_run_if_exists(path: &Path) -> Result<(), String> {
+    match fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error.to_string()),
+    }
+}
+
+struct SortSamRunRecord {
+    record: bam::Record,
+    run_index: usize,
+    sort_order: SortOrder,
+}
+
+impl Ord for SortSamRunRecord {
+    fn cmp(&self, other: &Self) -> Ordering {
+        // Runs are created from contiguous input ranges, so run order is the
+        // stable ordinal tie-breaker for equal keys across runs.
+        compare_for_sort_order(&other.record, &self.record, self.sort_order)
+            .then_with(|| other.run_index.cmp(&self.run_index))
+    }
+}
+
+impl PartialOrd for SortSamRunRecord {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl PartialEq for SortSamRunRecord {
+    fn eq(&self, other: &Self) -> bool {
+        compare_for_sort_order(&self.record, &other.record, self.sort_order) == Ordering::Equal
+            && self.run_index == other.run_index
+    }
+}
+
+impl Eq for SortSamRunRecord {}
 
 fn input_reader_is_sorted(reader: &mut bam::Reader, sort_order: SortOrder) -> Result<bool, String> {
     if sort_order == SortOrder::Unsorted {

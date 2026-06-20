@@ -14,15 +14,17 @@ ordering semantics into keys while the sorter owns bounded memory, temporary
 runs, deterministic merging, cleanup, and metrics.
 
 The first command integrations are `SortVcf`, `MergeVcfs`, sorted
-`LiftoverVcf` lifted output, and the SAM-text `SortSam` fast path. These feed
+`LiftoverVcf` lifted output, and `SortSam`. VCF and SAM-text adapters feed
 compact ordering keys and raw record-line payloads through the shared sorter.
 Existing header validation is preserved. Full streaming VCF parsing is still
 deferred to the later VCF streaming phase.
 
-`SortSam` BAM/CRAM sorting still uses the previous full-record vector path.
-Replacing it without violating `#![forbid(unsafe_code)]` needs a safe temporary
-BAM/CRAM run-file merge adapter, because rust-htslib does not expose raw BAM
-record bytes as a public safe API for opaque sorter payloads.
+`SortSam` BAM/CRAM input uses a safe temporary-BAM run-file adapter rather than
+opaque sorter payloads, because rust-htslib does not expose raw BAM record bytes
+as a public safe API. The adapter reads input once, detects monotonicity during
+that pass, stable-sorts bounded chunks with an input ordinal, writes temporary
+BAM runs under `TMP_DIR`, concatenates runs for monotonic input, and performs
+bounded-fan-in k-way merge for unsorted input.
 
 ## Implemented
 
@@ -33,6 +35,8 @@ record bytes as a public safe API for opaque sorter payloads.
 - drop-time cleanup for partial runs;
 - bounded merge fan-in with intermediate merge passes;
 - metrics for spills, resident records, estimated bytes, run count, and bytes written.
+- safe temporary-BAM run sorting for `SortSam` BAM/CRAM paths, bounded by
+  `MAX_RECORDS_IN_RAM`.
 
 ## Tests
 
@@ -46,10 +50,11 @@ Covered in `crates/turbo-picard-core/src/external_sort.rs`:
 - byte-limit spill instrumentation;
 - cleanup after dropping a sorter with partial runs.
 
-Additional `SortVcf`, `MergeVcfs`, `LiftoverVcf`, and SAM-text `SortSam` CLI
-coverage forces one-record external runs with `MAX_RECORDS_IN_RAM=1`, uses
-custom `TMP_DIR` values, verifies stable/sorted output ordering, and asserts
-temporary run cleanup.
+Additional `SortVcf`, `MergeVcfs`, `LiftoverVcf`, and `SortSam` CLI coverage
+forces one-record external runs with `MAX_RECORDS_IN_RAM=1`, uses custom
+`TMP_DIR` values, verifies stable/sorted output ordering, and asserts temporary
+run cleanup. The `SortSam` BAM test includes an inversion at the final record and
+duplicate equal sort keys to check stable tie-breaking.
 
 Passing:
 
@@ -146,3 +151,29 @@ Result:
 | Records | MAX_RECORDS_IN_RAM | Wall seconds | Max RSS bytes | Temp cleanup |
 | ---: | ---: | ---: | ---: | --- |
 | 5000 | 1 | 1.00 | 9,781,248 | PASS |
+
+Release command shape:
+
+```bash
+./target/release/picard SortSam \
+  I=queryname.bam \
+  O=coordinate.sam \
+  SO=coordinate \
+  MAX_RECORDS_IN_RAM=1 \
+  TMP_DIR=sort-tmp \
+  QUIET=true
+```
+
+Synthetic input: 5,000 reverse-position records converted to queryname-sorted
+BAM, then coordinate-sorted from BAM to SAM with forced one-record temporary BAM
+runs.
+
+Result:
+
+| Records | MAX_RECORDS_IN_RAM | Wall seconds | Max RSS bytes | Temp cleanup |
+| ---: | ---: | ---: | ---: | --- |
+| 5000 | 1 | 77.44 | 11,485,184 | PASS |
+
+This is an adversarial bounded-memory stress run, not a normal performance
+claim. The one-record cap intentionally forces thousands of tiny BAM files and
+merge-pass overhead.

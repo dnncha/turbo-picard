@@ -601,6 +601,72 @@ fn sortsam_writes_requested_bam_sidecars() {
 }
 
 #[test]
+fn sortsam_bam_uses_bounded_temp_runs_for_coordinate_sort() {
+    let tempdir = tempfile::tempdir().expect("tempdir exists");
+    let input_sam = tempdir.path().join("input.sam");
+    let input_bam = tempdir.path().join("queryname.bam");
+    let output = tempdir.path().join("coordinate.sam");
+    let sort_tmp = tempdir.path().join("sort-tmp");
+    fs::create_dir(&sort_tmp).expect("sort tmp exists");
+    fs::write(
+        &input_sam,
+        concat!(
+            "@HD\tVN:1.6\tSO:unsorted\n",
+            "@SQ\tSN:chr1\tLN:1000\n",
+            "a10\t0\tchr1\t10\t60\t4M\t*\t0\t0\tGGGG\tFFFF\n",
+            "b20\t0\tchr1\t20\t60\t4M\t*\t0\t0\tAAAA\tFFFF\n",
+            "b20\t0\tchr1\t20\t60\t4M\t*\t0\t0\tTTTT\tFFFF\n",
+            "z05\t0\tchr1\t5\t60\t4M\t*\t0\t0\tCCCC\tFFFF\n",
+        ),
+    )
+    .expect("input fixture is written");
+
+    Command::cargo_bin("picard")
+        .expect("binary exists")
+        .args([
+            "SortSam",
+            &format!("I={}", input_sam.display()),
+            &format!("O={}", input_bam.display()),
+            "SO=queryname",
+            "QUIET=true",
+        ])
+        .assert()
+        .success();
+
+    Command::cargo_bin("picard")
+        .expect("binary exists")
+        .args([
+            "SortSam",
+            &format!("I={}", input_bam.display()),
+            &format!("O={}", output.display()),
+            "SO=coordinate",
+            "MAX_RECORDS_IN_RAM=1",
+            &format!("TMP_DIR={}", sort_tmp.display()),
+            "QUIET=true",
+        ])
+        .assert()
+        .success();
+
+    let output_sam = fs::read_to_string(&output).expect("output SAM exists");
+    assert_eq!(record_names(&output_sam), vec!["z05", "a10", "b20", "b20"]);
+    assert_eq!(
+        output_sam
+            .lines()
+            .filter(|line| !line.starts_with('@'))
+            .map(|line| line.split('\t').nth(9).expect("sequence field"))
+            .collect::<Vec<_>>(),
+        vec!["CCCC", "GGGG", "AAAA", "TTTT"]
+    );
+    assert!(
+        fs::read_dir(&sort_tmp)
+            .expect("sort tmp readable")
+            .next()
+            .is_none(),
+        "SortSam BAM temp runs should be cleaned"
+    );
+}
+
+#[test]
 fn sortsam_streams_already_sorted_input() {
     let tempdir = tempfile::tempdir().expect("tempdir exists");
     let input = tempdir.path().join("input.sam");
