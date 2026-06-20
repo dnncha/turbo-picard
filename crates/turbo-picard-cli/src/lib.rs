@@ -6021,13 +6021,7 @@ fn run_updatevcfsequencedictionary(args: &[String]) -> Result<(), String> {
 
     let dictionary_text = fs::read_to_string(dictionary_path).map_err(|error| error.to_string())?;
     let contig_lines = vcf_contig_lines_from_dictionary(&dictionary_text)?;
-    let input_text = read_text_or_gzip(&input)?;
-    let output_text = replace_vcf_contig_header(&input_text, &contig_lines)?;
-    write_text_or_gzip(&output, &output_text)?;
-    if create_index && has_extension(&output, "vcf") {
-        write_vcf_idx_sidecar(&output, &output_text)?;
-    }
-    Ok(())
+    stream_vcf_contig_header_replacement(&input, &output, &contig_lines, create_index)
 }
 
 fn run_liftovervcf(args: &[String]) -> Result<(), String> {
@@ -7798,6 +7792,53 @@ fn replace_vcf_contig_header(input_text: &str, contig_lines: &[String]) -> Resul
         return Err("VCF input is missing #CHROM header".to_string());
     }
     Ok(output)
+}
+
+fn stream_vcf_contig_header_replacement(
+    input: &str,
+    output: &str,
+    contig_lines: &[String],
+    create_index: bool,
+) -> Result<(), String> {
+    let mut reader = open_text_or_gzip_reader(input)?;
+    let mut writer = StreamingTextOutput::create(output, "updatevcfsequencedictionary")?;
+    let mut index = (create_index && has_extension(output, "vcf")).then(VcfIndexOffsets::default);
+    let mut line = String::new();
+    let mut inserted_contigs = false;
+    let mut saw_column_header = false;
+
+    loop {
+        line.clear();
+        let bytes_read = reader
+            .read_line(&mut line)
+            .map_err(|error| error.to_string())?;
+        if bytes_read == 0 {
+            break;
+        }
+        let trimmed = line.trim_end_matches(['\r', '\n']);
+        if trimmed.starts_with("##contig=<") {
+            continue;
+        }
+        if trimmed.starts_with("#CHROM") && !inserted_contigs {
+            for contig in contig_lines {
+                writer.write_line(contig, false, index.as_mut())?;
+            }
+            inserted_contigs = true;
+        }
+        if trimmed.starts_with("#CHROM") {
+            saw_column_header = true;
+        }
+        writer.write_line(trimmed, !trimmed.starts_with('#'), index.as_mut())?;
+    }
+
+    if !saw_column_header {
+        return Err("VCF input is missing #CHROM header".to_string());
+    }
+    writer.persist()?;
+    if let Some(index) = index {
+        index.write_sidecar(output)?;
+    }
+    Ok(())
 }
 
 fn reject_unsupported_replacesamheader_args(

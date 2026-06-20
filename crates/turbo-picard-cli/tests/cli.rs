@@ -8350,6 +8350,108 @@ fn updatevcfsequencedictionary_writes_index_for_vcf_when_requested() {
 }
 
 #[test]
+fn updatevcfsequencedictionary_streams_gzip_input_and_output() {
+    let tempdir = tempfile::tempdir().expect("tempdir exists");
+    let input = tempdir.path().join("input.vcf.gz");
+    let dictionary = tempdir.path().join("reference.dict");
+    let output = tempdir.path().join("output.vcf.gz");
+    {
+        let file = fs::File::create(&input).expect("gzip VCF can be created");
+        let mut encoder = flate2::write::GzEncoder::new(file, flate2::Compression::default());
+        encoder
+            .write_all(
+                concat!(
+                    "##fileformat=VCFv4.2\n",
+                    "##contig=<ID=old,length=10>\n",
+                    "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\n",
+                    "chr2\t7\t.\tA\tC\t.\tPASS\t.\n",
+                )
+                .as_bytes(),
+            )
+            .expect("gzip VCF fixture is written");
+        encoder.finish().expect("gzip VCF is finished");
+    }
+    fs::write(
+        &dictionary,
+        concat!(
+            "@HD\tVN:1.6\n",
+            "@SQ\tSN:chr1\tLN:1000\n",
+            "@SQ\tSN:chr2\tLN:2000\n",
+        ),
+    )
+    .expect("dictionary is written");
+
+    Command::cargo_bin("picard")
+        .expect("binary exists")
+        .args([
+            "UpdateVcfSequenceDictionary",
+            &format!("I={}", input.display()),
+            &format!("O={}", output.display()),
+            &format!("SD={}", dictionary.display()),
+            "VALIDATION_STRINGENCY=SILENT",
+            "QUIET=true",
+        ])
+        .assert()
+        .success();
+
+    let output = read_gzip_to_string(output);
+    assert!(output.contains("##contig=<ID=chr1,length=1000>\n"));
+    assert!(output.contains("##contig=<ID=chr2,length=2000>\n"));
+    assert!(!output.contains("ID=old"));
+    assert!(output.contains("chr2\t7\t.\tA\tC\t.\tPASS\t.\n"));
+}
+
+#[test]
+fn updatevcfsequencedictionary_removes_temp_output_after_missing_column_header() {
+    let tempdir = tempfile::tempdir().expect("tempdir exists");
+    let input = tempdir.path().join("input.vcf");
+    let dictionary = tempdir.path().join("reference.dict");
+    let output = tempdir.path().join("output.vcf");
+    fs::write(
+        &input,
+        concat!(
+            "##fileformat=VCFv4.2\n",
+            "##contig=<ID=old,length=10>\n",
+            "chr2\t7\t.\tA\tC\t.\tPASS\t.\n",
+        ),
+    )
+    .expect("input VCF is written");
+    fs::write(
+        &dictionary,
+        concat!("@HD\tVN:1.6\n", "@SQ\tSN:chr2\tLN:2000\n",),
+    )
+    .expect("dictionary is written");
+
+    Command::cargo_bin("picard")
+        .expect("binary exists")
+        .args([
+            "UpdateVcfSequenceDictionary",
+            &format!("I={}", input.display()),
+            &format!("O={}", output.display()),
+            &format!("SD={}", dictionary.display()),
+            "VALIDATION_STRINGENCY=SILENT",
+            "QUIET=true",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "VCF input is missing #CHROM header",
+        ));
+
+    assert!(!output.exists());
+    assert!(
+        fs::read_dir(tempdir.path())
+            .expect("tempdir readable")
+            .filter_map(Result::ok)
+            .all(|entry| !entry
+                .file_name()
+                .to_string_lossy()
+                .contains("updatevcfsequencedictionary")),
+        "temporary UpdateVcfSequenceDictionary output should be cleaned"
+    );
+}
+
+#[test]
 fn gathervcfs_concatenates_records_with_first_header() {
     let tempdir = tempfile::tempdir().expect("tempdir exists");
     let first = tempdir.path().join("first.vcf");

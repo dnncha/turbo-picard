@@ -32,6 +32,9 @@ sidecar generation across the native CLI helpers and the MarkDuplicates crate.
   a same-directory temporary reject file, pushes lifted record payloads into the
   shared external sorter, and streams sorted lifted output with incremental index
   offsets.
+- `UpdateVcfSequenceDictionary` now replaces contig header lines while streaming
+  from plain or gzip input into a same-directory temporary output, with
+  incremental plain-VCF index offsets and temp cleanup on malformed headers.
 
 ## Tests
 
@@ -45,6 +48,7 @@ cargo test -p turbo-picard-cli gathervcfs -- --nocapture
 cargo test -p turbo-picard-cli mergevcfs -- --nocapture
 cargo test -p turbo-picard-cli sortvcf -- --nocapture
 cargo test -p turbo-picard-cli liftovervcf -- --nocapture
+cargo test -p turbo-picard-cli updatevcfsequencedictionary -- --nocapture
 cargo clippy -p turbo-picard-markdup --all-targets --all-features -- -D warnings
 ```
 
@@ -55,5 +59,5 @@ Blocked or not clean:
 
 Remaining Phase 7 work:
 
-- continue replacing smaller VCF whole-output helpers, including
-  `UpdateVcfSequenceDictionary`, with streaming temp-file writers where safe.
+- continue auditing smaller VCF helpers for avoidable whole-output strings while
+  preserving their existing compatibility surface.
