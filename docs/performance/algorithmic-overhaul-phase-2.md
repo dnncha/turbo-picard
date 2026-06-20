@@ -15,10 +15,11 @@ runs, deterministic merging, cleanup, and metrics.
 
 The first command integrations are `SortVcf`, `MergeVcfs`, sorted
 `LiftoverVcf` lifted output, `SortSam`, the unsorted `MergeSamFiles` fallback,
-and coordinate-output `FixMateInformation`. VCF and SAM-text adapters feed
-compact ordering keys and raw record-line payloads through the shared sorter.
-Existing header validation is preserved. Full streaming VCF parsing is still
-deferred to the later VCF streaming phase.
+coordinate-output `FixMateInformation`, and queryname-sorted `RevertSam`
+fallback output. VCF and SAM-text adapters feed compact ordering keys and raw
+record-line payloads through the shared sorter. Existing header validation is
+preserved. Full streaming VCF parsing is still deferred to the later VCF
+streaming phase.
 
 `SortSam` BAM/CRAM input uses a safe temporary-BAM run-file adapter rather than
 opaque sorter payloads, because rust-htslib does not expose raw BAM record bytes
@@ -38,6 +39,13 @@ For coordinate output, completed queryname groups are fixed and spilled into
 temporary BAM runs instead of appending every fixed record to one in-memory
 vector. Queryname and unsorted output continue to stream fixed groups directly.
 
+`RevertSam` now chooses the output strategy before writing. It streams directly
+when the requested order is already satisfied, and queryname-sorted fallback
+output sends reverted records through temporary BAM runs instead of writing a
+nearly complete speculative output and restarting after a late queryname
+inversion. Coordinate output still streams when alignment information is removed,
+preserving the existing unmapped-output behavior.
+
 ## Implemented
 
 - record-count spill limit;
@@ -53,6 +61,8 @@ vector. Queryname and unsorted output continue to stream fixed groups directly.
   preserving the sorted-input k-way fast path.
 - bounded temporary-BAM run sorting for `FixMateInformation SORT_ORDER=coordinate`
   output while preserving queryname-grouped mate repair.
+- bounded temporary-BAM run sorting for queryname-sorted `RevertSam` fallback
+  output while preserving direct streaming when sorting is unnecessary.
 
 ## Tests
 
@@ -67,7 +77,7 @@ Covered in `crates/turbo-picard-core/src/external_sort.rs`:
 - cleanup after dropping a sorter with partial runs.
 
 Additional `SortVcf`, `MergeVcfs`, `LiftoverVcf`, `SortSam`, `MergeSamFiles`,
-and `FixMateInformation` CLI coverage
+`FixMateInformation`, and `RevertSam` CLI coverage
 forces one-record external runs with `MAX_RECORDS_IN_RAM=1`, uses custom
 `TMP_DIR` values, verifies stable/sorted output ordering, and asserts temporary
 run cleanup. The `SortSam` BAM test includes an inversion at the final record and
@@ -82,6 +92,7 @@ cargo test -p turbo-picard-cli sortvcf -- --nocapture
 cargo test -p turbo-picard-cli mergevcfs -- --nocapture
 cargo test -p turbo-picard-cli mergesamfiles -- --nocapture
 cargo test -p turbo-picard-cli fixmateinformation -- --nocapture
+cargo test -p turbo-picard-cli revertsam -- --nocapture
 cargo test -p turbo-picard-cli liftovervcf -- --nocapture
 cargo test -p turbo-picard-cli sortsam -- --nocapture
 cargo clippy -p turbo-picard-core --all-targets --all-features -- -D warnings
@@ -101,6 +112,7 @@ bash tools/verify_basic_mergevcfs_parity.sh
 bash tools/verify_basic_liftovervcf_parity.sh
 bash tools/verify_basic_sortsam_parity.sh
 bash tools/verify_basic_fixmateinformation_parity.sh
+bash tools/verify_basic_revertsam_parity.sh
 ```
 
 This found `mamba`, but the configured Picard prefix
@@ -246,3 +258,30 @@ Result:
 | Pairs | Records | MAX_RECORDS_IN_RAM | Wall seconds | Max RSS bytes | Temp cleanup |
 | ---: | ---: | ---: | ---: | ---: | --- |
 | 1000 | 2000 | 1 | 0.56 | 8,912,896 | PASS |
+
+Release command shape:
+
+```bash
+./target/release/picard RevertSam \
+  I=input.sam \
+  O=reverted.sam \
+  COMPRESSION_LEVEL=5 \
+  MAX_RECORDS_IN_RAM=1 \
+  TMP_DIR=sort-tmp \
+  VALIDATION_STRINGENCY=SILENT \
+  QUIET=true
+```
+
+Synthetic input: 1,000 coordinate-header SAM records in reverse queryname order.
+The compression option disables the SAM-text shortcut so the htslib-backed
+RevertSam path is exercised, and the forced one-record cap sends every reverted
+record through temporary BAM sorting.
+
+Result:
+
+| Records | MAX_RECORDS_IN_RAM | Wall seconds | User seconds | Sys seconds | Max RSS bytes | Temp cleanup | Sorted |
+| ---: | ---: | ---: | ---: | ---: | ---: | --- | --- |
+| 1000 | 1 | 14.43 | 0.46 | 3.13 | 35,291,136 | PASS | PASS |
+
+This is an adversarial bounded-memory stress run rather than a normal
+performance claim.

@@ -5491,6 +5491,12 @@ fn run_revertsam(args: &[String]) -> Result<(), String> {
     let restore_hardclips = optional_bool(&args, "RESTORE_HARDCLIPS")?.unwrap_or(true);
     let create_md5_file = optional_bool(&args, "CREATE_MD5_FILE")?.unwrap_or(false);
     let create_index = optional_bool(&args, "CREATE_INDEX")?.unwrap_or(false);
+    let tmp_dir = optional_scalar(&args, "TMP_DIR")?
+        .map(PathBuf::from)
+        .unwrap_or_else(env::temp_dir);
+    let max_records_in_ram = optional_u32(&args, "MAX_RECORDS_IN_RAM")?
+        .map(|value| value as usize)
+        .unwrap_or(500_000);
     let attributes_to_reverse = attributes_for_revertsam(&args, "ATTRIBUTE_TO_REVERSE")?;
     let attributes_to_reverse_complement =
         attributes_for_revertsam(&args, "ATTRIBUTE_TO_REVERSE_COMPLEMENT")?;
@@ -5546,52 +5552,8 @@ fn run_revertsam(args: &[String]) -> Result<(), String> {
         );
     }
 
-    if let Some(()) = try_stream_revertsam(
-        &input,
-        &output,
-        output_format,
-        compression_level,
-        reference.as_deref(),
-        restore_original_qualities,
-        remove_alignment_information,
-        remove_duplicate_information,
-        restore_hardclips,
-        &attributes_to_clear,
-        &attributes_to_reverse,
-        &attributes_to_reverse_complement,
-        sort_order,
-    )? {
-        return write_requested_sidecars(
-            &output,
-            create_md5_file,
-            create_index && sort_order == SortOrder::Coordinate,
-        );
-    }
-
     let mut reader = open_bam_reader_with_reference(&input, reference.as_deref())?;
     let header = reverted_header(reader.header(), remove_alignment_information, sort_order);
-    let mut records = Vec::new();
-    for record in reader.records() {
-        let mut record = record.map_err(|error| error.to_string())?;
-        if record.is_secondary() || record.is_supplementary() {
-            continue;
-        }
-        revert_record(
-            &mut record,
-            restore_original_qualities,
-            remove_alignment_information,
-            remove_duplicate_information,
-            restore_hardclips,
-            &attributes_to_clear,
-            &attributes_to_reverse,
-            &attributes_to_reverse_complement,
-        )?;
-        records.push(record);
-    }
-    if sort_order == SortOrder::QueryName && !queryname_records_are_monotonic(&records) {
-        records.sort_unstable_by(compare_queryname);
-    }
-
     let mut writer = bam_writer_for_path_with_reference(
         &output,
         &header,
@@ -5599,9 +5561,19 @@ fn run_revertsam(args: &[String]) -> Result<(), String> {
         reference.as_deref(),
         compression_level,
     )?;
-    for record in records {
-        writer.write(&record).map_err(|error| error.to_string())?;
-    }
+    let options = RevertSamRecordOptions {
+        restore_original_qualities,
+        remove_alignment_information,
+        remove_duplicate_information,
+        restore_hardclips,
+        attributes_to_clear: &attributes_to_clear,
+        attributes_to_reverse: &attributes_to_reverse,
+        attributes_to_reverse_complement: &attributes_to_reverse_complement,
+        sort_order,
+        tmp_dir: &tmp_dir,
+        max_records_in_ram,
+    };
+    write_revertsam_records_bounded(&mut reader, &mut writer, &header, options)?;
     drop(writer);
 
     write_requested_sidecars(
@@ -5611,46 +5583,73 @@ fn run_revertsam(args: &[String]) -> Result<(), String> {
     )
 }
 
-fn try_stream_revertsam(
-    input: &str,
-    output: &str,
-    output_format: bam::Format,
-    compression_level: Option<u32>,
-    reference: Option<&str>,
+struct RevertSamRecordOptions<'a> {
     restore_original_qualities: bool,
     remove_alignment_information: bool,
     remove_duplicate_information: bool,
     restore_hardclips: bool,
-    attributes_to_clear: &[[u8; 2]],
-    attributes_to_reverse: &[[u8; 2]],
-    attributes_to_reverse_complement: &[[u8; 2]],
+    attributes_to_clear: &'a [[u8; 2]],
+    attributes_to_reverse: &'a [[u8; 2]],
+    attributes_to_reverse_complement: &'a [[u8; 2]],
     sort_order: SortOrder,
-) -> Result<Option<()>, String> {
-    if sort_order == SortOrder::Coordinate {
-        return Ok(None);
-    }
+    tmp_dir: &'a Path,
+    max_records_in_ram: usize,
+}
 
-    let stream_output = if sort_order == SortOrder::QueryName {
-        temp_revertsam_output_path(output)
+fn write_revertsam_records_bounded(
+    reader: &mut bam::Reader,
+    writer: &mut bam::Writer,
+    header: &bam::Header,
+    options: RevertSamRecordOptions<'_>,
+) -> Result<(), String> {
+    let input_sort_order = header_sort_order(reader.header());
+    let needs_sort = revertsam_output_needs_sort(
+        input_sort_order.as_deref(),
+        options.sort_order,
+        options.remove_alignment_information,
+    );
+    if needs_sort {
+        sort_revertsam_records_bounded(reader, writer, header, options)
     } else {
-        output.to_string()
-    };
-    let mut reader = open_bam_reader_with_reference(input, reference)?;
-    if sort_order == SortOrder::QueryName
-        && header_sort_order(reader.header()).as_deref() == Some("coordinate")
-    {
-        return Ok(None);
+        stream_revertsam_records(reader, writer, &options)
     }
-    let header = reverted_header(reader.header(), remove_alignment_information, sort_order);
-    let mut writer = bam_writer_for_path_with_reference(
-        &stream_output,
-        &header,
-        output_format,
-        reference,
-        compression_level,
-    )?;
-    let mut last_query_name = Vec::<u8>::new();
-    let mut have_last_query_name = false;
+}
+
+fn stream_revertsam_records(
+    reader: &mut bam::Reader,
+    writer: &mut bam::Writer,
+    options: &RevertSamRecordOptions<'_>,
+) -> Result<(), String> {
+    for record in reader.records() {
+        let mut record = record.map_err(|error| error.to_string())?;
+        if record.is_secondary() || record.is_supplementary() {
+            continue;
+        }
+        revert_record(
+            &mut record,
+            options.restore_original_qualities,
+            options.remove_alignment_information,
+            options.remove_duplicate_information,
+            options.restore_hardclips,
+            options.attributes_to_clear,
+            options.attributes_to_reverse,
+            options.attributes_to_reverse_complement,
+        )?;
+        writer.write(&record).map_err(|error| error.to_string())?;
+    }
+    Ok(())
+}
+
+fn sort_revertsam_records_bounded(
+    reader: &mut bam::Reader,
+    writer: &mut bam::Writer,
+    header: &bam::Header,
+    options: RevertSamRecordOptions<'_>,
+) -> Result<(), String> {
+    let max_records_in_ram = options.max_records_in_ram.max(1);
+    let mut run_set = SortSamTempRuns::new(options.tmp_dir.to_path_buf());
+    let mut records = Vec::<(bam::Record, u64)>::with_capacity(max_records_in_ram.min(8192));
+    let mut next_ordinal = 0_u64;
 
     for record in reader.records() {
         let mut record = record.map_err(|error| error.to_string())?;
@@ -5659,40 +5658,47 @@ fn try_stream_revertsam(
         }
         revert_record(
             &mut record,
-            restore_original_qualities,
-            remove_alignment_information,
-            remove_duplicate_information,
-            restore_hardclips,
-            attributes_to_clear,
-            attributes_to_reverse,
-            attributes_to_reverse_complement,
+            options.restore_original_qualities,
+            options.remove_alignment_information,
+            options.remove_duplicate_information,
+            options.restore_hardclips,
+            options.attributes_to_clear,
+            options.attributes_to_reverse,
+            options.attributes_to_reverse_complement,
         )?;
-        if sort_order == SortOrder::QueryName {
-            let qname = record.qname();
-            if have_last_query_name && last_query_name.as_slice() > qname {
-                drop(writer);
-                let _ = fs::remove_file(&stream_output);
-                return Ok(None);
-            }
-            last_query_name.clear();
-            last_query_name.extend_from_slice(qname);
-            have_last_query_name = true;
+        records.push((record, next_ordinal));
+        next_ordinal += 1;
+        if records.len() >= max_records_in_ram {
+            write_sortsam_temp_run(&mut run_set, header, options.sort_order, &mut records)?;
         }
-        writer.write(&record).map_err(|error| error.to_string())?;
     }
 
-    drop(writer);
-    if sort_order == SortOrder::QueryName {
-        if Path::new(output).exists() {
-            fs::remove_file(output).map_err(|error| error.to_string())?;
+    if run_set.paths.is_empty() {
+        stable_sort_bam_records(&mut records, options.sort_order);
+        for (record, _) in records {
+            writer.write(&record).map_err(|error| error.to_string())?;
         }
-        fs::rename(&stream_output, output).map_err(|error| error.to_string())?;
+        return Ok(());
     }
-    Ok(Some(()))
+    if !records.is_empty() {
+        write_sortsam_temp_run(&mut run_set, header, options.sort_order, &mut records)?;
+    }
+    coalesce_sortsam_runs(&mut run_set, header, options.sort_order)?;
+    write_sortsam_merged_runs(writer, &run_set.paths, options.sort_order)
 }
 
-fn temp_revertsam_output_path(output: &str) -> String {
-    format!("{output}.tmp.{}.revertsam", process::id())
+fn revertsam_output_needs_sort(
+    input_sort_order: Option<&str>,
+    sort_order: SortOrder,
+    remove_alignment_information: bool,
+) -> bool {
+    match sort_order {
+        SortOrder::Unsorted => false,
+        SortOrder::QueryName => input_sort_order != Some("queryname"),
+        SortOrder::Coordinate => {
+            !remove_alignment_information && input_sort_order != Some("coordinate")
+        }
+    }
 }
 
 fn run_setnmmdanduqtags(args: &[String]) -> Result<(), String> {
@@ -18281,12 +18287,6 @@ fn compare_queryname(left: &bam::Record, right: &bam::Record) -> Ordering {
         .then_with(|| compare_coordinate(left, right))
 }
 
-fn queryname_records_are_monotonic(records: &[bam::Record]) -> bool {
-    records
-        .windows(2)
-        .all(|window| compare_queryname(&window[0], &window[1]) != Ordering::Greater)
-}
-
 fn picard_bai_path(output: &str) -> String {
     Path::new(output)
         .with_extension("bai")
@@ -18318,33 +18318,6 @@ fn write_requested_sidecars(
 mod tests {
     use super::*;
     use turbo_picard_core::picard_args::normalize_picard_args;
-
-    fn record_with_qname(qname: &[u8]) -> bam::Record {
-        let mut record = bam::Record::new();
-        record.set(qname, None, b"ACGT", b"FFFF");
-        record
-    }
-
-    #[test]
-    fn queryname_records_are_monotonic_for_sorted_input() {
-        let records = vec![
-            record_with_qname(b"read0001"),
-            record_with_qname(b"read0001"),
-            record_with_qname(b"read0002"),
-        ];
-
-        assert!(queryname_records_are_monotonic(&records));
-    }
-
-    #[test]
-    fn queryname_records_are_not_monotonic_for_unsorted_input() {
-        let records = vec![
-            record_with_qname(b"read0002"),
-            record_with_qname(b"read0001"),
-        ];
-
-        assert!(!queryname_records_are_monotonic(&records));
-    }
 
     #[test]
     fn collectmultiplemetrics_single_pass_requires_hts_container_and_multiple_programs() {

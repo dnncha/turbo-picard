@@ -6068,6 +6068,51 @@ fn revertsam_accepts_non_queryname_sort_order_outputs() {
 }
 
 #[test]
+fn revertsam_queryname_output_uses_bounded_temp_runs() {
+    let tempdir = tempfile::tempdir().expect("tempdir exists");
+    let input = tempdir.path().join("input.sam");
+    let output = tempdir.path().join("reverted.sam");
+    let sort_tmp = tempdir.path().join("revertsam-tmp");
+    fs::create_dir(&sort_tmp).expect("sort tmp exists");
+    fs::write(
+        &input,
+        concat!(
+            "@HD\tVN:1.6\tSO:coordinate\n",
+            "@SQ\tSN:chr1\tLN:1000\n",
+            "read-c\t0\tchr1\t70\t60\t4M\t*\t0\t0\tCCCC\t!!!!\tOQ:Z:HHHH\tNM:i:0\tMD:Z:4\n",
+            "read-a\t0\tchr1\t10\t60\t4M\t*\t0\t0\tAAAA\t!!!!\tOQ:Z:FFFF\tNM:i:0\tMD:Z:4\n",
+            "read-b\t0\tchr1\t40\t60\t4M\t*\t0\t0\tGGGG\t!!!!\tOQ:Z:IIII\tNM:i:0\tMD:Z:4\n",
+        ),
+    )
+    .expect("input fixture is written");
+
+    Command::cargo_bin("picard")
+        .expect("binary exists")
+        .args([
+            "RevertSam",
+            &format!("I={}", input.display()),
+            &format!("O={}", output.display()),
+            "COMPRESSION_LEVEL=5",
+            "MAX_RECORDS_IN_RAM=1",
+            &format!("TMP_DIR={}", sort_tmp.display()),
+            "VALIDATION_STRINGENCY=SILENT",
+            "QUIET=true",
+        ])
+        .assert()
+        .success();
+
+    let reverted = fs::read_to_string(&output).expect("reverted SAM exists");
+    assert_eq!(record_names(&reverted), vec!["read-a", "read-b", "read-c"]);
+    assert!(
+        fs::read_dir(&sort_tmp)
+            .expect("revertsam tmp readable")
+            .next()
+            .is_none(),
+        "RevertSam queryname output should clean temporary runs"
+    );
+}
+
+#[test]
 fn revertsam_can_keep_alignment_information_when_requested() {
     let tempdir = tempfile::tempdir().expect("tempdir exists");
     let input = tempdir.path().join("input.sam");
