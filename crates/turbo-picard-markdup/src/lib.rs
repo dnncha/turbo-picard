@@ -900,7 +900,7 @@ fn duplicate_groups(
     candidates: &[DuplicateCandidate],
     config: &MarkDuplicatesConfig,
 ) -> Result<Vec<Vec<usize>>, MarkDuplicatesError> {
-    let keyed_pairs = collate_pair_key_rows(candidates, config.max_records_in_ram);
+    let keyed_pairs = collate_pair_key_rows(candidates, config)?;
     let mut groups = Vec::<Vec<usize>>::new();
     scan_pair_key_rows(keyed_pairs, config, |group| groups.push(group.to_vec()))?;
     Ok(groups)
@@ -913,7 +913,7 @@ fn process_pair_duplicate_groups(
     library_registry: &mut LibraryRegistry,
     config: &MarkDuplicatesConfig,
 ) -> Result<(), MarkDuplicatesError> {
-    let keyed_pairs = collate_pair_key_rows(candidates, config.max_records_in_ram);
+    let keyed_pairs = collate_pair_key_rows(candidates, config)?;
     scan_pair_key_rows(keyed_pairs, config, |group| {
         apply_pair_duplicate_group(
             group,
@@ -1001,12 +1001,12 @@ fn apply_pair_duplicate_group(
 
 fn collate_pair_key_rows(
     candidates: &[DuplicateCandidate],
-    max_displaced_pair_records: usize,
-) -> Vec<(BamDuplicateKey, [usize; 2])> {
+    config: &MarkDuplicatesConfig,
+) -> Result<Vec<(BamDuplicateKey, [usize; 2])>, MarkDuplicatesError> {
     let mut paired_by_name = HashMap::<InternedBytesId, usize>::default();
     let mut keyed_pairs = Vec::<(BamDuplicateKey, [usize; 2])>::new();
     let mut candidate_index = 0usize;
-    let max_displaced_pair_records = max_displaced_pair_records.max(1);
+    let max_displaced_pair_records = config.max_records_in_ram.max(1);
 
     while candidate_index < candidates.len() {
         if !candidates[candidate_index].is_pair() {
@@ -1028,7 +1028,7 @@ fn collate_pair_key_rows(
                     max_displaced_pair_records,
                 )
             {
-                return collate_pair_key_rows_by_qname(candidates);
+                return collate_pair_key_rows_by_qname(candidates, config);
             }
         } else {
             for index in candidate_index..run_end {
@@ -1041,14 +1041,14 @@ fn collate_pair_key_rows(
                         max_displaced_pair_records,
                     )
                 {
-                    return collate_pair_key_rows_by_qname(candidates);
+                    return collate_pair_key_rows_by_qname(candidates, config);
                 }
             }
         }
         candidate_index = run_end;
     }
 
-    keyed_pairs
+    Ok(keyed_pairs)
 }
 
 fn collate_adjacent_pair_run(
@@ -1072,33 +1072,52 @@ fn collate_adjacent_pair_run(
 
 fn collate_pair_key_rows_by_qname(
     candidates: &[DuplicateCandidate],
-) -> Vec<(BamDuplicateKey, [usize; 2])> {
-    let mut pair_indices = candidates
-        .iter()
-        .enumerate()
-        .filter_map(|(index, candidate)| candidate.is_pair().then_some(index))
-        .collect::<Vec<_>>();
-    pair_indices.sort_by_key(|&index| (candidates[index].qname_id, index));
+    config: &MarkDuplicatesConfig,
+) -> Result<Vec<(BamDuplicateKey, [usize; 2])>, MarkDuplicatesError> {
+    let mut sorter =
+        ExternalSorter::new(markdup_sort_config(config, "turbo-picard-markdup-qnames"))
+            .map_err(MarkDuplicatesError::Operation)?;
+    for (candidate_index, candidate) in candidates.iter().enumerate() {
+        if candidate.is_pair() {
+            sorter
+                .push(
+                    qname_sort_key(candidate.qname_id),
+                    index_payload(candidate_index),
+                )
+                .map_err(MarkDuplicatesError::Operation)?;
+        }
+    }
 
     let mut pairs = Vec::<[usize; 2]>::new();
     let mut first_index = None::<usize>;
     let mut current_qname_id = None::<InternedBytesId>;
-
-    for candidate_index in pair_indices {
-        let qname_id = candidates[candidate_index].qname_id;
-        if current_qname_id != Some(qname_id) {
-            current_qname_id = Some(qname_id);
-            first_index = Some(candidate_index);
-            continue;
-        }
-        if let Some(first) = first_index.take() {
-            pairs.push([first, candidate_index]);
-        } else {
-            first_index = Some(candidate_index);
-        }
-    }
+    sorter
+        .finish_into(|item| {
+            let qname_id = decode_qname_sort_key(&item.key).map_err(|error| error.to_string())?;
+            let candidate_index =
+                decode_index_payload(&item.payload).map_err(|error| error.to_string())?;
+            if current_qname_id != Some(qname_id) {
+                current_qname_id = Some(qname_id);
+                first_index = Some(candidate_index);
+                return Ok(());
+            }
+            if let Some(first) = first_index.take() {
+                pairs.push([first, candidate_index]);
+            } else {
+                first_index = Some(candidate_index);
+            }
+            Ok(())
+        })
+        .map_err(MarkDuplicatesError::Operation)?;
 
     pairs.sort_by_key(|pair| pair[1]);
+    Ok(pair_rows_from_pairs(pairs, candidates))
+}
+
+fn pair_rows_from_pairs(
+    pairs: Vec<[usize; 2]>,
+    candidates: &[DuplicateCandidate],
+) -> Vec<(BamDuplicateKey, [usize; 2])> {
     let mut keyed_pairs = Vec::<(BamDuplicateKey, [usize; 2])>::with_capacity(pairs.len());
     for [first_index, second_index] in pairs {
         push_pair_key_row(first_index, second_index, candidates, &mut keyed_pairs);
@@ -1320,6 +1339,22 @@ fn duplicate_sort_key(key: &BamDuplicateKey) -> Vec<u8> {
         }
     }
     bytes
+}
+
+fn qname_sort_key(qname_id: InternedBytesId) -> Vec<u8> {
+    qname_id.to_be_bytes().to_vec()
+}
+
+fn decode_qname_sort_key(bytes: &[u8]) -> Result<InternedBytesId, MarkDuplicatesError> {
+    if bytes.len() != 4 {
+        return Err(MarkDuplicatesError::Operation(format!(
+            "invalid MarkDuplicates qname sort key length: {}",
+            bytes.len()
+        )));
+    }
+    Ok(u32::from_be_bytes(
+        bytes.try_into().expect("slice length checked"),
+    ))
 }
 
 fn decode_duplicate_sort_key(bytes: &[u8]) -> Result<BamDuplicateKey, MarkDuplicatesError> {
@@ -2479,9 +2514,10 @@ mod tests {
             record_with_name_flags_and_position(b"displaced", 0x1, 20),
         ];
         let candidates = candidates_for_records(&records);
+        let config = sam_markdup_config();
 
         assert_eq!(
-            collate_pair_key_rows(&candidates, 500_000),
+            collate_pair_key_rows(&candidates, &config).expect("pair collation succeeds"),
             collate_pair_key_rows_legacy(&candidates)
         );
     }
@@ -2495,9 +2531,10 @@ mod tests {
             record_with_name_flags_and_position(b"repeat", 0x1, 25),
         ];
         let candidates = candidates_for_records(&records);
+        let config = sam_markdup_config();
 
         assert_eq!(
-            collate_pair_key_rows(&candidates, 500_000),
+            collate_pair_key_rows(&candidates, &config).expect("pair collation succeeds"),
             collate_pair_key_rows_legacy(&candidates)
         );
     }
@@ -2512,10 +2549,23 @@ mod tests {
             record_with_name_flags_and_position(b"pending-a", 0x1, 40),
         ];
         let candidates = candidates_for_records(&records);
+        let tmp = tempfile::tempdir().expect("tempdir exists");
+        let config = MarkDuplicatesConfig {
+            max_records_in_ram: 2,
+            tmp_dirs: vec![tmp.path().display().to_string()],
+            ..sam_markdup_config()
+        };
 
         assert_eq!(
-            collate_pair_key_rows(&candidates, 2),
+            collate_pair_key_rows(&candidates, &config).expect("pair collation succeeds"),
             collate_pair_key_rows_legacy(&candidates)
+        );
+        assert!(
+            fs::read_dir(tmp.path())
+                .expect("tmp dir remains readable")
+                .next()
+                .is_none(),
+            "external sorter cleans MarkDuplicates qname fallback runs"
         );
     }
 

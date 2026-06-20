@@ -74,6 +74,10 @@ vectors, and duplicate-group maps for the input.
 - Single-input BAM/CRAM output now uses a sequential reread pass driven by the
   ordinal-indexed decision stream. The first pass retains compact candidates but
   no longer holds every full `bam::Record` just to apply final flags and tags.
+- Distant-mate qname fallback collation now sorts compact `(qname_id,
+  candidate_index)` rows through the shared external sorter. Very displaced
+  mate workloads no longer require an in-memory compact qname sort once the
+  bounded pending-mate cache overflows.
 
 ## Tests
 
@@ -101,7 +105,5 @@ Remaining Phase 4 work:
 - spill compact duplicate candidates instead of retaining every full record;
 - extend the sequential reread/output pass to multi-input MarkDuplicates output
   once its merge-order application can be driven by compact decisions;
-- replace the in-memory compact qname fallback with temporary-run qname
-  collation for very large distant-mate workloads;
 - add adversarial tests for duplicate at EOF, giant duplicate families,
   distant/missing mates, barcodes, optical duplicates, and multi-input sorting.
