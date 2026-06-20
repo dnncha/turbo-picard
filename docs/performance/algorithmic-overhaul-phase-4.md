@@ -71,6 +71,9 @@ vectors, and duplicate-group maps for the input.
 - Duplicate-group scans now compute unique read-name counts, paired set size,
   and duplicate representative selection in one qname-score pass per group
   rather than rebuilding separate maps and rescanning qnames for each metric.
+- Single-input BAM/CRAM output now uses a sequential reread pass driven by the
+  ordinal-indexed decision stream. The first pass retains compact candidates but
+  no longer holds every full `bam::Record` just to apply final flags and tags.
 
 ## Tests
 
@@ -96,8 +99,8 @@ Blocked or not clean:
 Remaining Phase 4 work:
 
 - spill compact duplicate candidates instead of retaining every full record;
-- replace retained full records with a sequential reread/output pass driven by
-  the compact decision stream;
+- extend the sequential reread/output pass to multi-input MarkDuplicates output
+  once its merge-order application can be driven by compact decisions;
 - replace the in-memory compact qname fallback with temporary-run qname
   collation for very large distant-mate workloads;
 - add adversarial tests for duplicate at EOF, giant duplicate families,

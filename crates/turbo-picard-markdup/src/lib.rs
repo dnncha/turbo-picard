@@ -351,11 +351,12 @@ fn run_hts_container(
     if config.add_pg_tag_to_reads {
         push_markdup_pg_header_if_needed(&mut header);
     }
-    let mut writer = open_markdup_writer(config, &config.output, &header)?;
-    let mut records = Vec::new();
     let mut candidates = Vec::new();
     let mut qnames = ByteInterner::default();
     let mut barcodes = ByteInterner::default();
+    let mut record_count = 0usize;
+    let retain_records = config.inputs.len() > 1;
+    let mut records = Vec::new();
     let mut summary = MarkDuplicatesSummary {
         library,
         unpaired_reads_examined: 0,
@@ -372,7 +373,12 @@ fn run_hts_container(
     read_bam_records(
         &mut reader,
         &mut BamRecordSink {
-            records: &mut records,
+            records: if retain_records {
+                Some(&mut records)
+            } else {
+                None
+            },
+            record_count: &mut record_count,
             candidates: &mut candidates,
             qnames: &mut qnames,
             barcodes: &mut barcodes,
@@ -388,7 +394,8 @@ fn run_hts_container(
         read_bam_records(
             &mut reader,
             &mut BamRecordSink {
-                records: &mut records,
+                records: Some(&mut records),
+                record_count: &mut record_count,
                 candidates: &mut candidates,
                 qnames: &mut qnames,
                 barcodes: &mut barcodes,
@@ -400,7 +407,7 @@ fn run_hts_container(
         )?;
     }
 
-    let mut decisions = vec![RecordDecision::default(); records.len()];
+    let mut decisions = vec![RecordDecision::default(); record_count];
     process_pair_duplicate_groups(
         &candidates,
         &mut decisions,
@@ -416,16 +423,16 @@ fn run_hts_container(
         config,
     )?;
 
-    {
-        if config.inputs.len() > 1 {
-            let mut marked_records = records.into_iter().zip(decisions).collect::<Vec<_>>();
-            marked_records.sort_by(|(left, left_decision), (right, right_decision)| {
-                compare_bam_output_order(left, *left_decision, right, *right_decision)
-            });
-            write_bam_records(marked_records, config, &mut writer)?;
-        } else {
-            write_bam_records(records.into_iter().zip(decisions), config, &mut writer)?;
-        }
+    let mut writer = open_markdup_writer(config, &config.output, &header)?;
+    if config.inputs.len() > 1 {
+        let mut marked_records = records.into_iter().zip(decisions).collect::<Vec<_>>();
+        marked_records.sort_by(|(left, left_decision), (right, right_decision)| {
+            compare_bam_output_order(left, *left_decision, right, *right_decision)
+        });
+        write_bam_records(marked_records, config, &mut writer)?;
+    } else {
+        let mut reader = open_markdup_reader(config, first_input)?;
+        read_bam_records_for_output(&mut reader, &decisions, config, &mut writer)?;
     }
     drop(writer);
 
@@ -450,7 +457,8 @@ fn run_hts_container(
 }
 
 struct BamRecordSink<'a> {
-    records: &'a mut Vec<bam::Record>,
+    records: Option<&'a mut Vec<bam::Record>>,
+    record_count: &'a mut usize,
     candidates: &'a mut Vec<DuplicateCandidate>,
     qnames: &'a mut ByteInterner,
     barcodes: &'a mut ByteInterner,
@@ -471,12 +479,15 @@ fn read_bam_records<R: bam::Read>(
             record.set_flags(flag);
         }
         let library_id = record_library_id(&record, library_lookup);
-        let record_index = sink.records.len();
+        let record_index = *sink.record_count;
+        *sink.record_count += 1;
 
         if flag & UNMAPPED_FLAG != 0 {
             summary.unmapped_records += 1;
             library_registry.summary_mut(library_id).unmapped_records += 1;
-            sink.records.push(record);
+            if let Some(records) = sink.records.as_deref_mut() {
+                records.push(record);
+            }
             continue;
         }
         if flag & SECONDARY_OR_SUPPLEMENTARY_FLAGS != 0 {
@@ -484,7 +495,9 @@ fn read_bam_records<R: bam::Read>(
             library_registry
                 .summary_mut(library_id)
                 .secondary_or_supplementary_records += 1;
-            sink.records.push(record);
+            if let Some(records) = sink.records.as_deref_mut() {
+                records.push(record);
+            }
             continue;
         }
 
@@ -512,9 +525,40 @@ fn read_bam_records<R: bam::Read>(
             qname_id,
             barcode_id,
         ));
-        sink.records.push(record);
+        if let Some(records) = sink.records.as_deref_mut() {
+            records.push(record);
+        }
     }
 
+    Ok(())
+}
+
+fn read_bam_records_for_output<R: bam::Read>(
+    reader: &mut R,
+    decisions: &[RecordDecision],
+    config: &MarkDuplicatesConfig,
+    writer: &mut bam::Writer,
+) -> Result<(), MarkDuplicatesError> {
+    let mut seen_records = 0usize;
+    for (record_index, result) in reader.records().enumerate() {
+        let mut record = result?;
+        let flags = record.flags() & !DUPLICATE_FLAG;
+        if flags != record.flags() {
+            record.set_flags(flags);
+        }
+        let decision = decisions
+            .get(record_index)
+            .copied()
+            .ok_or_else(|| MarkDuplicatesError::Operation("missing duplicate decision".into()))?;
+        write_bam_record(record, decision, config, writer)?;
+        seen_records = record_index + 1;
+    }
+    if seen_records != decisions.len() {
+        return Err(MarkDuplicatesError::Operation(format!(
+            "duplicate decision count {} does not match reread record count {seen_records}",
+            decisions.len()
+        )));
+    }
     Ok(())
 }
 
