@@ -8105,6 +8105,64 @@ fn sortvcf_writes_index_for_vcf_when_requested() {
 }
 
 #[test]
+fn sortvcf_honors_tmp_dir_and_forced_external_runs() {
+    let tempdir = tempfile::tempdir().expect("tempdir exists");
+    let sort_tmp = tempdir.path().join("sort-tmp");
+    fs::create_dir(&sort_tmp).expect("sort temp dir is created");
+    let input = tempdir.path().join("input.vcf");
+    let output = tempdir.path().join("sorted.vcf");
+    fs::write(
+        &input,
+        concat!(
+            "##fileformat=VCFv4.2\n",
+            "##contig=<ID=chr1,length=1000>\n",
+            "##contig=<ID=chr2,length=1000>\n",
+            "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\n",
+            "chr2\t3\t.\tA\tC\t.\tPASS\t.\n",
+            "chr1\t9\tfirst\tA\tG\t.\tPASS\t.\n",
+            "chr1\t9\tsecond\tA\tT\t.\tPASS\t.\n",
+            "chr1\t2\t.\tT\tC\t.\tPASS\t.\n",
+        ),
+    )
+    .expect("input VCF is written");
+
+    Command::cargo_bin("picard")
+        .expect("binary exists")
+        .args([
+            "SortVcf",
+            &format!("I={}", input.display()),
+            &format!("O={}", output.display()),
+            "MAX_RECORDS_IN_RAM=1",
+            &format!("TMP_DIR={}", sort_tmp.display()),
+            "VALIDATION_STRINGENCY=SILENT",
+            "QUIET=true",
+        ])
+        .assert()
+        .success();
+
+    let output = fs::read_to_string(output).expect("sorted VCF exists");
+    assert_eq!(
+        output
+            .lines()
+            .filter(|line| !line.starts_with('#'))
+            .collect::<Vec<_>>(),
+        vec![
+            "chr1\t2\t.\tT\tC\t.\tPASS\t.",
+            "chr1\t9\tfirst\tA\tG\t.\tPASS\t.",
+            "chr1\t9\tsecond\tA\tT\t.\tPASS\t.",
+            "chr2\t3\t.\tA\tC\t.\tPASS\t.",
+        ]
+    );
+    assert!(
+        fs::read_dir(&sort_tmp)
+            .expect("sort temp readable")
+            .next()
+            .is_none(),
+        "external sort should clean temporary runs"
+    );
+}
+
+#[test]
 fn sortvcf_rejects_input_dictionary_that_differs_from_explicit_dictionary() {
     let tempdir = tempfile::tempdir().expect("tempdir exists");
     let input = tempdir.path().join("input.vcf");

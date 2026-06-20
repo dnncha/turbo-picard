@@ -25,10 +25,11 @@ use std::collections::{BTreeMap, BTreeSet, BinaryHeap, HashMap, HashSet};
 use std::env;
 use std::fs;
 use std::io::{BufRead, BufReader, BufWriter, Read as IoRead, Seek, SeekFrom, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{self, Command};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
+use turbo_picard_core::external_sort::{ExternalSortConfig, ExternalSorter};
 use turbo_picard_core::hts_io;
 use turbo_picard_core::markdup_config::MarkDuplicatesConfig;
 use turbo_picard_core::picard_args::normalize_picard_args_for_command;
@@ -6076,6 +6077,12 @@ fn run_sortvcf(args: &[String]) -> Result<(), String> {
     let output = required_scalar_for(&args, "OUTPUT", "SortVcf")?;
     let dictionary_path = optional_scalar(&args, "SEQUENCE_DICTIONARY")?;
     let create_index = optional_bool(&args, "CREATE_INDEX")?.unwrap_or(false);
+    let tmp_dir = optional_scalar(&args, "TMP_DIR")?
+        .map(PathBuf::from)
+        .unwrap_or_else(env::temp_dir);
+    let max_records_in_ram = optional_u32(&args, "MAX_RECORDS_IN_RAM")?
+        .map(|value| value as usize)
+        .unwrap_or(500_000);
 
     let mut documents = Vec::with_capacity(inputs.len());
     for input in &inputs {
@@ -6109,30 +6116,35 @@ fn run_sortvcf(args: &[String]) -> Result<(), String> {
     }
 
     let mut text = vcf_header_text_with_contigs(first, contig_lines.as_deref())?;
-    let mut records = Vec::new();
+    let mut sort_config = ExternalSortConfig::new(tmp_dir);
+    sort_config.max_records_in_ram = max_records_in_ram.max(1);
+    sort_config.prefix = "turbo-picard-sortvcf".to_string();
+    let mut sorter = ExternalSorter::new(sort_config)?;
     for document in documents {
-        for mut record in document.records {
-            record.serial = records.len();
-            records.push(record);
+        for record in document.records {
+            let Some(contig_rank) = contig_order.get(&record.contig).copied() else {
+                return Err(format!(
+                    "VCF contig {} is not present in sequence dictionary",
+                    record.contig
+                ));
+            };
+            sorter.push(
+                vcf_sort_key(contig_rank, record.position),
+                record.line.into_bytes(),
+            )?;
         }
     }
-    for record in &records {
-        if !contig_order.contains_key(&record.contig) {
+    let (records, _metrics) = sorter.finish()?;
+    for record in records {
+        let line = String::from_utf8(record.payload)
+            .map_err(|_| "SortVcf record payload is not UTF-8".to_string())?;
+        if line.is_empty() {
             return Err(format!(
-                "VCF contig {} is not present in sequence dictionary",
-                record.contig
+                "malformed SortVcf sorted record from ordinal {}",
+                record.ordinal
             ));
         }
-    }
-    records.sort_by(|left, right| {
-        contig_order[&left.contig]
-            .cmp(&contig_order[&right.contig])
-            .then_with(|| left.position.cmp(&right.position))
-            .then_with(|| left.serial.cmp(&right.serial))
-    });
-
-    for record in records {
-        text.push_str(&record.line);
+        text.push_str(&line);
         text.push('\n');
     }
     write_text_or_gzip(&output, &text)?;
@@ -6699,6 +6711,13 @@ fn parse_vcf_record(
         position,
         serial,
     })
+}
+
+fn vcf_sort_key(contig_rank: usize, position: u64) -> Vec<u8> {
+    let mut key = Vec::with_capacity(16);
+    key.extend_from_slice(&(contig_rank as u64).to_be_bytes());
+    key.extend_from_slice(&position.to_be_bytes());
+    key
 }
 
 #[derive(Debug, Clone)]
