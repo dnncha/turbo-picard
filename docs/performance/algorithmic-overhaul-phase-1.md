@@ -15,6 +15,11 @@ of `1` creates one application collector worker. `CollectWgsMetrics` remains on
 the ordered serial path inside CMM because its current state is order-dependent
 until the planned sliding-frontier implementation exists.
 
+The CMM batch size and queue depth are now centralized in the pipeline module.
+Defaults remain `512` records per batch and `16` in-flight batches. The internal
+overrides `TURBO_PICARD_CMM_BATCH_SIZE` and `TURBO_PICARD_CMM_QUEUE_DEPTH` accept
+positive integer values; invalid or zero values fall back to the defaults.
+
 ## Baseline context read
 
 Reviewed before editing:
@@ -41,6 +46,9 @@ cargo test --workspace
 python3 tools/verify_command_matrix.py
 cargo build --release -p turbo-picard-cli --bin picard --bin turbo-picard
 ```
+
+Additional CMM tests cover exact worker caps, error/panic propagation, record
+gate filtering, configurable small batches, and batch-vector allocation reuse.
 
 Blocked or failing:
 
@@ -79,11 +87,11 @@ TURBO_PICARD_CMM_THREADS=<N> ./target/release/picard CollectMultipleMetrics \
 
 | CMM threads | Wall seconds |
 | --- | ---: |
-| 1 | 0.086953 |
-| 2 | 0.043985 |
-| 4 | 0.031631 |
-| 8 | 0.031403 |
-| auto | 0.032713 |
+| 1 | 0.089198 |
+| 2 | 0.049144 |
+| 4 | 0.059850 |
+| 8 | 0.053703 |
+| auto | 0.061247 |
 
 `quality_yield_metrics` output was identical for `1`, `2`, `4`, `8`, and
 `auto` thread settings.

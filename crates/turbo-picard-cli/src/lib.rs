@@ -3210,8 +3210,6 @@ fn collectmultiplemetrics_can_single_pass(input: &str, programs: &[String]) -> b
     })
 }
 
-pub(crate) const CMM_BATCH_SIZE: usize = 512;
-
 fn cmm_collector_thread_count(active_collectors: usize) -> usize {
     if active_collectors < 2 {
         return 1;

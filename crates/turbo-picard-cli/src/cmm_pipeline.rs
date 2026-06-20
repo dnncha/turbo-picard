@@ -68,7 +68,8 @@ impl CmmRecordGates {
     }
 }
 
-pub const BATCH_POOL_DEPTH: usize = 16;
+pub const DEFAULT_BATCH_POOL_DEPTH: usize = 16;
+pub const DEFAULT_BATCH_SIZE: usize = 512;
 
 pub struct CmmBatchRecord {
     pub record: bam::Record,
@@ -77,6 +78,13 @@ pub struct CmmBatchRecord {
 
 pub type CmmBatchHandler = Box<dyn Fn(&[CmmBatchRecord]) -> Result<(), String> + Send>;
 type CmmWorkerGroup = Vec<CmmBatchHandler>;
+
+#[derive(Clone, Copy, Debug)]
+struct CmmWorkerPoolOptions {
+    worker_cap: usize,
+    batch_size: usize,
+    queue_depth: usize,
+}
 
 struct WorkerJob {
     batch: Arc<Vec<CmmBatchRecord>>,
@@ -95,6 +103,8 @@ pub struct CmmWorkerPool {
     batch_pool: Receiver<Vec<CmmBatchRecord>>,
     batch_return: Sender<Vec<CmmBatchRecord>>,
     inflight: Arc<AtomicUsize>,
+    batch_size: usize,
+    queue_depth: usize,
     completion_rx: Receiver<Vec<CmmBatchRecord>>,
     completion_job_tx: Option<Sender<CompletionJob>>,
     completion_handle: Option<JoinHandle<()>>,
@@ -105,19 +115,32 @@ pub struct CmmWorkerPool {
 
 impl CmmWorkerPool {
     pub fn new(handlers: Vec<CmmBatchHandler>, worker_cap: usize) -> Self {
-        let worker_groups = worker_groups_for_handlers(handlers, worker_cap);
+        Self::with_options(
+            handlers,
+            CmmWorkerPoolOptions {
+                worker_cap,
+                batch_size: cmm_batch_size(),
+                queue_depth: cmm_queue_depth(),
+            },
+        )
+    }
+
+    fn with_options(handlers: Vec<CmmBatchHandler>, options: CmmWorkerPoolOptions) -> Self {
+        let worker_groups = worker_groups_for_handlers(handlers, options.worker_cap);
         let worker_count = worker_groups.len();
-        let (batch_return, batch_pool) = bounded(BATCH_POOL_DEPTH);
+        let batch_size = options.batch_size.max(1);
+        let queue_depth = options.queue_depth.max(1);
+        let (batch_return, batch_pool) = bounded(queue_depth);
         let (completion_tx, completion_rx) = crossbeam_channel::unbounded::<Vec<CmmBatchRecord>>();
         let (error_tx, error_rx) = bounded(1);
         let inflight = Arc::new(AtomicUsize::new(0));
         let poison = Arc::new(AtomicBool::new(false));
         let mut work_txs = Vec::with_capacity(worker_count);
         let mut handles = Vec::with_capacity(worker_count);
-        let (completion_job_tx, completion_job_rx) = bounded(BATCH_POOL_DEPTH);
+        let (completion_job_tx, completion_job_rx) = bounded(queue_depth);
 
         for handlers in worker_groups {
-            let (work_tx, work_rx) = bounded::<WorkerJob>(BATCH_POOL_DEPTH);
+            let (work_tx, work_rx) = bounded::<WorkerJob>(queue_depth);
             let error_tx = error_tx.clone();
             let poison = Arc::clone(&poison);
             work_txs.push(work_tx);
@@ -179,6 +202,8 @@ impl CmmWorkerPool {
             batch_pool,
             batch_return,
             inflight,
+            batch_size,
+            queue_depth,
             completion_rx,
             completion_job_tx: Some(completion_job_tx),
             completion_handle: Some(completion_handle),
@@ -196,11 +221,11 @@ impl CmmWorkerPool {
     fn take_batch_vec(&self) -> Vec<CmmBatchRecord> {
         self.batch_pool
             .try_recv()
-            .unwrap_or_else(|_| Vec::with_capacity(super::CMM_BATCH_SIZE))
+            .unwrap_or_else(|_| Vec::with_capacity(self.batch_size))
     }
 
     fn wait_for_capacity(&self) -> Result<(), String> {
-        while self.inflight.load(Ordering::Acquire) >= BATCH_POOL_DEPTH {
+        while self.inflight.load(Ordering::Acquire) >= self.queue_depth {
             self.drain_one_completion()?;
         }
         Ok(())
@@ -313,7 +338,7 @@ impl CmmWorkerPool {
                         if gates.has_any() {
                             batch.push(CmmBatchRecord { record, gates });
                         }
-                        if batch.len() >= super::CMM_BATCH_SIZE {
+                        if batch.len() >= worker_pool.batch_size {
                             let full_batch =
                                 std::mem::replace(&mut batch, worker_pool.take_batch_vec());
                             worker_pool.dispatch_batch_async(full_batch)?;
@@ -369,6 +394,21 @@ fn worker_groups_for_handlers(
         groups[index % worker_count].push(handler);
     }
     groups
+}
+
+fn cmm_batch_size() -> usize {
+    positive_env_usize("TURBO_PICARD_CMM_BATCH_SIZE").unwrap_or(DEFAULT_BATCH_SIZE)
+}
+
+fn cmm_queue_depth() -> usize {
+    positive_env_usize("TURBO_PICARD_CMM_QUEUE_DEPTH").unwrap_or(DEFAULT_BATCH_POOL_DEPTH)
+}
+
+fn positive_env_usize(name: &str) -> Option<usize> {
+    std::env::var(name)
+        .ok()
+        .and_then(|value| value.trim().parse::<usize>().ok())
+        .filter(|value| *value > 0)
 }
 
 impl Drop for CmmWorkerPool {
@@ -683,6 +723,51 @@ mod tests {
             .collect();
         let pool = CmmWorkerPool::new(handlers, 1);
         assert_eq!(pool.worker_count(), 1);
+    }
+
+    #[test]
+    fn cmm_worker_pool_reuses_batch_vectors() {
+        use std::collections::HashSet;
+        use std::sync::{Arc, Mutex};
+
+        let tempdir = tempdir().expect("tempdir exists");
+        let input = tempdir.path().join("input.sam");
+        let mut lines = String::new();
+        for index in 0..12 {
+            lines.push_str(&format!(
+                "mapped_{index}\t0\tchr1\t{}\t60\t4M\t*\t0\t0\tACGT\tFFFF\n",
+                index + 1
+            ));
+        }
+        write_basic_sam(&input, &lines);
+        let reader = bam::Reader::from_path(&input).expect("sam input opens");
+
+        let seen_batches = Arc::new(Mutex::new(Vec::<usize>::new()));
+        let seen_batches_ref = Arc::clone(&seen_batches);
+        let pool = CmmWorkerPool::with_options(
+            vec![Box::new(move |batch| {
+                seen_batches_ref
+                    .lock()
+                    .expect("batch pointer lock")
+                    .push(batch.as_ptr() as usize);
+                Ok(())
+            })],
+            CmmWorkerPoolOptions {
+                worker_cap: 1,
+                batch_size: 1,
+                queue_depth: 1,
+            },
+        );
+
+        pool.run_parallel_bam_pass(reader, 0, false, false, false, false)
+            .expect("cmm parallel run succeeds");
+
+        let seen_batches = seen_batches.lock().expect("batch pointer lock");
+        let unique_batches = seen_batches.iter().copied().collect::<HashSet<_>>();
+        assert!(
+            unique_batches.len() < seen_batches.len(),
+            "expected at least one reused batch allocation, observed {seen_batches:?}"
+        );
     }
 
     #[test]
