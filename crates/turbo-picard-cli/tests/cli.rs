@@ -8263,6 +8263,76 @@ fn mergevcfs_merges_compatible_inputs_by_coordinate() {
 }
 
 #[test]
+fn mergevcfs_honors_tmp_dir_and_forced_external_runs() {
+    let tempdir = tempfile::tempdir().expect("tempdir exists");
+    let sort_tmp = tempdir.path().join("merge-tmp");
+    fs::create_dir(&sort_tmp).expect("merge temp dir is created");
+    let first = tempdir.path().join("first.vcf");
+    let second = tempdir.path().join("second.vcf");
+    let output = tempdir.path().join("merged.vcf");
+    fs::write(
+        &first,
+        concat!(
+            "##fileformat=VCFv4.2\n",
+            "##contig=<ID=chr1,length=1000>\n",
+            "##contig=<ID=chr2,length=1000>\n",
+            "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\n",
+            "chr2\t3\tchr2-first\tA\tC\t.\tPASS\t.\n",
+            "chr1\t9\tfirst\tA\tG\t.\tPASS\t.\n",
+        ),
+    )
+    .expect("first VCF is written");
+    fs::write(
+        &second,
+        concat!(
+            "##fileformat=VCFv4.2\n",
+            "##contig=<ID=chr1,length=1000>\n",
+            "##contig=<ID=chr2,length=1000>\n",
+            "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\n",
+            "chr1\t9\tsecond\tA\tT\t.\tPASS\t.\n",
+            "chr1\t2\tlow\tT\tC\t.\tPASS\t.\n",
+        ),
+    )
+    .expect("second VCF is written");
+
+    Command::cargo_bin("picard")
+        .expect("binary exists")
+        .args([
+            "MergeVcfs",
+            &format!("I={}", first.display()),
+            &format!("I={}", second.display()),
+            &format!("O={}", output.display()),
+            "MAX_RECORDS_IN_RAM=1",
+            &format!("TMP_DIR={}", sort_tmp.display()),
+            "VALIDATION_STRINGENCY=SILENT",
+            "QUIET=true",
+        ])
+        .assert()
+        .success();
+
+    let output = fs::read_to_string(output).expect("merged VCF exists");
+    assert_eq!(
+        output
+            .lines()
+            .filter(|line| !line.starts_with('#'))
+            .collect::<Vec<_>>(),
+        vec![
+            "chr1\t2\tlow\tT\tC\t.\tPASS\t.",
+            "chr1\t9\tfirst\tA\tG\t.\tPASS\t.",
+            "chr1\t9\tsecond\tA\tT\t.\tPASS\t.",
+            "chr2\t3\tchr2-first\tA\tC\t.\tPASS\t.",
+        ]
+    );
+    assert!(
+        fs::read_dir(&sort_tmp)
+            .expect("merge temp readable")
+            .next()
+            .is_none(),
+        "external merge sort should clean temporary runs"
+    );
+}
+
+#[test]
 fn mergevcfs_replaces_contig_header_from_explicit_dictionary() {
     let tempdir = tempfile::tempdir().expect("tempdir exists");
     let first = tempdir.path().join("first.vcf");
