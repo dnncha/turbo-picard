@@ -24,6 +24,10 @@ sidecar generation across the native CLI helpers and the MarkDuplicates crate.
   retaining only one parsed record per input plus the merge heap. If any input is
   discovered to be unsorted, the same-directory temporary output is discarded and
   the existing shared external-sort path is used unchanged.
+- `SortVcf` now scans headers and pushes records into the shared external sorter
+  line-by-line from plain or gzip inputs, then emits sorted records directly to a
+  same-directory temporary output. Index offsets are accumulated during output
+  writes instead of from a fully materialized output string.
 
 ## Tests
 
@@ -35,6 +39,7 @@ cargo test -p turbo-picard-markdup creates_md5_sidecar -- --nocapture
 cargo test -p turbo-picard-cli md5 -- --nocapture
 cargo test -p turbo-picard-cli gathervcfs -- --nocapture
 cargo test -p turbo-picard-cli mergevcfs -- --nocapture
+cargo test -p turbo-picard-cli sortvcf -- --nocapture
 cargo clippy -p turbo-picard-markdup --all-targets --all-features -- -D warnings
 ```
 
@@ -45,5 +50,5 @@ Blocked or not clean:
 
 Remaining Phase 7 work:
 
-- keep `SortVcf`/`LiftoverVcf` on compact external-sort records while reducing
-  remaining full-document VCF materialization.
+- keep `LiftoverVcf` on compact external-sort records while reducing remaining
+  full-document VCF materialization.

@@ -6138,15 +6138,18 @@ fn run_sortvcf(args: &[String]) -> Result<(), String> {
         .map(|value| value as usize)
         .unwrap_or(500_000);
 
-    let mut documents = Vec::with_capacity(inputs.len());
+    let mut headers = Vec::with_capacity(inputs.len());
+    let mut streams = Vec::with_capacity(inputs.len());
     for input in &inputs {
-        documents.push(read_vcf_document(input)?);
+        let (header, stream) = open_streaming_vcf_input(input)?;
+        headers.push(header);
+        streams.push(stream);
     }
-    let first = documents
+    let first = headers
         .first()
         .ok_or_else(|| "missing required SortVcf argument: INPUT".to_string())?;
-    for document in documents.iter().skip(1) {
-        if document.column_header != first.column_header {
+    for header in headers.iter().skip(1) {
+        if header.column_header != first.column_header {
             return Err("unsupported SortVcf inputs with different sample columns".to_string());
         }
     }
@@ -6155,41 +6158,35 @@ fn run_sortvcf(args: &[String]) -> Result<(), String> {
         let dictionary_text =
             fs::read_to_string(dictionary_path).map_err(|error| error.to_string())?;
         let contig_lines = vcf_contig_lines_from_dictionary(&dictionary_text)?;
-        validate_vcf_sequence_dictionaries(&documents, &contig_lines, "SortVcf")?;
+        validate_streaming_vcf_sequence_dictionaries(&headers, &contig_lines, "SortVcf")?;
         (
             dictionary_contig_order(&dictionary_text),
             Some(contig_lines),
         )
     } else {
         let contig_lines = first.contig_lines();
-        validate_vcf_sequence_dictionaries(&documents, &contig_lines, "SortVcf")?;
+        validate_streaming_vcf_sequence_dictionaries(&headers, &contig_lines, "SortVcf")?;
         (first.contig_order(), None)
     };
     if contig_order.is_empty() {
         return Err("unsupported SortVcf input without sequence dictionary".to_string());
     }
 
-    let mut text = vcf_header_text_with_contigs(first, contig_lines.as_deref())?;
     let mut sort_config = ExternalSortConfig::new(tmp_dir);
     sort_config.max_records_in_ram = max_records_in_ram.max(1);
     sort_config.prefix = "turbo-picard-sortvcf".to_string();
     let mut sorter = ExternalSorter::new(sort_config)?;
-    for document in documents {
-        for record in document.records {
-            let Some(contig_rank) = contig_order.get(&record.contig).copied() else {
-                return Err(format!(
-                    "VCF contig {} is not present in sequence dictionary",
-                    record.contig
-                ));
-            };
-            sorter.push(
-                vcf_sort_key(contig_rank, record.position),
-                record.line.into_bytes(),
-            )?;
-        }
+    for stream in &mut streams {
+        push_streaming_vcf_records_to_sorter(stream, &contig_order, &mut sorter)?;
     }
-    let (records, _metrics) = sorter.finish()?;
-    for record in records {
+
+    let header_text = streaming_vcf_header_text_with_contigs(first, contig_lines.as_deref())?;
+    let mut writer = StreamingTextOutput::create(&output, "sortvcf")?;
+    let mut index = (create_index && has_extension(&output, "vcf")).then(VcfIndexOffsets::default);
+    for line in header_text.lines() {
+        writer.write_line(line, false, index.as_mut())?;
+    }
+    sorter.finish_into(|record| {
         let line = String::from_utf8(record.payload)
             .map_err(|_| "SortVcf record payload is not UTF-8".to_string())?;
         if line.is_empty() {
@@ -6198,12 +6195,11 @@ fn run_sortvcf(args: &[String]) -> Result<(), String> {
                 record.ordinal
             ));
         }
-        text.push_str(&line);
-        text.push('\n');
-    }
-    write_text_or_gzip(&output, &text)?;
-    if create_index && has_extension(&output, "vcf") {
-        write_vcf_idx_sidecar(&output, &text)?;
+        writer.write_line(&line, true, index.as_mut())
+    })?;
+    writer.persist()?;
+    if let Some(index) = index {
+        index.write_sidecar(&output)?;
     }
     Ok(())
 }
@@ -7272,6 +7268,51 @@ fn next_streaming_vcf_record(
         }
         input.last_key = Some(key);
         return Ok(StreamingVcfRecord::Record(record, key));
+    }
+}
+
+fn push_streaming_vcf_records_to_sorter(
+    input: &mut StreamingVcfInput,
+    contig_order: &BTreeMap<String, usize>,
+    sorter: &mut ExternalSorter,
+) -> Result<(), String> {
+    loop {
+        input.line.clear();
+        let bytes_read = input
+            .reader
+            .read_line(&mut input.line)
+            .map_err(|error| error.to_string())?;
+        if bytes_read == 0 {
+            return Ok(());
+        }
+        input.line_number += 1;
+        let trimmed = input.line.trim_end_matches(['\r', '\n']);
+        if trimmed.trim().is_empty() {
+            continue;
+        }
+        if trimmed.starts_with('#') {
+            return Err(format!(
+                "unsupported VCF header line {} in {}",
+                input.line_number, input.source
+            ));
+        }
+        let record = parse_vcf_record(
+            trimmed,
+            input.record_serial,
+            &input.source,
+            input.line_number,
+        )?;
+        input.record_serial += 1;
+        let Some(contig_rank) = contig_order.get(&record.contig).copied() else {
+            return Err(format!(
+                "VCF contig {} is not present in sequence dictionary",
+                record.contig
+            ));
+        };
+        sorter.push(
+            vcf_sort_key(contig_rank, record.position),
+            record.line.into_bytes(),
+        )?;
     }
 }
 
