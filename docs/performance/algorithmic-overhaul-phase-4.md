@@ -23,6 +23,14 @@ vectors, and duplicate-group maps for the input.
   inputs, avoiding speculative output files that may be discarded.
 - The no-duplicate test now verifies observable behavior, record flags, and
   metrics rather than byte-for-byte copying from the removed optimization.
+- Added an explicit `DuplicateCandidate` extraction layer for eligible BAM
+  records. Duplicate grouping, representative scoring, qname identity, barcode
+  lookup, unclipped five-prime positions, and pair orientation now use cached
+  candidate fields instead of repeatedly deriving those values from retained
+  `bam::Record` objects.
+- Pair and fragment duplicate groups now store candidate indices and map back to
+  full records only when applying flags, DS/DI tags, optical duplicate tags, or
+  output policies.
 
 ## Tests
 
@@ -47,7 +55,7 @@ Blocked or not clean:
 
 Remaining Phase 4 work:
 
-- extract compact duplicate candidates instead of retaining every full record;
+- spill compact duplicate candidates instead of retaining every full record;
 - externally collate distant pairs by qname when needed;
 - externally sort fixed-width duplicate keys and scan groups once;
 - produce a compact decision stream for the final output pass;

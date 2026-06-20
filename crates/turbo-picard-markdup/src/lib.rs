@@ -100,6 +100,52 @@ struct BamDuplicateKey {
     barcode: Option<Vec<u8>>,
 }
 
+#[derive(Debug, Clone)]
+struct DuplicateCandidate {
+    record_index: usize,
+    library_id: LibraryId,
+    qname: Vec<u8>,
+    flags: u16,
+    reference_id: i32,
+    five_prime_position: i64,
+    _mate_reference_id: i32,
+    _mate_position: i64,
+    _template_length: i64,
+    duplicate_score: u64,
+    barcode: Option<Vec<u8>>,
+}
+
+impl DuplicateCandidate {
+    fn from_record(
+        record_index: usize,
+        record: &bam::Record,
+        library_id: LibraryId,
+        config: &MarkDuplicatesConfig,
+    ) -> Self {
+        Self {
+            record_index,
+            library_id,
+            qname: record.qname().to_vec(),
+            flags: record.flags(),
+            reference_id: record.tid(),
+            five_prime_position: unclipped_record_position(record),
+            _mate_reference_id: record.mtid(),
+            _mate_position: record.mpos(),
+            _template_length: record.insert_size(),
+            duplicate_score: quality_score(record),
+            barcode: bam_barcode(record, config),
+        }
+    }
+
+    fn is_pair(&self) -> bool {
+        duplicate_candidate_is_pair(self.flags)
+    }
+
+    fn reverse_strand(&self) -> bool {
+        self.flags & 0x10 != 0
+    }
+}
+
 pub fn run(config: &MarkDuplicatesConfig) -> Result<MarkDuplicatesSummary, MarkDuplicatesError> {
     if config
         .inputs
@@ -275,7 +321,7 @@ fn run_hts_container(
     let mut writer = open_markdup_writer(config, &config.output, &header)?;
     let mut records = Vec::new();
     let mut record_libraries = Vec::new();
-    let mut eligible_indices = Vec::new();
+    let mut candidates = Vec::new();
     let mut summary = MarkDuplicatesSummary {
         library,
         unpaired_reads_examined: 0,
@@ -291,41 +337,48 @@ fn run_hts_container(
 
     read_bam_records(
         &mut reader,
-        &mut records,
-        &mut record_libraries,
-        &mut eligible_indices,
+        &mut BamRecordSink {
+            records: &mut records,
+            record_libraries: &mut record_libraries,
+            candidates: &mut candidates,
+        },
         &first_library_lookup,
         &mut library_registry,
         &mut summary,
+        config,
     )?;
     for input in config.inputs.iter().skip(1) {
         let mut reader = open_markdup_reader(config, input)?;
         let input_library_lookup = library_lookup(reader.header(), &mut library_registry);
         read_bam_records(
             &mut reader,
-            &mut records,
-            &mut record_libraries,
-            &mut eligible_indices,
+            &mut BamRecordSink {
+                records: &mut records,
+                record_libraries: &mut record_libraries,
+                candidates: &mut candidates,
+            },
             &input_library_lookup,
             &mut library_registry,
             &mut summary,
+            config,
         )?;
     }
 
-    let duplicate_groups = duplicate_groups(&records, &record_libraries, &eligible_indices, config);
+    let duplicate_groups = duplicate_groups(&candidates);
     let mut optical_duplicate_records = vec![false; records.len()];
 
     for group in duplicate_groups.values() {
         if group.len() < 2 {
             continue;
         }
-        let paired_set_size = paired_duplicate_set_size(group, &records);
-        if !has_multiple_read_names(group, &records) {
+        let paired_set_size = paired_duplicate_set_size(group, &candidates);
+        if !has_multiple_read_names(group, &candidates) {
             if let Some(set_size) = paired_set_size {
                 add_duplicate_set(&mut summary, set_size, Some(set_size));
-                if let Some(index) = group.first() {
+                if let Some(candidate_index) = group.first() {
+                    let index = candidates[*candidate_index].record_index;
                     add_duplicate_set(
-                        library_registry.summary_mut(record_libraries[*index]),
+                        library_registry.summary_mut(record_libraries[index]),
                         set_size,
                         Some(set_size),
                     );
@@ -334,11 +387,12 @@ fn run_hts_container(
             continue;
         }
 
-        let representative_index = best_duplicate_representative_index(group, &records);
-        let representative_name = records[representative_index].qname().to_vec();
+        let representative_candidate_index =
+            best_duplicate_representative_index(group, &candidates);
+        let representative_name = candidates[representative_candidate_index].qname.clone();
         let optical_duplicates = optical_duplicate_record_indices(
             group,
-            &records,
+            &candidates,
             representative_name.as_slice(),
             config,
         );
@@ -346,25 +400,36 @@ fn run_hts_container(
             let optical_names = u64::try_from(optical_duplicates.read_names).unwrap_or(u64::MAX);
             let non_optical_size = (optical_names < set_size).then_some(set_size - optical_names);
             add_duplicate_set(&mut summary, set_size, non_optical_size);
-            if let Some(index) = group.first() {
-                let library_summary = library_registry.summary_mut(record_libraries[*index]);
+            if let Some(candidate_index) = group.first() {
+                let index = candidates[*candidate_index].record_index;
+                let library_summary = library_registry.summary_mut(record_libraries[index]);
                 add_duplicate_set(library_summary, set_size, non_optical_size);
             }
         }
         summary.read_pair_optical_duplicates += optical_duplicates.read_names as u64;
-        if let Some(index) = group.first() {
+        if let Some(candidate_index) = group.first() {
+            let index = candidates[*candidate_index].record_index;
             library_registry
-                .summary_mut(record_libraries[*index])
+                .summary_mut(record_libraries[index])
                 .read_pair_optical_duplicates += optical_duplicates.read_names as u64;
         }
         for index in optical_duplicates.record_indices {
             optical_duplicate_records[index] = true;
         }
         if config.tag_duplicate_set_members && !config.remove_duplicates {
-            add_duplicate_set_member_tags(group, &mut records, representative_name.as_slice())?;
+            add_duplicate_set_member_tags(
+                group,
+                &candidates,
+                &mut records,
+                representative_name.as_slice(),
+            )?;
         }
 
-        for index in group.iter().copied() {
+        for index in group
+            .iter()
+            .copied()
+            .map(|candidate_index| candidates[candidate_index].record_index)
+        {
             if records[index].qname() == representative_name.as_slice() {
                 continue;
             }
@@ -386,8 +451,7 @@ fn run_hts_container(
     mark_fragment_duplicate_groups(
         &mut records,
         &record_libraries,
-        &eligible_indices,
-        config,
+        &candidates,
         &mut summary,
         &mut library_registry,
     );
@@ -430,14 +494,19 @@ fn run_hts_container(
     Ok(summary)
 }
 
+struct BamRecordSink<'a> {
+    records: &'a mut Vec<bam::Record>,
+    record_libraries: &'a mut Vec<LibraryId>,
+    candidates: &'a mut Vec<DuplicateCandidate>,
+}
+
 fn read_bam_records<R: bam::Read>(
     reader: &mut R,
-    records: &mut Vec<bam::Record>,
-    record_libraries: &mut Vec<LibraryId>,
-    eligible_indices: &mut Vec<usize>,
+    sink: &mut BamRecordSink<'_>,
     library_lookup: &LibraryLookup,
     library_registry: &mut LibraryRegistry,
     summary: &mut MarkDuplicatesSummary,
+    config: &MarkDuplicatesConfig,
 ) -> Result<(), MarkDuplicatesError> {
     for result in reader.records() {
         let mut record = result?;
@@ -446,13 +515,13 @@ fn read_bam_records<R: bam::Read>(
             record.set_flags(flag);
         }
         let library_id = record_library_id(&record, library_lookup);
-        let record_index = records.len();
+        let record_index = sink.records.len();
 
         if flag & UNMAPPED_FLAG != 0 {
             summary.unmapped_records += 1;
             library_registry.summary_mut(library_id).unmapped_records += 1;
-            record_libraries.push(library_id);
-            records.push(record);
+            sink.record_libraries.push(library_id);
+            sink.records.push(record);
             continue;
         }
         if flag & SECONDARY_OR_SUPPLEMENTARY_FLAGS != 0 {
@@ -460,8 +529,8 @@ fn read_bam_records<R: bam::Read>(
             library_registry
                 .summary_mut(library_id)
                 .secondary_or_supplementary_records += 1;
-            record_libraries.push(library_id);
-            records.push(record);
+            sink.record_libraries.push(library_id);
+            sink.records.push(record);
             continue;
         }
 
@@ -480,9 +549,14 @@ fn read_bam_records<R: bam::Read>(
                 .summary_mut(library_id)
                 .unpaired_reads_examined += 1;
         }
-        eligible_indices.push(record_index);
-        record_libraries.push(library_id);
-        records.push(record);
+        sink.candidates.push(DuplicateCandidate::from_record(
+            record_index,
+            &record,
+            library_id,
+            config,
+        ));
+        sink.record_libraries.push(library_id);
+        sink.records.push(record);
     }
 
     Ok(())
@@ -578,7 +652,7 @@ struct OpticalDuplicateRecords {
 
 fn optical_duplicate_record_indices(
     group: &[usize],
-    records: &[bam::Record],
+    candidates: &[DuplicateCandidate],
     representative_name: &[u8],
     config: &MarkDuplicatesConfig,
 ) -> OpticalDuplicateRecords {
@@ -588,7 +662,8 @@ fn optical_duplicate_record_indices(
             record_indices: Vec::new(),
         };
     }
-    let Some(representative_location) = read_location_for_name(group, records, representative_name)
+    let Some(representative_location) =
+        read_location_for_name(group, candidates, representative_name)
     else {
         return OpticalDuplicateRecords {
             read_names: 0,
@@ -600,12 +675,12 @@ fn optical_duplicate_record_indices(
     let mut record_indices = Vec::<usize>::new();
 
     for index in group.iter().copied() {
-        let name = records[index].qname();
+        let name = candidates[index].qname.as_slice();
         if name == representative_name {
             continue;
         }
         if optical_names.contains(&name) {
-            record_indices.push(index);
+            record_indices.push(candidates[index].record_index);
             continue;
         }
         let Some(location) = parse_read_location(name) else {
@@ -613,7 +688,7 @@ fn optical_duplicate_record_indices(
         };
         if representative_location.is_within(&location, pixel_distance) {
             optical_names.push(name);
-            record_indices.push(index);
+            record_indices.push(candidates[index].record_index);
         }
     }
 
@@ -625,13 +700,13 @@ fn optical_duplicate_record_indices(
 
 fn read_location_for_name(
     group: &[usize],
-    records: &[bam::Record],
+    candidates: &[DuplicateCandidate],
     name: &[u8],
 ) -> Option<ReadLocation> {
     group
         .iter()
-        .find(|index| records[**index].qname() == name)
-        .and_then(|index| parse_read_location(records[*index].qname()))
+        .find(|index| candidates[**index].qname == name)
+        .and_then(|index| parse_read_location(candidates[*index].qname.as_slice()))
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -660,19 +735,17 @@ fn parse_read_location(name: &[u8]) -> Option<ReadLocation> {
 
 fn add_duplicate_set_member_tags(
     group: &[usize],
+    candidates: &[DuplicateCandidate],
     records: &mut [bam::Record],
     representative_name: &[u8],
 ) -> Result<(), MarkDuplicatesError> {
-    if !group
-        .iter()
-        .any(|index| duplicate_candidate_is_pair(records[*index].flags()))
-    {
+    if !group.iter().any(|index| candidates[*index].is_pair()) {
         return Ok(());
     }
 
     let mut member_names = HashSet::<Vec<u8>>::default();
     for index in group.iter().copied() {
-        member_names.insert(records[index].qname().to_vec());
+        member_names.insert(candidates[index].qname.clone());
     }
     if member_names.len() < 2 {
         return Ok(());
@@ -681,15 +754,17 @@ fn add_duplicate_set_member_tags(
     let duplicate_set_index = group
         .iter()
         .copied()
-        .filter(|index| records[*index].qname() == representative_name)
+        .filter(|index| candidates[*index].qname == representative_name)
+        .map(|index| candidates[index].record_index)
         .min()
-        .unwrap_or(group[0]);
+        .unwrap_or(candidates[group[0]].record_index);
     let duplicate_set_size = i32::try_from(member_names.len()).unwrap_or(i32::MAX);
     let duplicate_set_index = i32::try_from(duplicate_set_index).unwrap_or(i32::MAX);
 
     for index in group.iter().copied() {
-        replace_i32_aux(&mut records[index], b"DS", duplicate_set_size)?;
-        replace_i32_aux(&mut records[index], b"DI", duplicate_set_index)?;
+        let record_index = candidates[index].record_index;
+        replace_i32_aux(&mut records[record_index], b"DS", duplicate_set_size)?;
+        replace_i32_aux(&mut records[record_index], b"DI", duplicate_set_index)?;
     }
 
     Ok(())
@@ -804,30 +879,24 @@ fn parse_sam_integer(
         })
 }
 
-fn duplicate_groups(
-    records: &[bam::Record],
-    record_libraries: &[LibraryId],
-    eligible_indices: &[usize],
-    config: &MarkDuplicatesConfig,
-) -> HashMap<BamDuplicateKey, Vec<usize>> {
+fn duplicate_groups(candidates: &[DuplicateCandidate]) -> HashMap<BamDuplicateKey, Vec<usize>> {
     let mut paired_by_name = HashMap::<Vec<u8>, usize>::default();
     let mut duplicate_groups = HashMap::<BamDuplicateKey, Vec<usize>>::default();
 
-    for index in eligible_indices.iter().copied() {
-        let record = &records[index];
-        if duplicate_candidate_is_pair(record.flags()) {
-            if let Some(first_index) = paired_by_name.remove(record.qname()) {
-                let indices = [first_index, index];
-                let barcode = first_barcode(records, &indices, config);
+    for (candidate_index, candidate) in candidates.iter().enumerate() {
+        if candidate.is_pair() {
+            if let Some(first_index) = paired_by_name.remove(candidate.qname.as_slice()) {
+                let indices = [first_index, candidate_index];
+                let barcode = first_barcode(candidates, &indices);
                 let key = pair_duplicate_key_bam(
-                    &records[first_index],
-                    record,
-                    record_libraries[first_index],
+                    &candidates[first_index],
+                    candidate,
+                    candidates[first_index].library_id,
                     barcode,
                 );
                 duplicate_groups.entry(key).or_default().extend(indices);
             } else {
-                paired_by_name.insert(record.qname().to_vec(), index);
+                paired_by_name.insert(candidate.qname.clone(), candidate_index);
             }
         }
     }
@@ -838,31 +907,33 @@ fn duplicate_groups(
 fn mark_fragment_duplicate_groups(
     records: &mut [bam::Record],
     record_libraries: &[LibraryId],
-    eligible_indices: &[usize],
-    config: &MarkDuplicatesConfig,
+    candidates: &[DuplicateCandidate],
     summary: &mut MarkDuplicatesSummary,
     library_registry: &mut LibraryRegistry,
 ) {
     let mut fragment_groups = HashMap::<BamDuplicateKey, Vec<usize>>::default();
-    for index in eligible_indices.iter().copied() {
-        let barcode = bam_barcode(&records[index], config);
-        let key = fragment_duplicate_key_bam(&records[index], record_libraries[index], &barcode);
-        fragment_groups.entry(key).or_default().push(index);
+    for (candidate_index, candidate) in candidates.iter().enumerate() {
+        let key = fragment_duplicate_key_bam(candidate);
+        fragment_groups
+            .entry(key)
+            .or_default()
+            .push(candidate_index);
     }
 
     for group in fragment_groups.values() {
-        if group.len() < 2 || !has_multiple_read_names(group, records) {
+        if group.len() < 2 || !has_multiple_read_names(group, candidates) {
             continue;
         }
 
         let contains_complete_pair = group
             .iter()
-            .any(|index| duplicate_candidate_is_pair(records[*index].flags()));
+            .any(|candidate_index| candidates[*candidate_index].is_pair());
         if contains_complete_pair {
-            for index in group.iter().copied() {
-                if duplicate_candidate_is_pair(records[index].flags()) {
+            for candidate_index in group.iter().copied() {
+                if candidates[candidate_index].is_pair() {
                     continue;
                 }
+                let index = candidates[candidate_index].record_index;
                 mark_unpaired_duplicate_record(
                     index,
                     records,
@@ -874,10 +945,11 @@ fn mark_fragment_duplicate_groups(
             continue;
         }
 
-        let representative_index = best_duplicate_representative_index(group, records);
-        let representative_name = records[representative_index].qname().to_vec();
-        for index in group.iter().copied() {
-            if records[index].qname() == representative_name.as_slice() {
+        let representative_index = best_duplicate_representative_index(group, candidates);
+        let representative_name = candidates[representative_index].qname.clone();
+        for candidate_index in group.iter().copied() {
+            let index = candidates[candidate_index].record_index;
+            if candidates[candidate_index].qname == representative_name {
                 continue;
             }
             mark_unpaired_duplicate_record(
@@ -935,14 +1007,10 @@ fn sam_tag_value(fields: &[String], tag: &str) -> Option<Vec<u8>> {
     })
 }
 
-fn first_barcode(
-    records: &[bam::Record],
-    indices: &[usize],
-    config: &MarkDuplicatesConfig,
-) -> Option<Vec<u8>> {
+fn first_barcode(candidates: &[DuplicateCandidate], indices: &[usize]) -> Option<Vec<u8>> {
     indices
         .iter()
-        .find_map(|index| bam_barcode(&records[*index], config))
+        .find_map(|index| candidates[*index].barcode.clone())
 }
 
 fn bam_barcode(record: &bam::Record, config: &MarkDuplicatesConfig) -> Option<Vec<u8>> {
@@ -990,33 +1058,28 @@ where
     }
 }
 
-fn fragment_duplicate_key_bam(
-    record: &bam::Record,
-    library_id: LibraryId,
-    barcode: &Option<Vec<u8>>,
-) -> BamDuplicateKey {
-    let reverse_strand = record.flags() & 0x10 != 0;
+fn fragment_duplicate_key_bam(candidate: &DuplicateCandidate) -> BamDuplicateKey {
     BamDuplicateKey {
-        library_id,
-        reference_id: record.tid(),
-        position: unclipped_record_position(record),
+        library_id: candidate.library_id,
+        reference_id: candidate.reference_id,
+        position: candidate.five_prime_position,
         mate_reference_id: -1,
         mate_position: -1,
         template_length: 0,
-        reverse_strand,
-        barcode: barcode.clone(),
+        reverse_strand: candidate.reverse_strand(),
+        barcode: candidate.barcode.clone(),
     }
 }
 
 fn pair_duplicate_key_bam(
-    first: &bam::Record,
-    second: &bam::Record,
+    first: &DuplicateCandidate,
+    second: &DuplicateCandidate,
     library_id: LibraryId,
     barcode: Option<Vec<u8>>,
 ) -> BamDuplicateKey {
-    let first_position = unclipped_record_position(first);
-    let second_position = unclipped_record_position(second);
-    let (left, right) = if (first.tid(), first_position) <= (second.tid(), second_position) {
+    let (left, right) = if (first.reference_id, first.five_prime_position)
+        <= (second.reference_id, second.five_prime_position)
+    {
         (first, second)
     } else {
         (second, first)
@@ -1024,19 +1087,19 @@ fn pair_duplicate_key_bam(
 
     BamDuplicateKey {
         library_id,
-        reference_id: left.tid(),
-        position: unclipped_record_position(left),
-        mate_reference_id: right.tid(),
-        mate_position: unclipped_record_position(right),
+        reference_id: left.reference_id,
+        position: left.five_prime_position,
+        mate_reference_id: right.reference_id,
+        mate_position: right.five_prime_position,
         template_length: pair_orientation_code(left, right),
         reverse_strand: false,
         barcode,
     }
 }
 
-fn pair_orientation_code(left: &bam::Record, right: &bam::Record) -> i64 {
-    let left_reverse = i64::from(left.flags() & 0x10 != 0);
-    let right_reverse = i64::from(right.flags() & 0x10 != 0);
+fn pair_orientation_code(left: &DuplicateCandidate, right: &DuplicateCandidate) -> i64 {
+    let left_reverse = i64::from(left.reverse_strand());
+    let right_reverse = i64::from(right.reverse_strand());
     (left_reverse << 1) | right_reverse
 }
 
@@ -1175,44 +1238,51 @@ fn quality_score(record: &bam::Record) -> u64 {
         .sum()
 }
 
-fn has_multiple_read_names(group: &[usize], records: &[bam::Record]) -> bool {
+fn has_multiple_read_names(group: &[usize], candidates: &[DuplicateCandidate]) -> bool {
     let Some(first_index) = group.first() else {
         return false;
     };
-    let first_name = records[*first_index].qname();
+    let first_name = candidates[*first_index].qname.as_slice();
     group
         .iter()
         .skip(1)
-        .any(|index| records[*index].qname() != first_name)
+        .any(|index| candidates[*index].qname.as_slice() != first_name)
 }
 
-fn paired_duplicate_set_size(group: &[usize], records: &[bam::Record]) -> Option<u64> {
-    if !group
-        .iter()
-        .any(|index| duplicate_candidate_is_pair(records[*index].flags()))
-    {
+fn paired_duplicate_set_size(group: &[usize], candidates: &[DuplicateCandidate]) -> Option<u64> {
+    if !group.iter().any(|index| candidates[*index].is_pair()) {
         return None;
     }
     let mut names = HashSet::<Vec<u8>>::default();
     for index in group.iter().copied() {
-        names.insert(records[index].qname().to_vec());
+        names.insert(candidates[index].qname.clone());
     }
     u64::try_from(names.len()).ok().filter(|size| *size > 0)
 }
 
-fn best_duplicate_representative_index(group: &[usize], records: &[bam::Record]) -> usize {
+fn best_duplicate_representative_index(
+    group: &[usize],
+    candidates: &[DuplicateCandidate],
+) -> usize {
     let mut scores_by_name = HashMap::<Vec<u8>, (usize, u64)>::default();
 
     for index in group.iter().copied() {
-        let score = quality_score(&records[index]);
-        let name = records[index].qname().to_vec();
+        let candidate = &candidates[index];
+        let score = candidate.duplicate_score;
+        let name = candidate.qname.clone();
         let entry = scores_by_name.entry(name).or_insert((index, 0));
         entry.1 += score;
     }
 
     scores_by_name
         .into_values()
-        .max_by(|left, right| left.1.cmp(&right.1).then_with(|| right.0.cmp(&left.0)))
+        .max_by(|left, right| {
+            left.1.cmp(&right.1).then_with(|| {
+                candidates[right.0]
+                    .record_index
+                    .cmp(&candidates[left.0].record_index)
+            })
+        })
         .map(|(index, _)| index)
         .expect("non-empty duplicate group")
 }
@@ -1667,6 +1737,15 @@ mod tests {
         record
     }
 
+    fn candidates_for_records(records: &[bam::Record]) -> Vec<DuplicateCandidate> {
+        let config = sam_markdup_config();
+        records
+            .iter()
+            .enumerate()
+            .map(|(index, record)| DuplicateCandidate::from_record(index, record, 0, &config))
+            .collect()
+    }
+
     #[test]
     fn best_duplicate_representative_index_aggregates_score_by_read_name() {
         let records = [
@@ -1675,8 +1754,9 @@ mod tests {
             record_with_name_and_qualities(b"dup-b", &[35], 0),
             record_with_name_and_qualities(b"dup-c", &[5], 0),
         ];
+        let candidates = candidates_for_records(&records);
 
-        let representative_index = best_duplicate_representative_index(&[0, 1, 2, 3], &records);
+        let representative_index = best_duplicate_representative_index(&[0, 1, 2, 3], &candidates);
         assert_eq!(representative_index, 0);
     }
 
@@ -1687,8 +1767,9 @@ mod tests {
             record_with_name_and_qualities(b"dup-b", &[10], 0),
             record_with_name_and_qualities(b"dup-c", &[10], 0),
         ];
+        let candidates = candidates_for_records(&records);
 
-        let representative_index = best_duplicate_representative_index(&[0, 1, 2], &records);
+        let representative_index = best_duplicate_representative_index(&[0, 1, 2], &candidates);
         assert_eq!(representative_index, 0);
     }
 
@@ -1700,8 +1781,12 @@ mod tests {
             record_with_name_and_qualities(b"dup-b", &[30], 0x0),
             record_with_name_and_qualities(b"dup-b", &[40], 0x1),
         ];
+        let candidates = candidates_for_records(&records);
 
-        assert_eq!(paired_duplicate_set_size(&[0, 1, 2, 3], &records), Some(2));
+        assert_eq!(
+            paired_duplicate_set_size(&[0, 1, 2, 3], &candidates),
+            Some(2)
+        );
     }
 
     #[test]
@@ -1710,8 +1795,9 @@ mod tests {
             record_with_name_and_qualities(b"dup-a", &[10], 0x0),
             record_with_name_and_qualities(b"dup-a", &[20], 0x0),
         ];
+        let candidates = candidates_for_records(&records);
 
-        assert_eq!(paired_duplicate_set_size(&[0, 1], &records), None);
+        assert_eq!(paired_duplicate_set_size(&[0, 1], &candidates), None);
     }
 
     fn record_with_name_and_flags(qname: &[u8], flags: u16) -> bam::Record {
@@ -1735,8 +1821,10 @@ mod tests {
             record_with_name_and_flags(b"dup-b", 0x1),
             record_with_name_and_flags(b"dup-c", 0x1),
         ];
+        let candidates = candidates_for_records(&records);
 
-        add_duplicate_set_member_tags(&[0, 1, 2, 3], &mut records, b"dup-a").expect("tags applied");
+        add_duplicate_set_member_tags(&[0, 1, 2, 3], &candidates, &mut records, b"dup-a")
+            .expect("tags applied");
 
         for index in [0usize, 1, 2, 3] {
             let di = records[index].aux(b"DI").expect("DI tag exists");
@@ -1752,8 +1840,10 @@ mod tests {
             record_with_name_and_flags(b"dup-a", 0x0),
             record_with_name_and_flags(b"dup-a", 0x0),
         ];
+        let candidates = candidates_for_records(&records);
 
-        add_duplicate_set_member_tags(&[0, 1], &mut records, b"dup-a").expect("returns");
+        add_duplicate_set_member_tags(&[0, 1], &candidates, &mut records, b"dup-a")
+            .expect("returns");
 
         assert!(records[0].aux(b"DI").is_err());
         assert!(records[1].aux(b"DI").is_err());
