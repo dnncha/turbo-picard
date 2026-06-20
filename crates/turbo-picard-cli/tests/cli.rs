@@ -3662,6 +3662,80 @@ fn collectwgsmetrics_can_include_base_quality_histogram() {
 }
 
 #[test]
+fn collectwgsmetrics_handles_sparse_read_on_long_contig() {
+    let tempdir = tempfile::tempdir().expect("tempdir exists");
+    let input = tempdir.path().join("input.sam");
+    let reference = tempdir.path().join("ref.fa");
+    let output = tempdir.path().join("wgs_metrics.txt");
+    fs::write(&reference, format!(">chr1\n{}\n", "A".repeat(100_000)))
+        .expect("reference is written");
+    fs::write(
+        &input,
+        concat!(
+            "@HD\tVN:1.6\tSO:coordinate\n",
+            "@SQ\tSN:chr1\tLN:100000\n",
+            "read-a\t0\tchr1\t99991\t60\t4M\t*\t0\t0\tAAAA\tFFFF\n",
+        ),
+    )
+    .expect("input fixture is written");
+
+    Command::cargo_bin("picard")
+        .expect("binary exists")
+        .args([
+            "CollectWgsMetrics",
+            &format!("I={}", input.display()),
+            &format!("O={}", output.display()),
+            &format!("R={}", reference.display()),
+            "COUNT_UNPAIRED=true",
+            "SAMPLE_SIZE=0",
+            "VALIDATION_STRINGENCY=SILENT",
+            "QUIET=true",
+        ])
+        .assert()
+        .success();
+
+    let metrics = fs::read_to_string(&output).expect("metrics output exists");
+    assert!(metrics.contains("100000\t0.00004"));
+    assert!(metrics.contains("0\t99996\n"));
+    assert!(metrics.contains("1\t4\n"));
+}
+
+#[test]
+fn collectwgsmetrics_rejects_coordinate_regressions() {
+    let tempdir = tempfile::tempdir().expect("tempdir exists");
+    let input = tempdir.path().join("input.sam");
+    let reference = tempdir.path().join("ref.fa");
+    let output = tempdir.path().join("wgs_metrics.txt");
+    fs::write(&reference, ">chr1\nACGTACGTACGT\n").expect("reference is written");
+    fs::write(
+        &input,
+        concat!(
+            "@HD\tVN:1.6\tSO:coordinate\n",
+            "@SQ\tSN:chr1\tLN:12\n",
+            "read-b\t0\tchr1\t5\t60\t4M\t*\t0\t0\tACGT\tFFFF\n",
+            "read-a\t0\tchr1\t4\t60\t4M\t*\t0\t0\tACGT\tFFFF\n",
+        ),
+    )
+    .expect("input fixture is written");
+
+    Command::cargo_bin("picard")
+        .expect("binary exists")
+        .args([
+            "CollectWgsMetrics",
+            &format!("I={}", input.display()),
+            &format!("O={}", output.display()),
+            &format!("R={}", reference.display()),
+            "COUNT_UNPAIRED=true",
+            "SAMPLE_SIZE=0",
+            "VALIDATION_STRINGENCY=SILENT",
+            "QUIET=true",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicates::str::contains("not coordinate-sorted"));
+}
+
+#[test]
 fn collectwgsmetrics_use_fast_algorithm_defaults_to_zero_sample_and_no_bq_histogram() {
     let tempdir = tempfile::tempdir().expect("tempdir exists");
     let input = tempdir.path().join("input.sam");

@@ -75,14 +75,14 @@ scan optional tags in one pass instead of allocating a per-line tag vector. Thes
 choices keep parity with Picard output while avoiding repeated vector growth on
 long reads.
 
-``CollectWgsMetrics`` keeps one contig-sized ``u16`` depth buffer at a time,
-loads reference lengths from ``.fai`` when present (no full-genome FASTA load),
-updates coverage histograms incrementally as depths change (no ``O(genome size)``
-contig-finalize rescan), applies Picard-style mate overlap exclusion with
-``FxHashMap`` mate pairing and packed overlap bitmaps, and overlaps BGZF decode
-with pileup on BAM/CRAM inputs via a dedicated reader thread. That removes the
-memory and finalize costs that dominated WGS runs while keeping Picard-identical
-summary and histogram output.
+``CollectWgsMetrics`` keeps only a sliding active-span depth window, loads
+reference lengths from ``.fai`` when present (no full-genome FASTA load),
+finalizes coverage histograms as the coordinate frontier advances, applies
+Picard-style mate overlap exclusion with ``FxHashMap`` mate pairing, expiry
+pruning, and packed overlap bitmaps, and overlaps BGZF decode with pileup on
+BAM/CRAM inputs via a dedicated reader thread. That removes the memory and
+finalize costs that dominated WGS runs while keeping Picard-identical summary
+and histogram output.
 
 ``CollectMultipleMetrics`` on BAM/CRAM inputs runs all selected collectors in
 one HTSlib pass (the same idea as riker's ``multi`` command) instead of

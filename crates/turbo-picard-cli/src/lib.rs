@@ -21,7 +21,7 @@ use rust_htslib::bam::record::{Aux, Cigar, CigarString};
 use rust_htslib::bam::{self, Read};
 use rustc_hash::{FxBuildHasher, FxHashMap};
 use std::cmp::Ordering;
-use std::collections::{BTreeMap, BTreeSet, BinaryHeap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, BinaryHeap, HashMap, HashSet, VecDeque};
 use std::env;
 use std::fs;
 use std::io::{BufRead, BufReader, BufWriter, Read as IoRead, Seek, SeekFrom, Write};
@@ -11505,12 +11505,14 @@ impl WgsIntervalRange {
 #[derive(Debug, Default)]
 struct WgsOverlapBitmap {
     words: Vec<u64>,
+    bit_len: usize,
 }
 
 impl WgsOverlapBitmap {
     fn with_bit_len(bits: usize) -> Self {
         Self {
             words: vec![0; bits.div_ceil(64)],
+            bit_len: bits,
         }
     }
 
@@ -11521,6 +11523,9 @@ impl WgsOverlapBitmap {
     }
 
     fn get(&self, index: usize) -> bool {
+        if index >= self.bit_len {
+            return false;
+        }
         self.words
             .get(index / 64)
             .copied()
@@ -11531,6 +11536,7 @@ impl WgsOverlapBitmap {
 #[derive(Debug)]
 struct WgsCachedMate {
     overlap_start: u32,
+    expiry_coordinate: u32,
     bitmap: WgsOverlapBitmap,
 }
 
@@ -11563,6 +11569,11 @@ impl WgsMateBuffer {
 
     fn clear(&mut self) {
         self.pending.clear();
+    }
+
+    fn prune_before(&mut self, frontier: usize) {
+        self.pending
+            .retain(|_, cached| cached.expiry_coordinate as usize > frontier);
     }
 
     fn probe(&mut self, record: &bam::Record) -> WgsMatePeek {
@@ -11649,16 +11660,185 @@ fn wgs_locus_included_at(
     index < contig_length && ranges.map_or(true, |ranges| WgsIntervalRange::contains(ranges, index))
 }
 
-fn wgs_included_loci(contig: &WgsContigMetadata) -> usize {
-    contig
-        .included_ranges
-        .as_ref()
-        .map_or(contig.length, |ranges| {
-            ranges
-                .iter()
-                .map(|range| range.end.saturating_sub(range.start))
-                .sum()
+fn wgs_count_included_loci_between(
+    ranges: Option<&[WgsIntervalRange]>,
+    start: usize,
+    end: usize,
+    contig_length: usize,
+) -> usize {
+    let start = start.min(contig_length);
+    let end = end.min(contig_length);
+    if start >= end {
+        return 0;
+    }
+    let Some(ranges) = ranges else {
+        return end - start;
+    };
+    ranges
+        .iter()
+        .map(|range| {
+            let overlap_start = range.start.max(start);
+            let overlap_end = range.end.min(end);
+            overlap_end.saturating_sub(overlap_start)
         })
+        .sum()
+}
+
+#[derive(Debug, Default)]
+struct WgsDepthWindow {
+    finalized_frontier: usize,
+    depths_start: usize,
+    depths: VecDeque<u16>,
+    last_record_start: Option<usize>,
+    max_resident_loci: usize,
+}
+
+impl WgsDepthWindow {
+    fn reset(&mut self) {
+        self.finalized_frontier = 0;
+        self.depths_start = 0;
+        self.depths.clear();
+        self.last_record_start = None;
+    }
+
+    fn record_start(&mut self, start: usize) -> Result<(), String> {
+        if let Some(previous) = self.last_record_start
+            && start < previous
+        {
+            return Err(format!(
+                "CollectWgsMetrics alignment is not coordinate-sorted: position {} followed {}",
+                start + 1,
+                previous + 1
+            ));
+        }
+        self.last_record_start = Some(start);
+        Ok(())
+    }
+
+    #[cfg(test)]
+    fn resident_loci(&self) -> usize {
+        self.depths.len()
+    }
+
+    fn finalized_frontier(&self) -> usize {
+        self.finalized_frontier
+    }
+
+    fn depth_at(&self, index: usize) -> Result<u16, String> {
+        if index < self.finalized_frontier {
+            return Err(
+                "CollectWgsMetrics alignment overlaps a finalized coordinate frontier".to_string(),
+            );
+        }
+        if self.depths.is_empty()
+            || index < self.depths_start
+            || index >= self.depths_start + self.depths.len()
+        {
+            return Ok(0);
+        }
+        Ok(self.depths[index - self.depths_start])
+    }
+
+    fn increment(&mut self, index: usize) -> Result<(), String> {
+        if index < self.finalized_frontier {
+            return Err(
+                "CollectWgsMetrics alignment overlaps a finalized coordinate frontier".to_string(),
+            );
+        }
+        self.ensure_slot(index);
+        let offset = index - self.depths_start;
+        let new_depth = self.depths[offset].saturating_add(1);
+        self.depths[offset] = new_depth;
+        Ok(())
+    }
+
+    fn ensure_slot(&mut self, index: usize) {
+        if self.depths.is_empty() {
+            self.depths_start = index;
+            self.depths.push_back(0);
+            self.max_resident_loci = self.max_resident_loci.max(self.depths.len());
+            return;
+        }
+        if index < self.depths_start {
+            let prepend = self.depths_start - index;
+            for _ in 0..prepend {
+                self.depths.push_front(0);
+            }
+            self.depths_start = index;
+        } else {
+            let offset = index - self.depths_start;
+            while offset >= self.depths.len() {
+                self.depths.push_back(0);
+            }
+        }
+        self.max_resident_loci = self.max_resident_loci.max(self.depths.len());
+    }
+
+    fn finalize_until(
+        &mut self,
+        limit: usize,
+        included_ranges: Option<&[WgsIntervalRange]>,
+        contig_length: usize,
+        coverage_histogram: &mut [u64],
+        coverage_cap: u32,
+    ) {
+        let limit = limit.min(contig_length);
+        while self.finalized_frontier < limit {
+            if self.depths.is_empty() {
+                self.add_zero_depth_loci(
+                    self.finalized_frontier,
+                    limit,
+                    included_ranges,
+                    contig_length,
+                    coverage_histogram,
+                );
+                self.finalized_frontier = limit;
+                self.depths_start = self.finalized_frontier;
+                break;
+            }
+
+            if self.finalized_frontier < self.depths_start {
+                let zero_end = limit.min(self.depths_start);
+                self.add_zero_depth_loci(
+                    self.finalized_frontier,
+                    zero_end,
+                    included_ranges,
+                    contig_length,
+                    coverage_histogram,
+                );
+                self.finalized_frontier = zero_end;
+                continue;
+            }
+
+            let depth_end = limit.min(self.depths_start + self.depths.len());
+            if self.finalized_frontier >= depth_end {
+                break;
+            }
+            for index in self.finalized_frontier..depth_end {
+                let depth = self.depths.pop_front().unwrap_or(0) as u32;
+                if wgs_locus_included_at(included_ranges, index, contig_length) {
+                    coverage_histogram[depth.min(coverage_cap) as usize] += 1;
+                }
+            }
+            self.finalized_frontier = depth_end;
+            self.depths_start = self.finalized_frontier;
+            if self.depths.is_empty() {
+                self.depths_start = self.finalized_frontier;
+            }
+        }
+    }
+
+    fn add_zero_depth_loci(
+        &self,
+        start: usize,
+        end: usize,
+        included_ranges: Option<&[WgsIntervalRange]>,
+        contig_length: usize,
+        coverage_histogram: &mut [u64],
+    ) {
+        let zero_loci = wgs_count_included_loci_between(included_ranges, start, end, contig_length);
+        coverage_histogram[0] += zero_loci as u64;
+    }
 }
 
 #[derive(Debug)]
@@ -11677,7 +11857,7 @@ struct WgsMetricsSummary {
     coverage_histogram: Vec<u64>,
     active_contig: Option<String>,
     active_included_ranges: Option<Arc<[WgsIntervalRange]>>,
-    active_depths: Vec<u16>,
+    active_depths: WgsDepthWindow,
     processed_contigs: HashSet<String>,
     mate_buffer: WgsMateBuffer,
 }
@@ -11711,14 +11891,7 @@ impl WgsMetricsSummary {
                 )
             })
             .collect::<BTreeMap<_, _>>();
-        let included_loci = contigs
-            .values()
-            .map(|contig| wgs_included_loci(contig))
-            .sum::<usize>();
-        let mut coverage_histogram = vec![0; coverage_cap as usize + 1];
-        if included_loci > 0 {
-            coverage_histogram[0] = included_loci as u64;
-        }
+        let coverage_histogram = vec![0; coverage_cap as usize + 1];
         Self {
             contigs,
             coverage_cap,
@@ -11734,7 +11907,7 @@ impl WgsMetricsSummary {
             coverage_histogram,
             active_contig: None,
             active_included_ranges: None,
-            active_depths: Vec::new(),
+            active_depths: WgsDepthWindow::default(),
             processed_contigs: HashSet::new(),
             mate_buffer: WgsMateBuffer::default(),
         }
@@ -11742,11 +11915,14 @@ impl WgsMetricsSummary {
 
     fn finish(&mut self) {
         if let Some(contig) = self.active_contig.take() {
+            if let Some(length) = self.contigs.get(&contig).map(|metadata| metadata.length) {
+                self.finalize_active_contig_until(length);
+            }
             self.processed_contigs.insert(contig);
         }
         self.active_included_ranges = None;
         self.mate_buffer.clear();
-        self.active_depths.clear();
+        self.active_depths.reset();
     }
 
     fn ensure_contig(&mut self, contig: &str) -> Result<(), String> {
@@ -11759,8 +11935,11 @@ impl WgsMetricsSummary {
             ));
         }
         if let Some(previous) = self.active_contig.take() {
+            if let Some(length) = self.contigs.get(&previous).map(|metadata| metadata.length) {
+                self.finalize_active_contig_until(length);
+            }
             self.processed_contigs.insert(previous);
-            self.active_depths.clear();
+            self.active_depths.reset();
             self.active_included_ranges = None;
             self.mate_buffer.clear();
         }
@@ -11769,44 +11948,33 @@ impl WgsMetricsSummary {
                 "CollectWgsMetrics reference missing contig {contig}"
             ));
         };
-        self.active_depths.resize(metadata.length, 0);
         self.active_contig = Some(contig.to_string());
         self.active_included_ranges = metadata.included_ranges.clone();
         Ok(())
     }
 
-    fn adjust_coverage_histogram(
-        histogram: &mut [u64],
-        old_depth: u32,
-        new_depth: u32,
-        coverage_cap: u32,
-    ) {
-        let old_index = old_depth.min(coverage_cap) as usize;
-        let new_index = new_depth.min(coverage_cap) as usize;
-        if old_index == new_index {
-            return;
-        }
-        histogram[old_index] = histogram[old_index].saturating_sub(1);
-        histogram[new_index] += 1;
+    #[inline]
+    fn increment_filtered_depth(&mut self, reference_index: usize) -> Result<(), String> {
+        self.active_depths.increment(reference_index)
     }
 
-    #[inline]
-    fn increment_filtered_depth(&mut self, reference_index: usize) {
-        let old_depth = self.active_depths[reference_index] as u32;
-        let new_depth = old_depth.saturating_add(1);
-        self.active_depths[reference_index] = new_depth.min(u16::MAX as u32) as u16;
-        Self::adjust_coverage_histogram(
+    fn active_depth_at(&self, reference_index: usize) -> Result<u16, String> {
+        self.active_depths.depth_at(reference_index)
+    }
+
+    fn finalize_active_contig_until(&mut self, limit: usize) {
+        self.active_depths.finalize_until(
+            limit,
+            self.active_included_ranges.as_deref(),
+            self.contigs
+                .get(self.active_contig.as_deref().unwrap_or_default())
+                .map(|metadata| metadata.length)
+                .unwrap_or(limit),
             &mut self.coverage_histogram,
-            old_depth,
-            new_depth,
             self.coverage_cap,
         );
-    }
-
-    fn exclude_locus_from_histograms(&mut self, depth: u32) {
-        let depth_index = depth.min(self.coverage_cap) as usize;
-        self.coverage_histogram[depth_index] =
-            self.coverage_histogram[depth_index].saturating_sub(1);
+        self.mate_buffer
+            .prune_before(self.active_depths.finalized_frontier());
     }
 
     fn observe(
@@ -11830,10 +11998,13 @@ impl WgsMetricsSummary {
             return Err("CollectWgsMetrics record references unknown target".to_string());
         };
         self.ensure_contig(contig)?;
+        let record_start = record.pos().max(0) as usize;
+        self.active_depths.record_start(record_start)?;
+        self.finalize_active_contig_until(record_start);
         match self.mate_buffer.probe(record) {
             WgsMatePeek::Alone => self.observe_cigar_ops(
                 contig,
-                record.pos().max(0) as usize,
+                record_start,
                 record.qual(),
                 record.is_duplicate(),
                 record.mapq(),
@@ -11873,6 +12044,7 @@ impl WgsMetricsSummary {
                     record.qname(),
                     WgsCachedMate {
                         overlap_start,
+                        expiry_coordinate: overlap_start.saturating_add(overlap_len),
                         bitmap,
                     },
                 );
@@ -11880,7 +12052,7 @@ impl WgsMetricsSummary {
             }
             WgsMatePeek::PairWith(cached) => self.observe_cigar_ops(
                 contig,
-                record.pos().max(0) as usize,
+                record_start,
                 record.qual(),
                 record.is_duplicate(),
                 record.mapq(),
@@ -11949,7 +12121,13 @@ impl WgsMetricsSummary {
         I: Iterator<Item = Cigar>,
     {
         self.ensure_contig(contig)?;
-        let depth_len = self.active_depths.len();
+        self.active_depths.record_start(reference_offset_start)?;
+        self.finalize_active_contig_until(reference_offset_start);
+        let contig_length = self
+            .contigs
+            .get(contig)
+            .map(|metadata| metadata.length)
+            .ok_or_else(|| format!("CollectWgsMetrics reference missing contig {contig}"))?;
         let mut read_offset = 0usize;
         let mut reference_offset = reference_offset_start;
         let exclude_unpaired = !count_unpaired && !is_paired;
@@ -11968,7 +12146,7 @@ impl WgsMetricsSummary {
                     for index in 0..len {
                         let read_index = read_offset + index;
                         let reference_index = reference_offset + index;
-                        if reference_index >= depth_len {
+                        if reference_index >= contig_length {
                             return Err(
                                 "CollectWgsMetrics alignment extends beyond reference".to_string()
                             );
@@ -11976,7 +12154,7 @@ impl WgsMetricsSummary {
                         if !wgs_locus_included_at(
                             locus_ranges.as_deref(),
                             reference_index,
-                            depth_len,
+                            contig_length,
                         ) {
                             continue;
                         }
@@ -11997,9 +12175,10 @@ impl WgsMetricsSummary {
                             .is_some_and(|mode| mode.is_mate_covered(reference_index))
                         {
                             self.excluded_overlap += 1;
-                        } else if self.active_depths[reference_index] >= coverage_cap as u16
-                            || self.active_depths[reference_index] >= locus_accumulation_cap
-                        {
+                        } else if {
+                            let depth = self.active_depth_at(reference_index)?;
+                            depth >= coverage_cap as u16 || depth >= locus_accumulation_cap
+                        } {
                             if let Some(quality) = qualities.get(read_index) {
                                 let index = *quality as usize;
                                 self.base_quality_histogram[index] += 1;
@@ -12016,7 +12195,7 @@ impl WgsMetricsSummary {
                                     self.sensitivity_base_quality_histogram[index] += 1;
                                 }
                             }
-                            self.increment_filtered_depth(reference_index);
+                            self.increment_filtered_depth(reference_index)?;
                             if let Some(mode) = overlap_mode.as_mut() {
                                 mode.on_depth_counted(reference_index);
                             }
@@ -12039,9 +12218,7 @@ impl WgsMetricsSummary {
 
     fn limit_included_loci(&mut self, limit: usize) {
         let mut remaining = limit;
-        let mut excluded_loci = 0usize;
         for contig in self.contigs.values_mut() {
-            let before = wgs_included_loci(contig);
             let source_ranges = contig
                 .included_ranges
                 .as_ref()
@@ -12070,10 +12247,6 @@ impl WgsMetricsSummary {
                 }
             }
             contig.included_ranges = Some(Arc::<[WgsIntervalRange]>::from(clipped));
-            excluded_loci += before.saturating_sub(wgs_included_loci(contig));
-        }
-        for _ in 0..excluded_loci {
-            self.exclude_locus_from_histograms(0);
         }
     }
 
@@ -18519,7 +18692,7 @@ mod tests {
     fn wgs_coverage_histogram_matches_included_loci() {
         let reference_contigs = vec![("chr1".to_string(), 12usize)];
         let mut summary = WgsMetricsSummary::new(&reference_contigs, None, 250);
-        assert_eq!(summary.coverage_histogram[0], 12);
+        assert_eq!(summary.coverage_histogram[0], 0);
 
         let qualities = vec![30_u8; 12];
         summary
@@ -18540,17 +18713,111 @@ mod tests {
             )
             .expect("fixture alignment is valid");
 
-        let scanned = summary
-            .active_depths
-            .iter()
-            .map(|depth| (*depth as u32).min(250))
-            .fold(vec![0u64; 251], |mut histogram, depth| {
-                histogram[depth as usize] += 1;
-                histogram
-            });
-        assert_eq!(summary.coverage_histogram, scanned);
+        assert_eq!(summary.active_depths.resident_loci(), 12);
+        summary.finish();
         assert_eq!(summary.coverage_histogram[1], 12);
         assert_eq!(summary.coverage_histogram[0], 0);
+    }
+
+    #[test]
+    fn wgs_depth_window_tracks_active_span_not_contig_length() {
+        let reference_contigs = vec![("chr1".to_string(), 1_000_000usize)];
+        let mut summary = WgsMetricsSummary::new(&reference_contigs, None, 250);
+        let qualities = vec![30_u8; 4];
+
+        summary
+            .observe_cigar_ops_iter(
+                "chr1",
+                999_990,
+                &qualities,
+                false,
+                30,
+                true,
+                std::iter::once(Cigar::Match(4)),
+                20,
+                20,
+                250,
+                100_000,
+                false,
+                None,
+            )
+            .expect("fixture alignment is valid");
+
+        assert_eq!(summary.active_depths.resident_loci(), 4);
+        assert_eq!(summary.coverage_histogram[0], 999_990);
+        summary.finish();
+        assert_eq!(summary.coverage_histogram[0], 999_996);
+        assert_eq!(summary.coverage_histogram[1], 4);
+    }
+
+    #[test]
+    fn wgs_depth_window_rejects_coordinate_regression() {
+        let reference_contigs = vec![("chr1".to_string(), 100usize)];
+        let mut summary = WgsMetricsSummary::new(&reference_contigs, None, 250);
+        let qualities = vec![30_u8; 4];
+
+        summary
+            .observe_cigar_ops_iter(
+                "chr1",
+                20,
+                &qualities,
+                false,
+                30,
+                true,
+                std::iter::once(Cigar::Match(4)),
+                20,
+                20,
+                250,
+                100_000,
+                false,
+                None,
+            )
+            .expect("first fixture alignment is valid");
+        let error = summary
+            .observe_cigar_ops_iter(
+                "chr1",
+                19,
+                &qualities,
+                false,
+                30,
+                true,
+                std::iter::once(Cigar::Match(4)),
+                20,
+                20,
+                250,
+                100_000,
+                false,
+                None,
+            )
+            .expect_err("coordinate regression should be rejected");
+
+        assert!(error.contains("not coordinate-sorted"));
+    }
+
+    #[test]
+    fn wgs_mate_buffer_prunes_expired_overlap_entries() {
+        let mut buffer = WgsMateBuffer::default();
+        buffer.insert(
+            b"expired",
+            WgsCachedMate {
+                overlap_start: 10,
+                expiry_coordinate: 12,
+                bitmap: WgsOverlapBitmap::with_bit_len(2),
+            },
+        );
+        buffer.insert(
+            b"active",
+            WgsCachedMate {
+                overlap_start: 15,
+                expiry_coordinate: 18,
+                bitmap: WgsOverlapBitmap::with_bit_len(3),
+            },
+        );
+
+        buffer.prune_before(12);
+
+        assert!(!buffer.pending.contains_key(b"expired".as_slice()));
+        assert!(buffer.pending.contains_key(b"active".as_slice()));
     }
 
     #[test]

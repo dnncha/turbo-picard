@@ -5,14 +5,10 @@ Branch: `perf/algorithmic-overhaul`
 
 ## Scope
 
-Phase 3 targets `CollectWgsMetrics` memory use. The first slice replaces
-full-contig interval masks with compact merged half-open interval ranges. This
-removes one whole-contig allocation from interval-restricted runs and prepares
-the code for a sliding depth frontier.
-
-This is not the full sliding-depth implementation yet. The current accumulator
-still allocates `active_depths` to the full active contig length after the first
-record on that contig.
+Phase 3 targets `CollectWgsMetrics` memory use. The current implementation uses
+compact merged half-open interval ranges plus a sliding depth frontier. The
+global coverage histogram is populated when loci are finalized, rather than
+moving every locus between bins on each depth increment.
 
 ## Implemented
 
@@ -21,7 +17,16 @@ record on that contig.
 - Contigs without intervals remain excluded when interval restriction is active.
 - `STOP_AFTER` clips included ranges directly rather than materializing a full
   boolean mask.
-- Existing interval territory and `STOP_AFTER` output semantics are preserved.
+- Depths are stored only for the active coordinate span. Sparse skipped regions
+  are finalized as zero-depth territory in bulk.
+- Before each coordinate-sorted record is processed, loci below the record start
+  are finalized because no later record can affect them.
+- Coordinate regressions now produce an explicit `not coordinate-sorted` error.
+- The mate-overlap cache stores an expiry coordinate and is pruned whenever the
+  finalized frontier advances beyond the possible overlap span.
+- Existing interval territory, `STOP_AFTER`, coverage cap, base-quality,
+  duplicate, mapq, unpaired, overlap, and capped exclusion semantics are
+  preserved by the focused tests.
 
 ## Tests
 
@@ -29,14 +34,52 @@ Passing:
 
 ```bash
 cargo fmt --check
+cargo test -p turbo-picard-cli wgs_ -- --nocapture
 cargo test -p turbo-picard-cli collectwgsmetrics -- --nocapture
-cargo test -p turbo-picard-cli wgs_interval_ranges -- --nocapture
+cargo test --workspace
+python3 tools/verify_command_matrix.py
+cargo build --release -p turbo-picard-cli --bin picard --bin turbo-picard
 ```
 
-Remaining Phase 3 work:
+Blocked:
 
-- replace `active_depths: Vec<u16>` with a sliding frontier/ring buffer;
-- finalize loci as the coordinate frontier advances;
-- bound the mate-overlap cache by expiry coordinate;
-- add long-contig sparse-read memory assertions and randomized equivalence
-  tests against the previous implementation.
+```bash
+bash tools/verify_basic_collectwgsmetrics_parity.sh
+cargo clippy --workspace --all-targets --all-features -- -D warnings
+```
+
+The parity script found `mamba`, but the configured Picard prefix
+`.conda-turbo-picard` does not exist in this worktree. The clippy gate remains
+blocked by existing CLI lint debt such as `items_after_test_module`,
+`too_many_arguments`, and broad `collapsible_if` findings outside the new WGS
+frontier code.
+
+Release command shape:
+
+```bash
+./target/release/picard CollectWgsMetrics \
+  I=input.sam \
+  O=wgs.txt \
+  R=ref.fa \
+  COUNT_UNPAIRED=true \
+  SAMPLE_SIZE=0 \
+  VALIDATION_STRINGENCY=SILENT \
+  QUIET=true
+```
+
+Synthetic input: one 4M read near the end of a 1,000,000-base contig. This
+exercises bulk zero-depth finalization and a resident depth window proportional
+to active read span rather than contig length.
+
+Result:
+
+| Contig bases | Reads | Resident covered span | Wall seconds | User seconds | Sys seconds | Max RSS bytes | Zero-depth bin | One-depth bin |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 1,000,000 | 1 | 4 | 0.52 | 0.00 | 0.00 | 8,716,288 | 999,996 | 4 |
+
+Remaining Phase 3 work and follow-up hardening:
+
+- broaden randomized equivalence tests against the previous implementation;
+- add more adversarial mate-overlap cases with absent and distant mates;
+- run upstream Picard parity when the local `.conda-turbo-picard` environment is
+  available.
