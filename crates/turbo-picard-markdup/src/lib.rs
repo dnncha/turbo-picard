@@ -180,7 +180,7 @@ struct OutputRecordLocator {
     offset: i64,
     reference_id: i32,
     position: i64,
-    qname: Vec<u8>,
+    qname_id: InternedBytesId,
     flags: u16,
 }
 
@@ -200,6 +200,21 @@ impl ByteInterner {
         self.values.push(owned.clone());
         self.ids.insert(owned, id);
         id
+    }
+
+    fn get(&self, id: InternedBytesId) -> Result<&[u8], MarkDuplicatesError> {
+        self.values
+            .get(usize::try_from(id).map_err(|_| {
+                MarkDuplicatesError::Operation(
+                    "interned MarkDuplicates byte id exceeds usize".to_string(),
+                )
+            })?)
+            .map(Vec::as_slice)
+            .ok_or_else(|| {
+                MarkDuplicatesError::Operation(format!(
+                    "interned MarkDuplicates byte id {id} is out of range"
+                ))
+            })
     }
 }
 
@@ -493,7 +508,13 @@ fn run_hts_container(
     let mut writer = open_markdup_writer(config, &config.output, &header)?;
     if config.inputs.len() > 1 {
         if seekable_multi_bam_output {
-            write_multi_bam_records_by_locator(output_locs, &decisions, config, &mut writer)?;
+            write_multi_bam_records_by_locator(
+                output_locs,
+                &qnames,
+                &decisions,
+                config,
+                &mut writer,
+            )?;
         } else {
             let mut marked_records = records.into_iter().zip(decisions).collect::<Vec<_>>();
             marked_records.sort_by(|(left, left_decision), (right, right_decision)| {
@@ -567,6 +588,11 @@ fn read_bam_records<R: bam::Read>(
         let library_id = record_library_id(&record, library_lookup);
         let record_index = *sink.record_count;
         *sink.record_count += 1;
+        let locator_qname_id = if sink.output_locs.is_some() {
+            Some(sink.qnames.intern(record.qname()))
+        } else {
+            None
+        };
         if let (Some(output_locs), Some(offset)) = (sink.output_locs.as_deref_mut(), offset) {
             output_locs.push(OutputRecordLocator {
                 input_index: sink.input_index,
@@ -574,7 +600,7 @@ fn read_bam_records<R: bam::Read>(
                 offset,
                 reference_id: record.tid(),
                 position: record.pos(),
-                qname: record.qname().to_vec(),
+                qname_id: locator_qname_id.expect("qname id recorded for output locator"),
                 flags: flag,
             });
         }
@@ -613,7 +639,7 @@ fn read_bam_records<R: bam::Read>(
                 .summary_mut(library_id)
                 .unpaired_reads_examined += 1;
         }
-        let qname_id = sink.qnames.intern(record.qname());
+        let qname_id = locator_qname_id.unwrap_or_else(|| sink.qnames.intern(record.qname()));
         let barcode_id = bam_barcode(&record, config).map(|barcode| sink.barcodes.intern(&barcode));
         sink.candidates.push(DuplicateCandidate::from_record(
             record_index,
@@ -661,6 +687,7 @@ fn read_bam_records_for_output<R: bam::Read>(
 
 fn write_multi_bam_records_by_locator(
     output_locs: Vec<OutputRecordLocator>,
+    qnames: &ByteInterner,
     decisions: &[RecordDecision],
     config: &MarkDuplicatesConfig,
     writer: &mut bam::Writer,
@@ -681,7 +708,10 @@ fn write_multi_bam_records_by_locator(
             .copied()
             .ok_or_else(|| MarkDuplicatesError::Operation("missing duplicate decision".into()))?;
         sorter
-            .push(output_sort_key(locator, decision), locator_payload(locator))
+            .push(
+                output_sort_key(locator, qnames, decision)?,
+                locator_payload(locator),
+            )
             .map_err(MarkDuplicatesError::Operation)?;
     }
 
@@ -749,14 +779,19 @@ fn effective_record_flags(record: &bam::Record, decision: RecordDecision) -> u16
     }
 }
 
-fn output_sort_key(locator: &OutputRecordLocator, decision: RecordDecision) -> Vec<u8> {
-    let mut bytes = Vec::with_capacity(15 + locator.qname.len());
+fn output_sort_key(
+    locator: &OutputRecordLocator,
+    qnames: &ByteInterner,
+    decision: RecordDecision,
+) -> Result<Vec<u8>, MarkDuplicatesError> {
+    let qname = qnames.get(locator.qname_id)?;
+    let mut bytes = Vec::with_capacity(15 + qname.len());
     bytes.extend_from_slice(&sortable_i32(locator.reference_id));
     bytes.extend_from_slice(&sortable_i64(locator.position));
-    bytes.extend_from_slice(&locator.qname);
+    bytes.extend_from_slice(qname);
     bytes.push(0);
     bytes.extend_from_slice(&effective_locator_flags(locator, decision).to_be_bytes());
-    bytes
+    Ok(bytes)
 }
 
 fn effective_locator_flags(locator: &OutputRecordLocator, decision: RecordDecision) -> u16 {
@@ -3227,5 +3262,59 @@ mod tests {
 
         assert_malformed_sam_text_key_err(key, 41, "CIGAR");
         assert!(interner.values.is_empty());
+    }
+
+    #[test]
+    fn output_sort_key_uses_interned_qname_bytes() {
+        let mut qnames = ByteInterner::default();
+        let qname_id = qnames.intern(b"read-a");
+        assert_eq!(qname_id, qnames.intern(b"read-a"));
+        assert_eq!(qnames.values.len(), 1);
+        let locator = OutputRecordLocator {
+            input_index: 0,
+            record_index: 7,
+            offset: 123,
+            reference_id: 1,
+            position: 99,
+            qname_id,
+            flags: 0,
+        };
+
+        let key = output_sort_key(
+            &locator,
+            &qnames,
+            RecordDecision {
+                duplicate: true,
+                ..RecordDecision::default()
+            },
+        )
+        .expect("sort key");
+
+        assert_eq!(&key[12..18], b"read-a");
+        assert_eq!(&key[19..21], &DUPLICATE_FLAG.to_be_bytes());
+    }
+
+    #[test]
+    fn output_sort_key_rejects_unknown_qname_id() {
+        let qnames = ByteInterner::default();
+        let locator = OutputRecordLocator {
+            input_index: 0,
+            record_index: 7,
+            offset: 123,
+            reference_id: 1,
+            position: 99,
+            qname_id: 42,
+            flags: 0,
+        };
+
+        let error =
+            output_sort_key(&locator, &qnames, RecordDecision::default()).expect_err("error");
+
+        assert!(
+            error
+                .to_string()
+                .contains("interned MarkDuplicates byte id 42 is out of range"),
+            "{error}"
+        );
     }
 }
