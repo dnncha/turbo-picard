@@ -104,7 +104,7 @@ struct SamTextDuplicateKey {
     barcode_id: Option<InternedBytesId>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 struct BamDuplicateKey {
     library_id: LibraryId,
     reference_id: i32,
@@ -130,6 +130,7 @@ struct DuplicateCandidate {
     duplicate_score: u64,
     optical_location: Option<ReadLocation>,
     barcode_id: Option<InternedBytesId>,
+    fragment_key: BamDuplicateKey,
 }
 
 impl DuplicateCandidate {
@@ -140,19 +141,33 @@ impl DuplicateCandidate {
         qname_id: InternedBytesId,
         barcode_id: Option<InternedBytesId>,
     ) -> Self {
+        let flags = record.flags();
+        let reference_id = record.tid();
+        let five_prime_position = unclipped_record_position(record);
+        let reverse_strand = flags & 0x10 != 0;
         Self {
             record_index,
             library_id,
             qname_id,
-            flags: record.flags(),
-            reference_id: record.tid(),
-            five_prime_position: unclipped_record_position(record),
+            flags,
+            reference_id,
+            five_prime_position,
             _mate_reference_id: record.mtid(),
             _mate_position: record.mpos(),
             _template_length: record.insert_size(),
             duplicate_score: quality_score(record),
             optical_location: parse_read_location(record.qname()),
             barcode_id,
+            fragment_key: BamDuplicateKey {
+                library_id,
+                reference_id,
+                position: five_prime_position,
+                mate_reference_id: -1,
+                mate_position: -1,
+                template_length: 0,
+                reverse_strand,
+                barcode_id,
+            },
         }
     }
 
@@ -1612,9 +1627,7 @@ fn fragment_duplicate_groups(
     let keyed_fragments = candidates
         .iter()
         .enumerate()
-        .map(|(candidate_index, candidate)| {
-            (fragment_duplicate_key_bam(candidate), candidate_index)
-        })
+        .map(|(candidate_index, candidate)| (candidate.fragment_key, candidate_index))
         .collect::<Vec<_>>();
     let mut groups = Vec::<Vec<usize>>::new();
     scan_fragment_key_rows(keyed_fragments, config, |group| {
@@ -1901,9 +1914,7 @@ fn mark_fragment_duplicate_groups(
     let keyed_fragments = candidates
         .iter()
         .enumerate()
-        .map(|(candidate_index, candidate)| {
-            (fragment_duplicate_key_bam(candidate), candidate_index)
-        })
+        .map(|(candidate_index, candidate)| (candidate.fragment_key, candidate_index))
         .collect::<Vec<_>>();
     scan_fragment_key_rows(keyed_fragments, config, |group| {
         apply_fragment_duplicate_group(group, candidates, decisions, summary, library_registry);
@@ -2003,19 +2014,6 @@ where
             }
             Some(barcode)
         }
-    }
-}
-
-fn fragment_duplicate_key_bam(candidate: &DuplicateCandidate) -> BamDuplicateKey {
-    BamDuplicateKey {
-        library_id: candidate.library_id,
-        reference_id: candidate.reference_id,
-        position: candidate.five_prime_position,
-        mate_reference_id: -1,
-        mate_position: -1,
-        template_length: 0,
-        reverse_strand: candidate.reverse_strand(),
-        barcode_id: candidate.barcode_id,
     }
 }
 
@@ -2757,6 +2755,34 @@ mod tests {
             })
             .collect();
         (candidates, qnames)
+    }
+
+    #[test]
+    fn duplicate_candidate_caches_fragment_key() {
+        let cigar = bam::record::CigarString(vec![
+            bam::record::Cigar::Match(5),
+            bam::record::Cigar::SoftClip(3),
+        ]);
+        let mut record = bam::Record::new();
+        record.set(b"frag-a", Some(&cigar), b"AAAACCCC", b"FFFFFFFF");
+        record.set_flags(0x10);
+        record.set_tid(2);
+        record.set_pos(100);
+        let candidate = DuplicateCandidate::from_record(4, &record, 11, 7, Some(13));
+
+        assert_eq!(
+            candidate.fragment_key,
+            BamDuplicateKey {
+                library_id: 11,
+                reference_id: 2,
+                position: 107,
+                mate_reference_id: -1,
+                mate_position: -1,
+                template_length: 0,
+                reverse_strand: true,
+                barcode_id: Some(13),
+            }
+        );
     }
 
     #[test]
