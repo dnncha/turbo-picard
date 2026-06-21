@@ -13554,6 +13554,24 @@ struct GcBiasMetricsSummary {
     emit_unique: bool,
 }
 
+struct GcBiasDetailRows<'a> {
+    reads_used: &'a str,
+    read_starts_by_gc: &'a [u64; 101],
+    quality_sums_by_gc: &'a [u64; 101],
+    quality_counts_by_gc: &'a [u64; 101],
+    aligned_reads: u64,
+    minimum_genome_fraction: f64,
+}
+
+struct GcBiasSummaryRow<'a> {
+    reads_used: &'a str,
+    window_size: usize,
+    total_clusters: u64,
+    aligned_reads: u64,
+    read_starts_by_gc: &'a [u64; 101],
+    minimum_genome_fraction: f64,
+}
+
 impl GcBiasMetricsSummary {
     fn new(reference_path: &str, window_size: usize, emit_unique: bool) -> Result<Self, String> {
         Ok(Self {
@@ -13637,42 +13655,37 @@ impl GcBiasMetricsSummary {
         output.push_str("ACCUMULATION_LEVEL\tREADS_USED\tGC\tWINDOWS\tREAD_STARTS\tMEAN_BASE_QUALITY\tNORMALIZED_COVERAGE\tERROR_BAR_WIDTH\tSAMPLE\tLIBRARY\tREAD_GROUP\n");
         self.push_detail_rows(
             &mut output,
-            "ALL",
-            &self.read_starts,
-            &self.quality_sums,
-            &self.quality_counts,
-            self.aligned_reads,
-            minimum_genome_fraction,
+            GcBiasDetailRows {
+                reads_used: "ALL",
+                read_starts_by_gc: &self.read_starts,
+                quality_sums_by_gc: &self.quality_sums,
+                quality_counts_by_gc: &self.quality_counts,
+                aligned_reads: self.aligned_reads,
+                minimum_genome_fraction,
+            },
         );
         if self.emit_unique {
             self.push_detail_rows(
                 &mut output,
-                "UNIQUE",
-                &self.unique_read_starts,
-                &self.unique_quality_sums,
-                &self.unique_quality_counts,
-                self.unique_aligned_reads,
-                minimum_genome_fraction,
+                GcBiasDetailRows {
+                    reads_used: "UNIQUE",
+                    read_starts_by_gc: &self.unique_read_starts,
+                    quality_sums_by_gc: &self.unique_quality_sums,
+                    quality_counts_by_gc: &self.unique_quality_counts,
+                    aligned_reads: self.unique_aligned_reads,
+                    minimum_genome_fraction,
+                },
             );
         }
         output
     }
 
-    fn push_detail_rows(
-        &self,
-        output: &mut String,
-        reads_used: &str,
-        read_starts_by_gc: &[u64; 101],
-        quality_sums_by_gc: &[u64; 101],
-        quality_counts_by_gc: &[u64; 101],
-        aligned_reads: u64,
-        minimum_genome_fraction: f64,
-    ) {
+    fn push_detail_rows(&self, output: &mut String, rows: GcBiasDetailRows<'_>) {
         let total_windows = self.total_windows();
         let mean_reads_per_window = if total_windows == 0 {
             0.0
         } else {
-            aligned_reads as f64 / total_windows as f64
+            rows.aligned_reads as f64 / total_windows as f64
         };
         for gc in 0..=100 {
             let windows = self.windows[gc];
@@ -13681,10 +13694,10 @@ impl GcBiasMetricsSummary {
             } else {
                 windows as f64 / total_windows as f64
             };
-            let read_starts = read_starts_by_gc[gc];
+            let read_starts = rows.read_starts_by_gc[gc];
             let normalized_coverage = if windows == 0
                 || mean_reads_per_window == 0.0
-                || genome_fraction < minimum_genome_fraction
+                || genome_fraction < rows.minimum_genome_fraction
             {
                 0.0
             } else {
@@ -13695,9 +13708,11 @@ impl GcBiasMetricsSummary {
             } else {
                 normalized_coverage / (read_starts as f64).sqrt()
             };
-            let mean_base_quality = ratio(quality_sums_by_gc[gc], quality_counts_by_gc[gc]);
+            let mean_base_quality =
+                ratio(rows.quality_sums_by_gc[gc], rows.quality_counts_by_gc[gc]);
             output.push_str(&format!(
-                "All Reads\t{reads_used}\t{gc}\t{windows}\t{read_starts}\t{}\t{}\t{}\t\t\t\n",
+                "All Reads\t{}\t{gc}\t{windows}\t{read_starts}\t{}\t{}\t{}\t\t\t\n",
+                rows.reads_used,
                 format_float(mean_base_quality),
                 format_float(normalized_coverage),
                 format_float(error_bar_width),
@@ -13711,89 +13726,88 @@ impl GcBiasMetricsSummary {
         output.push_str("ACCUMULATION_LEVEL\tREADS_USED\tWINDOW_SIZE\tTOTAL_CLUSTERS\tALIGNED_READS\tAT_DROPOUT\tGC_DROPOUT\tGC_NC_0_19\tGC_NC_20_39\tGC_NC_40_59\tGC_NC_60_79\tGC_NC_80_100\tSAMPLE\tLIBRARY\tREAD_GROUP\n");
         self.push_summary_row(
             &mut output,
-            "ALL",
-            window_size,
-            self.total_clusters,
-            self.aligned_reads,
-            &self.read_starts,
-            minimum_genome_fraction,
+            GcBiasSummaryRow {
+                reads_used: "ALL",
+                window_size,
+                total_clusters: self.total_clusters,
+                aligned_reads: self.aligned_reads,
+                read_starts_by_gc: &self.read_starts,
+                minimum_genome_fraction,
+            },
         );
         if self.emit_unique {
             self.push_summary_row(
                 &mut output,
-                "UNIQUE",
-                window_size,
-                self.unique_total_clusters,
-                self.unique_aligned_reads,
-                &self.unique_read_starts,
-                minimum_genome_fraction,
+                GcBiasSummaryRow {
+                    reads_used: "UNIQUE",
+                    window_size,
+                    total_clusters: self.unique_total_clusters,
+                    aligned_reads: self.unique_aligned_reads,
+                    read_starts_by_gc: &self.unique_read_starts,
+                    minimum_genome_fraction,
+                },
             );
         }
         output
     }
 
-    fn push_summary_row(
-        &self,
-        output: &mut String,
-        reads_used: &str,
-        window_size: usize,
-        total_clusters: u64,
-        aligned_reads: u64,
-        read_starts_by_gc: &[u64; 101],
-        minimum_genome_fraction: f64,
-    ) {
+    fn push_summary_row(&self, output: &mut String, row: GcBiasSummaryRow<'_>) {
         let at_dropout = self.gc_dropout_slice(
-            read_starts_by_gc,
-            aligned_reads,
+            row.read_starts_by_gc,
+            row.aligned_reads,
             0,
             49,
-            minimum_genome_fraction,
+            row.minimum_genome_fraction,
         );
         let gc_dropout = self.gc_dropout_slice(
-            read_starts_by_gc,
-            aligned_reads,
+            row.read_starts_by_gc,
+            row.aligned_reads,
             50,
             100,
-            minimum_genome_fraction,
+            row.minimum_genome_fraction,
         );
         output.push_str(&format!(
-            "All Reads\t{reads_used}\t{window_size}\t{total_clusters}\t{aligned_reads}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t\t\t\n",
+            "All Reads\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t\t\t\n",
+            row.reads_used,
+            row.window_size,
+            row.total_clusters,
+            row.aligned_reads,
             format_float(at_dropout),
             format_float(gc_dropout),
             format_float(self.gc_nc_slice(
-                read_starts_by_gc,
-                aligned_reads,
+                row.read_starts_by_gc,
+                row.aligned_reads,
                 0,
                 19,
-                minimum_genome_fraction
+                row.minimum_genome_fraction
             )),
             format_float(self.gc_nc_slice(
-                read_starts_by_gc,
-                aligned_reads,
+                row.read_starts_by_gc,
+                row.aligned_reads,
                 20,
                 39,
-                minimum_genome_fraction
+                row.minimum_genome_fraction
             )),
             format_float(self.gc_nc_slice(
-                read_starts_by_gc,
-                aligned_reads,
+                row.read_starts_by_gc,
+                row.aligned_reads,
                 40,
                 59,
-                minimum_genome_fraction
+                row.minimum_genome_fraction
             )),
             format_float(self.gc_nc_slice(
-                read_starts_by_gc,
-                aligned_reads,
+                row.read_starts_by_gc,
+                row.aligned_reads,
                 60,
                 79,
-                minimum_genome_fraction
+                row.minimum_genome_fraction
             )),
             format_float(self.gc_nc_slice(
-                read_starts_by_gc,
-                aligned_reads,
+                row.read_starts_by_gc,
+                row.aligned_reads,
                 80,
                 100,
-                minimum_genome_fraction
+                row.minimum_genome_fraction
             )),
         ));
     }
@@ -13816,11 +13830,16 @@ impl GcBiasMetricsSummary {
         }
         let mut windows = 0_u64;
         let mut read_starts = 0_u64;
-        for gc in low..=high {
+        for (gc, read_starts_at_gc) in read_starts_by_gc
+            .iter()
+            .enumerate()
+            .take(high + 1)
+            .skip(low)
+        {
             let genome_fraction = self.windows[gc] as f64 / total_windows as f64;
             if genome_fraction >= minimum_genome_fraction {
                 windows += self.windows[gc];
-                read_starts += read_starts_by_gc[gc];
+                read_starts += *read_starts_at_gc;
             }
         }
         if windows == 0 {
@@ -13844,7 +13863,12 @@ impl GcBiasMetricsSummary {
         }
         let mean_reads_per_window = aligned_reads as f64 / total_windows as f64;
         let mut dropout = 0.0;
-        for gc in low..=high {
+        for (gc, read_starts_at_gc) in read_starts_by_gc
+            .iter()
+            .enumerate()
+            .take(high + 1)
+            .skip(low)
+        {
             let windows = self.windows[gc];
             if windows == 0 {
                 continue;
@@ -13854,7 +13878,7 @@ impl GcBiasMetricsSummary {
                 continue;
             }
             let normalized_coverage =
-                (read_starts_by_gc[gc] as f64 / windows as f64) / mean_reads_per_window;
+                (*read_starts_at_gc as f64 / windows as f64) / mean_reads_per_window;
             if normalized_coverage < 1.0 {
                 dropout += genome_fraction * (1.0 - normalized_coverage);
             }
@@ -14603,8 +14627,6 @@ fn insert_size_orientation(
         InsertSizeOrientation::Tandem
     } else if (!read_reverse && insert_size > 0) || (read_reverse && insert_size < 0) {
         InsertSizeOrientation::Fr
-    } else if read_reverse {
-        InsertSizeOrientation::Rf
     } else {
         InsertSizeOrientation::Rf
     }
@@ -14830,10 +14852,8 @@ fn skip_quality_metric_record(
 }
 
 fn quality_values(record: &bam::Record, use_original_qualities: bool) -> Vec<u8> {
-    if use_original_qualities {
-        if let Some(qualities) = original_quality_values(record) {
-            return qualities;
-        }
+    if use_original_qualities && let Some(qualities) = original_quality_values(record) {
+        return qualities;
     }
     record.qual().to_vec()
 }
@@ -14988,16 +15008,14 @@ fn run_fastqtosam_standard_sam(
             &mut first_reader_index,
             &mut first,
         )? {
-            if let Some(readers) = second_readers.as_mut() {
-                if next_fastq_bytes_record_from_readers(
+            if let Some(readers) = second_readers.as_mut()
+                && next_fastq_bytes_record_from_readers(
                     readers,
                     &mut second_reader_index,
                     &mut second,
-                )? {
-                    return Err(
-                        "malformed FastqToSam FASTQ2 has more records than FASTQ".to_string()
-                    );
-                }
+                )?
+            {
+                return Err("malformed FastqToSam FASTQ2 has more records than FASTQ".to_string());
             }
             break;
         }
@@ -15486,7 +15504,7 @@ fn write_fastq_sam_record(
         .and_then(|_| writer.write_all(fastqtosam_flag_prefix(flags)))
         .and_then(|_| writer.write_all(&read.sequence))
         .and_then(|_| writer.write_all(b"\t"))
-        .and_then(|_| writer.write_all(&qualities))
+        .and_then(|_| writer.write_all(qualities))
         .and_then(|_| writer.write_all(b"\tRG:Z:"))
         .and_then(|_| writer.write_all(read_group_id.as_bytes()))
         .and_then(|_| writer.write_all(b"\n"))
@@ -15628,12 +15646,12 @@ fn reject_unsupported_addorreplacereadgroups_args(
     optional_scalar(args, "REFERENCE_SEQUENCE")?;
     optional_bool(args, "CREATE_INDEX")?;
     optional_bool(args, "CREATE_MD5_FILE")?;
-    if let Some(level) = optional_u32(args, "COMPRESSION_LEVEL")? {
-        if level > 9 {
-            return Err(format!(
-                "unsupported AddOrReplaceReadGroups COMPRESSION_LEVEL: {level}"
-            ));
-        }
+    if let Some(level) = optional_u32(args, "COMPRESSION_LEVEL")?
+        && level > 9
+    {
+        return Err(format!(
+            "unsupported AddOrReplaceReadGroups COMPRESSION_LEVEL: {level}"
+        ));
     }
     optional_u32(args, "MAX_RECORDS_IN_RAM")?;
     optional_scalar(args, "TMP_DIR")?;
@@ -15815,10 +15833,11 @@ fn reject_unsupported_samtofastq_args(
                 .to_string(),
         );
     }
-    if let Some(action) = optional_scalar(args, "CLIPPING_ACTION")? {
-        if !matches!(action.as_str(), "N" | "X") && action.parse::<i32>().is_err() {
-            return Err("unsupported SamToFastq CLIPPING_ACTION".to_string());
-        }
+    if let Some(action) = optional_scalar(args, "CLIPPING_ACTION")?
+        && !matches!(action.as_str(), "N" | "X")
+        && action.parse::<i32>().is_err()
+    {
+        return Err("unsupported SamToFastq CLIPPING_ACTION".to_string());
     }
     optional_bool(args, "INCLUDE_NON_PF_READS")?;
     optional_bool(args, "INCLUDE_NON_PRIMARY_ALIGNMENTS")?;
@@ -15829,10 +15848,10 @@ fn reject_unsupported_samtofastq_args(
     optional_u32(args, "MAX_RECORDS_IN_RAM")?;
     optional_bool(args, "USE_JDK_DEFLATER")?;
     optional_bool(args, "USE_JDK_INFLATER")?;
-    if let Some(level) = optional_u32(args, "COMPRESSION_LEVEL")? {
-        if level > 9 {
-            return Err(format!("unsupported SamToFastq COMPRESSION_LEVEL: {level}"));
-        }
+    if let Some(level) = optional_u32(args, "COMPRESSION_LEVEL")?
+        && level > 9
+    {
+        return Err(format!("unsupported SamToFastq COMPRESSION_LEVEL: {level}"));
     }
     Ok(())
 }
@@ -15880,10 +15899,12 @@ fn reject_unsupported_fastqtosam_args(
             return Err(format!("unsupported FastqToSam argument: {key}"));
         }
     }
-    if let Some(sort_order) = optional_scalar(args, "SORT_ORDER")? {
-        if sort_order != "queryname" && sort_order != "coordinate" && sort_order != "unsorted" {
-            return Err(format!("unsupported FastqToSam SORT_ORDER={sort_order}"));
-        }
+    if let Some(sort_order) = optional_scalar(args, "SORT_ORDER")?
+        && sort_order != "queryname"
+        && sort_order != "coordinate"
+        && sort_order != "unsorted"
+    {
+        return Err(format!("unsupported FastqToSam SORT_ORDER={sort_order}"));
     }
     optional_u32(args, "MIN_Q")?;
     optional_u32(args, "MAX_Q")?;
@@ -15900,10 +15921,10 @@ fn reject_unsupported_fastqtosam_args(
     optional_u32(args, "MAX_RECORDS_IN_RAM")?;
     optional_bool(args, "USE_JDK_DEFLATER")?;
     optional_bool(args, "USE_JDK_INFLATER")?;
-    if let Some(level) = optional_u32(args, "COMPRESSION_LEVEL")? {
-        if level > 9 {
-            return Err(format!("unsupported FastqToSam COMPRESSION_LEVEL: {level}"));
-        }
+    if let Some(level) = optional_u32(args, "COMPRESSION_LEVEL")?
+        && level > 9
+    {
+        return Err(format!("unsupported FastqToSam COMPRESSION_LEVEL: {level}"));
     }
     Ok(())
 }
