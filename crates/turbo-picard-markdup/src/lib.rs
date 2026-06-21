@@ -122,12 +122,11 @@ struct FragmentDuplicateKey {
     library_id: LibraryId,
     reference_id: i32,
     position: i64,
-    reverse_strand: bool,
     barcode_id: Option<InternedBytesId>,
 }
 
 impl FragmentDuplicateKey {
-    fn duplicate_key(self) -> BamDuplicateKey {
+    fn duplicate_key(self, reverse_strand: bool) -> BamDuplicateKey {
         BamDuplicateKey {
             library_id: self.library_id,
             reference_id: self.reference_id,
@@ -135,7 +134,7 @@ impl FragmentDuplicateKey {
             mate_reference_id: -1,
             mate_position: -1,
             template_length: 0,
-            reverse_strand: self.reverse_strand,
+            reverse_strand,
             barcode_id: self.barcode_id,
         }
     }
@@ -156,17 +155,25 @@ struct CandidateFlags(u8);
 
 impl CandidateFlags {
     const PAIR: u8 = 0b0000_0001;
+    const REVERSE_STRAND: u8 = 0b0000_0010;
 
     fn from_record_flags(flags: u16) -> Self {
         let mut candidate_flags = 0;
         if duplicate_candidate_is_pair(flags) {
             candidate_flags |= Self::PAIR;
         }
+        if flags & 0x10 != 0 {
+            candidate_flags |= Self::REVERSE_STRAND;
+        }
         Self(candidate_flags)
     }
 
     fn is_pair(self) -> bool {
         self.0 & Self::PAIR != 0
+    }
+
+    fn reverse_strand(self) -> bool {
+        self.0 & Self::REVERSE_STRAND != 0
     }
 }
 
@@ -182,7 +189,6 @@ impl DuplicateCandidate {
         let reference_id = record.tid();
         let five_prime_position = unclipped_record_position(record);
         let candidate_flags = CandidateFlags::from_record_flags(flags);
-        let reverse_strand = flags & 0x10 != 0;
         Self {
             record_index,
             qname_id,
@@ -193,7 +199,6 @@ impl DuplicateCandidate {
                 library_id,
                 reference_id,
                 position: five_prime_position,
-                reverse_strand,
                 barcode_id,
             },
         }
@@ -204,11 +209,15 @@ impl DuplicateCandidate {
     }
 
     fn reverse_strand(&self) -> bool {
-        self.fragment_key.reverse_strand
+        self.flags.reverse_strand()
     }
 
     fn library_id(&self) -> LibraryId {
         self.fragment_key.library_id
+    }
+
+    fn fragment_duplicate_key(&self) -> BamDuplicateKey {
+        self.fragment_key.duplicate_key(self.reverse_strand())
     }
 }
 
@@ -1772,9 +1781,7 @@ fn fragment_key_rows(
     candidates
         .iter()
         .enumerate()
-        .map(|(candidate_index, candidate)| {
-            (candidate.fragment_key.duplicate_key(), candidate_index)
-        })
+        .map(|(candidate_index, candidate)| (candidate.fragment_duplicate_key(), candidate_index))
 }
 
 fn scan_fragment_key_rows(
@@ -3009,12 +3016,11 @@ mod tests {
                 library_id: 11,
                 reference_id: 2,
                 position: 107,
-                reverse_strand: true,
                 barcode_id: Some(13),
             }
         );
         assert_eq!(
-            candidate.fragment_key.duplicate_key(),
+            candidate.fragment_duplicate_key(),
             BamDuplicateKey {
                 library_id: 11,
                 reference_id: 2,
@@ -3770,5 +3776,11 @@ mod tests {
     #[test]
     fn output_record_locator_layout_stays_compact() {
         assert_eq!(std::mem::size_of::<OutputRecordLocator>(), 40);
+    }
+
+    #[test]
+    fn duplicate_candidate_layout_stays_compact() {
+        assert_eq!(std::mem::size_of::<FragmentDuplicateKey>(), 24);
+        assert_eq!(std::mem::size_of::<DuplicateCandidate>(), 80);
     }
 }
