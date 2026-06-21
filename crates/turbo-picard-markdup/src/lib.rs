@@ -185,6 +185,7 @@ impl DuplicateCandidate {
         library_id: LibraryId,
         qname_id: InternedBytesId,
         barcode_id: Option<InternedBytesId>,
+        parse_optical_location: bool,
     ) -> Self {
         let flags = record.flags();
         let reference_id = record.tid();
@@ -195,7 +196,9 @@ impl DuplicateCandidate {
             qname_id,
             flags: candidate_flags,
             duplicate_score: quality_score(record),
-            optical_location: parse_read_location(record.qname()),
+            optical_location: parse_optical_location
+                .then(|| parse_read_location(record.qname()))
+                .flatten(),
             fragment_key: FragmentDuplicateKey {
                 library_id,
                 reference_id,
@@ -739,6 +742,7 @@ fn read_bam_records<R: bam::Read>(
     config: &MarkDuplicatesConfig,
 ) -> Result<(), MarkDuplicatesError> {
     let mut record = bam::Record::new();
+    let parse_optical_location = parse_optical_locations(config);
     loop {
         let offset = sink.output_locs.as_ref().map(|_| reader.tell());
         let Some(result) = reader.read(&mut record) else {
@@ -811,6 +815,7 @@ fn read_bam_records<R: bam::Read>(
             library_id,
             qname_id,
             barcode_id,
+            parse_optical_location,
         ));
         if let Some(records) = sink.records.as_deref_mut() {
             records.push(std::mem::take(&mut record));
@@ -1071,6 +1076,10 @@ fn duplicate_type_tag(
     } else {
         None
     }
+}
+
+fn parse_optical_locations(config: &MarkDuplicatesConfig) -> bool {
+    config.read_name_regex.as_deref() != Some("null")
 }
 
 fn add_duplicate_type_tag(
@@ -3037,7 +3046,7 @@ mod tests {
             .enumerate()
             .map(|(index, record)| {
                 let qname_id = qnames.intern(record.qname());
-                DuplicateCandidate::from_record(index, record, 0, qname_id, None)
+                DuplicateCandidate::from_record(index, record, 0, qname_id, None, true)
             })
             .collect();
         (candidates, qnames)
@@ -3054,7 +3063,7 @@ mod tests {
         record.set_flags(0x10);
         record.set_tid(2);
         record.set_pos(100);
-        let candidate = DuplicateCandidate::from_record(4, &record, 11, 7, Some(13));
+        let candidate = DuplicateCandidate::from_record(4, &record, 11, 7, Some(13), true);
 
         assert!(!candidate.is_pair());
         assert!(candidate.reverse_strand());
@@ -3091,12 +3100,30 @@ mod tests {
         mate_unmapped.set_tid(0);
         mate_unmapped.set_pos(20);
 
-        let paired_candidate = DuplicateCandidate::from_record(0, &paired, 0, 1, None);
+        let paired_candidate = DuplicateCandidate::from_record(0, &paired, 0, 1, None, true);
         let mate_unmapped_candidate =
-            DuplicateCandidate::from_record(1, &mate_unmapped, 0, 2, None);
+            DuplicateCandidate::from_record(1, &mate_unmapped, 0, 2, None, true);
 
         assert!(paired_candidate.is_pair());
         assert!(!mate_unmapped_candidate.is_pair());
+    }
+
+    #[test]
+    fn duplicate_candidate_skips_optical_location_when_disabled() {
+        let record = record_with_name_and_flags(b"INST:1:2:3:4", 0);
+
+        let parsed = DuplicateCandidate::from_record(0, &record, 0, 1, None, true);
+        let skipped = DuplicateCandidate::from_record(0, &record, 0, 1, None, false);
+
+        assert_eq!(
+            parsed.optical_location,
+            Some(ReadLocation {
+                tile: 2,
+                x: 3,
+                y: 4,
+            })
+        );
+        assert_eq!(skipped.optical_location, None);
     }
 
     #[test]
