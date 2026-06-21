@@ -2038,6 +2038,64 @@ fn samtofastq_can_output_fastqs_per_read_group_from_bam_input() {
 }
 
 #[test]
+fn samtofastq_bam_queryname_groups_stream_across_many_prior_qnames() {
+    let tempdir = tempfile::tempdir().expect("tempdir exists");
+    let input_sam = tempdir.path().join("input.sam");
+    let input_bam = tempdir.path().join("input.bam");
+    let read1_fastq = tempdir.path().join("read1.fastq");
+    let read2_fastq = tempdir.path().join("read2.fastq");
+    let unpaired_fastq = tempdir.path().join("unpaired.fastq");
+    let mut sam = String::from("@HD\tVN:1.6\tSO:queryname\n@SQ\tSN:chr1\tLN:100\n");
+    for index in 0..128 {
+        sam.push_str(&format!(
+            "a{index:03}\t4\t*\t0\t0\t*\t*\t0\t0\tACGT\tFFFF\n"
+        ));
+    }
+    sam.push_str("zpair\t77\t*\t0\t0\t*\t*\t0\t0\tGATT\tHHHH\n");
+    sam.push_str("zpair\t141\t*\t0\t0\t*\t*\t0\t0\tCAGT\tJJJJ\n");
+    fs::write(&input_sam, sam).expect("input SAM is written");
+
+    Command::cargo_bin("picard")
+        .expect("binary exists")
+        .args([
+            "SortSam",
+            &format!("I={}", input_sam.display()),
+            &format!("O={}", input_bam.display()),
+            "SO=queryname",
+            "VALIDATION_STRINGENCY=SILENT",
+            "QUIET=true",
+        ])
+        .assert()
+        .success();
+
+    Command::cargo_bin("picard")
+        .expect("binary exists")
+        .args([
+            "SamToFastq",
+            &format!("I={}", input_bam.display()),
+            &format!("FASTQ={}", read1_fastq.display()),
+            &format!("SECOND_END_FASTQ={}", read2_fastq.display()),
+            &format!("UNPAIRED_FASTQ={}", unpaired_fastq.display()),
+            "VALIDATION_STRINGENCY=SILENT",
+            "QUIET=true",
+        ])
+        .assert()
+        .success();
+
+    assert_eq!(
+        fs::read_to_string(&read1_fastq).expect("read1 FASTQ exists"),
+        "@zpair/1\nGATT\n+\nHHHH\n",
+    );
+    assert_eq!(
+        fs::read_to_string(&read2_fastq).expect("read2 FASTQ exists"),
+        "@zpair/2\nCAGT\n+\nJJJJ\n",
+    );
+    let unpaired = fs::read_to_string(&unpaired_fastq).expect("unpaired FASTQ exists");
+    assert!(unpaired.starts_with("@a000\nACGT\n+\nFFFF\n"));
+    assert!(unpaired.contains("@a127\nACGT\n+\nFFFF\n"));
+}
+
+#[test]
 fn fastqtosam_writes_unmapped_paired_sam_with_read_group() {
     let tempdir = tempfile::tempdir().expect("tempdir exists");
     let r1 = tempdir.path().join("r1.fastq");

@@ -2562,83 +2562,61 @@ fn run_samtofastq(args: &[String]) -> Result<(), String> {
         )?),
         None => None,
     };
-    let mut first_seen_mates: HashMap<Vec<u8>, bam::Record> = HashMap::new();
-
-    for record in reader.records() {
-        let record = record.map_err(|error| error.to_string())?;
-        if record.is_quality_check_failed() && !include_non_pf_reads {
-            continue;
-        }
-        if (record.is_secondary() || record.is_supplementary()) && !include_non_primary_alignments {
-            continue;
-        }
-        if record.is_paired() && !interleave && second_writer.is_none() && per_rg_outputs.is_none()
-        {
-            return Err(
-                "SamToFastq input contains paired reads but no SECOND_END_FASTQ was specified"
-                    .to_string(),
-            );
-        }
-        if record.is_paired() {
-            if let Some(first_record) = first_seen_mates.remove(record.qname()) {
-                let (read1, read2) = if record.is_first_in_template() {
-                    (&record, &first_record)
-                } else {
-                    (&first_record, &record)
-                };
-                if let Some(outputs) = per_rg_outputs.as_mut() {
-                    outputs.write_bam_pair(read1, read2, &transform, re_reverse)?;
-                } else {
-                    let first = first_writer
-                        .as_mut()
-                        .expect("first writer exists for standard SamToFastq output");
-                    write_fastq_record(
-                        first,
-                        read1,
-                        &transform,
-                        transform.write_options_for(read1, re_reverse),
-                    )?;
-                    let writer = if interleave {
-                        first
-                    } else {
-                        second_writer
-                            .as_mut()
-                            .expect("second writer exists for paired output")
-                    };
-                    write_fastq_record(
-                        writer,
-                        read2,
-                        &transform,
-                        transform.write_options_for(read2, re_reverse),
-                    )?;
-                }
-            } else {
-                first_seen_mates.insert(record.qname().to_vec(), record);
-            }
-            continue;
-        }
-        let writer: &mut dyn Write = if let Some(outputs) = per_rg_outputs.as_mut() {
-            outputs.unpaired_writer_for_bam_record(&record)?
-        } else if !record.is_paired() {
-            match unpaired_writer.as_mut() {
-                Some(writer) => writer.as_mut(),
-                None => first_writer
-                    .as_mut()
-                    .expect("first writer exists for standard SamToFastq output")
-                    .as_mut(),
-            }
-        } else {
-            first_writer
-                .as_mut()
-                .expect("first writer exists for standard SamToFastq output")
-                .as_mut()
-        };
-        write_fastq_record(
-            writer,
-            &record,
+    if header_sort_order(reader.header()).as_deref() == Some("queryname") {
+        write_samtofastq_bam_queryname_groups(
+            &mut reader,
+            &mut first_writer,
+            &mut second_writer,
+            &mut unpaired_writer,
+            &mut per_rg_outputs,
+            interleave,
+            re_reverse,
+            include_non_pf_reads,
+            include_non_primary_alignments,
             &transform,
-            transform.write_options_for(&record, re_reverse),
         )?;
+    } else {
+        let mut first_seen_mates: HashMap<Vec<u8>, bam::Record> = HashMap::new();
+        for record in reader.records() {
+            let record = record.map_err(|error| error.to_string())?;
+            if !samtofastq_bam_record_passes_filters(
+                &record,
+                include_non_pf_reads,
+                include_non_primary_alignments,
+            ) {
+                continue;
+            }
+            ensure_samtofastq_paired_output(
+                &record,
+                interleave,
+                second_writer.is_some(),
+                per_rg_outputs.is_some(),
+            )?;
+            if record.is_paired() {
+                if let Some(first_record) = first_seen_mates.remove(record.qname()) {
+                    write_samtofastq_bam_pair(
+                        &first_record,
+                        &record,
+                        &mut first_writer,
+                        &mut second_writer,
+                        &mut per_rg_outputs,
+                        &transform,
+                        re_reverse,
+                    )?;
+                } else {
+                    first_seen_mates.insert(record.qname().to_vec(), record);
+                }
+                continue;
+            }
+            write_samtofastq_bam_unpaired(
+                &record,
+                &mut first_writer,
+                &mut unpaired_writer,
+                &mut per_rg_outputs,
+                &transform,
+                re_reverse,
+            )?;
+        }
     }
 
     if let Some(writer) = first_writer.as_mut() {
@@ -2666,6 +2644,204 @@ fn run_samtofastq(args: &[String]) -> Result<(), String> {
             create_md5_file,
         )
     }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn write_samtofastq_bam_queryname_groups(
+    reader: &mut bam::Reader,
+    first_writer: &mut Option<Box<dyn Write>>,
+    second_writer: &mut Option<Box<dyn Write>>,
+    unpaired_writer: &mut Option<Box<dyn Write>>,
+    per_rg_outputs: &mut Option<SamToFastqPerRgOutputs>,
+    interleave: bool,
+    re_reverse: bool,
+    include_non_pf_reads: bool,
+    include_non_primary_alignments: bool,
+    transform: &SamToFastqTransform,
+) -> Result<(), String> {
+    let mut current_qname = None::<Vec<u8>>;
+    let mut group = Vec::<bam::Record>::new();
+
+    for record in reader.records() {
+        let record = record.map_err(|error| error.to_string())?;
+        if !samtofastq_bam_record_passes_filters(
+            &record,
+            include_non_pf_reads,
+            include_non_primary_alignments,
+        ) {
+            continue;
+        }
+        let qname = record.qname().to_vec();
+        if current_qname
+            .as_deref()
+            .is_some_and(|current| current != qname)
+        {
+            write_samtofastq_bam_queryname_group(
+                &mut group,
+                first_writer,
+                second_writer,
+                unpaired_writer,
+                per_rg_outputs,
+                interleave,
+                re_reverse,
+                transform,
+            )?;
+            current_qname = Some(qname);
+        } else if current_qname.is_none() {
+            current_qname = Some(qname);
+        }
+        group.push(record);
+    }
+
+    write_samtofastq_bam_queryname_group(
+        &mut group,
+        first_writer,
+        second_writer,
+        unpaired_writer,
+        per_rg_outputs,
+        interleave,
+        re_reverse,
+        transform,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn write_samtofastq_bam_queryname_group(
+    group: &mut Vec<bam::Record>,
+    first_writer: &mut Option<Box<dyn Write>>,
+    second_writer: &mut Option<Box<dyn Write>>,
+    unpaired_writer: &mut Option<Box<dyn Write>>,
+    per_rg_outputs: &mut Option<SamToFastqPerRgOutputs>,
+    interleave: bool,
+    re_reverse: bool,
+    transform: &SamToFastqTransform,
+) -> Result<(), String> {
+    let mut pending_mate = None::<bam::Record>;
+    for record in group.drain(..) {
+        ensure_samtofastq_paired_output(
+            &record,
+            interleave,
+            second_writer.is_some(),
+            per_rg_outputs.is_some(),
+        )?;
+        if record.is_paired() {
+            if let Some(first_record) = pending_mate.take() {
+                write_samtofastq_bam_pair(
+                    &first_record,
+                    &record,
+                    first_writer,
+                    second_writer,
+                    per_rg_outputs,
+                    transform,
+                    re_reverse,
+                )?;
+            } else {
+                pending_mate = Some(record);
+            }
+        } else {
+            write_samtofastq_bam_unpaired(
+                &record,
+                first_writer,
+                unpaired_writer,
+                per_rg_outputs,
+                transform,
+                re_reverse,
+            )?;
+        }
+    }
+    Ok(())
+}
+
+fn samtofastq_bam_record_passes_filters(
+    record: &bam::Record,
+    include_non_pf_reads: bool,
+    include_non_primary_alignments: bool,
+) -> bool {
+    (!record.is_quality_check_failed() || include_non_pf_reads)
+        && (!(record.is_secondary() || record.is_supplementary()) || include_non_primary_alignments)
+}
+
+fn ensure_samtofastq_paired_output(
+    record: &bam::Record,
+    interleave: bool,
+    has_second_writer: bool,
+    has_per_rg_outputs: bool,
+) -> Result<(), String> {
+    if record.is_paired() && !interleave && !has_second_writer && !has_per_rg_outputs {
+        return Err(
+            "SamToFastq input contains paired reads but no SECOND_END_FASTQ was specified"
+                .to_string(),
+        );
+    }
+    Ok(())
+}
+
+fn write_samtofastq_bam_pair(
+    pending_record: &bam::Record,
+    current_record: &bam::Record,
+    first_writer: &mut Option<Box<dyn Write>>,
+    second_writer: &mut Option<Box<dyn Write>>,
+    per_rg_outputs: &mut Option<SamToFastqPerRgOutputs>,
+    transform: &SamToFastqTransform,
+    re_reverse: bool,
+) -> Result<(), String> {
+    let (read1, read2) = if current_record.is_first_in_template() {
+        (current_record, pending_record)
+    } else {
+        (pending_record, current_record)
+    };
+    if let Some(outputs) = per_rg_outputs.as_mut() {
+        return outputs.write_bam_pair(read1, read2, transform, re_reverse);
+    }
+
+    let first = first_writer
+        .as_mut()
+        .expect("first writer exists for standard SamToFastq output");
+    write_fastq_record(
+        first,
+        read1,
+        transform,
+        transform.write_options_for(read1, re_reverse),
+    )?;
+    let writer = if second_writer.is_some() {
+        second_writer
+            .as_mut()
+            .expect("second writer exists for paired output")
+    } else {
+        first
+    };
+    write_fastq_record(
+        writer,
+        read2,
+        transform,
+        transform.write_options_for(read2, re_reverse),
+    )
+}
+
+fn write_samtofastq_bam_unpaired(
+    record: &bam::Record,
+    first_writer: &mut Option<Box<dyn Write>>,
+    unpaired_writer: &mut Option<Box<dyn Write>>,
+    per_rg_outputs: &mut Option<SamToFastqPerRgOutputs>,
+    transform: &SamToFastqTransform,
+    re_reverse: bool,
+) -> Result<(), String> {
+    let writer: &mut dyn Write = if let Some(outputs) = per_rg_outputs.as_mut() {
+        outputs.unpaired_writer_for_bam_record(record)?
+    } else if let Some(writer) = unpaired_writer.as_mut() {
+        writer.as_mut()
+    } else {
+        first_writer
+            .as_mut()
+            .expect("first writer exists for standard SamToFastq output")
+            .as_mut()
+    };
+    write_fastq_record(
+        writer,
+        record,
+        transform,
+        transform.write_options_for(record, re_reverse),
+    )
 }
 
 fn run_fastqtosam(args: &[String]) -> Result<(), String> {
