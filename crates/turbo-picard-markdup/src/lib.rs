@@ -119,7 +119,6 @@ struct BamDuplicateKey {
 #[derive(Debug, Clone)]
 struct DuplicateCandidate {
     record_index: usize,
-    library_id: LibraryId,
     qname_id: InternedBytesId,
     flags: CandidateFlags,
     duplicate_score: u64,
@@ -161,7 +160,6 @@ impl DuplicateCandidate {
         let reverse_strand = flags & 0x10 != 0;
         Self {
             record_index,
-            library_id,
             qname_id,
             flags: candidate_flags,
             duplicate_score: quality_score(record),
@@ -185,6 +183,10 @@ impl DuplicateCandidate {
 
     fn reverse_strand(&self) -> bool {
         self.fragment_key.reverse_strand
+    }
+
+    fn library_id(&self) -> LibraryId {
+        self.fragment_key.library_id
     }
 }
 
@@ -1372,7 +1374,7 @@ fn apply_pair_duplicate_group(
             add_duplicate_set(summary, set_size, Some(set_size));
             if let Some(candidate_index) = group.first() {
                 add_duplicate_set(
-                    library_registry.summary_mut(candidates[*candidate_index].library_id),
+                    library_registry.summary_mut(candidates[*candidate_index].library_id()),
                     set_size,
                     Some(set_size),
                 );
@@ -1394,14 +1396,14 @@ fn apply_pair_duplicate_group(
         add_duplicate_set(summary, set_size, non_optical_size);
         if let Some(candidate_index) = group.first() {
             let library_summary =
-                library_registry.summary_mut(candidates[*candidate_index].library_id);
+                library_registry.summary_mut(candidates[*candidate_index].library_id());
             add_duplicate_set(library_summary, set_size, non_optical_size);
         }
     }
     summary.read_pair_optical_duplicates += optical_duplicate_read_names as u64;
     if let Some(candidate_index) = group.first() {
         library_registry
-            .summary_mut(candidates[*candidate_index].library_id)
+            .summary_mut(candidates[*candidate_index].library_id())
             .read_pair_optical_duplicates += optical_duplicate_read_names as u64;
     }
     if config.tag_duplicate_set_members && !config.remove_duplicates {
@@ -1417,12 +1419,12 @@ fn apply_pair_duplicate_group(
         if candidate.is_pair() {
             summary.duplicate_pair_records += 1;
             library_registry
-                .summary_mut(candidate.library_id)
+                .summary_mut(candidate.library_id())
                 .duplicate_pair_records += 1;
         } else {
             summary.unpaired_duplicate_records += 1;
             library_registry
-                .summary_mut(candidate.library_id)
+                .summary_mut(candidate.library_id())
                 .unpaired_duplicate_records += 1;
         }
         decisions.mark_duplicate(index);
@@ -1589,7 +1591,7 @@ fn push_pair_key_row(
     let key = pair_duplicate_key_bam(
         &candidates[first_index],
         &candidates[second_index],
-        candidates[first_index].library_id,
+        candidates[first_index].library_id(),
         barcode,
     );
     keyed_pairs.push((key, candidate_indices));
@@ -1984,7 +1986,7 @@ fn mark_unpaired_duplicate_record(
     }
     summary.unpaired_duplicate_records += 1;
     library_registry
-        .summary_mut(candidate.library_id)
+        .summary_mut(candidate.library_id())
         .unpaired_duplicate_records += 1;
     decisions.mark_duplicate(record_index);
 }
