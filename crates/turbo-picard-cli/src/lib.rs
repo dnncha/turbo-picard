@@ -2597,11 +2597,7 @@ fn run_samtofastq(args: &[String]) -> Result<(), String> {
                         first,
                         read1,
                         &transform,
-                        re_reverse,
-                        fastq_name_suffix(read1),
-                        transform.trim_for(read1),
-                        transform.quality,
-                        transform.max_bases_for(read1),
+                        transform.write_options_for(read1, re_reverse),
                     )?;
                     let writer = if interleave {
                         first
@@ -2614,11 +2610,7 @@ fn run_samtofastq(args: &[String]) -> Result<(), String> {
                         writer,
                         read2,
                         &transform,
-                        re_reverse,
-                        fastq_name_suffix(read2),
-                        transform.trim_for(read2),
-                        transform.quality,
-                        transform.max_bases_for(read2),
+                        transform.write_options_for(read2, re_reverse),
                     )?;
                 }
             } else {
@@ -2646,11 +2638,7 @@ fn run_samtofastq(args: &[String]) -> Result<(), String> {
             writer,
             &record,
             &transform,
-            re_reverse,
-            fastq_name_suffix(&record),
-            transform.trim_for(&record),
-            transform.quality,
-            transform.max_bases_for(&record),
+            transform.write_options_for(&record, re_reverse),
         )?;
     }
 
@@ -5702,16 +5690,7 @@ fn stream_revertsam_records(
         if record.is_secondary() || record.is_supplementary() {
             continue;
         }
-        revert_record(
-            &mut record,
-            options.restore_original_qualities,
-            options.remove_alignment_information,
-            options.remove_duplicate_information,
-            options.restore_hardclips,
-            options.attributes_to_clear,
-            options.attributes_to_reverse,
-            options.attributes_to_reverse_complement,
-        )?;
+        revert_record(&mut record, options)?;
         writer.write(&record).map_err(|error| error.to_string())?;
     }
     Ok(())
@@ -5735,16 +5714,7 @@ fn sort_revertsam_records_bounded(
         if record.is_secondary() || record.is_supplementary() {
             continue;
         }
-        revert_record(
-            &mut record,
-            options.restore_original_qualities,
-            options.remove_alignment_information,
-            options.remove_duplicate_information,
-            options.restore_hardclips,
-            options.attributes_to_clear,
-            options.attributes_to_reverse,
-            options.attributes_to_reverse_complement,
-        )?;
+        revert_record(&mut record, &options)?;
         resident_bytes = resident_bytes.saturating_add(bam_record_estimated_sort_bytes(&record));
         records.push((record, next_ordinal));
         next_ordinal += 1;
@@ -15972,9 +15942,7 @@ fn run_samtofastq_from_sam_text(
         None => None,
     };
     let mut line = String::new();
-    let mut sequence = Vec::new();
-    let mut qualities = Vec::new();
-    let mut output = Vec::with_capacity(512);
+    let mut sam_buffers = SamToFastqOwnedBuffers::new();
     let mut first_seen_mates: HashMap<String, SamFastqRecord> = HashMap::new();
     let mut per_rg_outputs =
         per_rg.map(|config| SamToFastqPerRgOutputs::new(config, compression_level));
@@ -16034,9 +16002,7 @@ fn run_samtofastq_from_sam_text(
                         read2,
                         &transform,
                         re_reverse,
-                        &mut sequence,
-                        &mut qualities,
-                        &mut output,
+                        &mut sam_buffers,
                     )?;
                 } else {
                     let first = first_writer
@@ -16046,13 +16012,8 @@ fn run_samtofastq_from_sam_text(
                         first.as_mut(),
                         read1,
                         &transform,
-                        re_reverse,
-                        transform.trim_for_flags(read1.flags),
-                        transform.quality,
-                        transform.max_bases_for_flags(read1.flags),
-                        &mut sequence,
-                        &mut qualities,
-                        &mut output,
+                        transform.write_options_for_flags(read1.flags, re_reverse),
+                        sam_buffers.as_parts(),
                     )?;
                     let writer = if interleave {
                         first.as_mut()
@@ -16066,13 +16027,8 @@ fn run_samtofastq_from_sam_text(
                         writer,
                         read2,
                         &transform,
-                        re_reverse,
-                        transform.trim_for_flags(read2.flags),
-                        transform.quality,
-                        transform.max_bases_for_flags(read2.flags),
-                        &mut sequence,
-                        &mut qualities,
-                        &mut output,
+                        transform.write_options_for_flags(read2.flags, re_reverse),
+                        sam_buffers.as_parts(),
                     )?;
                 }
             } else {
@@ -16093,13 +16049,8 @@ fn run_samtofastq_from_sam_text(
                 writer,
                 &current_record,
                 &transform,
-                re_reverse,
-                transform.trim_for_flags(current_record.flags),
-                transform.quality,
-                transform.max_bases_for_flags(current_record.flags),
-                &mut sequence,
-                &mut qualities,
-                &mut output,
+                transform.write_options_for_flags(current_record.flags, re_reverse),
+                sam_buffers.as_parts(),
             )?;
         }
     }
@@ -16267,21 +16218,13 @@ impl SamToFastqPerRgOutputs {
                 writer,
                 read1,
                 transform,
-                re_reverse,
-                fastq_name_suffix(read1),
-                transform.trim_for(read1),
-                transform.quality,
-                transform.max_bases_for(read1),
+                transform.write_options_for(read1, re_reverse),
             )?;
             write_fastq_record(
                 writer,
                 read2,
                 transform,
-                re_reverse,
-                fastq_name_suffix(read2),
-                transform.trim_for(read2),
-                transform.quality,
-                transform.max_bases_for(read2),
+                transform.write_options_for(read2, re_reverse),
             )
         } else {
             self.ensure_second_writer_for_read_group(&read_group_id)?;
@@ -16293,11 +16236,7 @@ impl SamToFastqPerRgOutputs {
                 writers.first.as_mut(),
                 read1,
                 transform,
-                re_reverse,
-                fastq_name_suffix(read1),
-                transform.trim_for(read1),
-                transform.quality,
-                transform.max_bases_for(read1),
+                transform.write_options_for(read1, re_reverse),
             )?;
             write_fastq_record(
                 writers
@@ -16307,11 +16246,7 @@ impl SamToFastqPerRgOutputs {
                     .as_mut(),
                 read2,
                 transform,
-                re_reverse,
-                fastq_name_suffix(read2),
-                transform.trim_for(read2),
-                transform.quality,
-                transform.max_bases_for(read2),
+                transform.write_options_for(read2, re_reverse),
             )
         }
     }
@@ -16323,9 +16258,7 @@ impl SamToFastqPerRgOutputs {
         read2: &SamFastqRecord,
         transform: &SamToFastqTransform,
         re_reverse: bool,
-        sequence: &mut Vec<u8>,
-        qualities: &mut Vec<u8>,
-        output: &mut Vec<u8>,
+        buffers: &mut SamToFastqOwnedBuffers,
     ) -> Result<(), String> {
         let read_group_id = sam_record_read_group_id(line)?;
         self.ensure_writers_for_read_group(&read_group_id)?;
@@ -16340,25 +16273,15 @@ impl SamToFastqPerRgOutputs {
                 writer,
                 read1,
                 transform,
-                re_reverse,
-                transform.trim_for_flags(read1.flags),
-                transform.quality,
-                transform.max_bases_for_flags(read1.flags),
-                sequence,
-                qualities,
-                output,
+                transform.write_options_for_flags(read1.flags, re_reverse),
+                buffers.as_parts(),
             )?;
             write_sam_fastq_record(
                 writer,
                 read2,
                 transform,
-                re_reverse,
-                transform.trim_for_flags(read2.flags),
-                transform.quality,
-                transform.max_bases_for_flags(read2.flags),
-                sequence,
-                qualities,
-                output,
+                transform.write_options_for_flags(read2.flags, re_reverse),
+                buffers.as_parts(),
             )
         } else {
             self.ensure_second_writer_for_read_group(&read_group_id)?;
@@ -16370,13 +16293,8 @@ impl SamToFastqPerRgOutputs {
                 writers.first.as_mut(),
                 read1,
                 transform,
-                re_reverse,
-                transform.trim_for_flags(read1.flags),
-                transform.quality,
-                transform.max_bases_for_flags(read1.flags),
-                sequence,
-                qualities,
-                output,
+                transform.write_options_for_flags(read1.flags, re_reverse),
+                buffers.as_parts(),
             )?;
             write_sam_fastq_record(
                 writers
@@ -16386,13 +16304,8 @@ impl SamToFastqPerRgOutputs {
                     .as_mut(),
                 read2,
                 transform,
-                re_reverse,
-                transform.trim_for_flags(read2.flags),
-                transform.quality,
-                transform.max_bases_for_flags(read2.flags),
-                sequence,
-                qualities,
-                output,
+                transform.write_options_for_flags(read2.flags, re_reverse),
+                buffers.as_parts(),
             )
         }
     }
@@ -16591,6 +16504,45 @@ struct SamToFastqClipping {
 }
 
 #[derive(Clone, Copy)]
+struct SamToFastqWriteOptions {
+    re_reverse: bool,
+    name_suffix: Option<&'static [u8]>,
+    trim: usize,
+    quality: Option<u8>,
+    max_bases_to_write: Option<usize>,
+}
+
+struct SamToFastqSamBuffers<'a> {
+    sequence: &'a mut Vec<u8>,
+    qualities: &'a mut Vec<u8>,
+    output: &'a mut Vec<u8>,
+}
+
+struct SamToFastqOwnedBuffers {
+    sequence: Vec<u8>,
+    qualities: Vec<u8>,
+    output: Vec<u8>,
+}
+
+impl SamToFastqOwnedBuffers {
+    fn new() -> Self {
+        Self {
+            sequence: Vec::new(),
+            qualities: Vec::new(),
+            output: Vec::with_capacity(512),
+        }
+    }
+
+    fn as_parts(&mut self) -> SamToFastqSamBuffers<'_> {
+        SamToFastqSamBuffers {
+            sequence: &mut self.sequence,
+            qualities: &mut self.qualities,
+            output: &mut self.output,
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
 enum SamToFastqClippingAction {
     Trim,
     MaskBase,
@@ -16598,6 +16550,26 @@ enum SamToFastqClippingAction {
 }
 
 impl SamToFastqTransform {
+    fn write_options_for(&self, record: &bam::Record, re_reverse: bool) -> SamToFastqWriteOptions {
+        SamToFastqWriteOptions {
+            re_reverse,
+            name_suffix: fastq_name_suffix(record),
+            trim: self.trim_for(record),
+            quality: self.quality,
+            max_bases_to_write: self.max_bases_for(record),
+        }
+    }
+
+    fn write_options_for_flags(&self, flags: u16, re_reverse: bool) -> SamToFastqWriteOptions {
+        SamToFastqWriteOptions {
+            re_reverse,
+            name_suffix: fastq_name_suffix_from_flags(flags),
+            trim: self.trim_for_flags(flags),
+            quality: self.quality,
+            max_bases_to_write: self.max_bases_for_flags(flags),
+        }
+    }
+
     fn trim_for(&self, record: &bam::Record) -> usize {
         if record.is_paired() && record.is_last_in_template() {
             self.read2_trim
@@ -16668,41 +16640,48 @@ fn write_sam_fastq_record(
     writer: &mut dyn Write,
     record: &SamFastqRecord,
     transform: &SamToFastqTransform,
-    re_reverse: bool,
-    trim: usize,
-    quality: Option<u8>,
-    max_bases_to_write: Option<usize>,
-    sequence: &mut Vec<u8>,
-    qualities: &mut Vec<u8>,
-    output: &mut Vec<u8>,
+    options: SamToFastqWriteOptions,
+    buffers: SamToFastqSamBuffers<'_>,
 ) -> Result<(), String> {
-    sequence.clear();
-    sequence.extend_from_slice(record.sequence.as_bytes());
-    qualities.clear();
-    qualities.extend_from_slice(record.qualities.as_bytes());
+    buffers.sequence.clear();
+    buffers
+        .sequence
+        .extend_from_slice(record.sequence.as_bytes());
+    buffers.qualities.clear();
+    buffers
+        .qualities
+        .extend_from_slice(record.qualities.as_bytes());
     if let Some(clipping) = transform.clipping {
         apply_samtofastq_clipping(
-            sequence,
-            qualities,
+            buffers.sequence,
+            buffers.qualities,
             record.clip_point,
             record.flags & 0x10 != 0,
             clipping,
         )?;
     }
-    if re_reverse && record.flags & 0x10 != 0 {
-        reverse_complement(sequence);
-        qualities.reverse();
+    if options.re_reverse && record.flags & 0x10 != 0 {
+        reverse_complement(buffers.sequence);
+        buffers.qualities.reverse();
     }
-    trim_and_cap_fastq(sequence, qualities, trim, quality, max_bases_to_write)?;
-    output.clear();
+    trim_and_cap_fastq(
+        buffers.sequence,
+        buffers.qualities,
+        options.trim,
+        options.quality,
+        options.max_bases_to_write,
+    )?;
+    buffers.output.clear();
     append_fastq_text_record(
-        output,
+        buffers.output,
         record.name.as_bytes(),
-        fastq_name_suffix_from_flags(record.flags),
-        sequence,
-        qualities,
+        options.name_suffix,
+        buffers.sequence,
+        buffers.qualities,
     );
-    writer.write_all(output).map_err(|error| error.to_string())
+    writer
+        .write_all(buffers.output)
+        .map_err(|error| error.to_string())
 }
 
 fn write_samtofastq_sidecars(
@@ -16769,11 +16748,7 @@ fn write_fastq_record(
     writer: &mut dyn Write,
     record: &bam::Record,
     transform: &SamToFastqTransform,
-    re_reverse: bool,
-    name_suffix: Option<&'static str>,
-    trim: usize,
-    quality: Option<u8>,
-    max_bases_to_write: Option<usize>,
+    options: SamToFastqWriteOptions,
 ) -> Result<(), String> {
     let name = String::from_utf8_lossy(record.qname());
     let mut sequence = record.seq().as_bytes();
@@ -16792,22 +16767,22 @@ fn write_fastq_record(
             clipping,
         )?;
     }
-    if re_reverse && record.is_reverse() {
+    if options.re_reverse && record.is_reverse() {
         reverse_complement(&mut sequence);
         qualities.reverse();
     }
     trim_and_cap_fastq(
         &mut sequence,
         &mut qualities,
-        trim,
-        quality,
-        max_bases_to_write,
+        options.trim,
+        options.quality,
+        options.max_bases_to_write,
     )?;
 
     writer
         .write_all(b"@")
         .and_then(|_| writer.write_all(name.as_bytes()))
-        .and_then(|_| writer.write_all(name_suffix.unwrap_or_default().as_bytes()))
+        .and_then(|_| writer.write_all(options.name_suffix.unwrap_or_default()))
         .and_then(|_| writer.write_all(b"\n"))
         .and_then(|_| writer.write_all(&sequence))
         .and_then(|_| writer.write_all(b"\n+\n"))
@@ -16891,7 +16866,7 @@ fn clip_fastq_component(
     if let Some(replacement) = replacement {
         let replacement_count = len - point + 1;
         if positive_strand {
-            result.extend(std::iter::repeat(replacement).take(replacement_count));
+            result.extend(std::iter::repeat_n(replacement, replacement_count));
         } else {
             let mut prefixed = vec![replacement; replacement_count];
             prefixed.extend_from_slice(&result);
@@ -16988,13 +16963,13 @@ fn fastq_name_suffix_from_flags(flags: u16) -> Option<&'static [u8]> {
     }
 }
 
-fn fastq_name_suffix(record: &bam::Record) -> Option<&'static str> {
+fn fastq_name_suffix(record: &bam::Record) -> Option<&'static [u8]> {
     if !record.is_paired() {
         None
     } else if record.is_first_in_template() {
-        Some("/1")
+        Some(b"/1")
     } else if record.is_last_in_template() {
-        Some("/2")
+        Some(b"/2")
     } else {
         None
     }
@@ -17046,10 +17021,10 @@ fn reject_unsupported_sortsam_args(
     optional_scalar(args, "VALIDATION_STRINGENCY")?;
     optional_scalar(args, "VERBOSITY")?;
     optional_u32(args, "MAX_RECORDS_IN_RAM")?;
-    if let Some(level) = optional_u32(args, "COMPRESSION_LEVEL")? {
-        if level > 9 {
-            return Err(format!("unsupported SortSam COMPRESSION_LEVEL: {level}"));
-        }
+    if let Some(level) = optional_u32(args, "COMPRESSION_LEVEL")?
+        && level > 9
+    {
+        return Err(format!("unsupported SortSam COMPRESSION_LEVEL: {level}"));
     }
     Ok(())
 }
@@ -17083,10 +17058,10 @@ fn reject_unsupported_cleansam_args(args: &BTreeMap<String, Vec<String>>) -> Res
     optional_scalar(args, "VALIDATION_STRINGENCY")?;
     optional_scalar(args, "VERBOSITY")?;
     optional_u32(args, "MAX_RECORDS_IN_RAM")?;
-    if let Some(level) = optional_u32(args, "COMPRESSION_LEVEL")? {
-        if level > 9 {
-            return Err(format!("unsupported CleanSam COMPRESSION_LEVEL: {level}"));
-        }
+    if let Some(level) = optional_u32(args, "COMPRESSION_LEVEL")?
+        && level > 9
+    {
+        return Err(format!("unsupported CleanSam COMPRESSION_LEVEL: {level}"));
     }
     Ok(())
 }
@@ -17130,12 +17105,12 @@ fn reject_unsupported_mergesamfiles_args(
     optional_scalar(args, "VALIDATION_STRINGENCY")?;
     optional_scalar(args, "VERBOSITY")?;
     optional_u32(args, "MAX_RECORDS_IN_RAM")?;
-    if let Some(level) = optional_u32(args, "COMPRESSION_LEVEL")? {
-        if level > 9 {
-            return Err(format!(
-                "unsupported MergeSamFiles COMPRESSION_LEVEL: {level}"
-            ));
-        }
+    if let Some(level) = optional_u32(args, "COMPRESSION_LEVEL")?
+        && level > 9
+    {
+        return Err(format!(
+            "unsupported MergeSamFiles COMPRESSION_LEVEL: {level}"
+        ));
     }
     Ok(())
 }
@@ -17397,11 +17372,11 @@ fn push_merged_cigar(cigars: &mut Vec<Cigar>, cigar: Cigar) {
     if cigar.is_empty() {
         return;
     }
-    if let Some(last) = cigars.last_mut() {
-        if last.char() == cigar.char() {
-            *last = cigar_with_len(*last, last.len() + cigar.len());
-            return;
-        }
+    if let Some(last) = cigars.last_mut()
+        && last.char() == cigar.char()
+    {
+        *last = cigar_with_len(*last, last.len() + cigar.len());
+        return;
     }
     cigars.push(cigar);
 }
@@ -17458,29 +17433,23 @@ fn bam_writer_for_path_with_reference(
 
 fn revert_record(
     record: &mut bam::Record,
-    restore_original_qualities: bool,
-    remove_alignment_information: bool,
-    remove_duplicate_information: bool,
-    restore_hardclips: bool,
-    attributes_to_clear: &[[u8; 2]],
-    attributes_to_reverse: &[[u8; 2]],
-    attributes_to_reverse_complement: &[[u8; 2]],
+    options: &RevertSamRecordOptions<'_>,
 ) -> Result<(), String> {
-    if restore_original_qualities
-        && remove_alignment_information
-        && attributes_to_clear.is_empty()
-        && attributes_to_reverse.is_empty()
-        && attributes_to_reverse_complement.is_empty()
+    if options.restore_original_qualities
+        && options.remove_alignment_information
+        && options.attributes_to_clear.is_empty()
+        && options.attributes_to_reverse.is_empty()
+        && options.attributes_to_reverse_complement.is_empty()
     {
         return revert_record_default_unmapped_fast(
             record,
-            remove_duplicate_information,
-            restore_hardclips,
+            options.remove_duplicate_information,
+            options.restore_hardclips,
         );
     }
 
     let mut restored_qualities = None;
-    if restore_original_qualities {
+    if options.restore_original_qualities {
         if let Ok(Aux::String(qualities)) = record.aux(b"OQ") {
             let restored = qualities
                 .bytes()
@@ -17491,7 +17460,7 @@ fn revert_record(
             }
             let qname = record.qname().to_vec();
             let sequence = record.seq().as_bytes();
-            if remove_alignment_information {
+            if options.remove_alignment_information {
                 restored_qualities = Some(restored);
             } else {
                 let cigar = CigarString(record.cigar().iter().copied().collect());
@@ -17501,11 +17470,11 @@ fn revert_record(
         remove_aux_if_present(record, b"OQ")?;
     }
 
-    if remove_alignment_information {
+    if options.remove_alignment_information {
         let qname = record.qname().to_vec();
         let mut sequence = record.seq().as_bytes();
         let mut qualities = restored_qualities.unwrap_or_else(|| record.qual().to_vec());
-        let hardclips = if restore_hardclips {
+        let hardclips = if options.restore_hardclips {
             hardclip_restoration_for_revertsam(record)?
         } else {
             None
@@ -17513,8 +17482,8 @@ fn revert_record(
         if record.is_reverse() {
             reverse_complement(&mut sequence);
             qualities.reverse();
-            reverse_aux_strings(record, attributes_to_reverse, false)?;
-            reverse_aux_strings(record, attributes_to_reverse_complement, true)?;
+            reverse_aux_strings(record, options.attributes_to_reverse, false)?;
+            reverse_aux_strings(record, options.attributes_to_reverse_complement, true)?;
         }
         if let Some((hardclip_bases, hardclip_qualities)) = hardclips {
             sequence.extend(hardclip_bases);
@@ -17537,19 +17506,19 @@ fn revert_record(
             flags &= !0x8;
         }
         flags &= !(0x2 | 0x10 | 0x20 | 0x100 | 0x800);
-        if remove_duplicate_information {
+        if options.remove_duplicate_information {
             flags &= !0x400;
         }
         record.set_flags(flags);
         for tag in [b"NM", b"UQ", b"PG", b"MD", b"MQ", b"SA", b"MC", b"AS"] {
             remove_aux_if_present(record, tag)?;
         }
-    } else if remove_duplicate_information {
+    } else if options.remove_duplicate_information {
         record.set_flags(record.flags() & !0x400);
         sort_aux_tags_for_kept_alignment(record)?;
     }
-    if remove_alignment_information {
-        for tag in attributes_to_clear {
+    if options.remove_alignment_information {
+        for tag in options.attributes_to_clear {
             remove_aux_if_present(record, tag)?;
         }
         sort_aux_tags_lexicographically(record)?;
