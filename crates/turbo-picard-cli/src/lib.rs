@@ -19457,6 +19457,24 @@ mod tests {
     use turbo_picard_core::picard_args::normalize_picard_args;
 
     #[test]
+    fn write_md5_sidecar_streams_output_file() {
+        let tempdir = tempfile::tempdir().expect("tempdir exists");
+        let output = tempdir.path().join("output.bin");
+        let mut bytes = Vec::new();
+        for index in 0..4096_u32 {
+            bytes.extend_from_slice(&index.to_le_bytes());
+            bytes.extend_from_slice(b"turbo-picard-md5-sidecar\n");
+        }
+        fs::write(&output, &bytes).expect("output is written");
+
+        write_md5_sidecar(output.to_str().expect("path is UTF-8")).expect("sidecar is written");
+
+        let sidecar =
+            fs::read_to_string(format!("{}.md5", output.display())).expect("sidecar can be read");
+        assert_eq!(sidecar, format!("{:x}", md5::compute(bytes)));
+    }
+
+    #[test]
     fn bam_sort_buffer_spills_by_record_count_or_estimated_bytes() {
         let mut record = bam::Record::new();
         record.set(b"read-1", None, b"ACGTACGT", b"FFFFFFFF");
