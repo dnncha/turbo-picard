@@ -1207,7 +1207,7 @@ fn apply_pair_duplicate_group_members(
         })
         .flatten();
     let pixel_distance = i64::from(state.config.optical_duplicate_pixel_distance.unwrap_or(100));
-    let mut optical_names = HashSet::<InternedBytesId>::default();
+    let mut optical_names = representative_location.map(|_| HashSet::<InternedBytesId>::default());
 
     for index in group.iter().copied() {
         let candidate = &state.candidates[index];
@@ -1220,7 +1220,9 @@ fn apply_pair_duplicate_group_members(
             continue;
         }
 
-        if let Some(representative_location) = representative_location {
+        if let (Some(representative_location), Some(optical_names)) =
+            (representative_location, optical_names.as_mut())
+        {
             if optical_names.contains(&candidate.qname_id) {
                 state
                     .decisions
@@ -1253,7 +1255,7 @@ fn apply_pair_duplicate_group_members(
         state.decisions.mark_duplicate(candidate.record_index);
     }
 
-    optical_names.len()
+    optical_names.as_ref().map_or(0, HashSet::len)
 }
 
 struct PairGroupMemberState<'a> {
@@ -4112,6 +4114,43 @@ mod tests {
         assert!(!decisions.decision(0).expect("decision").optical_duplicate());
         assert!(decisions.decision(1).expect("decision").optical_duplicate());
         assert!(decisions.decision(2).expect("decision").optical_duplicate());
+        assert_eq!(summary.duplicate_pair_records, 2);
+    }
+
+    #[test]
+    fn pair_group_member_actions_skip_optical_names_when_regex_is_null() {
+        let records = [
+            record_with_name_and_qualities(b"INST:1:FC:1:1101:100:100", &[40], 0x1),
+            record_with_name_and_qualities(b"INST:1:FC:1:1101:105:105", &[20], 0x1),
+            record_with_name_and_qualities(b"INST:1:FC:1:1101:105:105", &[20], 0x1),
+        ];
+        let (candidates, optical_locations) = candidates_and_locations_for_records(&records);
+        let stats = DuplicateGroupStats::from_group(&[0, 1, 2], &candidates);
+        let config = MarkDuplicatesConfig {
+            read_name_regex: Some("null".to_string()),
+            optical_duplicate_pixel_distance: Some(100),
+            ..sam_markdup_config()
+        };
+        let mut decisions = DuplicateDecisions::new(records.len());
+        let (mut summary, mut library_registry) = summary_and_library_registry();
+
+        let optical_read_names = apply_pair_duplicate_group_members(
+            &[0, 1, 2],
+            stats,
+            &mut PairGroupMemberState {
+                candidates: &candidates,
+                optical_locations: &optical_locations,
+                decisions: &mut decisions,
+                summary: &mut summary,
+                library_registry: &mut library_registry,
+                config: &config,
+            },
+        );
+
+        assert_eq!(optical_read_names, 0);
+        assert!(!decisions.decision(0).expect("decision").optical_duplicate());
+        assert!(!decisions.decision(1).expect("decision").optical_duplicate());
+        assert!(!decisions.decision(2).expect("decision").optical_duplicate());
         assert_eq!(summary.duplicate_pair_records, 2);
     }
 
