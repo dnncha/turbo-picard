@@ -2672,7 +2672,7 @@ fn write_samtofastq_bam_queryname_groups(
         ) {
             continue;
         }
-        let qname = record.qname().to_vec();
+        let qname = record.qname();
         if current_qname
             .as_deref()
             .is_some_and(|current| current != qname)
@@ -2687,9 +2687,9 @@ fn write_samtofastq_bam_queryname_groups(
                 re_reverse,
                 transform,
             )?;
-            current_qname = Some(qname);
+            current_qname = Some(qname.to_vec());
         } else if current_qname.is_none() {
-            current_qname = Some(qname);
+            current_qname = Some(qname.to_vec());
         }
         group.push(record);
     }
