@@ -185,10 +185,30 @@ impl DuplicateCandidate {
 
 #[derive(Debug, Clone, Copy, Default)]
 struct RecordDecision {
-    duplicate: bool,
-    optical_duplicate: bool,
+    flags: u8,
     duplicate_set_size: Option<i32>,
     duplicate_set_index: Option<i32>,
+}
+
+impl RecordDecision {
+    const DUPLICATE: u8 = 0b0000_0001;
+    const OPTICAL_DUPLICATE: u8 = 0b0000_0010;
+
+    fn duplicate(self) -> bool {
+        self.flags & Self::DUPLICATE != 0
+    }
+
+    fn optical_duplicate(self) -> bool {
+        self.flags & Self::OPTICAL_DUPLICATE != 0
+    }
+
+    fn mark_duplicate(&mut self) {
+        self.flags |= Self::DUPLICATE;
+    }
+
+    fn mark_optical_duplicate(&mut self) {
+        self.flags |= Self::OPTICAL_DUPLICATE;
+    }
 }
 
 #[derive(Debug)]
@@ -790,7 +810,7 @@ fn compare_bam_output_order(
 }
 
 fn effective_record_flags(record: &bam::Record, decision: RecordDecision) -> u16 {
-    if decision.duplicate {
+    if decision.duplicate() {
         record.flags() | DUPLICATE_FLAG
     } else {
         record.flags()
@@ -813,7 +833,7 @@ fn output_sort_key(
 }
 
 fn effective_locator_flags(locator: &OutputRecordLocator, decision: RecordDecision) -> u16 {
-    if decision.duplicate {
+    if decision.duplicate() {
         locator.flags | DUPLICATE_FLAG
     } else {
         locator.flags
@@ -874,8 +894,8 @@ fn write_bam_record(
     writer: &mut bam::Writer,
 ) -> Result<(), MarkDuplicatesError> {
     let flags = effective_record_flags(&record, decision);
-    if (config.remove_duplicates && decision.duplicate)
-        || (config.remove_sequencing_duplicates && decision.optical_duplicate)
+    if (config.remove_duplicates && decision.duplicate())
+        || (config.remove_sequencing_duplicates && decision.optical_duplicate())
     {
         return Ok(());
     }
@@ -886,7 +906,7 @@ fn write_bam_record(
         clear_duplicate_type_tag(&mut record)?;
     }
     if let Some(duplicate_type) =
-        duplicate_type_tag(config, record.flags(), decision.optical_duplicate)
+        duplicate_type_tag(config, record.flags(), decision.optical_duplicate())
     {
         add_duplicate_type_tag(&mut record, duplicate_type)?;
     }
@@ -1344,7 +1364,7 @@ fn apply_pair_duplicate_group(
             .read_pair_optical_duplicates += optical_duplicates.read_names as u64;
     }
     for index in optical_duplicates.record_indices {
-        decisions[index].optical_duplicate = true;
+        decisions[index].mark_optical_duplicate();
     }
     if config.tag_duplicate_set_members && !config.remove_duplicates {
         add_duplicate_set_member_tags(group, candidates, decisions, stats);
@@ -1367,7 +1387,7 @@ fn apply_pair_duplicate_group(
                 .summary_mut(candidate.library_id)
                 .unpaired_duplicate_records += 1;
         }
-        decisions[index].duplicate = true;
+        decisions[index].mark_duplicate();
     }
 }
 
@@ -1933,14 +1953,14 @@ fn mark_unpaired_duplicate_record(
 ) {
     let candidate = &candidates[candidate_index];
     let record_index = candidate.record_index;
-    if decisions[record_index].duplicate {
+    if decisions[record_index].duplicate() {
         return;
     }
     summary.unpaired_duplicate_records += 1;
     library_registry
         .summary_mut(candidate.library_id)
         .unpaired_duplicate_records += 1;
-    decisions[record_index].duplicate = true;
+    decisions[record_index].mark_duplicate();
 }
 
 fn sam_barcode(fields: &[String], config: &MarkDuplicatesConfig) -> Option<Vec<u8>> {
@@ -2810,6 +2830,20 @@ mod tests {
     }
 
     #[test]
+    fn record_decision_packs_duplicate_flags() {
+        let mut decision = RecordDecision::default();
+        assert!(!decision.duplicate());
+        assert!(!decision.optical_duplicate());
+
+        decision.mark_duplicate();
+        decision.mark_optical_duplicate();
+
+        assert!(decision.duplicate());
+        assert!(decision.optical_duplicate());
+        assert_eq!(decision.flags, 0b0000_0011);
+    }
+
+    #[test]
     fn best_duplicate_representative_index_aggregates_score_by_read_name() {
         let records = [
             record_with_name_and_qualities(b"dup-a", &[20], 0),
@@ -3341,15 +3375,9 @@ mod tests {
             flags: 0,
         };
 
-        let key = output_sort_key(
-            &locator,
-            &qnames,
-            RecordDecision {
-                duplicate: true,
-                ..RecordDecision::default()
-            },
-        )
-        .expect("sort key");
+        let mut decision = RecordDecision::default();
+        decision.mark_duplicate();
+        let key = output_sort_key(&locator, &qnames, decision).expect("sort key");
 
         assert_eq!(&key[12..18], b"read-a");
         assert_eq!(&key[19..21], &DUPLICATE_FLAG.to_be_bytes());
