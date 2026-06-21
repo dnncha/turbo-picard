@@ -17,6 +17,7 @@ use turbo_picard_core::markdup_config::MarkDuplicatesConfig;
 
 const DUPLICATE_FLAG: u16 = 0x400;
 const UNMAPPED_FLAG: u16 = 0x4;
+const DECISION_BITS_PER_WORD: usize = u64::BITS as usize;
 type LibraryId = u32;
 type InternedBytesId = u32;
 
@@ -217,54 +218,84 @@ impl RecordDecision {
 
 #[derive(Debug, Clone)]
 struct DuplicateDecisions {
-    flags: Vec<u8>,
+    record_count: usize,
+    duplicate_flags: Vec<u64>,
+    optical_duplicate_flags: Vec<u64>,
     duplicate_sets: HashMap<usize, DuplicateSetTag>,
 }
 
 impl DuplicateDecisions {
     fn new(record_count: usize) -> Self {
         Self {
-            flags: vec![0; record_count],
+            record_count,
+            duplicate_flags: vec![0; bitset_words(record_count)],
+            optical_duplicate_flags: vec![0; bitset_words(record_count)],
             duplicate_sets: HashMap::default(),
         }
     }
 
     fn len(&self) -> usize {
-        self.flags.len()
+        self.record_count
     }
 
     fn decision(&self, record_index: usize) -> Option<RecordDecision> {
-        self.flags
-            .get(record_index)
-            .copied()
-            .map(|flags| RecordDecision {
+        (record_index < self.record_count).then(|| {
+            let mut flags = 0u8;
+            if bitset_get(&self.duplicate_flags, record_index) {
+                flags |= RecordDecision::DUPLICATE;
+            }
+            if bitset_get(&self.optical_duplicate_flags, record_index) {
+                flags |= RecordDecision::OPTICAL_DUPLICATE;
+            }
+            RecordDecision {
                 flags,
                 duplicate_set: self.duplicate_sets.get(&record_index).copied(),
-            })
+            }
+        })
     }
 
     fn duplicate(&self, record_index: usize) -> bool {
-        self.flags
-            .get(record_index)
-            .is_some_and(|flags| flags & RecordDecision::DUPLICATE != 0)
+        record_index < self.record_count && bitset_get(&self.duplicate_flags, record_index)
     }
 
     fn mark_duplicate(&mut self, record_index: usize) {
-        if let Some(flags) = self.flags.get_mut(record_index) {
-            *flags |= RecordDecision::DUPLICATE;
+        if record_index < self.record_count {
+            bitset_set(&mut self.duplicate_flags, record_index);
         }
     }
 
     fn mark_optical_duplicate(&mut self, record_index: usize) {
-        if let Some(flags) = self.flags.get_mut(record_index) {
-            *flags |= RecordDecision::OPTICAL_DUPLICATE;
+        if record_index < self.record_count {
+            bitset_set(&mut self.optical_duplicate_flags, record_index);
         }
     }
 
     fn set_duplicate_set(&mut self, record_index: usize, size: i32, index: i32) {
-        self.duplicate_sets
-            .insert(record_index, DuplicateSetTag { size, index });
+        if record_index < self.record_count {
+            self.duplicate_sets
+                .insert(record_index, DuplicateSetTag { size, index });
+        }
     }
+}
+
+fn bitset_words(bits: usize) -> usize {
+    bits.div_ceil(DECISION_BITS_PER_WORD)
+}
+
+fn bitset_get(words: &[u64], bit: usize) -> bool {
+    words
+        .get(bit / DECISION_BITS_PER_WORD)
+        .is_some_and(|word| word & bitset_mask(bit) != 0)
+}
+
+fn bitset_set(words: &mut [u64], bit: usize) {
+    if let Some(word) = words.get_mut(bit / DECISION_BITS_PER_WORD) {
+        *word |= bitset_mask(bit);
+    }
+}
+
+fn bitset_mask(bit: usize) -> u64 {
+    1u64 << (bit % DECISION_BITS_PER_WORD)
 }
 
 #[derive(Debug)]
@@ -2985,19 +3016,30 @@ mod tests {
     }
 
     #[test]
-    fn duplicate_decisions_store_sparse_tags() {
-        let mut decisions = DuplicateDecisions::new(4);
+    fn duplicate_decisions_store_flags_in_bitsets_and_tags_sparsely() {
+        let mut decisions = DuplicateDecisions::new(65);
         decisions.mark_duplicate(1);
-        decisions.mark_optical_duplicate(2);
+        decisions.mark_optical_duplicate(64);
         decisions.set_duplicate_set(3, 9, 4);
+        decisions.mark_duplicate(65);
+        decisions.mark_optical_duplicate(65);
+        decisions.set_duplicate_set(65, 7, 2);
 
-        assert_eq!(decisions.len(), 4);
+        assert_eq!(decisions.len(), 65);
+        assert_eq!(decisions.duplicate_flags.len(), 2);
+        assert_eq!(decisions.optical_duplicate_flags.len(), 2);
         assert!(decisions.decision(1).expect("decision").duplicate());
-        assert!(decisions.decision(2).expect("decision").optical_duplicate());
+        assert!(
+            decisions
+                .decision(64)
+                .expect("decision")
+                .optical_duplicate()
+        );
         assert_eq!(
             decisions.decision(3).expect("decision").duplicate_set,
             Some(DuplicateSetTag { size: 9, index: 4 })
         );
+        assert!(decisions.decision(65).is_none());
         assert_eq!(decisions.duplicate_sets.len(), 1);
     }
 
