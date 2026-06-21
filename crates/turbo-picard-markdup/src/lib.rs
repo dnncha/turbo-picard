@@ -206,17 +206,57 @@ impl RecordDecision {
     fn optical_duplicate(self) -> bool {
         self.flags & Self::OPTICAL_DUPLICATE != 0
     }
+}
 
-    fn mark_duplicate(&mut self) {
-        self.flags |= Self::DUPLICATE;
+#[derive(Debug, Clone)]
+struct DuplicateDecisions {
+    flags: Vec<u8>,
+    duplicate_sets: HashMap<usize, DuplicateSetTag>,
+}
+
+impl DuplicateDecisions {
+    fn new(record_count: usize) -> Self {
+        Self {
+            flags: vec![0; record_count],
+            duplicate_sets: HashMap::default(),
+        }
     }
 
-    fn mark_optical_duplicate(&mut self) {
-        self.flags |= Self::OPTICAL_DUPLICATE;
+    fn len(&self) -> usize {
+        self.flags.len()
     }
 
-    fn set_duplicate_set(&mut self, size: i32, index: i32) {
-        self.duplicate_set = Some(DuplicateSetTag { size, index });
+    fn decision(&self, record_index: usize) -> Option<RecordDecision> {
+        self.flags
+            .get(record_index)
+            .copied()
+            .map(|flags| RecordDecision {
+                flags,
+                duplicate_set: self.duplicate_sets.get(&record_index).copied(),
+            })
+    }
+
+    fn duplicate(&self, record_index: usize) -> bool {
+        self.flags
+            .get(record_index)
+            .is_some_and(|flags| flags & RecordDecision::DUPLICATE != 0)
+    }
+
+    fn mark_duplicate(&mut self, record_index: usize) {
+        if let Some(flags) = self.flags.get_mut(record_index) {
+            *flags |= RecordDecision::DUPLICATE;
+        }
+    }
+
+    fn mark_optical_duplicate(&mut self, record_index: usize) {
+        if let Some(flags) = self.flags.get_mut(record_index) {
+            *flags |= RecordDecision::OPTICAL_DUPLICATE;
+        }
+    }
+
+    fn set_duplicate_set(&mut self, record_index: usize, size: i32, index: i32) {
+        self.duplicate_sets
+            .insert(record_index, DuplicateSetTag { size, index });
     }
 }
 
@@ -536,7 +576,7 @@ fn run_hts_container(
         )?;
     }
 
-    let mut decisions = vec![RecordDecision::default(); record_count];
+    let mut decisions = DuplicateDecisions::new(record_count);
     process_pair_duplicate_groups(
         &candidates,
         &mut decisions,
@@ -563,7 +603,16 @@ fn run_hts_container(
                 &mut writer,
             )?;
         } else {
-            let mut marked_records = records.into_iter().zip(decisions).collect::<Vec<_>>();
+            let mut marked_records = records
+                .into_iter()
+                .enumerate()
+                .map(|(record_index, record)| {
+                    let decision = decisions.decision(record_index).ok_or_else(|| {
+                        MarkDuplicatesError::Operation("missing duplicate decision".into())
+                    })?;
+                    Ok((record, decision))
+                })
+                .collect::<Result<Vec<_>, MarkDuplicatesError>>()?;
             marked_records.sort_by(|(left, left_decision), (right, right_decision)| {
                 compare_bam_output_order(left, *left_decision, right, *right_decision)
             });
@@ -705,7 +754,7 @@ fn read_bam_records<R: bam::Read>(
 
 fn read_bam_records_for_output<R: bam::Read>(
     reader: &mut R,
-    decisions: &[RecordDecision],
+    decisions: &DuplicateDecisions,
     config: &MarkDuplicatesConfig,
     writer: &mut bam::Writer,
 ) -> Result<(), MarkDuplicatesError> {
@@ -717,8 +766,7 @@ fn read_bam_records_for_output<R: bam::Read>(
             record.set_flags(flags);
         }
         let decision = decisions
-            .get(record_index)
-            .copied()
+            .decision(record_index)
             .ok_or_else(|| MarkDuplicatesError::Operation("missing duplicate decision".into()))?;
         write_bam_record(record, decision, config, writer)?;
         seen_records = record_index + 1;
@@ -735,7 +783,7 @@ fn read_bam_records_for_output<R: bam::Read>(
 fn write_multi_bam_records_by_locator(
     output_locs: Vec<OutputRecordLocator>,
     qnames: &ByteInterner,
-    decisions: &[RecordDecision],
+    decisions: &DuplicateDecisions,
     config: &MarkDuplicatesConfig,
     writer: &mut bam::Writer,
 ) -> Result<(), MarkDuplicatesError> {
@@ -751,8 +799,7 @@ fn write_multi_bam_records_by_locator(
             .map_err(MarkDuplicatesError::Operation)?;
     for locator in &output_locs {
         let decision = decisions
-            .get(locator.record_index)
-            .copied()
+            .decision(locator.record_index)
             .ok_or_else(|| MarkDuplicatesError::Operation("missing duplicate decision".into()))?;
         sorter
             .push(
@@ -784,13 +831,9 @@ fn write_multi_bam_records_by_locator(
                 .map_err(|error| error.to_string())?;
             match reader.read(&mut record) {
                 Some(Ok(())) => {
-                    let decision =
-                        decisions
-                            .get(locator.record_index)
-                            .copied()
-                            .ok_or_else(|| {
-                                "missing duplicate decision for sorted output record".to_string()
-                            })?;
+                    let decision = decisions.decision(locator.record_index).ok_or_else(|| {
+                        "missing duplicate decision for sorted output record".to_string()
+                    })?;
                     write_bam_record(std::mem::take(&mut record), decision, config, writer)
                         .map_err(|error| error.to_string())
                 }
@@ -1049,7 +1092,7 @@ fn parse_read_location(name: &[u8]) -> Option<ReadLocation> {
 fn add_duplicate_set_member_tags(
     group: &[usize],
     candidates: &[DuplicateCandidate],
-    decisions: &mut [RecordDecision],
+    decisions: &mut DuplicateDecisions,
     stats: DuplicateGroupStats,
 ) {
     if !stats.has_pair || !stats.has_multiple_read_names {
@@ -1061,7 +1104,7 @@ fn add_duplicate_set_member_tags(
 
     for index in group.iter().copied() {
         let record_index = candidates[index].record_index;
-        decisions[record_index].set_duplicate_set(duplicate_set_size, duplicate_set_index);
+        decisions.set_duplicate_set(record_index, duplicate_set_size, duplicate_set_index);
     }
 }
 
@@ -1303,7 +1346,7 @@ fn duplicate_groups(
 
 fn process_pair_duplicate_groups(
     candidates: &[DuplicateCandidate],
-    decisions: &mut [RecordDecision],
+    decisions: &mut DuplicateDecisions,
     summary: &mut MarkDuplicatesSummary,
     library_registry: &mut LibraryRegistry,
     config: &MarkDuplicatesConfig,
@@ -1324,7 +1367,7 @@ fn process_pair_duplicate_groups(
 fn apply_pair_duplicate_group(
     group: &[usize],
     candidates: &[DuplicateCandidate],
-    decisions: &mut [RecordDecision],
+    decisions: &mut DuplicateDecisions,
     summary: &mut MarkDuplicatesSummary,
     library_registry: &mut LibraryRegistry,
     config: &MarkDuplicatesConfig,
@@ -1370,7 +1413,7 @@ fn apply_pair_duplicate_group(
             .read_pair_optical_duplicates += optical_duplicates.read_names as u64;
     }
     for index in optical_duplicates.record_indices {
-        decisions[index].mark_optical_duplicate();
+        decisions.mark_optical_duplicate(index);
     }
     if config.tag_duplicate_set_members && !config.remove_duplicates {
         add_duplicate_set_member_tags(group, candidates, decisions, stats);
@@ -1393,7 +1436,7 @@ fn apply_pair_duplicate_group(
                 .summary_mut(candidate.library_id)
                 .unpaired_duplicate_records += 1;
         }
-        decisions[index].mark_duplicate();
+        decisions.mark_duplicate(index);
     }
 }
 
@@ -1888,7 +1931,7 @@ fn emit_completed_fragment_group(
 fn apply_fragment_duplicate_group(
     group: &[usize],
     candidates: &[DuplicateCandidate],
-    decisions: &mut [RecordDecision],
+    decisions: &mut DuplicateDecisions,
     summary: &mut MarkDuplicatesSummary,
     library_registry: &mut LibraryRegistry,
 ) {
@@ -1935,7 +1978,7 @@ fn apply_fragment_duplicate_group(
 
 fn mark_fragment_duplicate_groups(
     candidates: &[DuplicateCandidate],
-    decisions: &mut [RecordDecision],
+    decisions: &mut DuplicateDecisions,
     summary: &mut MarkDuplicatesSummary,
     library_registry: &mut LibraryRegistry,
     config: &MarkDuplicatesConfig,
@@ -1953,20 +1996,20 @@ fn mark_fragment_duplicate_groups(
 fn mark_unpaired_duplicate_record(
     candidate_index: usize,
     candidates: &[DuplicateCandidate],
-    decisions: &mut [RecordDecision],
+    decisions: &mut DuplicateDecisions,
     summary: &mut MarkDuplicatesSummary,
     library_registry: &mut LibraryRegistry,
 ) {
     let candidate = &candidates[candidate_index];
     let record_index = candidate.record_index;
-    if decisions[record_index].duplicate() {
+    if decisions.duplicate(record_index) {
         return;
     }
     summary.unpaired_duplicate_records += 1;
     library_registry
         .summary_mut(candidate.library_id)
         .unpaired_duplicate_records += 1;
-    decisions[record_index].mark_duplicate();
+    decisions.mark_duplicate(record_index);
 }
 
 fn sam_barcode(fields: &[String], config: &MarkDuplicatesConfig) -> Option<Vec<u8>> {
@@ -2837,15 +2880,15 @@ mod tests {
 
     #[test]
     fn record_decision_packs_duplicate_flags() {
-        let mut decision = RecordDecision::default();
-        assert!(!decision.duplicate());
-        assert!(!decision.optical_duplicate());
-        assert!(decision.duplicate_set.is_none());
+        let empty = RecordDecision::default();
+        assert!(!empty.duplicate());
+        assert!(!empty.optical_duplicate());
+        assert!(empty.duplicate_set.is_none());
 
-        decision.mark_duplicate();
-        decision.mark_optical_duplicate();
-        decision.set_duplicate_set(7, 3);
-
+        let decision = RecordDecision {
+            flags: RecordDecision::DUPLICATE | RecordDecision::OPTICAL_DUPLICATE,
+            duplicate_set: Some(DuplicateSetTag { size: 7, index: 3 }),
+        };
         assert!(decision.duplicate());
         assert!(decision.optical_duplicate());
         assert_eq!(decision.flags, 0b0000_0011);
@@ -2853,6 +2896,23 @@ mod tests {
             decision.duplicate_set,
             Some(DuplicateSetTag { size: 7, index: 3 })
         );
+    }
+
+    #[test]
+    fn duplicate_decisions_store_sparse_tags() {
+        let mut decisions = DuplicateDecisions::new(4);
+        decisions.mark_duplicate(1);
+        decisions.mark_optical_duplicate(2);
+        decisions.set_duplicate_set(3, 9, 4);
+
+        assert_eq!(decisions.len(), 4);
+        assert!(decisions.decision(1).expect("decision").duplicate());
+        assert!(decisions.decision(2).expect("decision").optical_duplicate());
+        assert_eq!(
+            decisions.decision(3).expect("decision").duplicate_set,
+            Some(DuplicateSetTag { size: 9, index: 4 })
+        );
+        assert_eq!(decisions.duplicate_sets.len(), 1);
     }
 
     #[test]
@@ -3214,14 +3274,16 @@ mod tests {
             record_with_name_and_flags(b"dup-c", 0x1),
         ];
         let candidates = candidates_for_records(&records);
-        let mut decisions = vec![RecordDecision::default(); records.len()];
+        let mut decisions = DuplicateDecisions::new(records.len());
         let stats = DuplicateGroupStats::from_group(&[0, 1, 2, 3], &candidates);
 
         add_duplicate_set_member_tags(&[0, 1, 2, 3], &candidates, &mut decisions, stats);
 
         for index in [0usize, 1, 2, 3] {
             assert_eq!(
-                decisions[index].duplicate_set,
+                decisions
+                    .decision(index)
+                    .and_then(|decision| decision.duplicate_set),
                 Some(DuplicateSetTag { size: 3, index: 0 })
             );
         }
@@ -3234,13 +3296,23 @@ mod tests {
             record_with_name_and_flags(b"dup-a", 0x0),
         ];
         let candidates = candidates_for_records(&records);
-        let mut decisions = vec![RecordDecision::default(); records.len()];
+        let mut decisions = DuplicateDecisions::new(records.len());
         let stats = DuplicateGroupStats::from_group(&[0, 1], &candidates);
 
         add_duplicate_set_member_tags(&[0, 1], &candidates, &mut decisions, stats);
 
-        assert!(decisions[0].duplicate_set.is_none());
-        assert!(decisions[1].duplicate_set.is_none());
+        assert!(
+            decisions
+                .decision(0)
+                .and_then(|decision| decision.duplicate_set)
+                .is_none()
+        );
+        assert!(
+            decisions
+                .decision(1)
+                .and_then(|decision| decision.duplicate_set)
+                .is_none()
+        );
     }
 
     #[test]
@@ -3389,8 +3461,10 @@ mod tests {
             flags: 0,
         };
 
-        let mut decision = RecordDecision::default();
-        decision.mark_duplicate();
+        let decision = RecordDecision {
+            flags: RecordDecision::DUPLICATE,
+            duplicate_set: None,
+        };
         let key = output_sort_key(&locator, &qnames, decision).expect("sort key");
 
         assert_eq!(&key[12..18], b"read-a");
