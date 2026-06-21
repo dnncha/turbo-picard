@@ -2027,6 +2027,59 @@ fn samtofastq_can_output_compressed_fastqs_per_read_group_using_id() {
 }
 
 #[test]
+fn samtofastq_reopens_evicted_per_read_group_fastqs_in_append_mode() {
+    let tempdir = tempfile::tempdir().expect("tempdir exists");
+    let input = tempdir.path().join("input.sam");
+    let output_dir = tempdir.path().join("per-rg");
+    fs::create_dir(&output_dir).expect("output dir exists");
+    fs::write(
+        &input,
+        concat!(
+            "@HD\tVN:1.6\tSO:coordinate\n",
+            "@SQ\tSN:chr1\tLN:100\n",
+            "@RG\tID:rg1\tSM:sample\tLB:lib\tPL:ILLUMINA\tPU:unit1\n",
+            "@RG\tID:rg2\tSM:sample\tLB:lib\tPL:ILLUMINA\tPU:unit2\n",
+            "@RG\tID:rg3\tSM:sample\tLB:lib\tPL:ILLUMINA\tPU:unit3\n",
+            "rg1a\t0\tchr1\t1\t60\t4M\t*\t0\t0\tAAAA\tFFFF\tRG:Z:rg1\n",
+            "rg2a\t0\tchr1\t2\t60\t4M\t*\t0\t0\tCCCC\tFFFF\tRG:Z:rg2\n",
+            "rg3a\t0\tchr1\t3\t60\t4M\t*\t0\t0\tGGGG\tFFFF\tRG:Z:rg3\n",
+            "rg1b\t0\tchr1\t4\t60\t4M\t*\t0\t0\tTTTT\tFFFF\tRG:Z:rg1\n",
+            "rg2b\t0\tchr1\t5\t60\t4M\t*\t0\t0\tACAC\tFFFF\tRG:Z:rg2\n",
+            "rg3b\t0\tchr1\t6\t60\t4M\t*\t0\t0\tGTGT\tFFFF\tRG:Z:rg3\n",
+        ),
+    )
+    .expect("input SAM is written");
+
+    Command::cargo_bin("picard")
+        .expect("binary exists")
+        .args([
+            "SamToFastq",
+            &format!("I={}", input.display()),
+            "OUTPUT_PER_RG=true",
+            "RG_TAG=ID",
+            &format!("OUTPUT_DIR={}", output_dir.display()),
+            "VALIDATION_STRINGENCY=SILENT",
+            "QUIET=true",
+        ])
+        .env("TURBO_PICARD_SAMTOFASTQ_MAX_OPEN_RG_WRITERS", "2")
+        .assert()
+        .success();
+
+    assert_eq!(
+        fs::read_to_string(output_dir.join("rg1_1.fastq")).expect("rg1 FASTQ exists"),
+        "@rg1a\nAAAA\n+\nFFFF\n@rg1b\nTTTT\n+\nFFFF\n",
+    );
+    assert_eq!(
+        fs::read_to_string(output_dir.join("rg2_1.fastq")).expect("rg2 FASTQ exists"),
+        "@rg2a\nCCCC\n+\nFFFF\n@rg2b\nACAC\n+\nFFFF\n",
+    );
+    assert_eq!(
+        fs::read_to_string(output_dir.join("rg3_1.fastq")).expect("rg3 FASTQ exists"),
+        "@rg3a\nGGGG\n+\nFFFF\n@rg3b\nGTGT\n+\nFFFF\n",
+    );
+}
+
+#[test]
 fn samtofastq_can_output_fastqs_per_read_group_from_bam_input() {
     let tempdir = tempfile::tempdir().expect("tempdir exists");
     let input_sam = tempdir.path().join("input.sam");

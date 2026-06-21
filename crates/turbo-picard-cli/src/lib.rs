@@ -16409,7 +16409,24 @@ fn reject_unsupported_fastqtosam_args(
 }
 
 fn fastq_writer(path: &str, compression_level: u32) -> Result<Box<dyn Write>, String> {
-    let file = fs::File::create(path).map_err(|error| error.to_string())?;
+    fastq_writer_with_mode(path, compression_level, false)
+}
+
+fn fastq_writer_append(path: &str, compression_level: u32) -> Result<Box<dyn Write>, String> {
+    fastq_writer_with_mode(path, compression_level, true)
+}
+
+fn fastq_writer_with_mode(
+    path: &str,
+    compression_level: u32,
+    append: bool,
+) -> Result<Box<dyn Write>, String> {
+    let file = if append {
+        fs::OpenOptions::new().create(true).append(true).open(path)
+    } else {
+        fs::File::create(path)
+    }
+    .map_err(|error| error.to_string())?;
     let writer = BufWriter::with_capacity(1024 * 1024, file);
     if has_gzip_extension(path) {
         Ok(Box::new(GzEncoder::new(
@@ -16673,17 +16690,31 @@ struct SamToFastqPerRgOutputs {
     compression_level: u32,
     read_groups: BTreeMap<String, SamToFastqReadGroupInfo>,
     writers: BTreeMap<String, SamToFastqReadGroupWriters>,
-    output_paths: Vec<String>,
+    recent_read_groups: VecDeque<String>,
+    opened_read_group_outputs: BTreeSet<(String, String)>,
+    output_paths: BTreeSet<String>,
+    max_open_read_groups: usize,
 }
 
 impl SamToFastqPerRgOutputs {
     fn new(config: SamToFastqPerRgMode, compression_level: u32) -> Self {
+        let max_open_read_groups = if config.compress {
+            // Reopening gzip outputs would create concatenated gzip members. Picard-compatible
+            // consumers and our tests expect a single gzip stream, so compressed per-RG outputs
+            // keep their existing open-writer behavior until a chunked compressor is introduced.
+            usize::MAX
+        } else {
+            samtofastq_max_open_read_group_writers()
+        };
         Self {
             config,
             compression_level,
             read_groups: BTreeMap::new(),
             writers: BTreeMap::new(),
-            output_paths: Vec::new(),
+            recent_read_groups: VecDeque::new(),
+            opened_read_group_outputs: BTreeSet::new(),
+            output_paths: BTreeSet::new(),
+            max_open_read_groups,
         }
     }
 
@@ -16872,11 +16903,19 @@ impl SamToFastqPerRgOutputs {
 
     fn ensure_writers_for_read_group(&mut self, read_group_id: &str) -> Result<(), String> {
         if self.writers.contains_key(read_group_id) {
+            self.touch_read_group(read_group_id);
             return Ok(());
         }
         let first_path = self.read_group_output_path(read_group_id, "_1")?;
-        self.output_paths.push(first_path.clone());
-        let first = fastq_writer(&first_path, self.compression_level)?;
+        let append = self.read_group_output_was_opened(read_group_id, "_1");
+        self.evict_oldest_writer_if_needed(read_group_id)?;
+        self.output_paths.insert(first_path.clone());
+        let first = if append {
+            fastq_writer_append(&first_path, self.compression_level)?
+        } else {
+            fastq_writer(&first_path, self.compression_level)?
+        };
+        self.mark_read_group_output_opened(read_group_id, "_1");
         self.writers.insert(
             read_group_id.to_string(),
             SamToFastqReadGroupWriters {
@@ -16884,6 +16923,7 @@ impl SamToFastqPerRgOutputs {
                 second: None,
             },
         );
+        self.touch_read_group(read_group_id);
         Ok(())
     }
 
@@ -16896,14 +16936,66 @@ impl SamToFastqPerRgOutputs {
             .get(read_group_id)
             .is_some_and(|writers| writers.second.is_none());
         if !needs_second {
+            self.touch_read_group(read_group_id);
             return Ok(());
         }
         let path = self.read_group_output_path(read_group_id, "_2")?;
-        self.output_paths.push(path.clone());
+        let append = self.read_group_output_was_opened(read_group_id, "_2");
+        self.output_paths.insert(path.clone());
+        let writer = if append {
+            fastq_writer_append(&path, self.compression_level)?
+        } else {
+            fastq_writer(&path, self.compression_level)?
+        };
+        self.mark_read_group_output_opened(read_group_id, "_2");
         self.writers
             .get_mut(read_group_id)
             .expect("writers exist after ensure")
-            .second = Some(fastq_writer(&path, self.compression_level)?);
+            .second = Some(writer);
+        self.touch_read_group(read_group_id);
+        Ok(())
+    }
+
+    fn read_group_output_was_opened(&self, read_group_id: &str, suffix: &str) -> bool {
+        self.opened_read_group_outputs
+            .contains(&(read_group_id.to_string(), suffix.to_string()))
+    }
+
+    fn mark_read_group_output_opened(&mut self, read_group_id: &str, suffix: &str) {
+        self.opened_read_group_outputs
+            .insert((read_group_id.to_string(), suffix.to_string()));
+    }
+
+    fn touch_read_group(&mut self, read_group_id: &str) {
+        self.recent_read_groups
+            .retain(|candidate| candidate != read_group_id);
+        self.recent_read_groups.push_back(read_group_id.to_string());
+    }
+
+    fn evict_oldest_writer_if_needed(&mut self, protected_read_group: &str) -> Result<(), String> {
+        if self.max_open_read_groups == usize::MAX {
+            return Ok(());
+        }
+        while self.writers.len() >= self.max_open_read_groups {
+            let Some(candidate) = self.recent_read_groups.pop_front() else {
+                break;
+            };
+            if candidate == protected_read_group {
+                self.recent_read_groups.push_back(candidate);
+                break;
+            }
+            if let Some(writers) = self.writers.remove(&candidate) {
+                Self::flush_read_group_writers(writers)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn flush_read_group_writers(mut writers: SamToFastqReadGroupWriters) -> Result<(), String> {
+        writers.first.flush().map_err(|error| error.to_string())?;
+        if let Some(writer) = writers.second.as_mut() {
+            writer.flush().map_err(|error| error.to_string())?;
+        }
         Ok(())
     }
 
@@ -16953,6 +17045,14 @@ impl SamToFastqPerRgOutputs {
         }
         Ok(())
     }
+}
+
+fn samtofastq_max_open_read_group_writers() -> usize {
+    env::var("TURBO_PICARD_SAMTOFASTQ_MAX_OPEN_RG_WRITERS")
+        .ok()
+        .and_then(|value| value.trim().parse::<usize>().ok())
+        .filter(|value| *value > 0)
+        .unwrap_or(64)
 }
 
 struct SamToFastqReadGroupInfo {
