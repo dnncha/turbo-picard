@@ -6393,15 +6393,13 @@ fn run_sortvcf(args: &[String]) -> Result<(), String> {
         writer.write_line(line, false, index.as_mut())?;
     }
     sorter.finish_into(|record| {
-        let line = String::from_utf8(record.payload)
-            .map_err(|_| "SortVcf record payload is not UTF-8".to_string())?;
-        if line.is_empty() {
+        if record.payload.is_empty() {
             return Err(format!(
                 "malformed SortVcf sorted record from ordinal {}",
                 record.ordinal
             ));
         }
-        writer.write_line(&line, true, index.as_mut())
+        writer.write_line_bytes(&record.payload, true, index.as_mut())
     })?;
     writer.persist()?;
     if let Some(index) = index {
@@ -6493,15 +6491,13 @@ fn run_mergevcfs_external_sort(
         writer.write_line(line, false, index.as_mut())?;
     }
     sorter.finish_into(|record| {
-        let line = String::from_utf8(record.payload)
-            .map_err(|_| "MergeVcfs record payload is not UTF-8".to_string())?;
-        if line.is_empty() {
+        if record.payload.is_empty() {
             return Err(format!(
                 "malformed MergeVcfs sorted record from ordinal {}",
                 record.ordinal
             ));
         }
-        writer.write_line(&line, true, index.as_mut())
+        writer.write_line_bytes(&record.payload, true, index.as_mut())
     })?;
     writer.persist()?;
     if let Some(index) = index {
@@ -7005,6 +7001,15 @@ impl StreamingTextOutput {
         is_record: bool,
         index: Option<&mut VcfIndexOffsets>,
     ) -> Result<(), String> {
+        self.write_line_bytes(line.as_bytes(), is_record, index)
+    }
+
+    fn write_line_bytes(
+        &mut self,
+        line: &[u8],
+        is_record: bool,
+        index: Option<&mut VcfIndexOffsets>,
+    ) -> Result<(), String> {
         match self
             .writer
             .as_mut()
@@ -7012,19 +7017,19 @@ impl StreamingTextOutput {
         {
             StreamingTextOutputWriter::Plain(writer) => {
                 writer
-                    .write_all(line.as_bytes())
+                    .write_all(line)
                     .and_then(|_| writer.write_all(b"\n"))
                     .map_err(|error| error.to_string())?;
             }
             StreamingTextOutputWriter::Gzip(writer) => {
                 writer
-                    .write_all(line.as_bytes())
+                    .write_all(line)
                     .and_then(|_| writer.write_all(b"\n"))
                     .map_err(|error| error.to_string())?;
             }
         }
         if let Some(index) = index {
-            index.observe_line(line, is_record)?;
+            index.observe_line_bytes(line, is_record)?;
         }
         Ok(())
     }
@@ -7103,7 +7108,7 @@ impl VcfIndexOffsets {
         })
     }
 
-    fn observe_line(&mut self, line: &str, is_record: bool) -> Result<(), String> {
+    fn observe_line_bytes(&mut self, line: &[u8], is_record: bool) -> Result<(), String> {
         if is_record {
             let writer = self
                 .writer
@@ -7466,22 +7471,17 @@ fn push_streaming_vcf_records_to_sorter(
                 input.line_number, input.source
             ));
         }
-        let record = parse_vcf_record(
-            trimmed,
-            input.record_serial,
-            &input.source,
-            input.line_number,
-        )?;
+        let (contig, position) = parse_vcf_record_key(trimmed, &input.source, input.line_number)?;
         input.record_serial += 1;
-        let Some(contig_rank) = contig_order.get(&record.contig).copied() else {
+        let Some(contig_rank) = contig_order.get(contig).copied() else {
             return Err(format!(
                 "VCF contig {} is not present in sequence dictionary",
-                record.contig
+                contig
             ));
         };
         sorter.push(
-            vcf_sort_key(contig_rank, record.position),
-            record.line.into_bytes(),
+            vcf_sort_key(contig_rank, position),
+            trimmed.as_bytes().to_vec(),
         )?;
     }
 }
@@ -7553,6 +7553,20 @@ fn parse_vcf_record(
     source: &str,
     line_number: usize,
 ) -> Result<VcfRecord, String> {
+    let (contig, position) = parse_vcf_record_key(line, source, line_number)?;
+    Ok(VcfRecord {
+        line: line.to_string(),
+        contig: contig.to_string(),
+        position,
+        serial,
+    })
+}
+
+fn parse_vcf_record_key<'line>(
+    line: &'line str,
+    source: &str,
+    line_number: usize,
+) -> Result<(&'line str, u64), String> {
     let mut fields = line.split('\t');
     let contig = fields
         .next()
@@ -7562,12 +7576,7 @@ fn parse_vcf_record(
         .ok_or_else(|| format!("malformed VCF record on line {line_number} in {source}"))?
         .parse::<u64>()
         .map_err(|_| format!("malformed VCF POS on line {line_number} in {source}"))?;
-    Ok(VcfRecord {
-        line: line.to_string(),
-        contig: contig.to_string(),
-        position,
-        serial,
-    })
+    Ok((contig, position))
 }
 
 fn vcf_sort_key(contig_rank: usize, position: u64) -> Vec<u8> {
