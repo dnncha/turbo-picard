@@ -121,8 +121,7 @@ struct DuplicateCandidate {
     record_index: usize,
     library_id: LibraryId,
     qname_id: InternedBytesId,
-    is_pair: bool,
-    reverse_strand: bool,
+    flags: CandidateFlags,
     reference_id: i32,
     five_prime_position: i64,
     _mate_reference_id: i32,
@@ -132,6 +131,33 @@ struct DuplicateCandidate {
     optical_location: Option<ReadLocation>,
     barcode_id: Option<InternedBytesId>,
     fragment_key: BamDuplicateKey,
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+struct CandidateFlags(u8);
+
+impl CandidateFlags {
+    const PAIR: u8 = 0b0000_0001;
+    const REVERSE_STRAND: u8 = 0b0000_0010;
+
+    fn from_record_flags(flags: u16) -> Self {
+        let mut candidate_flags = 0;
+        if duplicate_candidate_is_pair(flags) {
+            candidate_flags |= Self::PAIR;
+        }
+        if flags & 0x10 != 0 {
+            candidate_flags |= Self::REVERSE_STRAND;
+        }
+        Self(candidate_flags)
+    }
+
+    fn is_pair(self) -> bool {
+        self.0 & Self::PAIR != 0
+    }
+
+    fn reverse_strand(self) -> bool {
+        self.0 & Self::REVERSE_STRAND != 0
+    }
 }
 
 impl DuplicateCandidate {
@@ -145,14 +171,12 @@ impl DuplicateCandidate {
         let flags = record.flags();
         let reference_id = record.tid();
         let five_prime_position = unclipped_record_position(record);
-        let reverse_strand = flags & 0x10 != 0;
-        let is_pair = duplicate_candidate_is_pair(flags);
+        let candidate_flags = CandidateFlags::from_record_flags(flags);
         Self {
             record_index,
             library_id,
             qname_id,
-            is_pair,
-            reverse_strand,
+            flags: candidate_flags,
             reference_id,
             five_prime_position,
             _mate_reference_id: record.mtid(),
@@ -168,18 +192,18 @@ impl DuplicateCandidate {
                 mate_reference_id: -1,
                 mate_position: -1,
                 template_length: 0,
-                reverse_strand,
+                reverse_strand: candidate_flags.reverse_strand(),
                 barcode_id,
             },
         }
     }
 
     fn is_pair(&self) -> bool {
-        self.is_pair
+        self.flags.is_pair()
     }
 
     fn reverse_strand(&self) -> bool {
-        self.reverse_strand
+        self.flags.reverse_strand()
     }
 }
 
@@ -2871,9 +2895,7 @@ mod tests {
         let mate_unmapped_candidate =
             DuplicateCandidate::from_record(1, &mate_unmapped, 0, 2, None);
 
-        assert!(paired_candidate.is_pair);
         assert!(paired_candidate.is_pair());
-        assert!(!mate_unmapped_candidate.is_pair);
         assert!(!mate_unmapped_candidate.is_pair());
     }
 
