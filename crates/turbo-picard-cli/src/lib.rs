@@ -5053,9 +5053,19 @@ fn run_createsequencedictionary(args: &[String]) -> Result<(), String> {
 }
 
 fn read_alt_names(path: &str) -> Result<BTreeMap<String, Vec<String>>, String> {
-    let text = fs::read_to_string(path).map_err(|error| error.to_string())?;
+    let mut reader = open_text_or_gzip_reader(path)?;
     let mut alt_names = BTreeMap::<String, Vec<String>>::new();
-    for (line_index, line) in text.lines().enumerate() {
+    let mut line = String::new();
+    let mut line_number = 0usize;
+    loop {
+        line.clear();
+        let bytes_read = reader
+            .read_line(&mut line)
+            .map_err(|error| error.to_string())?;
+        if bytes_read == 0 {
+            break;
+        }
+        line_number += 1;
         let line = line.trim();
         if line.is_empty() {
             continue;
@@ -5063,8 +5073,7 @@ fn read_alt_names(path: &str) -> Result<BTreeMap<String, Vec<String>>, String> {
         let fields = line.split('\t').collect::<Vec<_>>();
         if fields.len() < 2 {
             return Err(format!(
-                "malformed CreateSequenceDictionary ALT_NAMES line {}",
-                line_index + 1
+                "malformed CreateSequenceDictionary ALT_NAMES line {line_number}"
             ));
         }
         alt_names
