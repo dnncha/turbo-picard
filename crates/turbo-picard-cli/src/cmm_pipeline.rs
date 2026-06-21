@@ -425,6 +425,90 @@ impl Drop for CmmWorkerPool {
     }
 }
 
+/// Overlap BGZF decode (reader thread) with record processing (consumer thread).
+pub fn pipeline_bam_records<F>(
+    mut reader: bam::Reader,
+    stop_after: u32,
+    channel_depth: usize,
+    mut consumer: F,
+) -> Result<(), String>
+where
+    F: FnMut(bam::Record) -> Result<(), String>,
+{
+    let (record_tx, record_rx) = bounded::<Result<bam::Record, String>>(channel_depth);
+    let (error_tx, error_rx) = bounded::<String>(1);
+    let (stop_tx, stop_rx) = bounded::<()>(1);
+
+    let mut consumer_error: Option<String> = None;
+
+    let reader_handle = thread::spawn(move || {
+        let result = (|| -> Result<(), String> {
+            let mut seen = 0usize;
+            for record in reader.records() {
+                if stop_after > 0 {
+                    if seen >= stop_after as usize {
+                        break;
+                    }
+                    seen += 1;
+                }
+                let record = record.map_err(|error| error.to_string())?;
+                crossbeam_channel::select! {
+                    recv(stop_rx) -> _ => return Ok(()),
+                    send(record_tx, Ok(record)) -> result => {
+                        result.map_err(|error| error.to_string())?;
+                    }
+                }
+            }
+            Ok(())
+        })();
+        if let Err(error) = result {
+            let _ = error_tx.send(error);
+        }
+    });
+
+    while let Ok(record) = record_rx.recv() {
+        let record = match record {
+            Ok(record) => record,
+            Err(error) => {
+                consumer_error = Some(error);
+                break;
+            }
+        };
+
+        let consumer_result = panic::catch_unwind(AssertUnwindSafe(|| consumer(record)));
+        match consumer_result {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => {
+                consumer_error = Some(error);
+                break;
+            }
+            Err(panic) => {
+                consumer_error = Some(format!("CMM consumer panicked: {}", panic_message(&*panic)));
+                break;
+            }
+        }
+        if let Ok(error) = error_rx.try_recv() {
+            if consumer_error.is_none() {
+                consumer_error = Some(error);
+            }
+            break;
+        }
+    }
+
+    let _ = stop_tx.send(());
+
+    reader_handle
+        .join()
+        .map_err(|_| "BAM reader thread panicked".to_string())?;
+    if let Some(error) = consumer_error {
+        return Err(error);
+    }
+    if let Ok(error) = error_rx.try_recv() {
+        return Err(error);
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -783,88 +867,4 @@ mod tests {
         let result = pipeline_bam_records(reader, 0, 2, |_record| Ok(()));
         assert!(result.is_err());
     }
-}
-
-/// Overlap BGZF decode (reader thread) with record processing (consumer thread).
-pub fn pipeline_bam_records<F>(
-    mut reader: bam::Reader,
-    stop_after: u32,
-    channel_depth: usize,
-    mut consumer: F,
-) -> Result<(), String>
-where
-    F: FnMut(bam::Record) -> Result<(), String>,
-{
-    let (record_tx, record_rx) = bounded::<Result<bam::Record, String>>(channel_depth);
-    let (error_tx, error_rx) = bounded::<String>(1);
-    let (stop_tx, stop_rx) = bounded::<()>(1);
-
-    let mut consumer_error: Option<String> = None;
-
-    let reader_handle = thread::spawn(move || {
-        let result = (|| -> Result<(), String> {
-            let mut seen = 0usize;
-            for record in reader.records() {
-                if stop_after > 0 {
-                    if seen >= stop_after as usize {
-                        break;
-                    }
-                    seen += 1;
-                }
-                let record = record.map_err(|error| error.to_string())?;
-                crossbeam_channel::select! {
-                    recv(stop_rx) -> _ => return Ok(()),
-                    send(record_tx, Ok(record)) -> result => {
-                        result.map_err(|error| error.to_string())?;
-                    }
-                }
-            }
-            Ok(())
-        })();
-        if let Err(error) = result {
-            let _ = error_tx.send(error);
-        }
-    });
-
-    while let Ok(record) = record_rx.recv() {
-        let record = match record {
-            Ok(record) => record,
-            Err(error) => {
-                consumer_error = Some(error);
-                break;
-            }
-        };
-
-        let consumer_result = panic::catch_unwind(AssertUnwindSafe(|| consumer(record)));
-        match consumer_result {
-            Ok(Ok(())) => {}
-            Ok(Err(error)) => {
-                consumer_error = Some(error);
-                break;
-            }
-            Err(panic) => {
-                consumer_error = Some(format!("CMM consumer panicked: {}", panic_message(&*panic)));
-                break;
-            }
-        }
-        if let Ok(error) = error_rx.try_recv() {
-            if consumer_error.is_none() {
-                consumer_error = Some(error);
-            }
-            break;
-        }
-    }
-
-    let _ = stop_tx.send(());
-
-    reader_handle
-        .join()
-        .map_err(|_| "BAM reader thread panicked".to_string())?;
-    if let Some(error) = consumer_error {
-        return Err(error);
-    }
-    if let Ok(error) = error_rx.try_recv() {
-        return Err(error);
-    }
-    Ok(())
 }

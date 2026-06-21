@@ -19246,6 +19246,292 @@ fn write_requested_sidecars(
     Ok(())
 }
 
+fn write_md5_sidecar(output: &str) -> Result<(), String> {
+    let mut reader = BufReader::with_capacity(
+        64 * 1024,
+        fs::File::open(output).map_err(|error| error.to_string())?,
+    );
+    let mut context = md5::Context::new();
+    let mut buffer = [0_u8; 64 * 1024];
+    loop {
+        let bytes_read = reader
+            .read(&mut buffer)
+            .map_err(|error| error.to_string())?;
+        if bytes_read == 0 {
+            break;
+        }
+        context.consume(&buffer[..bytes_read]);
+    }
+    let digest = context.compute();
+    fs::write(format!("{output}.md5"), format!("{digest:x}")).map_err(|error| error.to_string())
+}
+
+fn picard_reference_command_names() -> &'static [&'static str] {
+    static COMMANDS: OnceLock<Vec<&'static str>> = OnceLock::new();
+    COMMANDS
+        .get_or_init(|| {
+            PICARD_REFERENCE_COMMANDS
+                .lines()
+                .filter(|line| !line.trim().is_empty())
+                .collect()
+        })
+        .as_slice()
+}
+
+fn is_picard_reference_command(command: &str) -> bool {
+    picard_reference_command_names()
+        .iter()
+        .any(|name| name == &command)
+}
+
+fn print_picard_command_list() {
+    for command in picard_reference_command_names() {
+        println!("{command}");
+    }
+}
+
+fn resolve_fallback_command() -> Option<String> {
+    if let Ok(command) = env::var("TURBO_PICARD_FALLBACK_COMMAND") {
+        let trimmed = command.trim();
+        if !trimmed.is_empty() {
+            return Some(trimmed.to_string());
+        }
+    }
+    discover_upstream_picard_command()
+}
+
+fn discover_upstream_picard_command() -> Option<String> {
+    if env::var("TURBO_PICARD_DISABLE_AUTO_FALLBACK").is_ok() {
+        return None;
+    }
+    if let Ok(jar) = env::var("PICARD_JAR") {
+        let trimmed = jar.trim();
+        if !trimmed.is_empty() && Path::new(trimmed).is_file() {
+            return Some(format!("java -jar {}", quote_fallback_command_arg(trimmed)));
+        }
+    }
+    if let Ok(prefix) = env::var("CONDA_PREFIX") {
+        if let Some(command) = discover_picard_in_prefix(&prefix) {
+            return Some(command);
+        }
+    }
+    discover_picard_on_path()
+}
+
+fn discover_picard_in_prefix(prefix: &str) -> Option<String> {
+    let share = Path::new(prefix).join("share");
+    let entries = fs::read_dir(&share).ok()?;
+    let mut jars = Vec::new();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+        let jar = path.join("picard.jar");
+        if jar.is_file() {
+            jars.push(jar);
+        }
+    }
+    jars.sort();
+    jars.into_iter().next().map(|jar| {
+        format!(
+            "java -jar {}",
+            quote_fallback_command_arg(&jar.display().to_string())
+        )
+    })
+}
+
+fn discover_picard_on_path() -> Option<String> {
+    let current_exe = env::current_exe().ok();
+    let path_var = env::var_os("PATH")?;
+    let mut candidates = Vec::new();
+    for dir in env::split_paths(&path_var) {
+        let candidate = dir.join("picard");
+        if !is_executable_file(&candidate) {
+            continue;
+        }
+        if current_exe.as_ref().is_some_and(|exe| exe == &candidate) {
+            continue;
+        }
+        if is_turbo_picard_binary(&candidate) {
+            continue;
+        }
+        candidates.push(candidate);
+    }
+    candidates.sort();
+    candidates
+        .into_iter()
+        .next()
+        .map(|path| quote_fallback_command_arg(&path.to_string_lossy()))
+}
+
+fn quote_fallback_command_arg(value: &str) -> String {
+    if !value.contains(&['"', '\''][..]) && !value.contains(char::is_whitespace) {
+        return value.to_string();
+    }
+    if !value.contains('\'') {
+        let mut quoted = String::with_capacity(value.len() + 2);
+        quoted.push('\'');
+        quoted.push_str(value);
+        quoted.push('\'');
+        return quoted;
+    }
+
+    let mut quoted = String::new();
+    quoted.push('"');
+    for ch in value.chars() {
+        if ch == '"' {
+            quoted.push('\\');
+        }
+        quoted.push(ch);
+    }
+    quoted.push('"');
+    quoted
+}
+
+#[cfg(unix)]
+fn is_executable_file(path: &Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    path.is_file()
+        && fs::metadata(path)
+            .map(|meta| meta.permissions().mode() & 0o111 != 0)
+            .unwrap_or(false)
+}
+
+#[cfg(not(unix))]
+fn is_executable_file(path: &Path) -> bool {
+    path.is_file()
+}
+
+fn is_turbo_picard_binary(path: &Path) -> bool {
+    Command::new(path)
+        .arg("--version")
+        .output()
+        .ok()
+        .and_then(|output| String::from_utf8(output.stdout).ok())
+        .is_some_and(|text| {
+            let normalized = text.trim().to_ascii_lowercase();
+            normalized.contains("turbo-picard")
+                || normalized.starts_with(
+                    &format!("picard {}", env!("CARGO_PKG_VERSION")).to_ascii_lowercase(),
+                )
+        })
+}
+
+fn try_run_fallback(args: &[String]) -> Option<i32> {
+    let fallback_command = resolve_fallback_command()?;
+
+    match fallback_status(&fallback_command, args) {
+        Ok(exit_code) => Some(exit_code),
+        Err(error) => {
+            eprintln!("{error}");
+            Some(2)
+        }
+    }
+}
+
+fn try_run_fallback_for_native_error(error: &str, args: &[String]) -> Option<i32> {
+    if should_delegate_to_picard(error) {
+        try_run_fallback(args)
+    } else {
+        None
+    }
+}
+
+fn should_delegate_to_picard(error: &str) -> bool {
+    error.starts_with("unsupported ")
+        || error.contains("not implemented yet")
+        || error.contains("should use upstream Picard")
+}
+
+fn fallback_status(fallback_command: &str, args: &[String]) -> Result<i32, String> {
+    let mut command_parts = split_fallback_command(fallback_command)?;
+    let program = command_parts.remove(0);
+    let mut command = Command::new(program);
+    command.args(command_parts).args(args);
+
+    let status = command
+        .env_remove("TURBO_PICARD_FALLBACK_COMMAND")
+        .status()
+        .map_err(|error| format!("failed to run Picard fallback command: {error}"))?;
+
+    Ok(status.code().unwrap_or(1))
+}
+
+fn split_fallback_command(command: &str) -> Result<Vec<String>, String> {
+    if command.trim().is_empty() {
+        return Err("fallback command is empty".to_string());
+    }
+    if !command.contains(char::is_whitespace) && !command.contains(&['"', '\''][..]) {
+        return Ok(vec![command.to_string()]);
+    }
+
+    let mut parts = Vec::new();
+    let mut current = String::new();
+    let mut quoted: Option<char> = None;
+    let mut chars = command.chars().peekable();
+
+    let mut in_token = false;
+
+    while let Some(ch) = chars.next() {
+        if ch == '\\' && quoted != Some('\'') {
+            if let Some(&next) = chars.peek() {
+                if next.is_whitespace() || matches!(next, '"' | '\'') {
+                    current.push(next);
+                    chars.next();
+                    in_token = true;
+                    continue;
+                }
+            }
+            current.push('\\');
+            in_token = true;
+            continue;
+        }
+
+        match ch {
+            '\'' if quoted.is_none() => {
+                quoted = Some('\'');
+                in_token = true;
+            }
+            '\'' if quoted == Some('\'') => {
+                quoted = None;
+            }
+            '"' if quoted.is_none() => {
+                quoted = Some('"');
+                in_token = true;
+            }
+            '"' if quoted == Some('"') => {
+                quoted = None;
+            }
+            ch if ch.is_whitespace() && quoted.is_none() => {
+                if in_token {
+                    if current.is_empty() {
+                        parts.push(String::new());
+                    } else {
+                        parts.push(std::mem::take(&mut current));
+                    }
+                    in_token = false;
+                }
+            }
+            _ => {
+                in_token = true;
+                current.push(ch);
+            }
+        }
+    }
+
+    if quoted.is_some() {
+        return Err("invalid fallback command: unmatched quote".to_string());
+    }
+    if in_token || !current.is_empty() {
+        parts.push(current);
+    }
+    if parts.first().is_none_or(|part| part.trim().is_empty()) {
+        return Err("fallback command is empty".to_string());
+    }
+    Ok(parts)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -19996,290 +20282,4 @@ mod tests {
             ]
         );
     }
-}
-
-fn write_md5_sidecar(output: &str) -> Result<(), String> {
-    let mut reader = BufReader::with_capacity(
-        64 * 1024,
-        fs::File::open(output).map_err(|error| error.to_string())?,
-    );
-    let mut context = md5::Context::new();
-    let mut buffer = [0_u8; 64 * 1024];
-    loop {
-        let bytes_read = reader
-            .read(&mut buffer)
-            .map_err(|error| error.to_string())?;
-        if bytes_read == 0 {
-            break;
-        }
-        context.consume(&buffer[..bytes_read]);
-    }
-    let digest = context.compute();
-    fs::write(format!("{output}.md5"), format!("{digest:x}")).map_err(|error| error.to_string())
-}
-
-fn picard_reference_command_names() -> &'static [&'static str] {
-    static COMMANDS: OnceLock<Vec<&'static str>> = OnceLock::new();
-    COMMANDS
-        .get_or_init(|| {
-            PICARD_REFERENCE_COMMANDS
-                .lines()
-                .filter(|line| !line.trim().is_empty())
-                .collect()
-        })
-        .as_slice()
-}
-
-fn is_picard_reference_command(command: &str) -> bool {
-    picard_reference_command_names()
-        .iter()
-        .any(|name| name == &command)
-}
-
-fn print_picard_command_list() {
-    for command in picard_reference_command_names() {
-        println!("{command}");
-    }
-}
-
-fn resolve_fallback_command() -> Option<String> {
-    if let Ok(command) = env::var("TURBO_PICARD_FALLBACK_COMMAND") {
-        let trimmed = command.trim();
-        if !trimmed.is_empty() {
-            return Some(trimmed.to_string());
-        }
-    }
-    discover_upstream_picard_command()
-}
-
-fn discover_upstream_picard_command() -> Option<String> {
-    if env::var("TURBO_PICARD_DISABLE_AUTO_FALLBACK").is_ok() {
-        return None;
-    }
-    if let Ok(jar) = env::var("PICARD_JAR") {
-        let trimmed = jar.trim();
-        if !trimmed.is_empty() && Path::new(trimmed).is_file() {
-            return Some(format!("java -jar {}", quote_fallback_command_arg(trimmed)));
-        }
-    }
-    if let Ok(prefix) = env::var("CONDA_PREFIX") {
-        if let Some(command) = discover_picard_in_prefix(&prefix) {
-            return Some(command);
-        }
-    }
-    discover_picard_on_path()
-}
-
-fn discover_picard_in_prefix(prefix: &str) -> Option<String> {
-    let share = Path::new(prefix).join("share");
-    let entries = fs::read_dir(&share).ok()?;
-    let mut jars = Vec::new();
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if !path.is_dir() {
-            continue;
-        }
-        let jar = path.join("picard.jar");
-        if jar.is_file() {
-            jars.push(jar);
-        }
-    }
-    jars.sort();
-    jars.into_iter().next().map(|jar| {
-        format!(
-            "java -jar {}",
-            quote_fallback_command_arg(&jar.display().to_string())
-        )
-    })
-}
-
-fn discover_picard_on_path() -> Option<String> {
-    let current_exe = env::current_exe().ok();
-    let path_var = env::var_os("PATH")?;
-    let mut candidates = Vec::new();
-    for dir in env::split_paths(&path_var) {
-        let candidate = dir.join("picard");
-        if !is_executable_file(&candidate) {
-            continue;
-        }
-        if current_exe.as_ref().is_some_and(|exe| exe == &candidate) {
-            continue;
-        }
-        if is_turbo_picard_binary(&candidate) {
-            continue;
-        }
-        candidates.push(candidate);
-    }
-    candidates.sort();
-    candidates
-        .into_iter()
-        .next()
-        .map(|path| quote_fallback_command_arg(&path.to_string_lossy()))
-}
-
-fn quote_fallback_command_arg(value: &str) -> String {
-    if !value.contains(&['"', '\''][..]) && !value.contains(char::is_whitespace) {
-        return value.to_string();
-    }
-    if !value.contains('\'') {
-        let mut quoted = String::with_capacity(value.len() + 2);
-        quoted.push('\'');
-        quoted.push_str(value);
-        quoted.push('\'');
-        return quoted;
-    }
-
-    let mut quoted = String::new();
-    quoted.push('"');
-    for ch in value.chars() {
-        if ch == '"' {
-            quoted.push('\\');
-        }
-        quoted.push(ch);
-    }
-    quoted.push('"');
-    quoted
-}
-
-#[cfg(unix)]
-fn is_executable_file(path: &Path) -> bool {
-    use std::os::unix::fs::PermissionsExt;
-    path.is_file()
-        && fs::metadata(path)
-            .map(|meta| meta.permissions().mode() & 0o111 != 0)
-            .unwrap_or(false)
-}
-
-#[cfg(not(unix))]
-fn is_executable_file(path: &Path) -> bool {
-    path.is_file()
-}
-
-fn is_turbo_picard_binary(path: &Path) -> bool {
-    Command::new(path)
-        .arg("--version")
-        .output()
-        .ok()
-        .and_then(|output| String::from_utf8(output.stdout).ok())
-        .is_some_and(|text| {
-            let normalized = text.trim().to_ascii_lowercase();
-            normalized.contains("turbo-picard")
-                || normalized.starts_with(
-                    &format!("picard {}", env!("CARGO_PKG_VERSION")).to_ascii_lowercase(),
-                )
-        })
-}
-
-fn try_run_fallback(args: &[String]) -> Option<i32> {
-    let fallback_command = resolve_fallback_command()?;
-
-    match fallback_status(&fallback_command, args) {
-        Ok(exit_code) => Some(exit_code),
-        Err(error) => {
-            eprintln!("{error}");
-            Some(2)
-        }
-    }
-}
-
-fn try_run_fallback_for_native_error(error: &str, args: &[String]) -> Option<i32> {
-    if should_delegate_to_picard(error) {
-        try_run_fallback(args)
-    } else {
-        None
-    }
-}
-
-fn should_delegate_to_picard(error: &str) -> bool {
-    error.starts_with("unsupported ")
-        || error.contains("not implemented yet")
-        || error.contains("should use upstream Picard")
-}
-
-fn fallback_status(fallback_command: &str, args: &[String]) -> Result<i32, String> {
-    let mut command_parts = split_fallback_command(fallback_command)?;
-    let program = command_parts.remove(0);
-    let mut command = Command::new(program);
-    command.args(command_parts).args(args);
-
-    let status = command
-        .env_remove("TURBO_PICARD_FALLBACK_COMMAND")
-        .status()
-        .map_err(|error| format!("failed to run Picard fallback command: {error}"))?;
-
-    Ok(status.code().unwrap_or(1))
-}
-
-fn split_fallback_command(command: &str) -> Result<Vec<String>, String> {
-    if command.trim().is_empty() {
-        return Err("fallback command is empty".to_string());
-    }
-    if !command.contains(char::is_whitespace) && !command.contains(&['"', '\''][..]) {
-        return Ok(vec![command.to_string()]);
-    }
-
-    let mut parts = Vec::new();
-    let mut current = String::new();
-    let mut quoted: Option<char> = None;
-    let mut chars = command.chars().peekable();
-
-    let mut in_token = false;
-
-    while let Some(ch) = chars.next() {
-        if ch == '\\' && quoted != Some('\'') {
-            if let Some(&next) = chars.peek() {
-                if next.is_whitespace() || matches!(next, '"' | '\'') {
-                    current.push(next);
-                    chars.next();
-                    in_token = true;
-                    continue;
-                }
-            }
-            current.push('\\');
-            in_token = true;
-            continue;
-        }
-
-        match ch {
-            '\'' if quoted.is_none() => {
-                quoted = Some('\'');
-                in_token = true;
-            }
-            '\'' if quoted == Some('\'') => {
-                quoted = None;
-            }
-            '"' if quoted.is_none() => {
-                quoted = Some('"');
-                in_token = true;
-            }
-            '"' if quoted == Some('"') => {
-                quoted = None;
-            }
-            ch if ch.is_whitespace() && quoted.is_none() => {
-                if in_token {
-                    if current.is_empty() {
-                        parts.push(String::new());
-                    } else {
-                        parts.push(std::mem::take(&mut current));
-                    }
-                    in_token = false;
-                }
-            }
-            _ => {
-                in_token = true;
-                current.push(ch);
-            }
-        }
-    }
-
-    if quoted.is_some() {
-        return Err("invalid fallback command: unmatched quote".to_string());
-    }
-    if in_token || !current.is_empty() {
-        parts.push(current);
-    }
-    if parts.first().is_none_or(|part| part.trim().is_empty()) {
-        return Err("fallback command is empty".to_string());
-    }
-    Ok(parts)
 }
