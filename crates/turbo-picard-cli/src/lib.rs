@@ -5177,12 +5177,10 @@ fn run_bedtointervallist(args: &[String]) -> Result<(), String> {
     let keep_length_zero_intervals =
         optional_bool(&args, "KEEP_LENGTH_ZERO_INTERVALS")?.unwrap_or(false);
 
-    let dictionary_text =
-        fs::read_to_string(&dictionary_path).map_err(|error| error.to_string())?;
-    let contig_order = dictionary_contig_order(&dictionary_text);
+    let dictionary = read_bed_interval_list_dictionary(&dictionary_path)?;
     let mut intervals = read_bed_intervals(
         &input,
-        &contig_order,
+        &dictionary.contig_order,
         drop_missing_contigs,
         keep_length_zero_intervals,
     )?;
@@ -5205,7 +5203,7 @@ fn run_bedtointervallist(args: &[String]) -> Result<(), String> {
         });
     }
 
-    let mut text = bed_interval_list_header(&dictionary_text, sort);
+    let mut text = dictionary.header_text;
     for interval in intervals {
         text.push_str(&format!(
             "{}\t{}\t{}\t{}\t{}\n",
@@ -5215,11 +5213,31 @@ fn run_bedtointervallist(args: &[String]) -> Result<(), String> {
     fs::write(output, text).map_err(|error| error.to_string())
 }
 
-fn bed_interval_list_header(dictionary_text: &str, _sort: bool) -> String {
+struct BedIntervalListDictionary {
+    header_text: String,
+    contig_order: BTreeMap<String, usize>,
+}
+
+fn read_bed_interval_list_dictionary(path: &str) -> Result<BedIntervalListDictionary, String> {
+    let mut reader = open_text_or_gzip_reader(path)?;
     let sort_order = "coordinate";
     let mut text = String::new();
     let mut saw_hd = false;
-    for line in dictionary_text.lines().filter(|line| line.starts_with('@')) {
+    let mut contig_order = BTreeMap::new();
+    let mut sequence_index = 0usize;
+    let mut line = String::new();
+    loop {
+        line.clear();
+        let bytes_read = reader
+            .read_line(&mut line)
+            .map_err(|error| error.to_string())?;
+        if bytes_read == 0 {
+            break;
+        }
+        let line = line.trim_end_matches(['\r', '\n']);
+        if !line.starts_with('@') {
+            continue;
+        }
         if line.starts_with("@HD\t") {
             saw_hd = true;
             let mut fields = vec!["@HD".to_string()];
@@ -5238,15 +5256,27 @@ fn bed_interval_list_header(dictionary_text: &str, _sort: bool) -> String {
             text.push_str(&fields.join("\t"));
             text.push('\n');
         } else {
+            if line.starts_with("@SQ\t") {
+                if let Some(name) = line
+                    .split('\t')
+                    .skip(1)
+                    .find_map(|field| field.strip_prefix("SN:"))
+                {
+                    contig_order.insert(name.to_string(), sequence_index);
+                }
+                sequence_index += 1;
+            }
             text.push_str(line);
             text.push('\n');
         }
     }
-    if saw_hd {
-        text
-    } else {
-        format!("@HD\tVN:1.6\tSO:{sort_order}\n{text}")
+    if !saw_hd {
+        text = format!("@HD\tVN:1.6\tSO:{sort_order}\n{text}");
     }
+    Ok(BedIntervalListDictionary {
+        header_text: text,
+        contig_order,
+    })
 }
 
 fn run_intervallisttools(args: &[String]) -> Result<(), String> {
