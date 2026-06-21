@@ -8850,6 +8850,7 @@ fn gathervcfs_removes_temp_output_after_header_mismatch() {
             &format!("I={}", first.display()),
             &format!("I={}", second.display()),
             &format!("O={}", output.display()),
+            "CREATE_INDEX=true",
             "VALIDATION_STRINGENCY=SILENT",
             "QUIET=true",
         ])

@@ -6279,7 +6279,7 @@ fn run_liftovervcf(args: &[String]) -> Result<(), String> {
     }
 
     let mut output_writer = StreamingTextOutput::create(&output, "liftovervcf")?;
-    let mut index = (create_index && has_extension(&output, "vcf")).then(VcfIndexOffsets::default);
+    let mut index = create_vcf_index(&output, "liftovervcf-index", create_index)?;
     write_liftover_output_header(
         &input_header,
         &contig_lines,
@@ -6300,7 +6300,7 @@ fn run_liftovervcf(args: &[String]) -> Result<(), String> {
     })?;
     output_writer.persist()?;
     if let Some(index) = index {
-        index.write_sidecar(&output)?;
+        index.persist()?;
     }
     reject_writer.persist()
 }
@@ -6314,7 +6314,7 @@ fn run_gathervcfs(args: &[String]) -> Result<(), String> {
     let create_index = optional_bool(&args, "CREATE_INDEX")?.unwrap_or(false);
 
     let mut writer = StreamingTextOutput::create(&output, "gathervcfs")?;
-    let mut index = (create_index && has_extension(&output, "vcf")).then(VcfIndexOffsets::default);
+    let mut index = create_vcf_index(&output, "gathervcfs-index", create_index)?;
     let mut first_header = None::<GatherVcfHeader>;
     for (input_index, input) in inputs.iter().enumerate() {
         let header = stream_gathervcf_input(
@@ -6329,11 +6329,8 @@ fn run_gathervcfs(args: &[String]) -> Result<(), String> {
         }
     }
     writer.persist()?;
-    if create_index
-        && has_extension(&output, "vcf")
-        && let Some(index) = index
-    {
-        index.write_sidecar(&output)?;
+    if let Some(index) = index {
+        index.persist()?;
     }
     Ok(())
 }
@@ -6397,7 +6394,7 @@ fn run_sortvcf(args: &[String]) -> Result<(), String> {
 
     let header_text = streaming_vcf_header_text_with_contigs(first, contig_lines.as_deref())?;
     let mut writer = StreamingTextOutput::create(&output, "sortvcf")?;
-    let mut index = (create_index && has_extension(&output, "vcf")).then(VcfIndexOffsets::default);
+    let mut index = create_vcf_index(&output, "sortvcf-index", create_index)?;
     for line in header_text.lines() {
         writer.write_line(line, false, index.as_mut())?;
     }
@@ -6414,7 +6411,7 @@ fn run_sortvcf(args: &[String]) -> Result<(), String> {
     })?;
     writer.persist()?;
     if let Some(index) = index {
-        index.write_sidecar(&output)?;
+        index.persist()?;
     }
     Ok(())
 }
@@ -6501,7 +6498,7 @@ fn run_mergevcfs_external_sort(
 
     let header_text = streaming_vcf_header_text_with_contigs(first, contig_lines.as_deref())?;
     let mut writer = StreamingTextOutput::create(output, "mergevcfs")?;
-    let mut index = (create_index && has_extension(output, "vcf")).then(VcfIndexOffsets::default);
+    let mut index = create_vcf_index(output, "mergevcfs-index", create_index)?;
     for line in header_text.lines() {
         writer.write_line(line, false, index.as_mut())?;
     }
@@ -6518,7 +6515,7 @@ fn run_mergevcfs_external_sort(
     })?;
     writer.persist()?;
     if let Some(index) = index {
-        index.write_sidecar(output)?;
+        index.persist()?;
     }
     Ok(())
 }
@@ -7037,7 +7034,7 @@ impl StreamingTextOutput {
             }
         }
         if let Some(index) = index {
-            index.observe_line(line, is_record);
+            index.observe_line(line, is_record)?;
         }
         Ok(())
     }
@@ -7087,27 +7084,77 @@ fn create_unique_temp_path(output_dir: &Path, prefix: &str) -> Result<PathBuf, S
     Err("could not allocate temporary streaming text output path".to_string())
 }
 
-#[derive(Debug, Default)]
 struct VcfIndexOffsets {
     offset: usize,
-    record_offsets: Vec<usize>,
+    output: String,
+    temp_path: PathBuf,
+    writer: Option<BufWriter<fs::File>>,
 }
 
 impl VcfIndexOffsets {
-    fn observe_line(&mut self, line: &str, is_record: bool) {
-        if is_record {
-            self.record_offsets.push(self.offset);
-        }
-        self.offset += line.len() + 1;
+    fn create(output: &str, prefix: &str) -> Result<Self, String> {
+        let output_path = Path::new(output);
+        let output_dir = output_path.parent().unwrap_or_else(|| Path::new("."));
+        let temp_path = create_unique_temp_path(output_dir, prefix)?;
+        let file = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temp_path)
+            .map_err(|error| error.to_string())?;
+        let mut writer = BufWriter::with_capacity(64 * 1024, file);
+        writer
+            .write_all(b"# turbo-picard VCF record offsets\n")
+            .map_err(|error| error.to_string())?;
+        Ok(Self {
+            offset: 0,
+            output: output.to_string(),
+            temp_path,
+            writer: Some(writer),
+        })
     }
 
-    fn write_sidecar(self, output: &str) -> Result<(), String> {
-        let mut index = String::from("# turbo-picard VCF record offsets\n");
-        for offset in self.record_offsets {
-            index.push_str(&offset.to_string());
-            index.push('\n');
+    fn observe_line(&mut self, line: &str, is_record: bool) -> Result<(), String> {
+        if is_record {
+            let writer = self
+                .writer
+                .as_mut()
+                .ok_or_else(|| "VCF index writer is already closed".to_string())?;
+            writeln!(writer, "{}", self.offset).map_err(|error| error.to_string())?;
         }
-        fs::write(format!("{output}.idx"), index).map_err(|error| error.to_string())
+        self.offset += line.len() + 1;
+        Ok(())
+    }
+
+    fn persist(mut self) -> Result<(), String> {
+        let writer = self
+            .writer
+            .take()
+            .ok_or_else(|| "VCF index writer is already closed".to_string())?;
+        writer.into_inner().map_err(|error| error.to_string())?;
+        fs::rename(&self.temp_path, format!("{}.idx", self.output))
+            .map_err(|error| error.to_string())?;
+        self.temp_path.clear();
+        Ok(())
+    }
+}
+
+impl Drop for VcfIndexOffsets {
+    fn drop(&mut self) {
+        if !self.temp_path.as_os_str().is_empty() {
+            let _ = fs::remove_file(&self.temp_path);
+        }
+    }
+}
+
+fn create_vcf_index(
+    output: &str,
+    prefix: &str,
+    create_index: bool,
+) -> Result<Option<VcfIndexOffsets>, String> {
+    if create_index && has_extension(output, "vcf") {
+        VcfIndexOffsets::create(output, prefix).map(Some)
+    } else {
+        Ok(None)
     }
 }
 
@@ -7273,11 +7320,7 @@ fn stream_sorted_mergevcfs(
 ) -> Result<MergeVcfStreamOutcome, String> {
     let header_text = streaming_vcf_header_text_with_contigs(first_header, contig_lines)?;
     let mut writer = StreamingTextOutput::create(output, "mergevcfs")?;
-    let mut index = if create_index && has_extension(output, "vcf") {
-        Some(VcfIndexOffsets::default())
-    } else {
-        None
-    };
+    let mut index = create_vcf_index(output, "mergevcfs-index", create_index)?;
     for line in header_text.lines() {
         writer.write_line(line, false, index.as_mut())?;
     }
@@ -7314,7 +7357,7 @@ fn stream_sorted_mergevcfs(
 
     writer.persist()?;
     if let Some(index) = index {
-        index.write_sidecar(output)?;
+        index.persist()?;
     }
     Ok(MergeVcfStreamOutcome::Streamed)
 }
@@ -7885,7 +7928,7 @@ fn stream_vcf_contig_header_replacement(
 ) -> Result<(), String> {
     let mut reader = open_text_or_gzip_reader(input)?;
     let mut writer = StreamingTextOutput::create(output, "updatevcfsequencedictionary")?;
-    let mut index = (create_index && has_extension(output, "vcf")).then(VcfIndexOffsets::default);
+    let mut index = create_vcf_index(output, "updatevcfsequencedictionary-index", create_index)?;
     let mut line = String::new();
     let mut inserted_contigs = false;
     let mut saw_column_header = false;
@@ -7919,7 +7962,7 @@ fn stream_vcf_contig_header_replacement(
     }
     writer.persist()?;
     if let Some(index) = index {
-        index.write_sidecar(output)?;
+        index.persist()?;
     }
     Ok(())
 }
