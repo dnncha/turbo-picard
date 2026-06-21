@@ -8929,16 +8929,21 @@ impl ValidateSamReport {
         }
     }
 
-    fn add_issue(&mut self, key: &str, detail: String) {
+    fn add_issue_with(&mut self, key: &str, detail: impl FnOnce() -> String) {
         *self.counts.entry(key.to_string()).or_default() += 1;
         if self.details.len() < self.detail_limit {
             self.details.push(ValidateSamDetail {
                 key: key.to_string(),
-                line: detail,
+                line: detail(),
             });
         } else {
             self.details_truncated = true;
         }
+    }
+
+    #[cfg(test)]
+    fn add_issue(&mut self, key: &str, detail: String) {
+        self.add_issue_with(key, || detail);
     }
 
     fn remove_ignored_key(&mut self, key: &str) {
@@ -9149,7 +9154,6 @@ fn validate_sam_record_summary_sam_line(
     let qname = fields
         .next()
         .ok_or_else(|| "malformed ValidateSamFile SAM record".to_string())?;
-    let read_name = String::from_utf8_lossy(qname).into_owned();
     let flags = parse_u16_bytes(
         fields
             .next()
@@ -9181,51 +9185,46 @@ fn validate_sam_record_summary_sam_line(
         Some(read_group) => {
             let read_group = String::from_utf8_lossy(read_group);
             if !read_groups.contains_key(read_group.as_ref()) {
-                add_validate_issue(
-                    report,
-                    "ERROR:READ_GROUP_NOT_FOUND",
+                add_validate_issue_lazy(report, "ERROR:READ_GROUP_NOT_FOUND", || {
+                    let read_name = String::from_utf8_lossy(qname);
                     format!(
                         "ERROR::READ_GROUP_NOT_FOUND:Read name {read_name}, RG ID on record not found in header"
-                    ),
-                );
+                    )
+                });
             }
         }
-        None => add_validate_issue(
-            report,
-            "WARNING:RECORD_MISSING_READ_GROUP",
+        None => add_validate_issue_lazy(report, "WARNING:RECORD_MISSING_READ_GROUP", || {
+            let read_name = String::from_utf8_lossy(qname);
             format!(
                 "WARNING::RECORD_MISSING_READ_GROUP:Read name {read_name}, A record is missing a read group"
-            ),
-        ),
+            )
+        }),
     }
 
     if rname != b"*" {
         if target_count == 0 {
-            add_validate_issue(
-                report,
-                "ERROR:MISSING_SEQUENCE_DICTIONARY",
+            add_validate_issue_lazy(report, "ERROR:MISSING_SEQUENCE_DICTIONARY", || {
+                let read_name = String::from_utf8_lossy(qname);
                 format!(
                     "ERROR::MISSING_SEQUENCE_DICTIONARY:Read name {read_name}, Reference sequence is missing from the sequence dictionary"
-                ),
-            );
+                )
+            });
         }
         if !has_nm {
-            add_validate_issue(
-                report,
-                "WARNING:MISSING_TAG_NM",
+            add_validate_issue_lazy(report, "WARNING:MISSING_TAG_NM", || {
+                let read_name = String::from_utf8_lossy(qname);
                 format!(
                     "WARNING::MISSING_TAG_NM:Record {record_number}, Read name {read_name}, NM tag (nucleotide differences) is missing"
-                ),
-            );
+                )
+            });
         }
     } else if mapq != b"0" {
-        add_validate_issue(
-            report,
-            "ERROR:INVALID_MAPPING_QUALITY",
+        add_validate_issue_lazy(report, "ERROR:INVALID_MAPPING_QUALITY", || {
+            let read_name = String::from_utf8_lossy(qname);
             format!(
                 "ERROR::INVALID_MAPPING_QUALITY:Record {record_number}, Read name {read_name}, MAPQ should be 0 for unmapped read"
-            ),
-        );
+            )
+        });
     }
     let _ = flags;
     Ok(())
@@ -9293,14 +9292,12 @@ fn validate_sam_mate_summary_sam_line(
     };
     if let Some(pending) = pending_mates.remove(&qname) {
         if !pending.is_reciprocal_with(&mate) {
-            add_validate_issue(
-                report,
-                "ERROR:MATE_NOT_FOUND",
+            add_validate_issue_lazy(report, "ERROR:MATE_NOT_FOUND", || {
                 format!(
                     "ERROR::MATE_NOT_FOUND:Read name {}, Mate not found for paired read",
                     String::from_utf8_lossy(&qname)
-                ),
-            );
+                )
+            });
         }
     } else {
         pending_mates.insert(qname, mate);
@@ -9346,14 +9343,12 @@ fn validate_sam_mate_summary(
     let mate = ValidateSamMate::from_record(record);
     if let Some(pending) = pending_mates.remove(&qname) {
         if !pending.is_reciprocal_with(&mate) {
-            add_validate_issue(
-                report,
-                "ERROR:MATE_NOT_FOUND",
+            add_validate_issue_lazy(report, "ERROR:MATE_NOT_FOUND", || {
                 format!(
                     "ERROR::MATE_NOT_FOUND:Read name {}, Mate not found for paired read",
                     validate_qname(record)
-                ),
-            );
+                )
+            });
         }
     } else {
         pending_mates.insert(qname, mate);
@@ -9368,42 +9363,37 @@ fn validate_sam_record_summary(
     references_by_tid: Option<&[Option<&[u8]>]>,
     report: &mut ValidateSamReport,
 ) -> Result<(), String> {
-    let read_name = validate_qname(record);
     match record.aux(b"RG") {
         Ok(Aux::String(read_group)) => {
             if !read_groups.contains_key(read_group) {
-                add_validate_issue(
-                    report,
-                    "ERROR:READ_GROUP_NOT_FOUND",
+                add_validate_issue_lazy(report, "ERROR:READ_GROUP_NOT_FOUND", || {
+                    let read_name = validate_qname(record);
                     format!(
                         "ERROR::READ_GROUP_NOT_FOUND:Read name {read_name}, RG ID on record not found in header"
-                    ),
-                );
+                    )
+                });
             }
         }
-        Ok(_) => add_validate_issue(
-            report,
-            "ERROR:INVALID_TAG_TYPE",
-            format!("ERROR::INVALID_TAG_TYPE:Read name {read_name}, RG tag has invalid type"),
-        ),
-        Err(_) => add_validate_issue(
-            report,
-            "WARNING:RECORD_MISSING_READ_GROUP",
+        Ok(_) => add_validate_issue_lazy(report, "ERROR:INVALID_TAG_TYPE", || {
+            let read_name = validate_qname(record);
+            format!("ERROR::INVALID_TAG_TYPE:Read name {read_name}, RG tag has invalid type")
+        }),
+        Err(_) => add_validate_issue_lazy(report, "WARNING:RECORD_MISSING_READ_GROUP", || {
+            let read_name = validate_qname(record);
             format!(
                 "WARNING::RECORD_MISSING_READ_GROUP:Read name {read_name}, A record is missing a read group"
-            ),
-        ),
+            )
+        }),
     }
 
     if !record.is_unmapped() {
         if record.tid() < 0 || record.tid() as u32 >= target_count {
-            add_validate_issue(
-                report,
-                "ERROR:MISSING_SEQUENCE_DICTIONARY",
+            add_validate_issue_lazy(report, "ERROR:MISSING_SEQUENCE_DICTIONARY", || {
+                let read_name = validate_qname(record);
                 format!(
                     "ERROR::MISSING_SEQUENCE_DICTIONARY:Read name {read_name}, Reference sequence is missing from the sequence dictionary"
-                ),
-            );
+                )
+            });
         }
         match record.aux(b"NM") {
             Ok(aux) => {
@@ -9412,33 +9402,30 @@ fn validate_sam_record_summary(
                     && let Some(expected_nm) = expected_record_nm(record, references_by_tid)?
                     && actual_nm != expected_nm
                 {
-                    add_validate_issue(
-                        report,
-                        "ERROR:INVALID_TAG_NM",
+                    add_validate_issue_lazy(report, "ERROR:INVALID_TAG_NM", || {
+                        let read_name = validate_qname(record);
                         format!(
                             "ERROR::INVALID_TAG_NM:Record {record_number}, Read name {read_name}, NM tag is incorrect"
-                        ),
-                    );
+                        )
+                    });
                 }
             }
             Err(_) => {
-                add_validate_issue(
-                    report,
-                    "WARNING:MISSING_TAG_NM",
+                add_validate_issue_lazy(report, "WARNING:MISSING_TAG_NM", || {
+                    let read_name = validate_qname(record);
                     format!(
                         "WARNING::MISSING_TAG_NM:Record {record_number}, Read name {read_name}, NM tag (nucleotide differences) is missing"
-                    ),
-                );
+                    )
+                });
             }
         }
     } else if record.mapq() != 0 {
-        add_validate_issue(
-            report,
-            "ERROR:INVALID_MAPPING_QUALITY",
+        add_validate_issue_lazy(report, "ERROR:INVALID_MAPPING_QUALITY", || {
+            let read_name = validate_qname(record);
             format!(
                 "ERROR::INVALID_MAPPING_QUALITY:Record {record_number}, Read name {read_name}, MAPQ should be 0 for unmapped read"
-            ),
-        );
+            )
+        });
     }
     Ok(())
 }
@@ -9621,7 +9608,15 @@ fn validate_qname(record: &bam::Record) -> String {
 }
 
 fn add_validate_issue(report: &mut ValidateSamReport, key: &str, detail: String) {
-    report.add_issue(key, detail);
+    report.add_issue_with(key, || detail);
+}
+
+fn add_validate_issue_lazy(
+    report: &mut ValidateSamReport,
+    key: &str,
+    detail: impl FnOnce() -> String,
+) {
+    report.add_issue_with(key, detail);
 }
 
 fn write_validate_sam_summary(
