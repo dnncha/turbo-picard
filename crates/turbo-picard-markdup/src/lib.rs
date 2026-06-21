@@ -153,29 +153,30 @@ impl FragmentDuplicateKey {
 #[derive(Debug, Clone)]
 struct DuplicateCandidate {
     record_index: usize,
-    qname_id: InternedBytesId,
-    flags: CandidateFlags,
     duplicate_score: u64,
-    optical_location_id: Option<OpticalLocationId>,
     fragment_key: FragmentDuplicateKey,
+    qname_id: InternedBytesId,
+    metadata: CandidateMetadata,
 }
 
-#[derive(Debug, Clone, Copy, Default)]
-struct CandidateFlags(u8);
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct CandidateMetadata(u32);
 
-impl CandidateFlags {
-    const PAIR: u8 = 0b0000_0001;
-    const REVERSE_STRAND: u8 = 0b0000_0010;
+impl CandidateMetadata {
+    const PAIR: u32 = 0x8000_0000;
+    const REVERSE_STRAND: u32 = 0x4000_0000;
+    const LOCATION_MASK: u32 = 0x3fff_ffff;
+    const NO_LOCATION: u32 = Self::LOCATION_MASK;
 
-    fn from_record_flags(flags: u16) -> Self {
-        let mut candidate_flags = 0;
+    fn from_record_flags_and_location(flags: u16, location: Option<OpticalLocationId>) -> Self {
+        let mut metadata = location.unwrap_or(Self::NO_LOCATION) & Self::LOCATION_MASK;
         if duplicate_candidate_is_pair(flags) {
-            candidate_flags |= Self::PAIR;
+            metadata |= Self::PAIR;
         }
         if flags & 0x10 != 0 {
-            candidate_flags |= Self::REVERSE_STRAND;
+            metadata |= Self::REVERSE_STRAND;
         }
-        Self(candidate_flags)
+        Self(metadata)
     }
 
     fn is_pair(self) -> bool {
@@ -184,6 +185,11 @@ impl CandidateFlags {
 
     fn reverse_strand(self) -> bool {
         self.0 & Self::REVERSE_STRAND != 0
+    }
+
+    fn optical_location_id(self) -> Option<OpticalLocationId> {
+        let id = self.0 & Self::LOCATION_MASK;
+        (id != Self::NO_LOCATION).then_some(id)
     }
 }
 
@@ -200,31 +206,34 @@ impl DuplicateCandidate {
         let flags = record.flags();
         let reference_id = record.tid();
         let five_prime_position = unclipped_record_position(record);
-        let candidate_flags = CandidateFlags::from_record_flags(flags);
+        let optical_location_id = parse_optical_location
+            .then(|| parse_read_location(record.qname()))
+            .flatten()
+            .map(|location| optical_locations.push(location));
         Self {
             record_index,
-            qname_id,
-            flags: candidate_flags,
             duplicate_score: quality_score(record),
-            optical_location_id: parse_optical_location
-                .then(|| parse_read_location(record.qname()))
-                .flatten()
-                .map(|location| optical_locations.push(location)),
             fragment_key: FragmentDuplicateKey {
                 library_id,
                 reference_id,
                 position: five_prime_position,
                 barcode_id,
             },
+            qname_id,
+            metadata: CandidateMetadata::from_record_flags_and_location(flags, optical_location_id),
         }
     }
 
     fn is_pair(&self) -> bool {
-        self.flags.is_pair()
+        self.metadata.is_pair()
     }
 
     fn reverse_strand(&self) -> bool {
-        self.flags.reverse_strand()
+        self.metadata.reverse_strand()
+    }
+
+    fn optical_location_id(&self) -> Option<OpticalLocationId> {
+        self.metadata.optical_location_id()
     }
 
     fn library_id(&self) -> LibraryId {
@@ -425,6 +434,15 @@ impl OpticalLocations {
     fn push(&mut self, location: ReadLocation) -> OpticalLocationId {
         let id = OpticalLocationId::try_from(self.values.len())
             .expect("optical location id fits in u32");
+        assert_ne!(
+            id,
+            CandidateMetadata::NO_LOCATION,
+            "optical location id reserves the packed absent sentinel"
+        );
+        assert!(
+            id < CandidateMetadata::NO_LOCATION,
+            "optical location id must fit in the packed candidate metadata"
+        );
         self.values.push(location);
         id
     }
@@ -1184,7 +1202,7 @@ fn apply_pair_duplicate_group_members(
     let representative_location = (state.config.read_name_regex.as_deref() != Some("null"))
         .then(|| {
             state.candidates[stats.representative_candidate_index]
-                .optical_location_id
+                .optical_location_id()
                 .and_then(|id| state.optical_locations.get(id))
         })
         .flatten();
@@ -1208,7 +1226,7 @@ fn apply_pair_duplicate_group_members(
                     .decisions
                     .mark_optical_duplicate(candidate.record_index);
             } else if let Some(location) = candidate
-                .optical_location_id
+                .optical_location_id()
                 .and_then(|id| state.optical_locations.get(id))
                 && representative_location.is_within(&location, pixel_distance)
             {
@@ -3400,7 +3418,7 @@ mod tests {
 
         assert_eq!(
             parsed
-                .optical_location_id
+                .optical_location_id()
                 .and_then(|id| parsed_locations.get(id)),
             Some(ReadLocation {
                 tile: 2,
@@ -3408,7 +3426,7 @@ mod tests {
                 y: 4,
             })
         );
-        assert_eq!(skipped.optical_location_id, None);
+        assert_eq!(skipped.optical_location_id(), None);
         assert!(skipped_locations.values.is_empty());
     }
 
@@ -4069,7 +4087,7 @@ mod tests {
 
         assert_eq!(
             candidates[0]
-                .optical_location_id
+                .optical_location_id()
                 .and_then(|id| optical_locations.get(id)),
             Some(ReadLocation {
                 tile: 1101,
@@ -4449,6 +4467,6 @@ mod tests {
     #[test]
     fn duplicate_candidate_layout_stays_compact() {
         assert_eq!(std::mem::size_of::<FragmentDuplicateKey>(), 24);
-        assert_eq!(std::mem::size_of::<DuplicateCandidate>(), 56);
+        assert_eq!(std::mem::size_of::<DuplicateCandidate>(), 48);
     }
 }
