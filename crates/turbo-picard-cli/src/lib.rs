@@ -1820,6 +1820,9 @@ enum SortOrder {
     Unsorted,
 }
 
+type IntervalRange = (u64, u64);
+type IntervalFilter = BTreeMap<i32, Vec<IntervalRange>>;
+
 fn run_sortsam(args: &[String]) -> Result<(), String> {
     let args =
         normalize_picard_args_for_command("SortSam", args).map_err(|error| error.to_string())?;
@@ -5114,24 +5117,26 @@ fn run_intervallisttools(args: &[String]) -> Result<(), String> {
     fs::write(output, text).map_err(|error| error.to_string())
 }
 
-fn revertsam_can_use_sam_text_fast_path(
-    input: &str,
-    output: &str,
+struct RevertSamFastPathOptions<'a> {
+    input: &'a str,
+    output: &'a str,
     compression_level: Option<u32>,
     restore_original_qualities: bool,
     remove_alignment_information: bool,
-    attributes_to_clear: &[[u8; 2]],
-    attributes_to_reverse: &[[u8; 2]],
-    attributes_to_reverse_complement: &[[u8; 2]],
-) -> bool {
-    has_sam_extension(input)
-        && (has_sam_extension(output) || has_extension(output, "bam"))
-        && compression_level.is_none()
-        && restore_original_qualities
-        && remove_alignment_information
-        && attributes_to_clear.is_empty()
-        && attributes_to_reverse.is_empty()
-        && attributes_to_reverse_complement.is_empty()
+    attributes_to_clear: &'a [[u8; 2]],
+    attributes_to_reverse: &'a [[u8; 2]],
+    attributes_to_reverse_complement: &'a [[u8; 2]],
+}
+
+fn revertsam_can_use_sam_text_fast_path(options: &RevertSamFastPathOptions<'_>) -> bool {
+    has_sam_extension(options.input)
+        && (has_sam_extension(options.output) || has_extension(options.output, "bam"))
+        && options.compression_level.is_none()
+        && options.restore_original_qualities
+        && options.remove_alignment_information
+        && options.attributes_to_clear.is_empty()
+        && options.attributes_to_reverse.is_empty()
+        && options.attributes_to_reverse_complement.is_empty()
 }
 
 #[derive(Debug)]
@@ -5286,31 +5291,33 @@ fn write_revertsam_sam_text_header(
     Ok(())
 }
 
-fn run_revertsam_sam_text_to_bam(
-    input: &str,
-    output: &str,
+struct RevertSamTextToBamOptions<'a> {
+    input: &'a str,
+    output: &'a str,
     output_format: bam::Format,
     compression_level: Option<u32>,
-    reference: Option<&str>,
+    reference: Option<&'a str>,
     remove_duplicate_information: bool,
     restore_hardclips: bool,
     sort_order: SortOrder,
     create_md5_file: bool,
     create_index: bool,
-) -> Result<(), String> {
+}
+
+fn run_revertsam_sam_text_to_bam(options: RevertSamTextToBamOptions<'_>) -> Result<(), String> {
     let (header_lines, records) = collect_revertsam_sam_text_records(
-        input,
-        remove_duplicate_information,
-        restore_hardclips,
-        sort_order,
+        options.input,
+        options.remove_duplicate_information,
+        options.restore_hardclips,
+        options.sort_order,
     )?;
-    let header = reverted_header_from_sam_text(&header_lines, true, sort_order)?;
+    let header = reverted_header_from_sam_text(&header_lines, true, options.sort_order)?;
     let mut writer = bam_writer_for_path_with_reference(
-        output,
+        options.output,
         &header,
-        output_format,
-        reference,
-        compression_level,
+        options.output_format,
+        options.reference,
+        options.compression_level,
     )?;
     for record in records {
         writer
@@ -5319,9 +5326,9 @@ fn run_revertsam_sam_text_to_bam(
     }
     drop(writer);
     write_requested_sidecars(
-        output,
-        create_md5_file,
-        create_index && sort_order == SortOrder::Coordinate,
+        options.output,
+        options.create_md5_file,
+        options.create_index && options.sort_order == SortOrder::Coordinate,
     )
 }
 
@@ -5599,16 +5606,16 @@ fn run_revertsam(args: &[String]) -> Result<(), String> {
     let attributes_to_clear = attributes_to_clear_for_revertsam(&args)?;
     let reference = picard_reference(&args)?;
 
-    if revertsam_can_use_sam_text_fast_path(
-        &input,
-        &output,
+    if revertsam_can_use_sam_text_fast_path(&RevertSamFastPathOptions {
+        input: &input,
+        output: &output,
         compression_level,
         restore_original_qualities,
         remove_alignment_information,
-        &attributes_to_clear,
-        &attributes_to_reverse,
-        &attributes_to_reverse_complement,
-    ) {
+        attributes_to_clear: &attributes_to_clear,
+        attributes_to_reverse: &attributes_to_reverse,
+        attributes_to_reverse_complement: &attributes_to_reverse_complement,
+    }) {
         if has_sam_extension(&output) {
             return run_revertsam_sam_text(
                 &input,
@@ -5619,18 +5626,18 @@ fn run_revertsam(args: &[String]) -> Result<(), String> {
                 sort_order,
             );
         }
-        return run_revertsam_sam_text_to_bam(
-            &input,
-            &output,
+        return run_revertsam_sam_text_to_bam(RevertSamTextToBamOptions {
+            input: &input,
+            output: &output,
             output_format,
             compression_level,
-            reference.as_deref(),
+            reference: reference.as_deref(),
             remove_duplicate_information,
             restore_hardclips,
             sort_order,
             create_md5_file,
             create_index,
-        );
+        });
     }
 
     let mut reader = open_bam_reader_with_reference(&input, reference.as_deref())?;
@@ -5983,12 +5990,12 @@ fn run_viewsam_records_only(
     compression_level: Option<u32>,
     alignment_status: &str,
     pf_status: &str,
-    interval_filter: Option<&BTreeMap<i32, Vec<(u64, u64)>>>,
+    interval_filter: Option<&IntervalFilter>,
 ) -> Result<(), String> {
-    if let Some(output) = output {
-        if !has_sam_extension(output) {
-            return Err("unsupported ViewSam RECORDS_ONLY=true with non-SAM OUTPUT".to_string());
-        }
+    if let Some(output) = output
+        && !has_sam_extension(output)
+    {
+        return Err("unsupported ViewSam RECORDS_ONLY=true with non-SAM OUTPUT".to_string());
     }
 
     let temp_path = env::temp_dir().join(format!(
@@ -6218,10 +6225,11 @@ fn run_gathervcfs(args: &[String]) -> Result<(), String> {
         }
     }
     writer.persist()?;
-    if create_index && has_extension(&output, "vcf") {
-        if let Some(index) = index {
-            index.write_sidecar(&output)?;
-        }
+    if create_index
+        && has_extension(&output, "vcf")
+        && let Some(index) = index
+    {
+        index.write_sidecar(&output)?;
     }
     Ok(())
 }
@@ -6453,10 +6461,10 @@ fn reject_unsupported_viewsam_args(args: &BTreeMap<String, Vec<String>>) -> Resu
     if header_only && records_only {
         return Err("unsupported ViewSam HEADER_ONLY=true with RECORDS_ONLY=true".to_string());
     }
-    if let Some(level) = optional_u32(args, "COMPRESSION_LEVEL")? {
-        if level > 9 {
-            return Err(format!("unsupported ViewSam COMPRESSION_LEVEL: {level}"));
-        }
+    if let Some(level) = optional_u32(args, "COMPRESSION_LEVEL")?
+        && level > 9
+    {
+        return Err(format!("unsupported ViewSam COMPRESSION_LEVEL: {level}"));
     }
     Ok(())
 }
@@ -6465,7 +6473,7 @@ fn viewsam_record_matches(
     record: &bam::Record,
     alignment_status: &str,
     pf_status: &str,
-    interval_filter: Option<&BTreeMap<i32, Vec<(u64, u64)>>>,
+    interval_filter: Option<&IntervalFilter>,
 ) -> Result<bool, String> {
     let alignment_matches = match alignment_status {
         "All" => true,
@@ -6485,7 +6493,7 @@ fn viewsam_record_matches(
 fn viewsam_interval_filter(
     interval_paths: Option<&Vec<String>>,
     header: &bam::HeaderView,
-) -> Result<Option<BTreeMap<i32, Vec<(u64, u64)>>>, String> {
+) -> Result<Option<IntervalFilter>, String> {
     let Some(interval_paths) = interval_paths else {
         return Ok(None);
     };
@@ -6495,7 +6503,7 @@ fn viewsam_interval_filter(
         .enumerate()
         .map(|(index, name)| (String::from_utf8_lossy(name).to_string(), index))
         .collect::<BTreeMap<_, _>>();
-    let mut intervals_by_tid = BTreeMap::<i32, Vec<(u64, u64)>>::new();
+    let mut intervals_by_tid = IntervalFilter::new();
     for interval_path in interval_paths {
         let text = read_text_or_gzip(interval_path)?;
         for interval in read_interval_list_intervals(&text, &contig_order)? {
@@ -6511,7 +6519,7 @@ fn viewsam_interval_filter(
 fn merge_interval_filter(
     interval_paths: Option<&Vec<String>>,
     target_names: &[String],
-) -> Result<Option<BTreeMap<i32, Vec<(u64, u64)>>>, String> {
+) -> Result<Option<IntervalFilter>, String> {
     let Some(interval_paths) = interval_paths else {
         return Ok(None);
     };
@@ -6520,7 +6528,7 @@ fn merge_interval_filter(
         .enumerate()
         .map(|(index, name)| (name.clone(), index))
         .collect::<BTreeMap<_, _>>();
-    let mut intervals_by_tid = BTreeMap::<i32, Vec<(u64, u64)>>::new();
+    let mut intervals_by_tid = IntervalFilter::new();
     for interval_path in interval_paths {
         let text = read_text_or_gzip(interval_path)?;
         for interval in read_interval_list_intervals(&text, &contig_order)? {
@@ -6535,7 +6543,7 @@ fn merge_interval_filter(
 
 fn record_overlaps_intervals(
     record: &bam::Record,
-    interval_filter: Option<&BTreeMap<i32, Vec<(u64, u64)>>>,
+    interval_filter: Option<&IntervalFilter>,
 ) -> bool {
     let Some(interval_filter) = interval_filter else {
         return true;
@@ -6590,12 +6598,12 @@ fn reject_unsupported_updatevcfsequencedictionary_args(
     optional_u32(args, "MAX_RECORDS_IN_RAM")?;
     optional_bool(args, "USE_JDK_DEFLATER")?;
     optional_bool(args, "USE_JDK_INFLATER")?;
-    if let Some(level) = optional_u32(args, "COMPRESSION_LEVEL")? {
-        if level > 9 {
-            return Err(format!(
-                "unsupported UpdateVcfSequenceDictionary COMPRESSION_LEVEL: {level}"
-            ));
-        }
+    if let Some(level) = optional_u32(args, "COMPRESSION_LEVEL")?
+        && level > 9
+    {
+        return Err(format!(
+            "unsupported UpdateVcfSequenceDictionary COMPRESSION_LEVEL: {level}"
+        ));
     }
     Ok(())
 }
@@ -6634,12 +6642,12 @@ fn reject_unsupported_liftovervcf_args(args: &BTreeMap<String, Vec<String>>) -> 
     optional_u32(args, "MAX_RECORDS_IN_RAM")?;
     optional_bool(args, "USE_JDK_DEFLATER")?;
     optional_bool(args, "USE_JDK_INFLATER")?;
-    if let Some(level) = optional_u32(args, "COMPRESSION_LEVEL")? {
-        if level > 9 {
-            return Err(format!(
-                "unsupported LiftoverVcf COMPRESSION_LEVEL: {level}"
-            ));
-        }
+    if let Some(level) = optional_u32(args, "COMPRESSION_LEVEL")?
+        && level > 9
+    {
+        return Err(format!(
+            "unsupported LiftoverVcf COMPRESSION_LEVEL: {level}"
+        ));
     }
     Ok(())
 }
@@ -6675,10 +6683,10 @@ fn reject_unsupported_gathervcfs_args(args: &BTreeMap<String, Vec<String>>) -> R
     optional_u32(args, "MAX_RECORDS_IN_RAM")?;
     optional_bool(args, "USE_JDK_DEFLATER")?;
     optional_bool(args, "USE_JDK_INFLATER")?;
-    if let Some(level) = optional_u32(args, "COMPRESSION_LEVEL")? {
-        if level > 9 {
-            return Err(format!("unsupported GatherVcfs COMPRESSION_LEVEL: {level}"));
-        }
+    if let Some(level) = optional_u32(args, "COMPRESSION_LEVEL")?
+        && level > 9
+    {
+        return Err(format!("unsupported GatherVcfs COMPRESSION_LEVEL: {level}"));
     }
     Ok(())
 }
@@ -6709,10 +6717,10 @@ fn reject_unsupported_sortvcf_args(args: &BTreeMap<String, Vec<String>>) -> Resu
     optional_scalar(args, "VALIDATION_STRINGENCY")?;
     optional_scalar(args, "VERBOSITY")?;
     optional_bool(args, "QUIET")?;
-    if let Some(level) = optional_u32(args, "COMPRESSION_LEVEL")? {
-        if level > 9 {
-            return Err(format!("unsupported SortVcf COMPRESSION_LEVEL: {level}"));
-        }
+    if let Some(level) = optional_u32(args, "COMPRESSION_LEVEL")?
+        && level > 9
+    {
+        return Err(format!("unsupported SortVcf COMPRESSION_LEVEL: {level}"));
     }
     Ok(())
 }
@@ -6743,10 +6751,10 @@ fn reject_unsupported_mergevcfs_args(args: &BTreeMap<String, Vec<String>>) -> Re
     optional_scalar(args, "VALIDATION_STRINGENCY")?;
     optional_scalar(args, "VERBOSITY")?;
     optional_bool(args, "QUIET")?;
-    if let Some(level) = optional_u32(args, "COMPRESSION_LEVEL")? {
-        if level > 9 {
-            return Err(format!("unsupported MergeVcfs COMPRESSION_LEVEL: {level}"));
-        }
+    if let Some(level) = optional_u32(args, "COMPRESSION_LEVEL")?
+        && level > 9
+    {
+        return Err(format!("unsupported MergeVcfs COMPRESSION_LEVEL: {level}"));
     }
     Ok(())
 }
@@ -7171,8 +7179,8 @@ fn stream_sorted_mergevcfs(
     }
 
     let mut heap = BinaryHeap::new();
-    for input_index in 0..streams.len() {
-        match next_streaming_vcf_record(&mut streams[input_index], contig_order)? {
+    for (input_index, stream) in streams.iter_mut().enumerate() {
+        match next_streaming_vcf_record(stream, contig_order)? {
             StreamingVcfRecord::Record(record, key) => {
                 heap.push(MergeVcfHeapItem {
                     key,
@@ -7639,7 +7647,7 @@ fn write_liftover_output_header(
         writer.write_line(line, false, index.as_deref_mut())?;
     }
     writer.write_line(reference_line, false, index.as_deref_mut())?;
-    writer.write_line(&header.column_header, false, index.as_deref_mut())
+    writer.write_line(&header.column_header, false, index)
 }
 
 fn write_liftover_reject_header(
@@ -7847,12 +7855,12 @@ fn reject_unsupported_replacesamheader_args(
     optional_u32(args, "MAX_RECORDS_IN_RAM")?;
     optional_bool(args, "USE_JDK_DEFLATER")?;
     optional_bool(args, "USE_JDK_INFLATER")?;
-    if let Some(level) = optional_u32(args, "COMPRESSION_LEVEL")? {
-        if level > 9 {
-            return Err(format!(
-                "unsupported ReplaceSamHeader COMPRESSION_LEVEL: {level}"
-            ));
-        }
+    if let Some(level) = optional_u32(args, "COMPRESSION_LEVEL")?
+        && level > 9
+    {
+        return Err(format!(
+            "unsupported ReplaceSamHeader COMPRESSION_LEVEL: {level}"
+        ));
     }
     Ok(())
 }
@@ -7897,12 +7905,12 @@ fn reject_unsupported_createsequencedictionary_args(
     optional_u32(args, "NUM_SEQUENCES")?;
     optional_bool(args, "CREATE_INDEX")?;
     optional_bool(args, "CREATE_MD5_FILE")?;
-    if let Some(level) = optional_u32(args, "COMPRESSION_LEVEL")? {
-        if level > 9 {
-            return Err(format!(
-                "unsupported CreateSequenceDictionary COMPRESSION_LEVEL: {level}"
-            ));
-        }
+    if let Some(level) = optional_u32(args, "COMPRESSION_LEVEL")?
+        && level > 9
+    {
+        return Err(format!(
+            "unsupported CreateSequenceDictionary COMPRESSION_LEVEL: {level}"
+        ));
     }
     optional_u32(args, "MAX_RECORDS_IN_RAM")?;
     optional_scalar(args, "TMP_DIR")?;
@@ -7944,12 +7952,12 @@ fn reject_unsupported_normalizefasta_args(
     optional_scalar(args, "REFERENCE_SEQUENCE")?;
     optional_bool(args, "CREATE_INDEX")?;
     optional_bool(args, "CREATE_MD5_FILE")?;
-    if let Some(level) = optional_u32(args, "COMPRESSION_LEVEL")? {
-        if level > 9 {
-            return Err(format!(
-                "unsupported NormalizeFasta COMPRESSION_LEVEL: {level}"
-            ));
-        }
+    if let Some(level) = optional_u32(args, "COMPRESSION_LEVEL")?
+        && level > 9
+    {
+        return Err(format!(
+            "unsupported NormalizeFasta COMPRESSION_LEVEL: {level}"
+        ));
     }
     optional_u32(args, "MAX_RECORDS_IN_RAM")?;
     optional_scalar(args, "TMP_DIR")?;
@@ -7996,12 +8004,12 @@ fn reject_unsupported_bedtointervallist_args(
     optional_scalar(args, "REFERENCE_SEQUENCE")?;
     optional_bool(args, "CREATE_INDEX")?;
     optional_bool(args, "CREATE_MD5_FILE")?;
-    if let Some(level) = optional_u32(args, "COMPRESSION_LEVEL")? {
-        if level > 9 {
-            return Err(format!(
-                "unsupported BedToIntervalList COMPRESSION_LEVEL: {level}"
-            ));
-        }
+    if let Some(level) = optional_u32(args, "COMPRESSION_LEVEL")?
+        && level > 9
+    {
+        return Err(format!(
+            "unsupported BedToIntervalList COMPRESSION_LEVEL: {level}"
+        ));
     }
     optional_u32(args, "MAX_RECORDS_IN_RAM")?;
     optional_scalar(args, "TMP_DIR")?;
@@ -8041,10 +8049,10 @@ fn reject_unsupported_intervallisttools_args(
             return Err(format!("unsupported IntervalListTools argument: {key}"));
         }
     }
-    if let Some(action) = optional_scalar(args, "ACTION")? {
-        if action != "CONCAT" {
-            return Err(format!("unsupported IntervalListTools ACTION={action}"));
-        }
+    if let Some(action) = optional_scalar(args, "ACTION")?
+        && action != "CONCAT"
+    {
+        return Err(format!("unsupported IntervalListTools ACTION={action}"));
     }
     optional_bool(args, "SORT")?;
     optional_bool(args, "UNIQUE")?;
@@ -8055,12 +8063,12 @@ fn reject_unsupported_intervallisttools_args(
     optional_scalar(args, "VALIDATION_STRINGENCY")?;
     optional_scalar(args, "VERBOSITY")?;
     optional_bool(args, "QUIET")?;
-    if let Some(level) = optional_u32(args, "COMPRESSION_LEVEL")? {
-        if level > 9 {
-            return Err(format!(
-                "unsupported IntervalListTools COMPRESSION_LEVEL: {level}"
-            ));
-        }
+    if let Some(level) = optional_u32(args, "COMPRESSION_LEVEL")?
+        && level > 9
+    {
+        return Err(format!(
+            "unsupported IntervalListTools COMPRESSION_LEVEL: {level}"
+        ));
     }
     Ok(())
 }
@@ -8108,10 +8116,12 @@ fn reject_unsupported_revertsam_args(args: &BTreeMap<String, Vec<String>>) -> Re
     optional_bool(args, "RESTORE_ORIGINAL_QUALITIES")?;
     let explicit_sort_order = optional_scalar(args, "SORT_ORDER")?;
     optional_bool(args, "CREATE_INDEX")?;
-    if let Some(sort_order) = explicit_sort_order {
-        if sort_order != "queryname" && sort_order != "coordinate" && sort_order != "unsorted" {
-            return Err(format!("unsupported RevertSam SORT_ORDER={sort_order}"));
-        }
+    if let Some(sort_order) = explicit_sort_order
+        && sort_order != "queryname"
+        && sort_order != "coordinate"
+        && sort_order != "unsorted"
+    {
+        return Err(format!("unsupported RevertSam SORT_ORDER={sort_order}"));
     }
     let _ = attributes_to_clear_for_revertsam(args)?;
     let _ = attributes_for_revertsam(args, "ATTRIBUTE_TO_REVERSE")?;
@@ -8124,10 +8134,10 @@ fn reject_unsupported_revertsam_args(args: &BTreeMap<String, Vec<String>>) -> Re
     optional_u32(args, "MAX_RECORDS_IN_RAM")?;
     optional_bool(args, "USE_JDK_DEFLATER")?;
     optional_bool(args, "USE_JDK_INFLATER")?;
-    if let Some(level) = optional_u32(args, "COMPRESSION_LEVEL")? {
-        if level > 9 {
-            return Err(format!("unsupported RevertSam COMPRESSION_LEVEL: {level}"));
-        }
+    if let Some(level) = optional_u32(args, "COMPRESSION_LEVEL")?
+        && level > 9
+    {
+        return Err(format!("unsupported RevertSam COMPRESSION_LEVEL: {level}"));
     }
     Ok(())
 }
@@ -8191,12 +8201,12 @@ fn reject_unsupported_setnmmdanduqtags_args(
     optional_scalar(args, "VALIDATION_STRINGENCY")?;
     optional_scalar(args, "VERBOSITY")?;
     optional_bool(args, "QUIET")?;
-    if let Some(level) = optional_u32(args, "COMPRESSION_LEVEL")? {
-        if level > 9 {
-            return Err(format!(
-                "unsupported SetNmMdAndUqTags COMPRESSION_LEVEL: {level}"
-            ));
-        }
+    if let Some(level) = optional_u32(args, "COMPRESSION_LEVEL")?
+        && level > 9
+    {
+        return Err(format!(
+            "unsupported SetNmMdAndUqTags COMPRESSION_LEVEL: {level}"
+        ));
     }
     Ok(())
 }
@@ -8238,12 +8248,12 @@ fn reject_unsupported_validatesamfile_args(
     optional_u32(args, "MAX_RECORDS_IN_RAM")?;
     optional_bool(args, "USE_JDK_DEFLATER")?;
     optional_bool(args, "USE_JDK_INFLATER")?;
-    if let Some(level) = optional_u32(args, "COMPRESSION_LEVEL")? {
-        if level > 9 {
-            return Err(format!(
-                "unsupported ValidateSamFile COMPRESSION_LEVEL: {level}"
-            ));
-        }
+    if let Some(level) = optional_u32(args, "COMPRESSION_LEVEL")?
+        && level > 9
+    {
+        return Err(format!(
+            "unsupported ValidateSamFile COMPRESSION_LEVEL: {level}"
+        ));
     }
     optional_scalar(args, "VALIDATION_STRINGENCY")?;
     optional_scalar(args, "VERBOSITY")?;
@@ -18574,7 +18584,7 @@ fn write_merge_records_bounded(
 
 struct MergeRecordWriteOptions<'a> {
     reference: Option<&'a str>,
-    interval_filter: Option<&'a BTreeMap<i32, Vec<(u64, u64)>>>,
+    interval_filter: Option<&'a IntervalFilter>,
     sort_order: SortOrder,
     tmp_dir: &'a Path,
     max_records_in_ram: usize,
@@ -18898,7 +18908,7 @@ fn write_kway_merged_records(
     input_plans: &[MergeInputPlan],
     sort_order: SortOrder,
     reference: Option<&str>,
-    interval_filter: Option<&BTreeMap<i32, Vec<(u64, u64)>>>,
+    interval_filter: Option<&IntervalFilter>,
 ) -> Result<(), String> {
     let reader_threads =
         turbo_picard_core::bgzf_threads::bgzf_reader_threads_per_input(input_plans.len())
@@ -18955,7 +18965,7 @@ fn write_kway_merged_records(
 fn read_next_merge_record(
     reader: &mut bam::Reader,
     read_group_renames: &BTreeMap<String, String>,
-    interval_filter: Option<&BTreeMap<i32, Vec<(u64, u64)>>>,
+    interval_filter: Option<&IntervalFilter>,
 ) -> Result<Option<bam::Record>, String> {
     loop {
         let mut record = bam::Record::new();
