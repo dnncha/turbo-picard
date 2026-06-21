@@ -2193,6 +2193,61 @@ fn samtofastq_bam_queryname_groups_stream_across_many_prior_qnames() {
 }
 
 #[test]
+fn samtofastq_bam_queryname_group_streams_repeated_pairs() {
+    let tempdir = tempfile::tempdir().expect("tempdir exists");
+    let input_sam = tempdir.path().join("input.sam");
+    let input_bam = tempdir.path().join("input.bam");
+    let read1_fastq = tempdir.path().join("read1.fastq");
+    let read2_fastq = tempdir.path().join("read2.fastq");
+    let mut sam = String::from("@HD\tVN:1.6\tSO:queryname\n@SQ\tSN:chr1\tLN:1000\n");
+    for index in 0..64 {
+        let pos = index + 1;
+        sam.push_str(&format!(
+            "repeat\t67\tchr1\t{pos}\t60\t4M\t=\t{mate}\t0\tACGT\tFFFF\n",
+            mate = pos + 1
+        ));
+        sam.push_str(&format!(
+            "repeat\t131\tchr1\t{pos}\t60\t4M\t=\t{mate}\t0\tTGCA\tHHHH\n",
+            mate = pos + 1
+        ));
+    }
+    fs::write(&input_sam, sam).expect("input SAM is written");
+
+    Command::cargo_bin("picard")
+        .expect("binary exists")
+        .args([
+            "SortSam",
+            &format!("I={}", input_sam.display()),
+            &format!("O={}", input_bam.display()),
+            "SO=queryname",
+            "VALIDATION_STRINGENCY=SILENT",
+            "QUIET=true",
+        ])
+        .assert()
+        .success();
+
+    Command::cargo_bin("picard")
+        .expect("binary exists")
+        .args([
+            "SamToFastq",
+            &format!("I={}", input_bam.display()),
+            &format!("FASTQ={}", read1_fastq.display()),
+            &format!("SECOND_END_FASTQ={}", read2_fastq.display()),
+            "VALIDATION_STRINGENCY=SILENT",
+            "QUIET=true",
+        ])
+        .assert()
+        .success();
+
+    let read1 = fs::read_to_string(&read1_fastq).expect("read1 FASTQ exists");
+    let read2 = fs::read_to_string(&read2_fastq).expect("read2 FASTQ exists");
+    assert_eq!(read1.matches("@repeat/1\n").count(), 64);
+    assert_eq!(read2.matches("@repeat/2\n").count(), 64);
+    assert_eq!(read1.lines().count(), 64 * 4);
+    assert_eq!(read2.lines().count(), 64 * 4);
+}
+
+#[test]
 fn fastqtosam_writes_unmapped_paired_sam_with_read_group() {
     let tempdir = tempfile::tempdir().expect("tempdir exists");
     let r1 = tempdir.path().join("r1.fastq");

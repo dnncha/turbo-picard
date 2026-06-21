@@ -2661,7 +2661,7 @@ fn write_samtofastq_bam_queryname_groups(
     transform: &SamToFastqTransform,
 ) -> Result<(), String> {
     let mut current_qname = None::<Vec<u8>>;
-    let mut group = Vec::<bam::Record>::new();
+    let mut pending_mate = None::<bam::Record>;
 
     for record in reader.records() {
         let record = record.map_err(|error| error.to_string())?;
@@ -2677,48 +2677,12 @@ fn write_samtofastq_bam_queryname_groups(
             .as_deref()
             .is_some_and(|current| current != qname)
         {
-            write_samtofastq_bam_queryname_group(
-                &mut group,
-                first_writer,
-                second_writer,
-                unpaired_writer,
-                per_rg_outputs,
-                interleave,
-                re_reverse,
-                transform,
-            )?;
+            pending_mate = None;
             current_qname = Some(qname.to_vec());
         } else if current_qname.is_none() {
             current_qname = Some(qname.to_vec());
         }
-        group.push(record);
-    }
 
-    write_samtofastq_bam_queryname_group(
-        &mut group,
-        first_writer,
-        second_writer,
-        unpaired_writer,
-        per_rg_outputs,
-        interleave,
-        re_reverse,
-        transform,
-    )
-}
-
-#[allow(clippy::too_many_arguments)]
-fn write_samtofastq_bam_queryname_group(
-    group: &mut Vec<bam::Record>,
-    first_writer: &mut Option<Box<dyn Write>>,
-    second_writer: &mut Option<Box<dyn Write>>,
-    unpaired_writer: &mut Option<Box<dyn Write>>,
-    per_rg_outputs: &mut Option<SamToFastqPerRgOutputs>,
-    interleave: bool,
-    re_reverse: bool,
-    transform: &SamToFastqTransform,
-) -> Result<(), String> {
-    let mut pending_mate = None::<bam::Record>;
-    for record in group.drain(..) {
         ensure_samtofastq_paired_output(
             &record,
             interleave,
@@ -2750,6 +2714,7 @@ fn write_samtofastq_bam_queryname_group(
             )?;
         }
     }
+
     Ok(())
 }
 
