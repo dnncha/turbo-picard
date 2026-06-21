@@ -38,6 +38,7 @@ fn marks_duplicates_on_cram_input_and_output() {
         output: output_cram.display().to_string(),
         metrics_file: metrics.display().to_string(),
         max_records_in_ram: 500_000,
+        mate_cache_records: 500_000,
         tmp_dirs: Vec::new(),
         remove_duplicates: false,
         remove_sequencing_duplicates: false,

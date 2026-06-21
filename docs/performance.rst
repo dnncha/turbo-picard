@@ -70,7 +70,8 @@ explicit sorter-run override when profiling supports a different buffer size.
 ``doctor`` reports both resolved values as ``resource_plan_memory_budget_bytes``
 and ``resource_plan_sorter_max_bytes_in_ram``. It also reports
 ``resource_plan_mate_cache_records``; set ``TURBO_PICARD_MATE_CACHE_RECORDS``
-to make mate-cache sizing assumptions explicit in diagnostics.
+to cap MarkDuplicates displaced-mate caching independently from sorter run
+sizing when profiling supports a different fallback threshold.
 
 ``SortSam`` streams BAM/CRAM inputs without loading them into memory when the
 ``@HD`` sort order already matches the requested ``SORT_ORDER``. Inputs with

@@ -52,10 +52,11 @@ vectors, and duplicate-group maps for the input.
 - Pair collation now consumes adjacent qname runs before using the displaced
   qname map, preserving the previous map-only pairing order while avoiding hash
   lookups for queryname-grouped candidates.
-- `MAX_RECORDS_IN_RAM` is now retained in `MarkDuplicatesConfig` and caps the
-  displaced-pair cache. When unresolved distant mates exceed that cap, the
-  native engine falls back to compact qname-id collation instead of silently
-  growing the cache without bound.
+- `MAX_RECORDS_IN_RAM` is now retained in `MarkDuplicatesConfig` and defaults
+  the displaced-pair cache limit. When unresolved distant mates exceed that cap,
+  the native engine falls back to compact qname-id collation instead of silently
+  growing the cache without bound. Phase 8 adds
+  `TURBO_PICARD_MATE_CACHE_RECORDS` for overriding just this cache threshold.
 - `TMP_DIR` is now retained in `MarkDuplicatesConfig` and used by the native
   MarkDuplicates duplicate-key sorter.
 - Pair and fragment duplicate key rows now sort through the shared external

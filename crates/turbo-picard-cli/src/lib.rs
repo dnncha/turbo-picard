@@ -1784,11 +1784,33 @@ Supported options:
 fn run_markduplicates(args: &[String]) -> Result<(), String> {
     let picard_args = normalize_picard_args_for_command("MarkDuplicates", args)
         .map_err(|error| error.to_string())?;
-    let config =
+    let mut config =
         MarkDuplicatesConfig::try_from_args(&picard_args).map_err(|error| error.to_string())?;
+    apply_markduplicates_resource_plan(
+        &mut config,
+        resource_plan::resolve_current(),
+        markduplicates_mate_cache_override_present(),
+    );
 
     turbo_picard_markdup::run(&config).map_err(|error| error.to_string())?;
     Ok(())
+}
+
+fn apply_markduplicates_resource_plan(
+    config: &mut MarkDuplicatesConfig,
+    plan: resource_plan::ResourcePlan,
+    mate_cache_override_present: bool,
+) {
+    if mate_cache_override_present {
+        config.mate_cache_records = plan.mate_cache_records.max(1);
+    }
+}
+
+fn markduplicates_mate_cache_override_present() -> bool {
+    env::var("TURBO_PICARD_MATE_CACHE_RECORDS")
+        .ok()
+        .and_then(|value| value.trim().parse::<usize>().ok())
+        .is_some_and(|value| value > 0)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -19243,6 +19265,61 @@ mod tests {
             10,
             estimated
         ));
+    }
+
+    #[test]
+    fn markduplicates_resource_plan_overrides_only_explicit_mate_cache_budget() {
+        let mut config = MarkDuplicatesConfig {
+            input: String::new(),
+            inputs: Vec::new(),
+            output: String::new(),
+            metrics_file: String::new(),
+            max_records_in_ram: 17,
+            mate_cache_records: 17,
+            tmp_dirs: Vec::new(),
+            remove_duplicates: false,
+            remove_sequencing_duplicates: false,
+            assume_sorted: true,
+            assume_sort_order: None,
+            validation_stringency: None,
+            quiet: true,
+            create_index: false,
+            create_md5_file: false,
+            add_pg_tag_to_reads: true,
+            tag_duplicate_set_members: false,
+            duplicate_scoring_strategy: None,
+            read_name_regex: None,
+            tagging_policy: None,
+            barcode_tag: None,
+            read_one_barcode_tag: None,
+            read_two_barcode_tag: None,
+            clear_dt: true,
+            optical_duplicate_pixel_distance: None,
+            compression_level: None,
+            reference_sequence: None,
+        };
+        let plan = resource_plan::ResourcePlan {
+            reported_cpus: 8,
+            global_thread_ceiling: 8,
+            bgzf_reader_threads: 4,
+            bgzf_writer_threads: 4,
+            bgzf_index_threads: 4,
+            bgzf_pipeline_reader_threads: 2,
+            application_worker_budget: 6,
+            memory_budget_bytes: 0,
+            sorter_max_bytes_in_ram: 268_435_456,
+            mate_cache_records: 3,
+            cmm_batch_size: 512,
+            cmm_queue_depth: 16,
+        };
+
+        apply_markduplicates_resource_plan(&mut config, plan, false);
+        assert_eq!(config.mate_cache_records, 17);
+        assert_eq!(config.max_records_in_ram, 17);
+
+        apply_markduplicates_resource_plan(&mut config, plan, true);
+        assert_eq!(config.mate_cache_records, 3);
+        assert_eq!(config.max_records_in_ram, 17);
     }
 
     #[test]

@@ -1199,7 +1199,7 @@ fn collate_pair_key_rows(
     let mut paired_by_name = HashMap::<InternedBytesId, usize>::default();
     let mut keyed_pairs = Vec::<(BamDuplicateKey, [usize; 2])>::new();
     let mut candidate_index = 0usize;
-    let max_displaced_pair_records = config.max_records_in_ram.max(1);
+    let max_displaced_pair_records = config.mate_cache_records.max(1);
 
     while candidate_index < candidates.len() {
         if !candidates[candidate_index].is_pair() {
@@ -2472,6 +2472,7 @@ mod tests {
             output: String::new(),
             metrics_file: String::new(),
             max_records_in_ram: 500_000,
+            mate_cache_records: 500_000,
             tmp_dirs: Vec::new(),
             remove_duplicates: false,
             remove_sequencing_duplicates: false,
@@ -2745,6 +2746,7 @@ mod tests {
         let tmp = tempfile::tempdir().expect("tempdir exists");
         let config = MarkDuplicatesConfig {
             max_records_in_ram: 2,
+            mate_cache_records: 2,
             tmp_dirs: vec![tmp.path().display().to_string()],
             ..sam_markdup_config()
         };
@@ -2759,6 +2761,30 @@ mod tests {
                 .next()
                 .is_none(),
             "external sorter cleans MarkDuplicates qname fallback runs"
+        );
+    }
+
+    #[test]
+    fn pair_collation_uses_mate_cache_limit_independent_of_sort_run_limit() {
+        let records = [
+            record_with_name_flags_and_position(b"pending-a", 0x1, 10),
+            record_with_name_flags_and_position(b"pending-b", 0x1, 20),
+            record_with_name_flags_and_position(b"pending-c", 0x1, 50),
+            record_with_name_flags_and_position(b"pending-b", 0x1, 30),
+            record_with_name_flags_and_position(b"pending-a", 0x1, 40),
+        ];
+        let candidates = candidates_for_records(&records);
+        let tmp = tempfile::tempdir().expect("tempdir exists");
+        let config = MarkDuplicatesConfig {
+            max_records_in_ram: 64,
+            mate_cache_records: 2,
+            tmp_dirs: vec![tmp.path().display().to_string()],
+            ..sam_markdup_config()
+        };
+
+        assert_eq!(
+            collate_pair_key_rows(&candidates, &config).expect("pair collation succeeds"),
+            collate_pair_key_rows_legacy(&candidates)
         );
     }
 

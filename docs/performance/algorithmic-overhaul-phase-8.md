@@ -35,9 +35,11 @@ separate local defaults.
 - BAM-record temporary-run buffers for SortSam, MergeSamFiles, FixMateInformation,
   and RevertSam now flush on the shared sorter byte budget as well as
   `MAX_RECORDS_IN_RAM`.
-- `doctor` reports `resource_plan_mate_cache_records`, with
-  `TURBO_PICARD_MATE_CACHE_RECORDS` available as a diagnostic override for
-  mate-cache sizing assumptions.
+- `doctor` reports `resource_plan_mate_cache_records`; when
+  `TURBO_PICARD_MATE_CACHE_RECORDS` is set, MarkDuplicates uses that value to
+  cap its displaced-pair mate cache before falling back to compact qname-id
+  collation. Without the env override, MarkDuplicates preserves the existing
+  `MAX_RECORDS_IN_RAM` cache limit.
 
 ## Tests
 
@@ -88,11 +90,22 @@ sorted_output_check=PASS
 temp_run_cleanup_check=PASS
 ```
 
+```text
+command=MarkDuplicates
+records=4
+TURBO_PICARD_MATE_CACHE_RECORDS=1
+repeats=3
+median_wall_seconds=0.007320
+wall_seconds=0.366184,0.007320,0.006991
+duplicate_flags_check=PASS
+temp_run_cleanup_check=PASS
+```
+
 The Picard-backed `tools/verify_basic_mergesamfiles_parity.sh` comparison was
 not available in this worktree because `.conda-turbo-picard` did not exist.
 
 Remaining Phase 8 work:
 
-- Propagate the mate-cache plan into additional command-specific caches where
-  an explicit overflow path exists, and add more command-specific memory
+- Propagate the mate-cache plan into additional command-specific caches only
+  where an explicit overflow path exists, and add more command-specific memory
   accounting for non-sorter buffers.
