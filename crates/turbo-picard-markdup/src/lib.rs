@@ -81,6 +81,7 @@ impl From<rust_htslib::errors::Error> for MarkDuplicatesError {
     }
 }
 
+#[cfg(test)]
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct DuplicateKey {
     reference_name: String,
@@ -90,6 +91,17 @@ struct DuplicateKey {
     template_length: i64,
     reverse_strand: bool,
     barcode: Option<Vec<u8>>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+struct SamTextDuplicateKey {
+    reference_id: InternedBytesId,
+    position: i64,
+    mate_reference_id: InternedBytesId,
+    mate_position: i64,
+    template_length: i64,
+    reverse_strand: bool,
+    barcode_id: Option<InternedBytesId>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -216,7 +228,8 @@ fn run_sam_text(
     let input = File::open(&config.input)?;
     let mut reader = BufReader::with_capacity(1024 * 1024, input);
     let mut output = AtomicSamTextOutput::create(&config.output)?;
-    let mut seen = HashMap::<DuplicateKey, usize>::default();
+    let mut seen = HashMap::<SamTextDuplicateKey, usize>::default();
+    let mut key_interner = ByteInterner::default();
     let mut summary = MarkDuplicatesSummary {
         library: "Unknown Library".to_string(),
         unpaired_reads_examined: 0,
@@ -288,7 +301,7 @@ fn run_sam_text(
         } else {
             summary.unpaired_reads_examined += 1;
         }
-        let key = duplicate_key(&fields, flag, line_number, config)?;
+        let key = sam_text_duplicate_key(&fields, flag, line_number, config, &mut key_interner)?;
         let seen_count = seen.entry(key).or_insert(0);
         let duplicate = *seen_count > 0;
         *seen_count += 1;
@@ -1154,6 +1167,7 @@ fn write_md5_sidecar(output: &str) -> Result<(), MarkDuplicatesError> {
     Ok(())
 }
 
+#[cfg(test)]
 fn duplicate_key(
     fields: &[String],
     flag: u16,
@@ -1172,6 +1186,32 @@ fn duplicate_key(
         template_length,
         reverse_strand,
         barcode: sam_barcode(fields, config),
+    })
+}
+
+fn sam_text_duplicate_key(
+    fields: &[String],
+    flag: u16,
+    line_number: usize,
+    config: &MarkDuplicatesConfig,
+    interner: &mut ByteInterner,
+) -> Result<SamTextDuplicateKey, MarkDuplicatesError> {
+    let reverse_strand = flag & 0x10 != 0;
+    let position = parse_sam_integer(&fields[3], "POS", line_number)? - 1;
+    let mate_position = parse_sam_integer(&fields[7], "MATE_POS", line_number)?;
+    let template_length = parse_sam_integer(&fields[8], "TLEN", line_number)?;
+    let five_prime_position =
+        unclipped_five_prime_position(position, &fields[5], reverse_strand, line_number)?;
+    let barcode_id = sam_barcode(fields, config).map(|barcode| interner.intern(&barcode));
+
+    Ok(SamTextDuplicateKey {
+        reference_id: interner.intern(fields[2].as_bytes()),
+        position: five_prime_position,
+        mate_reference_id: interner.intern(fields[6].as_bytes()),
+        mate_position,
+        template_length,
+        reverse_strand,
+        barcode_id,
     })
 }
 
@@ -2613,6 +2653,26 @@ mod tests {
         ]
     }
 
+    fn assert_malformed_sam_text_key_err(
+        result: Result<SamTextDuplicateKey, MarkDuplicatesError>,
+        expected_line: usize,
+        field: &str,
+    ) {
+        let error = result.expect_err("expected malformed SAM error");
+        let MarkDuplicatesError::MalformedSam {
+            line_number,
+            reason,
+        } = error
+        else {
+            panic!("expected malformed SAM error");
+        };
+        assert_eq!(line_number, expected_line);
+        assert!(
+            reason.contains(field),
+            "expected reason {reason:?} to contain {field:?}"
+        );
+    }
+
     fn assert_malformed_sam_err(
         result: Result<DuplicateKey, MarkDuplicatesError>,
         expected_line: usize,
@@ -3128,5 +3188,44 @@ mod tests {
 
         let key = duplicate_key(&fields, 0, 31, &sam_markdup_config());
         assert_malformed_sam_err(key, 31, "CIGAR");
+    }
+
+    #[test]
+    fn sam_text_duplicate_key_interns_repeated_text_fields() {
+        let mut config = sam_markdup_config();
+        config.barcode_tag = Some("BC".to_string());
+        let mut fields = valid_sam_fields();
+        fields[6] = "chr1".to_string();
+        fields.push("BC:Z:ACGT".to_string());
+        let mut interner = ByteInterner::default();
+
+        let first =
+            sam_text_duplicate_key(&fields, 0, 37, &config, &mut interner).expect("first key");
+        let second =
+            sam_text_duplicate_key(&fields, 0, 37, &config, &mut interner).expect("second key");
+
+        assert_eq!(first, second);
+        assert_eq!(first.reference_id, first.mate_reference_id);
+        assert_eq!(interner.values.len(), 2);
+        assert_eq!(
+            interner.values[usize::try_from(first.reference_id).unwrap()],
+            b"chr1"
+        );
+        assert_eq!(
+            interner.values[usize::try_from(first.barcode_id.unwrap()).unwrap()],
+            b"ACGT"
+        );
+    }
+
+    #[test]
+    fn sam_text_duplicate_key_preserves_malformed_cigar_errors() {
+        let mut fields = valid_sam_fields();
+        fields[5] = "0M".to_string();
+        let mut interner = ByteInterner::default();
+
+        let key = sam_text_duplicate_key(&fields, 0, 41, &sam_markdup_config(), &mut interner);
+
+        assert_malformed_sam_text_key_err(key, 41, "CIGAR");
+        assert!(interner.values.is_empty());
     }
 }
