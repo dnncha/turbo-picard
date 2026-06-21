@@ -8724,12 +8724,21 @@ fn count_gc_bias_windows(reference_path: &str, window_size: usize) -> Result<[u6
 }
 
 fn read_fasta_sequences(path: &str, truncate_names: bool) -> Result<Vec<FastaSequence>, String> {
-    let text = read_text_or_gzip(path)?;
+    let mut reader = open_text_or_gzip_reader(path)?;
     let mut records = Vec::new();
     let mut current_name: Option<String> = None;
     let mut current_sequence = Vec::new();
+    let mut line = String::new();
 
-    for line in text.lines() {
+    loop {
+        line.clear();
+        let bytes_read = reader
+            .read_line(&mut line)
+            .map_err(|error| error.to_string())?;
+        if bytes_read == 0 {
+            break;
+        }
+        let line = line.trim_end_matches(['\r', '\n']);
         if let Some(header) = line.strip_prefix('>') {
             if let Some(name) = current_name.take() {
                 records.push(FastaSequence {
@@ -8768,7 +8777,7 @@ fn read_fasta_sequences(path: &str, truncate_names: bool) -> Result<Vec<FastaSeq
 fn reference_sequences_by_name(path: &str) -> Result<BTreeMap<String, Vec<u8>>, String> {
     Ok(read_fasta_sequences(path, true)?
         .into_iter()
-        .map(|record| (record.name, record.sequence.to_ascii_uppercase()))
+        .map(|record| (record.name, record.sequence))
         .collect())
 }
 
