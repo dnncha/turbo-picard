@@ -425,6 +425,7 @@ fn run_sam_text(
     let mut output = AtomicSamTextOutput::create(&config.output)?;
     let mut seen = HashMap::<SamTextDuplicateKey, usize>::default();
     let mut key_interner = ByteInterner::default();
+    let barcode_extractor = SamBarcodeExtractor::from_config(config);
     let mut summary = MarkDuplicatesSummary {
         library: "Unknown Library".to_string(),
         unpaired_reads_examined: 0,
@@ -496,7 +497,13 @@ fn run_sam_text(
         } else {
             summary.unpaired_reads_examined += 1;
         }
-        let key = sam_text_duplicate_key(&fields, flag, line_number, config, &mut key_interner)?;
+        let key = sam_text_duplicate_key(
+            &fields,
+            flag,
+            line_number,
+            &barcode_extractor,
+            &mut key_interner,
+        )?;
         let seen_count = seen.entry(key).or_insert(0);
         let duplicate = *seen_count > 0;
         *seen_count += 1;
@@ -1445,7 +1452,7 @@ fn sam_text_duplicate_key(
     fields: &[String],
     flag: u16,
     line_number: usize,
-    config: &MarkDuplicatesConfig,
+    barcode_extractor: &SamBarcodeExtractor,
     interner: &mut ByteInterner,
 ) -> Result<SamTextDuplicateKey, MarkDuplicatesError> {
     let reverse_strand = flag & 0x10 != 0;
@@ -1454,7 +1461,7 @@ fn sam_text_duplicate_key(
     let template_length = parse_sam_integer(&fields[8], "TLEN", line_number)?;
     let five_prime_position =
         unclipped_five_prime_position(position, &fields[5], reverse_strand, line_number)?;
-    let barcode_id = sam_barcode(fields, config).map(|barcode| interner.intern(&barcode));
+    let barcode_id = barcode_extractor.id(fields, interner);
 
     Ok(SamTextDuplicateKey {
         reference_id: interner.intern(fields[2].as_bytes()),
@@ -2222,6 +2229,7 @@ fn mark_unpaired_duplicate_record(
     decisions.mark_duplicate(record_index);
 }
 
+#[cfg(test)]
 fn sam_barcode(fields: &[String], config: &MarkDuplicatesConfig) -> Option<Vec<u8>> {
     if let Some(tag) = config.barcode_tag.as_deref() {
         return sam_tag_value(fields, tag);
@@ -2239,6 +2247,7 @@ fn sam_barcode(fields: &[String], config: &MarkDuplicatesConfig) -> Option<Vec<u
     )
 }
 
+#[cfg(test)]
 fn sam_tag_value(fields: &[String], tag: &str) -> Option<Vec<u8>> {
     let prefix = format!("{tag}:Z:");
     fields.iter().skip(11).find_map(|field| {
@@ -2246,6 +2255,76 @@ fn sam_tag_value(fields: &[String], tag: &str) -> Option<Vec<u8>> {
             .strip_prefix(&prefix)
             .map(|value| value.as_bytes().to_vec())
     })
+}
+
+#[derive(Debug, Clone)]
+struct SamBarcodeExtractor {
+    mode: SamBarcodeExtractorMode,
+}
+
+#[derive(Debug, Clone)]
+enum SamBarcodeExtractorMode {
+    None,
+    Single(String),
+    Pair {
+        read_one: Option<String>,
+        read_two: Option<String>,
+    },
+}
+
+impl SamBarcodeExtractor {
+    fn from_config(config: &MarkDuplicatesConfig) -> Self {
+        if let Some(tag) = config.barcode_tag.as_deref() {
+            return Self {
+                mode: SamBarcodeExtractorMode::Single(sam_tag_prefix(tag)),
+            };
+        }
+        match (
+            config.read_one_barcode_tag.as_deref(),
+            config.read_two_barcode_tag.as_deref(),
+        ) {
+            (None, None) => Self {
+                mode: SamBarcodeExtractorMode::None,
+            },
+            (read_one, read_two) => Self {
+                mode: SamBarcodeExtractorMode::Pair {
+                    read_one: read_one.map(sam_tag_prefix),
+                    read_two: read_two.map(sam_tag_prefix),
+                },
+            },
+        }
+    }
+
+    fn id(&self, fields: &[String], interner: &mut ByteInterner) -> Option<InternedBytesId> {
+        match &self.mode {
+            SamBarcodeExtractorMode::None => None,
+            SamBarcodeExtractorMode::Single(prefix) => {
+                sam_tag_prefixed_value(fields, prefix).map(|value| interner.intern(value))
+            }
+            SamBarcodeExtractorMode::Pair { read_one, read_two } => {
+                let barcode = combined_barcode(
+                    read_one
+                        .as_deref()
+                        .and_then(|prefix| sam_tag_prefixed_value(fields, prefix)),
+                    read_two
+                        .as_deref()
+                        .and_then(|prefix| sam_tag_prefixed_value(fields, prefix)),
+                )?;
+                Some(interner.intern(&barcode))
+            }
+        }
+    }
+}
+
+fn sam_tag_prefix(tag: &str) -> String {
+    format!("{tag}:Z:")
+}
+
+fn sam_tag_prefixed_value<'a>(fields: &'a [String], prefix: &str) -> Option<&'a [u8]> {
+    fields
+        .iter()
+        .skip(11)
+        .find_map(|field| field.strip_prefix(prefix).map(str::as_bytes))
 }
 
 fn first_barcode(candidates: &[DuplicateCandidate], indices: &[usize]) -> Option<InternedBytesId> {
@@ -4004,11 +4083,12 @@ mod tests {
         fields[6] = "chr1".to_string();
         fields.push("BC:Z:ACGT".to_string());
         let mut interner = ByteInterner::default();
+        let extractor = SamBarcodeExtractor::from_config(&config);
 
         let first =
-            sam_text_duplicate_key(&fields, 0, 37, &config, &mut interner).expect("first key");
+            sam_text_duplicate_key(&fields, 0, 37, &extractor, &mut interner).expect("first key");
         let second =
-            sam_text_duplicate_key(&fields, 0, 37, &config, &mut interner).expect("second key");
+            sam_text_duplicate_key(&fields, 0, 37, &extractor, &mut interner).expect("second key");
 
         assert_eq!(first, second);
         assert_eq!(first.reference_id, first.mate_reference_id);
@@ -4020,6 +4100,40 @@ mod tests {
         assert_eq!(
             interner.values[usize::try_from(first.barcode_id.unwrap()).unwrap()].as_ref(),
             b"ACGT"
+        );
+    }
+
+    #[test]
+    fn sam_barcode_extractor_skips_unconfigured_tags() {
+        let config = sam_markdup_config();
+        let fields = valid_sam_fields();
+        let mut interner = ByteInterner::default();
+
+        let barcode_id = SamBarcodeExtractor::from_config(&config).id(&fields, &mut interner);
+
+        assert!(barcode_id.is_none());
+        assert!(interner.values.is_empty());
+    }
+
+    #[test]
+    fn sam_barcode_extractor_prefers_single_barcode_tag() {
+        let mut config = sam_markdup_config();
+        config.barcode_tag = Some("BC".to_string());
+        config.read_one_barcode_tag = Some("BX".to_string());
+        config.read_two_barcode_tag = Some("BY".to_string());
+        let mut fields = valid_sam_fields();
+        fields.push("BC:Z:single".to_string());
+        fields.push("BX:Z:read-one".to_string());
+        fields.push("BY:Z:read-two".to_string());
+        let mut interner = ByteInterner::default();
+
+        let barcode_id = SamBarcodeExtractor::from_config(&config)
+            .id(&fields, &mut interner)
+            .expect("barcode id");
+
+        assert_eq!(
+            interner.values[usize::try_from(barcode_id).unwrap()].as_ref(),
+            b"single"
         );
     }
 
@@ -4109,8 +4223,9 @@ mod tests {
         let mut fields = valid_sam_fields();
         fields[5] = "0M".to_string();
         let mut interner = ByteInterner::default();
+        let extractor = SamBarcodeExtractor::from_config(&sam_markdup_config());
 
-        let key = sam_text_duplicate_key(&fields, 0, 41, &sam_markdup_config(), &mut interner);
+        let key = sam_text_duplicate_key(&fields, 0, 41, &extractor, &mut interner);
 
         assert_malformed_sam_text_key_err(key, 41, "CIGAR");
         assert!(interner.values.is_empty());
