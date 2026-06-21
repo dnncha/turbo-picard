@@ -11,6 +11,7 @@ use std::fmt;
 use std::fs::{self, File, OpenOptions};
 use std::io::{BufRead, BufReader, BufWriter, Read as IoRead, Write};
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 use turbo_picard_core::external_sort::{ExternalSortConfig, ExternalSorter};
 use turbo_picard_core::hts_io;
 use turbo_picard_core::markdup_config::MarkDuplicatesConfig;
@@ -341,8 +342,8 @@ struct OutputRecordLocator {
 
 #[derive(Debug, Default)]
 struct ByteInterner {
-    ids: HashMap<Vec<u8>, InternedBytesId>,
-    values: Vec<Vec<u8>>,
+    ids: HashMap<Rc<[u8]>, InternedBytesId>,
+    values: Vec<Rc<[u8]>>,
 }
 
 impl ByteInterner {
@@ -351,8 +352,8 @@ impl ByteInterner {
             return *id;
         }
         let id = InternedBytesId::try_from(self.values.len()).expect("interned id fits in u32");
-        let owned = value.to_vec();
-        self.values.push(owned.clone());
+        let owned = Rc::<[u8]>::from(value);
+        self.values.push(Rc::clone(&owned));
         self.ids.insert(owned, id);
         id
     }
@@ -364,7 +365,7 @@ impl ByteInterner {
                     "interned MarkDuplicates byte id exceeds usize".to_string(),
                 )
             })?)
-            .map(Vec::as_slice)
+            .map(Rc::as_ref)
             .ok_or_else(|| {
                 MarkDuplicatesError::Operation(format!(
                     "interned MarkDuplicates byte id {id} is out of range"
@@ -3052,6 +3053,20 @@ mod tests {
     }
 
     #[test]
+    fn byte_interner_shares_key_and_value_storage() {
+        let mut interner = ByteInterner::default();
+
+        let id = interner.intern(b"read-a");
+        assert_eq!(id, interner.intern(b"read-a"));
+
+        let key = interner.ids.keys().next().expect("interned key");
+        assert!(Rc::ptr_eq(
+            key,
+            &interner.values[usize::try_from(id).unwrap()]
+        ));
+    }
+
+    #[test]
     fn record_decision_packs_duplicate_flags() {
         let empty = RecordDecision::default();
         assert!(!empty.duplicate());
@@ -3669,11 +3684,11 @@ mod tests {
         assert_eq!(first.reference_id, first.mate_reference_id);
         assert_eq!(interner.values.len(), 2);
         assert_eq!(
-            interner.values[usize::try_from(first.reference_id).unwrap()],
+            interner.values[usize::try_from(first.reference_id).unwrap()].as_ref(),
             b"chr1"
         );
         assert_eq!(
-            interner.values[usize::try_from(first.barcode_id.unwrap()).unwrap()],
+            interner.values[usize::try_from(first.barcode_id.unwrap()).unwrap()].as_ref(),
             b"ACGT"
         );
     }
@@ -3693,7 +3708,10 @@ mod tests {
 
         assert_eq!(first, second);
         assert_eq!(interner.values.len(), 1);
-        assert_eq!(interner.values[usize::try_from(first).unwrap()], b"ACGT");
+        assert_eq!(
+            interner.values[usize::try_from(first).unwrap()].as_ref(),
+            b"ACGT"
+        );
     }
 
     #[test]
@@ -3708,7 +3726,10 @@ mod tests {
 
         let barcode_id = bam_barcode_id(&record, &config, &mut interner).expect("barcode id");
 
-        assert_eq!(interner.values[usize::try_from(barcode_id).unwrap()], b"A");
+        assert_eq!(
+            interner.values[usize::try_from(barcode_id).unwrap()].as_ref(),
+            b"A"
+        );
     }
 
     #[test]
