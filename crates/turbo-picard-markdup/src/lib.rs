@@ -932,7 +932,7 @@ struct OpticalDuplicateRecords {
 fn optical_duplicate_record_indices(
     group: &[usize],
     candidates: &[DuplicateCandidate],
-    representative_qname_id: InternedBytesId,
+    representative_candidate_index: usize,
     config: &MarkDuplicatesConfig,
 ) -> OpticalDuplicateRecords {
     if config.read_name_regex.as_deref() == Some("null") {
@@ -941,11 +941,9 @@ fn optical_duplicate_record_indices(
             record_indices: Vec::new(),
         };
     }
-    let Some(representative_location) = group
-        .iter()
-        .find(|index| candidates[**index].qname_id == representative_qname_id)
-        .and_then(|index| candidates[*index].optical_location)
-    else {
+    let representative = &candidates[representative_candidate_index];
+    let representative_qname_id = representative.qname_id;
+    let Some(representative_location) = representative.optical_location else {
         return OpticalDuplicateRecords {
             read_names: 0,
             record_indices: Vec::new(),
@@ -1007,29 +1005,14 @@ fn add_duplicate_set_member_tags(
     group: &[usize],
     candidates: &[DuplicateCandidate],
     decisions: &mut [RecordDecision],
-    representative_qname_id: InternedBytesId,
+    stats: DuplicateGroupStats,
 ) {
-    if !group.iter().any(|index| candidates[*index].is_pair()) {
+    if !stats.has_pair || !stats.has_multiple_read_names {
         return;
     }
 
-    let mut member_names = HashSet::<InternedBytesId>::default();
-    for index in group.iter().copied() {
-        member_names.insert(candidates[index].qname_id);
-    }
-    if member_names.len() < 2 {
-        return;
-    }
-
-    let duplicate_set_index = group
-        .iter()
-        .copied()
-        .filter(|index| candidates[*index].qname_id == representative_qname_id)
-        .map(|index| candidates[index].record_index)
-        .min()
-        .unwrap_or(candidates[group[0]].record_index);
-    let duplicate_set_size = i32::try_from(member_names.len()).unwrap_or(i32::MAX);
-    let duplicate_set_index = i32::try_from(duplicate_set_index).unwrap_or(i32::MAX);
+    let duplicate_set_size = i32::try_from(stats.unique_read_names).unwrap_or(i32::MAX);
+    let duplicate_set_index = i32::try_from(stats.representative_record_index).unwrap_or(i32::MAX);
 
     for index in group.iter().copied() {
         let record_index = candidates[index].record_index;
@@ -1320,9 +1303,12 @@ fn apply_pair_duplicate_group(
         return;
     }
 
-    let representative_qname_id = candidates[stats.representative_candidate_index].qname_id;
-    let optical_duplicates =
-        optical_duplicate_record_indices(group, candidates, representative_qname_id, config);
+    let optical_duplicates = optical_duplicate_record_indices(
+        group,
+        candidates,
+        stats.representative_candidate_index,
+        config,
+    );
     if let Some(set_size) = stats.paired_set_size {
         let optical_names = u64::try_from(optical_duplicates.read_names).unwrap_or(u64::MAX);
         let non_optical_size = (optical_names < set_size).then_some(set_size - optical_names);
@@ -1343,11 +1329,11 @@ fn apply_pair_duplicate_group(
         decisions[index].optical_duplicate = true;
     }
     if config.tag_duplicate_set_members && !config.remove_duplicates {
-        add_duplicate_set_member_tags(group, candidates, decisions, representative_qname_id);
+        add_duplicate_set_member_tags(group, candidates, decisions, stats);
     }
 
     for candidate_index in group.iter().copied() {
-        if candidates[candidate_index].qname_id == representative_qname_id {
+        if candidates[candidate_index].qname_id == stats.representative_qname_id {
             continue;
         }
         let candidate = &candidates[candidate_index];
@@ -1891,9 +1877,8 @@ fn apply_fragment_duplicate_group(
         return;
     }
 
-    let representative_qname_id = candidates[stats.representative_candidate_index].qname_id;
     for candidate_index in group.iter().copied() {
-        if candidates[candidate_index].qname_id == representative_qname_id {
+        if candidates[candidate_index].qname_id == stats.representative_qname_id {
             continue;
         }
         mark_unpaired_duplicate_record(
@@ -2204,35 +2189,46 @@ fn quality_score(record: &bam::Record) -> u64 {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct DuplicateGroupStats {
     has_multiple_read_names: bool,
+    has_pair: bool,
+    unique_read_names: usize,
     paired_set_size: Option<u64>,
     representative_candidate_index: usize,
+    representative_qname_id: InternedBytesId,
+    representative_record_index: usize,
 }
 
 impl DuplicateGroupStats {
     fn from_group(group: &[usize], candidates: &[DuplicateCandidate]) -> Self {
-        let mut scores_by_name = HashMap::<InternedBytesId, (usize, u64)>::default();
+        let mut scores_by_name = HashMap::<InternedBytesId, DuplicateNameStats>::default();
         let mut has_pair = false;
 
         for index in group.iter().copied() {
             let candidate = &candidates[index];
             has_pair |= candidate.is_pair();
-            let entry = scores_by_name
-                .entry(candidate.qname_id)
-                .or_insert((index, 0));
-            entry.1 += candidate.duplicate_score;
+            let entry =
+                scores_by_name
+                    .entry(candidate.qname_id)
+                    .or_insert_with(|| DuplicateNameStats {
+                        first_candidate_index: index,
+                        duplicate_score: 0,
+                        min_record_index: candidate.record_index,
+                    });
+            entry.duplicate_score += candidate.duplicate_score;
+            entry.min_record_index = entry.min_record_index.min(candidate.record_index);
         }
 
         let unique_name_count = scores_by_name.len();
-        let representative_candidate_index = scores_by_name
+        let representative = scores_by_name
             .into_values()
             .max_by(|left, right| {
-                left.1.cmp(&right.1).then_with(|| {
-                    candidates[right.0]
-                        .record_index
-                        .cmp(&candidates[left.0].record_index)
-                })
+                left.duplicate_score
+                    .cmp(&right.duplicate_score)
+                    .then_with(|| {
+                        candidates[right.first_candidate_index]
+                            .record_index
+                            .cmp(&candidates[left.first_candidate_index].record_index)
+                    })
             })
-            .map(|(index, _)| index)
             .expect("non-empty duplicate group");
         let paired_set_size = has_pair
             .then(|| u64::try_from(unique_name_count).ok())
@@ -2241,10 +2237,21 @@ impl DuplicateGroupStats {
 
         Self {
             has_multiple_read_names: unique_name_count > 1,
+            has_pair,
+            unique_read_names: unique_name_count,
             paired_set_size,
-            representative_candidate_index,
+            representative_candidate_index: representative.first_candidate_index,
+            representative_qname_id: candidates[representative.first_candidate_index].qname_id,
+            representative_record_index: representative.min_record_index,
         }
     }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct DuplicateNameStats {
+    first_candidate_index: usize,
+    duplicate_score: u64,
+    min_record_index: usize,
 }
 
 #[cfg(test)]
@@ -2808,8 +2815,15 @@ mod tests {
         let stats = DuplicateGroupStats::from_group(&[0, 1, 2, 3], &candidates);
 
         assert!(stats.has_multiple_read_names);
+        assert!(stats.has_pair);
+        assert_eq!(stats.unique_read_names, 3);
         assert_eq!(stats.paired_set_size, Some(3));
         assert_eq!(stats.representative_candidate_index, 2);
+        assert_eq!(stats.representative_qname_id, candidates[2].qname_id);
+        assert_eq!(
+            stats.representative_record_index,
+            candidates[2].record_index
+        );
     }
 
     #[test]
@@ -3105,13 +3119,9 @@ mod tests {
         ];
         let candidates = candidates_for_records(&records);
         let mut decisions = vec![RecordDecision::default(); records.len()];
+        let stats = DuplicateGroupStats::from_group(&[0, 1, 2, 3], &candidates);
 
-        add_duplicate_set_member_tags(
-            &[0, 1, 2, 3],
-            &candidates,
-            &mut decisions,
-            candidates[0].qname_id,
-        );
+        add_duplicate_set_member_tags(&[0, 1, 2, 3], &candidates, &mut decisions, stats);
 
         for index in [0usize, 1, 2, 3] {
             assert_eq!(decisions[index].duplicate_set_index, Some(0));
@@ -3127,8 +3137,9 @@ mod tests {
         ];
         let candidates = candidates_for_records(&records);
         let mut decisions = vec![RecordDecision::default(); records.len()];
+        let stats = DuplicateGroupStats::from_group(&[0, 1], &candidates);
 
-        add_duplicate_set_member_tags(&[0, 1], &candidates, &mut decisions, candidates[0].qname_id);
+        add_duplicate_set_member_tags(&[0, 1], &candidates, &mut decisions, stats);
 
         assert!(decisions[0].duplicate_set_index.is_none());
         assert!(decisions[1].duplicate_set_index.is_none());
