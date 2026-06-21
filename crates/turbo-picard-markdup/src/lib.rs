@@ -321,11 +321,11 @@ fn bitset_mask(bit: usize) -> u64 {
 
 #[derive(Debug)]
 struct OutputRecordLocator {
-    input_index: u32,
     record_index: usize,
     offset: i64,
-    reference_id: i32,
     position: i64,
+    input_index: u32,
+    reference_id: i32,
     qname_id: InternedBytesId,
     flags: u16,
 }
@@ -3765,5 +3765,10 @@ mod tests {
                 .contains("interned MarkDuplicates byte id 42 is out of range"),
             "{error}"
         );
+    }
+
+    #[test]
+    fn output_record_locator_layout_stays_compact() {
+        assert_eq!(std::mem::size_of::<OutputRecordLocator>(), 40);
     }
 }
