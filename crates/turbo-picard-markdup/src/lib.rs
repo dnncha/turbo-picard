@@ -122,8 +122,6 @@ struct DuplicateCandidate {
     library_id: LibraryId,
     qname_id: InternedBytesId,
     flags: CandidateFlags,
-    reference_id: i32,
-    five_prime_position: i64,
     duplicate_score: u64,
     optical_location: Option<ReadLocation>,
     fragment_key: BamDuplicateKey,
@@ -173,8 +171,6 @@ impl DuplicateCandidate {
             library_id,
             qname_id,
             flags: candidate_flags,
-            reference_id,
-            five_prime_position,
             duplicate_score: quality_score(record),
             optical_location: parse_read_location(record.qname()),
             fragment_key: BamDuplicateKey {
@@ -2083,9 +2079,11 @@ fn pair_duplicate_key_bam(
     library_id: LibraryId,
     barcode_id: Option<InternedBytesId>,
 ) -> BamDuplicateKey {
-    let (left, right) = if (first.reference_id, first.five_prime_position)
-        <= (second.reference_id, second.five_prime_position)
-    {
+    let (left, right) = if (first.fragment_key.reference_id, first.fragment_key.position)
+        <= (
+            second.fragment_key.reference_id,
+            second.fragment_key.position,
+        ) {
         (first, second)
     } else {
         (second, first)
@@ -2093,10 +2091,10 @@ fn pair_duplicate_key_bam(
 
     BamDuplicateKey {
         library_id,
-        reference_id: left.reference_id,
-        position: left.five_prime_position,
-        mate_reference_id: right.reference_id,
-        mate_position: right.five_prime_position,
+        reference_id: left.fragment_key.reference_id,
+        position: left.fragment_key.position,
+        mate_reference_id: right.fragment_key.reference_id,
+        mate_position: right.fragment_key.position,
         template_length: pair_orientation_code(left, right),
         reverse_strand: false,
         barcode_id,
