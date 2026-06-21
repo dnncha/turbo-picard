@@ -745,7 +745,6 @@ fn read_bam_records<R: bam::Read>(
             break;
         };
         result?;
-        let mut record = std::mem::take(&mut record);
         let flag = record.flags() & !DUPLICATE_FLAG;
         if record.flags() != flag {
             record.set_flags(flag);
@@ -774,7 +773,7 @@ fn read_bam_records<R: bam::Read>(
             summary.unmapped_records += 1;
             library_registry.summary_mut(library_id).unmapped_records += 1;
             if let Some(records) = sink.records.as_deref_mut() {
-                records.push(record);
+                records.push(std::mem::take(&mut record));
             }
             continue;
         }
@@ -784,7 +783,7 @@ fn read_bam_records<R: bam::Read>(
                 .summary_mut(library_id)
                 .secondary_or_supplementary_records += 1;
             if let Some(records) = sink.records.as_deref_mut() {
-                records.push(record);
+                records.push(std::mem::take(&mut record));
             }
             continue;
         }
@@ -814,7 +813,7 @@ fn read_bam_records<R: bam::Read>(
             barcode_id,
         ));
         if let Some(records) = sink.records.as_deref_mut() {
-            records.push(record);
+            records.push(std::mem::take(&mut record));
         }
     }
 
@@ -828,8 +827,12 @@ fn read_bam_records_for_output<R: bam::Read>(
     writer: &mut bam::Writer,
 ) -> Result<(), MarkDuplicatesError> {
     let mut seen_records = 0usize;
-    for (record_index, result) in reader.records().enumerate() {
-        let mut record = result?;
+    let mut record = bam::Record::new();
+    for record_index in 0usize.. {
+        let Some(result) = reader.read(&mut record) else {
+            break;
+        };
+        result?;
         let flags = record.flags() & !DUPLICATE_FLAG;
         if flags != record.flags() {
             record.set_flags(flags);
@@ -837,7 +840,7 @@ fn read_bam_records_for_output<R: bam::Read>(
         let decision = decisions
             .decision(record_index)
             .ok_or_else(|| MarkDuplicatesError::Operation("missing duplicate decision".into()))?;
-        write_bam_record(record, decision, config, writer)?;
+        write_bam_record(&mut record, decision, config, writer)?;
         seen_records = record_index + 1;
     }
     if seen_records != decisions.len() {
@@ -903,7 +906,7 @@ fn write_multi_bam_records_by_locator(
                     let decision = decisions.decision(locator.record_index).ok_or_else(|| {
                         "missing duplicate decision for sorted output record".to_string()
                     })?;
-                    write_bam_record(std::mem::take(&mut record), decision, config, writer)
+                    write_bam_record(&mut record, decision, config, writer)
                         .map_err(|error| error.to_string())
                 }
                 Some(Err(error)) => Err(error.to_string()),
@@ -1002,19 +1005,19 @@ fn write_bam_records(
     config: &MarkDuplicatesConfig,
     writer: &mut bam::Writer,
 ) -> Result<(), MarkDuplicatesError> {
-    for (record, decision) in records {
-        write_bam_record(record, decision, config, writer)?;
+    for (mut record, decision) in records {
+        write_bam_record(&mut record, decision, config, writer)?;
     }
     Ok(())
 }
 
 fn write_bam_record(
-    mut record: bam::Record,
+    record: &mut bam::Record,
     decision: RecordDecision,
     config: &MarkDuplicatesConfig,
     writer: &mut bam::Writer,
 ) -> Result<(), MarkDuplicatesError> {
-    let flags = effective_record_flags(&record, decision);
+    let flags = effective_record_flags(record, decision);
     if (config.remove_duplicates && decision.duplicate())
         || (config.remove_sequencing_duplicates && decision.optical_duplicate())
     {
@@ -1024,21 +1027,21 @@ fn write_bam_record(
         record.set_flags(flags);
     }
     if config.clear_dt {
-        clear_duplicate_type_tag(&mut record)?;
+        clear_duplicate_type_tag(record)?;
     }
     if let Some(duplicate_type) =
         duplicate_type_tag(config, record.flags(), decision.optical_duplicate())
     {
-        add_duplicate_type_tag(&mut record, duplicate_type)?;
+        add_duplicate_type_tag(record, duplicate_type)?;
     }
     if let Some(duplicate_set) = decision.duplicate_set {
-        replace_i32_aux(&mut record, b"DS", duplicate_set.size)?;
-        replace_i32_aux(&mut record, b"DI", duplicate_set.index)?;
+        replace_i32_aux(record, b"DS", duplicate_set.size)?;
+        replace_i32_aux(record, b"DI", duplicate_set.index)?;
     }
     if config.add_pg_tag_to_reads {
-        add_program_group_to_bam_record(&mut record)?;
+        add_program_group_to_bam_record(record)?;
     }
-    writer.write(&record)?;
+    writer.write(record)?;
     Ok(())
 }
 
