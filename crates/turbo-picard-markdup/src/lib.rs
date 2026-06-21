@@ -1036,34 +1036,23 @@ fn add_duplicate_type_tag(
     Ok(())
 }
 
-struct OpticalDuplicateRecords {
-    read_names: usize,
-    record_indices: Vec<usize>,
-}
-
-fn optical_duplicate_record_indices(
+fn mark_optical_duplicate_records(
     group: &[usize],
     candidates: &[DuplicateCandidate],
     representative_candidate_index: usize,
+    decisions: &mut DuplicateDecisions,
     config: &MarkDuplicatesConfig,
-) -> OpticalDuplicateRecords {
+) -> usize {
     if config.read_name_regex.as_deref() == Some("null") {
-        return OpticalDuplicateRecords {
-            read_names: 0,
-            record_indices: Vec::new(),
-        };
+        return 0;
     }
     let representative = &candidates[representative_candidate_index];
     let representative_qname_id = representative.qname_id;
     let Some(representative_location) = representative.optical_location else {
-        return OpticalDuplicateRecords {
-            read_names: 0,
-            record_indices: Vec::new(),
-        };
+        return 0;
     };
     let pixel_distance = i64::from(config.optical_duplicate_pixel_distance.unwrap_or(100));
     let mut optical_names = HashSet::<InternedBytesId>::default();
-    let mut record_indices = Vec::<usize>::new();
 
     for index in group.iter().copied() {
         let candidate = &candidates[index];
@@ -1071,7 +1060,7 @@ fn optical_duplicate_record_indices(
             continue;
         }
         if optical_names.contains(&candidate.qname_id) {
-            record_indices.push(candidate.record_index);
+            decisions.mark_optical_duplicate(candidate.record_index);
             continue;
         }
         let Some(location) = candidate.optical_location else {
@@ -1079,14 +1068,11 @@ fn optical_duplicate_record_indices(
         };
         if representative_location.is_within(&location, pixel_distance) {
             optical_names.insert(candidate.qname_id);
-            record_indices.push(candidate.record_index);
+            decisions.mark_optical_duplicate(candidate.record_index);
         }
     }
 
-    OpticalDuplicateRecords {
-        read_names: optical_names.len(),
-        record_indices,
-    }
+    optical_names.len()
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1414,14 +1400,15 @@ fn apply_pair_duplicate_group(
         return;
     }
 
-    let optical_duplicates = optical_duplicate_record_indices(
+    let optical_duplicate_read_names = mark_optical_duplicate_records(
         group,
         candidates,
         stats.representative_candidate_index,
+        decisions,
         config,
     );
     if let Some(set_size) = stats.paired_set_size {
-        let optical_names = u64::try_from(optical_duplicates.read_names).unwrap_or(u64::MAX);
+        let optical_names = u64::try_from(optical_duplicate_read_names).unwrap_or(u64::MAX);
         let non_optical_size = (optical_names < set_size).then_some(set_size - optical_names);
         add_duplicate_set(summary, set_size, non_optical_size);
         if let Some(candidate_index) = group.first() {
@@ -1430,14 +1417,11 @@ fn apply_pair_duplicate_group(
             add_duplicate_set(library_summary, set_size, non_optical_size);
         }
     }
-    summary.read_pair_optical_duplicates += optical_duplicates.read_names as u64;
+    summary.read_pair_optical_duplicates += optical_duplicate_read_names as u64;
     if let Some(candidate_index) = group.first() {
         library_registry
             .summary_mut(candidates[*candidate_index].library_id)
-            .read_pair_optical_duplicates += optical_duplicates.read_names as u64;
-    }
-    for index in optical_duplicates.record_indices {
-        decisions.mark_optical_duplicate(index);
+            .read_pair_optical_duplicates += optical_duplicate_read_names as u64;
     }
     if config.tag_duplicate_set_members && !config.remove_duplicates {
         add_duplicate_set_member_tags(group, candidates, decisions, stats);
@@ -3349,6 +3333,7 @@ mod tests {
             optical_duplicate_pixel_distance: Some(100),
             ..sam_markdup_config()
         };
+        let mut decisions = DuplicateDecisions::new(records.len());
 
         assert_eq!(
             candidates[0].optical_location,
@@ -3358,10 +3343,13 @@ mod tests {
                 y: 100
             })
         );
-        let optical = optical_duplicate_record_indices(&[0, 1, 2], &candidates, 0, &config);
+        let optical_read_names =
+            mark_optical_duplicate_records(&[0, 1, 2], &candidates, 0, &mut decisions, &config);
 
-        assert_eq!(optical.read_names, 1);
-        assert_eq!(optical.record_indices, vec![1, 2]);
+        assert_eq!(optical_read_names, 1);
+        assert!(!decisions.decision(0).expect("decision").optical_duplicate());
+        assert!(decisions.decision(1).expect("decision").optical_duplicate());
+        assert!(decisions.decision(2).expect("decision").optical_duplicate());
     }
 
     #[test]
