@@ -2497,10 +2497,12 @@ struct DuplicateGroupStats {
 
 impl DuplicateGroupStats {
     fn from_group(group: &[usize], candidates: &[DuplicateCandidate]) -> Self {
-        const SMALL_GROUP_NAME_CAPACITY: usize = 4;
+        const SMALL_GROUP_NAME_CAPACITY: usize = 8;
 
-        if group.len() <= SMALL_GROUP_NAME_CAPACITY {
-            return Self::from_small_group::<SMALL_GROUP_NAME_CAPACITY>(group, candidates);
+        if let Some(stats) =
+            Self::try_from_small_group::<SMALL_GROUP_NAME_CAPACITY>(group, candidates)
+        {
+            return stats;
         }
 
         let mut scores_by_name = HashMap::<InternedBytesId, DuplicateNameStats>::default();
@@ -2525,10 +2527,10 @@ impl DuplicateGroupStats {
         Self::from_name_stats(scores_by_name.into_values(), has_pair, candidates)
     }
 
-    fn from_small_group<const CAPACITY: usize>(
+    fn try_from_small_group<const CAPACITY: usize>(
         group: &[usize],
         candidates: &[DuplicateCandidate],
-    ) -> Self {
+    ) -> Option<Self> {
         let mut name_stats = [None::<DuplicateNameStats>; CAPACITY];
         let mut unique_name_count = 0usize;
         let mut has_pair = false;
@@ -2546,6 +2548,9 @@ impl DuplicateGroupStats {
                 stats.duplicate_score += candidate.duplicate_score;
                 stats.min_record_index = stats.min_record_index.min(candidate.record_index);
             } else {
+                if unique_name_count == CAPACITY {
+                    return None;
+                }
                 name_stats[unique_name_count] = Some(DuplicateNameStats {
                     qname_id: candidate.qname_id,
                     first_candidate_index: index,
@@ -2556,11 +2561,11 @@ impl DuplicateGroupStats {
             }
         }
 
-        Self::from_name_stats(
+        Some(Self::from_name_stats(
             name_stats.into_iter().take(unique_name_count).flatten(),
             has_pair,
             candidates,
-        )
+        ))
     }
 
     fn from_name_stats(
@@ -3426,6 +3431,33 @@ mod tests {
             stats.representative_record_index,
             candidates[2].record_index
         );
+    }
+
+    #[test]
+    fn duplicate_group_stats_handles_many_records_with_few_names() {
+        let records = [
+            record_with_name_and_qualities(b"dup-a", &[10], 0x1),
+            record_with_name_and_qualities(b"dup-a", &[20], 0x1),
+            record_with_name_and_qualities(b"dup-b", &[30], 0x1),
+            record_with_name_and_qualities(b"dup-b", &[40], 0x1),
+            record_with_name_and_qualities(b"dup-c", &[25], 0x1),
+            record_with_name_and_qualities(b"dup-c", &[30], 0x1),
+            record_with_name_and_qualities(b"dup-d", &[5], 0x1),
+            record_with_name_and_qualities(b"dup-d", &[10], 0x1),
+            record_with_name_and_qualities(b"dup-e", &[60], 0x1),
+            record_with_name_and_qualities(b"dup-e", &[20], 0x1),
+        ];
+        let candidates = candidates_for_records(&records);
+        let group = (0..records.len()).collect::<Vec<_>>();
+
+        let stats = DuplicateGroupStats::from_group(&group, &candidates);
+
+        assert!(stats.has_multiple_read_names);
+        assert!(stats.has_pair);
+        assert_eq!(stats.unique_read_names, 5);
+        assert_eq!(stats.paired_set_size, Some(5));
+        assert_eq!(stats.representative_candidate_index, 8);
+        assert_eq!(stats.representative_qname_id, candidates[8].qname_id);
     }
 
     #[test]
