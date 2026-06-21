@@ -19430,7 +19430,13 @@ fn write_sortsam_bounded_records(
             max_records_in_ram,
             max_bytes_in_ram,
         ) {
-            write_sortsam_temp_run(&mut run_set, header, sort_order, &mut records)?;
+            write_sortsam_temp_run_maybe_sorted(
+                &mut run_set,
+                header,
+                sort_order,
+                &mut records,
+                !monotonic,
+            )?;
             resident_bytes = 0;
         }
     }
@@ -19446,7 +19452,13 @@ fn write_sortsam_bounded_records(
     }
 
     if !records.is_empty() {
-        write_sortsam_temp_run(&mut run_set, header, sort_order, &mut records)?;
+        write_sortsam_temp_run_maybe_sorted(
+            &mut run_set,
+            header,
+            sort_order,
+            &mut records,
+            !monotonic,
+        )?;
     }
     if monotonic {
         write_sortsam_runs_sequentially(writer, &run_set.paths)
@@ -19462,7 +19474,19 @@ fn write_sortsam_temp_run(
     sort_order: SortOrder,
     records: &mut Vec<(bam::Record, u64)>,
 ) -> Result<(), String> {
-    stable_sort_bam_records(records, sort_order);
+    write_sortsam_temp_run_maybe_sorted(run_set, header, sort_order, records, true)
+}
+
+fn write_sortsam_temp_run_maybe_sorted(
+    run_set: &mut SortSamTempRuns,
+    header: &bam::Header,
+    sort_order: SortOrder,
+    records: &mut Vec<(bam::Record, u64)>,
+    sort_records: bool,
+) -> Result<(), String> {
+    if sort_records {
+        stable_sort_bam_records(records, sort_order);
+    }
     let path = run_set.create_registered_path()?;
     {
         let mut writer = bam_writer_for_temp_run(&path, header)?;
