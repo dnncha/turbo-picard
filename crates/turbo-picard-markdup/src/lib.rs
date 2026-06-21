@@ -132,25 +132,17 @@ struct CandidateFlags(u8);
 
 impl CandidateFlags {
     const PAIR: u8 = 0b0000_0001;
-    const REVERSE_STRAND: u8 = 0b0000_0010;
 
     fn from_record_flags(flags: u16) -> Self {
         let mut candidate_flags = 0;
         if duplicate_candidate_is_pair(flags) {
             candidate_flags |= Self::PAIR;
         }
-        if flags & 0x10 != 0 {
-            candidate_flags |= Self::REVERSE_STRAND;
-        }
         Self(candidate_flags)
     }
 
     fn is_pair(self) -> bool {
         self.0 & Self::PAIR != 0
-    }
-
-    fn reverse_strand(self) -> bool {
-        self.0 & Self::REVERSE_STRAND != 0
     }
 }
 
@@ -166,6 +158,7 @@ impl DuplicateCandidate {
         let reference_id = record.tid();
         let five_prime_position = unclipped_record_position(record);
         let candidate_flags = CandidateFlags::from_record_flags(flags);
+        let reverse_strand = flags & 0x10 != 0;
         Self {
             record_index,
             library_id,
@@ -180,7 +173,7 @@ impl DuplicateCandidate {
                 mate_reference_id: -1,
                 mate_position: -1,
                 template_length: 0,
-                reverse_strand: candidate_flags.reverse_strand(),
+                reverse_strand,
                 barcode_id,
             },
         }
@@ -191,7 +184,7 @@ impl DuplicateCandidate {
     }
 
     fn reverse_strand(&self) -> bool {
-        self.flags.reverse_strand()
+        self.fragment_key.reverse_strand
     }
 }
 
