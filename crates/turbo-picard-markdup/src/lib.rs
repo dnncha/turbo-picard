@@ -795,7 +795,7 @@ fn read_bam_records<R: bam::Read>(
                 .unpaired_reads_examined += 1;
         }
         let qname_id = locator_qname_id.unwrap_or_else(|| sink.qnames.intern(record.qname()));
-        let barcode_id = bam_barcode(&record, config).map(|barcode| sink.barcodes.intern(&barcode));
+        let barcode_id = bam_barcode_id(&record, config, sink.barcodes);
         sink.candidates.push(DuplicateCandidate::from_record(
             record_index,
             &record,
@@ -2105,12 +2105,16 @@ fn first_barcode(candidates: &[DuplicateCandidate], indices: &[usize]) -> Option
         .find_map(|index| candidates[*index].fragment_key.barcode_id)
 }
 
-fn bam_barcode(record: &bam::Record, config: &MarkDuplicatesConfig) -> Option<Vec<u8>> {
+fn bam_barcode_id(
+    record: &bam::Record,
+    config: &MarkDuplicatesConfig,
+    interner: &mut ByteInterner,
+) -> Option<InternedBytesId> {
     if let Some(tag) = config.barcode_tag.as_deref() {
-        return bam_tag_value(record, tag);
+        return bam_tag_value_id(record, tag, interner);
     }
 
-    combined_barcode(
+    let barcode = combined_barcode(
         config
             .read_one_barcode_tag
             .as_deref()
@@ -2119,7 +2123,20 @@ fn bam_barcode(record: &bam::Record, config: &MarkDuplicatesConfig) -> Option<Ve
             .read_two_barcode_tag
             .as_deref()
             .and_then(|tag| bam_tag_value(record, tag)),
-    )
+    )?;
+    Some(interner.intern(&barcode))
+}
+
+fn bam_tag_value_id(
+    record: &bam::Record,
+    tag: &str,
+    interner: &mut ByteInterner,
+) -> Option<InternedBytesId> {
+    match record.aux(tag.as_bytes()) {
+        Ok(Aux::String(value)) => Some(interner.intern(value.as_bytes())),
+        Ok(Aux::Char(value)) => Some(interner.intern(&[value])),
+        _ => None,
+    }
 }
 
 fn bam_tag_value(record: &bam::Record, tag: &str) -> Option<Vec<u8>> {
@@ -3653,6 +3670,39 @@ mod tests {
             interner.values[usize::try_from(first.barcode_id.unwrap()).unwrap()],
             b"ACGT"
         );
+    }
+
+    #[test]
+    fn bam_barcode_id_interns_single_tag_without_combining() {
+        let mut config = sam_markdup_config();
+        config.barcode_tag = Some("BC".to_string());
+        let mut record = record_with_name_and_flags(b"read", 0);
+        record
+            .push_aux(b"BC", Aux::String("ACGT"))
+            .expect("push barcode");
+        let mut interner = ByteInterner::default();
+
+        let first = bam_barcode_id(&record, &config, &mut interner).expect("barcode id");
+        let second = bam_barcode_id(&record, &config, &mut interner).expect("barcode id");
+
+        assert_eq!(first, second);
+        assert_eq!(interner.values.len(), 1);
+        assert_eq!(interner.values[usize::try_from(first).unwrap()], b"ACGT");
+    }
+
+    #[test]
+    fn bam_barcode_id_interns_char_tags() {
+        let mut config = sam_markdup_config();
+        config.barcode_tag = Some("BC".to_string());
+        let mut record = record_with_name_and_flags(b"read", 0);
+        record
+            .push_aux(b"BC", Aux::Char(b'A'))
+            .expect("push barcode");
+        let mut interner = ByteInterner::default();
+
+        let barcode_id = bam_barcode_id(&record, &config, &mut interner).expect("barcode id");
+
+        assert_eq!(interner.values[usize::try_from(barcode_id).unwrap()], b"A");
     }
 
     #[test]
