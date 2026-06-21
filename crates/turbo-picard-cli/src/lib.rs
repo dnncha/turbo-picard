@@ -3329,7 +3329,7 @@ fn run_collectgcbiasmetrics(args: &[String]) -> Result<(), String> {
     let mut metrics = GcBiasMetricsSummary::new(&reference, window_size, also_ignore_duplicates)?;
     for record in limited_records(&mut reader, stop_after) {
         let record = record.map_err(|error| error.to_string())?;
-        metrics.observe(&record, &target_names, window_size)?;
+        metrics.observe(&record, &target_names)?;
     }
 
     fs::write(
@@ -3787,8 +3787,8 @@ fn run_collectmultiplemetrics_single_pass(
                 *include_supplemental,
             );
         }
-        if let Some((metrics, _, _, _, window_size, ..)) = gc_bias.as_mut() {
-            metrics.observe(record, &target_names, *window_size)?;
+        if let Some((metrics, _, _, _, _window_size, ..)) = gc_bias.as_mut() {
+            metrics.observe(record, &target_names)?;
         }
         if let Some((
             metrics,
@@ -4084,10 +4084,9 @@ fn run_collectmultiplemetrics_single_pass(
                 Ok(())
             }));
         }
-        if let Some((worker, _, _, _, window_size, _)) = &gc_bias_worker {
+        if let Some((worker, _, _, _, _window_size, _)) = &gc_bias_worker {
             let worker = Arc::clone(worker);
             let target_names = Arc::clone(&target_names);
-            let window_size = *window_size;
             handlers.push(Box::new(move |batch| {
                 let mut metrics = worker.lock().expect("gc-bias collector lock");
                 for entry in batch {
@@ -4095,9 +4094,7 @@ fn run_collectmultiplemetrics_single_pass(
                         continue;
                     }
                     let record = &entry.record;
-                    if let Err(error) =
-                        metrics.observe(record, target_names.as_slice(), window_size)
-                    {
+                    if let Err(error) = metrics.observe(record, target_names.as_slice()) {
                         return Err(format!("CollectGcBiasMetrics failed: {error}"));
                     }
                 }
@@ -8572,9 +8569,10 @@ fn count_gc_bias_windows(reference_path: &str, window_size: usize) -> Result<[u6
         }
         let sequence = load_fasta_contig_sequence(reference_path, &name)?;
         let window_count = sequence.len().saturating_sub(window_size + 1);
+        let gc_bins = gc_window_bins(&sequence, window_size)?;
         for start in 0..window_count {
-            if let Some(window) = sequence.get(start..start + window_size) {
-                windows[gc_percent(window, window_size)] += 1;
+            if let Some(gc) = gc_bins.get(start) {
+                windows[*gc as usize] += 1;
             }
         }
     }
@@ -13702,8 +13700,9 @@ struct GcBiasMetricsSummary {
     unique_quality_sums: [u64; 101],
     unique_quality_counts: [u64; 101],
     reference_path: String,
+    window_size: usize,
     active_contig: Option<String>,
-    active_sequence: Vec<u8>,
+    active_gc_bins: Vec<u8>,
     total_clusters: u64,
     aligned_reads: u64,
     unique_total_clusters: u64,
@@ -13740,8 +13739,9 @@ impl GcBiasMetricsSummary {
             unique_quality_sums: [0; 101],
             unique_quality_counts: [0; 101],
             reference_path: reference_path.to_string(),
+            window_size,
             active_contig: None,
-            active_sequence: Vec::new(),
+            active_gc_bins: Vec::new(),
             total_clusters: 0,
             aligned_reads: 0,
             unique_total_clusters: 0,
@@ -13754,17 +13754,13 @@ impl GcBiasMetricsSummary {
         if self.active_contig.as_deref() == Some(contig) {
             return Ok(());
         }
-        self.active_sequence = load_fasta_contig_sequence(&self.reference_path, contig)?;
+        let sequence = load_fasta_contig_sequence(&self.reference_path, contig)?;
+        self.active_gc_bins = gc_window_bins(&sequence, self.window_size)?;
         self.active_contig = Some(contig.to_string());
         Ok(())
     }
 
-    fn observe(
-        &mut self,
-        record: &bam::Record,
-        target_names: &[String],
-        window_size: usize,
-    ) -> Result<(), String> {
+    fn observe(&mut self, record: &bam::Record, target_names: &[String]) -> Result<(), String> {
         if record.is_secondary() || record.is_supplementary() {
             return Ok(());
         }
@@ -13783,12 +13779,11 @@ impl GcBiasMetricsSummary {
             .get(record.tid() as usize)
             .ok_or_else(|| "CollectGcBiasMetrics record references unknown target".to_string())?;
         self.ensure_contig(contig)?;
-        let reference = &self.active_sequence;
-        if reference.len() < window_size {
+        if self.active_gc_bins.is_empty() {
             return Ok(());
         }
-        let start = (record.pos().max(0) as usize).min(reference.len() - window_size);
-        let gc = gc_percent(&reference[start..start + window_size], window_size);
+        let start = (record.pos().max(0) as usize).min(self.active_gc_bins.len() - 1);
+        let gc = self.active_gc_bins[start] as usize;
         let quality_sum = record
             .qual()
             .iter()
@@ -14044,12 +14039,41 @@ impl GcBiasMetricsSummary {
     }
 }
 
+#[cfg(test)]
 fn gc_percent(window: &[u8], window_size: usize) -> usize {
     let gc = window
         .iter()
         .filter(|base| matches!(base.to_ascii_uppercase(), b'G' | b'C'))
         .count();
     ((gc * 100) + (window_size / 2)) / window_size
+}
+
+fn gc_window_bins(sequence: &[u8], window_size: usize) -> Result<Vec<u8>, String> {
+    if window_size == 0 {
+        return Err("CollectGcBiasMetrics SCAN_WINDOW_SIZE must be greater than 0".to_string());
+    }
+    if sequence.len() < window_size {
+        return Ok(Vec::new());
+    }
+    let mut gc = sequence[..window_size]
+        .iter()
+        .filter(|base| matches!(base.to_ascii_uppercase(), b'G' | b'C'))
+        .count();
+    let mut bins = Vec::with_capacity(sequence.len() - window_size + 1);
+    bins.push((((gc * 100) + (window_size / 2)) / window_size) as u8);
+    for start in 1..=sequence.len() - window_size {
+        if matches!(sequence[start - 1].to_ascii_uppercase(), b'G' | b'C') {
+            gc -= 1;
+        }
+        if matches!(
+            sequence[start + window_size - 1].to_ascii_uppercase(),
+            b'G' | b'C'
+        ) {
+            gc += 1;
+        }
+        bins.push((((gc * 100) + (window_size / 2)) / window_size) as u8);
+    }
+    Ok(bins)
 }
 
 fn collect_mean_quality_by_cycle_sam_text(
@@ -20314,8 +20338,9 @@ mod tests {
             unique_quality_sums: [0; 101],
             unique_quality_counts: [0; 101],
             reference_path: String::new(),
+            window_size: 100,
             active_contig: None,
-            active_sequence: Vec::new(),
+            active_gc_bins: Vec::new(),
             total_clusters: 1,
             aligned_reads: 1,
             unique_total_clusters: 0,
@@ -20325,6 +20350,16 @@ mod tests {
 
         let text = summary.detail_text(100, 0.0);
         assert!(text.contains("All Reads\tALL\t50\t2\t1\t30\t1\t1"));
+    }
+
+    #[test]
+    fn gc_window_bins_match_direct_window_percentages() {
+        let sequence = b"ACGTGCAA";
+        let bins = gc_window_bins(sequence, 4).expect("bins compute");
+        let expected = (0..=sequence.len() - 4)
+            .map(|start| gc_percent(&sequence[start..start + 4], 4) as u8)
+            .collect::<Vec<_>>();
+        assert_eq!(bins, expected);
     }
 
     #[test]
