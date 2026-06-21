@@ -1696,20 +1696,24 @@ fn fragment_duplicate_groups(
     candidates: &[DuplicateCandidate],
     config: &MarkDuplicatesConfig,
 ) -> Result<Vec<Vec<usize>>, MarkDuplicatesError> {
-    let keyed_fragments = candidates
-        .iter()
-        .enumerate()
-        .map(|(candidate_index, candidate)| (candidate.fragment_key, candidate_index))
-        .collect::<Vec<_>>();
     let mut groups = Vec::<Vec<usize>>::new();
-    scan_fragment_key_rows(keyed_fragments, config, |group| {
+    scan_fragment_key_rows(fragment_key_rows(candidates), config, |group| {
         groups.push(group.to_vec());
     })?;
     Ok(groups)
 }
 
+fn fragment_key_rows(
+    candidates: &[DuplicateCandidate],
+) -> impl Iterator<Item = (BamDuplicateKey, usize)> + '_ {
+    candidates
+        .iter()
+        .enumerate()
+        .map(|(candidate_index, candidate)| (candidate.fragment_key, candidate_index))
+}
+
 fn scan_fragment_key_rows(
-    keyed_fragments: Vec<(BamDuplicateKey, usize)>,
+    keyed_fragments: impl IntoIterator<Item = (BamDuplicateKey, usize)>,
     config: &MarkDuplicatesConfig,
     mut emit_group: impl FnMut(&[usize]),
 ) -> Result<(), MarkDuplicatesError> {
@@ -1983,12 +1987,7 @@ fn mark_fragment_duplicate_groups(
     library_registry: &mut LibraryRegistry,
     config: &MarkDuplicatesConfig,
 ) -> Result<(), MarkDuplicatesError> {
-    let keyed_fragments = candidates
-        .iter()
-        .enumerate()
-        .map(|(candidate_index, candidate)| (candidate.fragment_key, candidate_index))
-        .collect::<Vec<_>>();
-    scan_fragment_key_rows(keyed_fragments, config, |group| {
+    scan_fragment_key_rows(fragment_key_rows(candidates), config, |group| {
         apply_fragment_duplicate_group(group, candidates, decisions, summary, library_registry);
     })
 }
