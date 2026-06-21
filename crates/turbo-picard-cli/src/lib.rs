@@ -16793,12 +16793,12 @@ impl SamToFastqPerRgOutputs {
         record: &bam::Record,
     ) -> Result<&mut dyn Write, String> {
         let read_group_id = bam_record_read_group_id(record)?;
-        self.unpaired_writer_for_read_group(&read_group_id)
+        self.unpaired_writer_for_read_group(read_group_id)
     }
 
     fn unpaired_writer_for_sam_record(&mut self, line: &str) -> Result<&mut dyn Write, String> {
         let read_group_id = sam_record_read_group_id(line)?;
-        self.unpaired_writer_for_read_group(&read_group_id)
+        self.unpaired_writer_for_read_group(read_group_id)
     }
 
     fn write_bam_pair(
@@ -16809,11 +16809,11 @@ impl SamToFastqPerRgOutputs {
         re_reverse: bool,
     ) -> Result<(), String> {
         let read_group_id = bam_record_read_group_id(read1)?;
-        self.ensure_writers_for_read_group(&read_group_id)?;
+        self.ensure_writers_for_read_group(read_group_id)?;
         if self.config.interleave {
             let writer = self
                 .writers
-                .get_mut(&read_group_id)
+                .get_mut(read_group_id)
                 .expect("writers exist after ensure")
                 .first
                 .as_mut();
@@ -16830,10 +16830,10 @@ impl SamToFastqPerRgOutputs {
                 transform.write_options_for(read2, re_reverse),
             )
         } else {
-            self.ensure_second_writer_for_read_group(&read_group_id)?;
+            self.ensure_second_writer_for_read_group(read_group_id)?;
             let writers = self
                 .writers
-                .get_mut(&read_group_id)
+                .get_mut(read_group_id)
                 .expect("writers exist after ensure");
             write_fastq_record(
                 writers.first.as_mut(),
@@ -16864,11 +16864,11 @@ impl SamToFastqPerRgOutputs {
         buffers: &mut SamToFastqOwnedBuffers,
     ) -> Result<(), String> {
         let read_group_id = sam_record_read_group_id(line)?;
-        self.ensure_writers_for_read_group(&read_group_id)?;
+        self.ensure_writers_for_read_group(read_group_id)?;
         if self.config.interleave {
             let writer = self
                 .writers
-                .get_mut(&read_group_id)
+                .get_mut(read_group_id)
                 .expect("writers exist after ensure")
                 .first
                 .as_mut();
@@ -16887,10 +16887,10 @@ impl SamToFastqPerRgOutputs {
                 buffers.as_parts(),
             )
         } else {
-            self.ensure_second_writer_for_read_group(&read_group_id)?;
+            self.ensure_second_writer_for_read_group(read_group_id)?;
             let writers = self
                 .writers
-                .get_mut(&read_group_id)
+                .get_mut(read_group_id)
                 .expect("writers exist after ensure");
             write_sam_fastq_record(
                 writers.first.as_mut(),
@@ -17090,17 +17090,17 @@ struct SamToFastqReadGroupWriters {
     second: Option<Box<dyn Write>>,
 }
 
-fn bam_record_read_group_id(record: &bam::Record) -> Result<String, String> {
+fn bam_record_read_group_id(record: &bam::Record) -> Result<&str, String> {
     match record.aux(b"RG") {
-        Ok(Aux::String(value)) => Ok(value.to_string()),
+        Ok(Aux::String(value)) => Ok(value),
         _ => Err("SamToFastq record is missing RG tag".to_string()),
     }
 }
 
-fn sam_record_read_group_id(line: &str) -> Result<String, String> {
+fn sam_record_read_group_id(line: &str) -> Result<&str, String> {
     for field in line.split('\t').skip(11) {
         if let Some(value) = field.strip_prefix("RG:Z:") {
-            return Ok(value.to_string());
+            return Ok(value);
         }
     }
     Err("SamToFastq record is missing RG tag".to_string())
