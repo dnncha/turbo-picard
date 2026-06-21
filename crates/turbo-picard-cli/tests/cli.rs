@@ -286,6 +286,35 @@ fn markduplicates_delegates_unsupported_native_surface_to_configured_fallback() 
 }
 
 #[test]
+fn markduplicates_delegates_multi_cram_native_surface_to_configured_fallback() {
+    let tempdir = tempfile::tempdir().expect("tempdir exists");
+    let fallback = fallback_script(tempdir.path(), 0);
+    let log = tempdir.path().join("fallback.args");
+
+    let mut cmd = Command::cargo_bin("picard").expect("binary exists");
+    cmd.env(
+        "TURBO_PICARD_FALLBACK_COMMAND",
+        fallback.display().to_string(),
+    )
+    .env("TURBO_PICARD_FALLBACK_LOG", log.display().to_string())
+    .args([
+        "MarkDuplicates",
+        "I=in1.cram",
+        "I=in2.cram",
+        "O=out.bam",
+        "M=metrics.txt",
+    ])
+    .assert()
+    .success();
+
+    let fallback_args = fs::read_to_string(log).expect("fallback log exists");
+    assert_eq!(
+        fallback_args,
+        "MarkDuplicates\nI=in1.cram\nI=in2.cram\nO=out.bam\nM=metrics.txt\n"
+    );
+}
+
+#[test]
 fn markduplicates_uses_native_engine_before_configured_fallback() {
     let tempdir = tempfile::tempdir().expect("tempdir exists");
     let fallback = fallback_script(tempdir.path(), 99);

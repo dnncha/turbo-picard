@@ -458,6 +458,11 @@ pub fn run(config: &MarkDuplicatesConfig) -> Result<MarkDuplicatesSummary, MarkD
         .iter()
         .all(|input| hts_io::is_hts_container_input(input))
     {
+        if config.inputs.len() > 1 && !all_inputs_are_bam(config) {
+            return Err(MarkDuplicatesError::UnsupportedInputFormat(
+                config.inputs.join(","),
+            ));
+        }
         return run_hts_container(config);
     }
 
@@ -608,6 +613,13 @@ fn markdup_reference(config: &MarkDuplicatesConfig) -> Option<&str> {
     config.reference_sequence.as_deref()
 }
 
+fn all_inputs_are_bam(config: &MarkDuplicatesConfig) -> bool {
+    config
+        .inputs
+        .iter()
+        .all(|input| hts_io::path_format(input) == Some(bam::Format::Bam))
+}
+
 fn open_markdup_reader(
     config: &MarkDuplicatesConfig,
     path: &str,
@@ -657,9 +669,7 @@ fn run_hts_container(
     let mut barcodes = ByteInterner::default();
     let mut optical_locations = OpticalLocations::default();
     let mut record_count = 0usize;
-    let seekable_multi_bam_output = config.inputs.len() > 1 && all_inputs_are_bam(config);
-    let retain_records = config.inputs.len() > 1 && !seekable_multi_bam_output;
-    let mut records = Vec::new();
+    let use_multi_input_locators = config.inputs.len() > 1;
     let mut output_locs = Vec::new();
     let mut summary = MarkDuplicatesSummary {
         library,
@@ -677,12 +687,7 @@ fn run_hts_container(
     read_bam_records(
         &mut reader,
         &mut BamRecordSink {
-            records: if retain_records {
-                Some(&mut records)
-            } else {
-                None
-            },
-            output_locs: if seekable_multi_bam_output {
+            output_locs: if use_multi_input_locators {
                 Some(&mut output_locs)
             } else {
                 None
@@ -705,12 +710,7 @@ fn run_hts_container(
         read_bam_records(
             &mut reader,
             &mut BamRecordSink {
-                records: if retain_records {
-                    Some(&mut records)
-                } else {
-                    None
-                },
-                output_locs: if seekable_multi_bam_output {
+                output_locs: if use_multi_input_locators {
                     Some(&mut output_locs)
                 } else {
                     None
@@ -752,30 +752,7 @@ fn run_hts_container(
 
     let mut writer = open_markdup_writer(config, &config.output, &header)?;
     if config.inputs.len() > 1 {
-        if seekable_multi_bam_output {
-            write_multi_bam_records_by_locator(
-                output_locs,
-                &qnames,
-                &decisions,
-                config,
-                &mut writer,
-            )?;
-        } else {
-            let mut marked_records = records
-                .into_iter()
-                .enumerate()
-                .map(|(record_index, record)| {
-                    let decision = decisions.decision(record_index).ok_or_else(|| {
-                        MarkDuplicatesError::Operation("missing duplicate decision".into())
-                    })?;
-                    Ok((record, decision))
-                })
-                .collect::<Result<Vec<_>, MarkDuplicatesError>>()?;
-            marked_records.sort_by(|(left, left_decision), (right, right_decision)| {
-                compare_bam_output_order(left, *left_decision, right, *right_decision)
-            });
-            write_bam_records(marked_records, config, &mut writer)?;
-        }
+        write_multi_bam_records_by_locator(output_locs, &qnames, &decisions, config, &mut writer)?;
     } else {
         let mut reader = open_markdup_reader(config, first_input)?;
         read_bam_records_for_output(&mut reader, &decisions, config, &mut writer)?;
@@ -802,15 +779,7 @@ fn run_hts_container(
     Ok(summary)
 }
 
-fn all_inputs_are_bam(config: &MarkDuplicatesConfig) -> bool {
-    config
-        .inputs
-        .iter()
-        .all(|input| hts_io::path_format(input) == Some(bam::Format::Bam))
-}
-
 struct BamRecordSink<'a> {
-    records: Option<&'a mut Vec<bam::Record>>,
     output_locs: Option<&'a mut Vec<OutputRecordLocator>>,
     input_index: u32,
     record_count: &'a mut usize,
@@ -864,9 +833,6 @@ fn read_bam_records<R: bam::Read>(
         if flag & UNMAPPED_FLAG != 0 {
             summary.unmapped_records += 1;
             library_registry.summary_mut(library_id).unmapped_records += 1;
-            if let Some(records) = sink.records.as_deref_mut() {
-                records.push(std::mem::take(&mut record));
-            }
             continue;
         }
         if flag & SECONDARY_OR_SUPPLEMENTARY_FLAGS != 0 {
@@ -874,9 +840,6 @@ fn read_bam_records<R: bam::Read>(
             library_registry
                 .summary_mut(library_id)
                 .secondary_or_supplementary_records += 1;
-            if let Some(records) = sink.records.as_deref_mut() {
-                records.push(std::mem::take(&mut record));
-            }
             continue;
         }
 
@@ -906,9 +869,6 @@ fn read_bam_records<R: bam::Read>(
             parse_optical_location,
             sink.optical_locations,
         ));
-        if let Some(records) = sink.records.as_deref_mut() {
-            records.push(std::mem::take(&mut record));
-        }
     }
 
     Ok(())
@@ -1011,22 +971,6 @@ fn write_multi_bam_records_by_locator(
     Ok(())
 }
 
-fn compare_bam_output_order(
-    left: &bam::Record,
-    left_decision: RecordDecision,
-    right: &bam::Record,
-    right_decision: RecordDecision,
-) -> Ordering {
-    left.tid()
-        .cmp(&right.tid())
-        .then_with(|| left.pos().cmp(&right.pos()))
-        .then_with(|| left.qname().cmp(right.qname()))
-        .then_with(|| {
-            effective_record_flags(left, left_decision)
-                .cmp(&effective_record_flags(right, right_decision))
-        })
-}
-
 fn effective_record_flags(record: &bam::Record, decision: RecordDecision) -> u16 {
     if decision.duplicate() {
         record.flags() | DUPLICATE_FLAG
@@ -1096,17 +1040,6 @@ fn decode_locator_payload(payload: &[u8]) -> Result<OutputLocatorPayload, MarkDu
         record_index,
         offset,
     })
-}
-
-fn write_bam_records(
-    records: impl IntoIterator<Item = (bam::Record, RecordDecision)>,
-    config: &MarkDuplicatesConfig,
-    writer: &mut bam::Writer,
-) -> Result<(), MarkDuplicatesError> {
-    for (mut record, decision) in records {
-        write_bam_record(&mut record, decision, config, writer)?;
-    }
-    Ok(())
 }
 
 fn write_bam_record(

@@ -65,3 +65,52 @@ fn marks_duplicates_on_cram_input_and_output() {
     run(&config).expect("CRAM duplicate marking succeeds");
     assert!(output_cram.exists());
 }
+
+#[test]
+fn multiple_cram_inputs_return_unsupported_native_surface() {
+    let tempdir = tempfile::tempdir().expect("tempdir exists");
+    let reference = reference_fasta();
+    let input1_cram = tempdir.path().join("missing1.cram");
+    let input2_cram = tempdir.path().join("missing2.cram");
+    let output_bam = tempdir.path().join("output.bam");
+    let metrics = tempdir.path().join("metrics.txt");
+
+    let config = MarkDuplicatesConfig {
+        input: input1_cram.display().to_string(),
+        inputs: vec![
+            input1_cram.display().to_string(),
+            input2_cram.display().to_string(),
+        ],
+        output: output_bam.display().to_string(),
+        metrics_file: metrics.display().to_string(),
+        max_records_in_ram: 1,
+        mate_cache_records: 1,
+        tmp_dirs: vec![tempdir.path().display().to_string()],
+        remove_duplicates: false,
+        remove_sequencing_duplicates: false,
+        assume_sorted: true,
+        assume_sort_order: None,
+        validation_stringency: Some("SILENT".to_string()),
+        quiet: true,
+        create_index: false,
+        create_md5_file: false,
+        add_pg_tag_to_reads: true,
+        tag_duplicate_set_members: false,
+        duplicate_scoring_strategy: None,
+        read_name_regex: Some("null".to_string()),
+        tagging_policy: Some("DontTag".to_string()),
+        barcode_tag: None,
+        read_one_barcode_tag: None,
+        read_two_barcode_tag: None,
+        clear_dt: true,
+        optical_duplicate_pixel_distance: None,
+        compression_level: None,
+        reference_sequence: Some(reference.display().to_string()),
+    };
+
+    let error = run(&config).expect_err("multi-input CRAM should delegate to Picard");
+
+    assert!(error.to_string().starts_with("unsupported MarkDuplicates"));
+    assert!(!output_bam.exists());
+    assert!(!metrics.exists());
+}
