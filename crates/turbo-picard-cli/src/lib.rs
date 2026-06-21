@@ -5091,27 +5091,71 @@ fn run_normalizefasta(args: &[String]) -> Result<(), String> {
         return Err("unsupported NormalizeFasta LINE_LENGTH=0".to_string());
     }
 
-    let text = read_text_or_gzip(&input)?;
-    let mut normalized = String::new();
-    let mut current_sequence = Vec::<u8>::new();
-    for line in text.lines() {
-        if let Some(header) = line.strip_prefix('>') {
-            flush_fasta_sequence(&mut normalized, &current_sequence, line_length);
-            current_sequence.clear();
-            let header = if truncate_names {
-                header.split_whitespace().next().unwrap_or_default()
+    let output_path = Path::new(&output);
+    let output_dir = output_path.parent().unwrap_or_else(|| Path::new("."));
+    let temp_path = create_unique_temp_path(output_dir, "normalizefasta")?;
+    let result = (|| -> Result<(), String> {
+        let mut reader = open_text_or_gzip_reader(&input)?;
+        let file = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temp_path)
+            .map_err(|error| error.to_string())?;
+        let mut writer = BufWriter::with_capacity(64 * 1024, file);
+        let mut line = String::new();
+        let mut current_column = 0usize;
+
+        loop {
+            line.clear();
+            let bytes_read = reader
+                .read_line(&mut line)
+                .map_err(|error| error.to_string())?;
+            if bytes_read == 0 {
+                break;
+            }
+            let line = line.trim_end_matches(['\r', '\n']);
+            if let Some(header) = line.strip_prefix('>') {
+                if current_column != 0 {
+                    writer.write_all(b"\n").map_err(|error| error.to_string())?;
+                    current_column = 0;
+                }
+                let header = if truncate_names {
+                    header.split_whitespace().next().unwrap_or_default()
+                } else {
+                    header
+                };
+                writer
+                    .write_all(b">")
+                    .and_then(|_| writer.write_all(header.as_bytes()))
+                    .and_then(|_| writer.write_all(b"\n"))
+                    .map_err(|error| error.to_string())?;
             } else {
-                header
-            };
-            normalized.push('>');
-            normalized.push_str(header);
-            normalized.push('\n');
-        } else {
-            current_sequence.extend(line.trim().as_bytes());
+                let sequence = line.trim().as_bytes();
+                let mut offset = 0usize;
+                while offset < sequence.len() {
+                    let take = (line_length - current_column).min(sequence.len() - offset);
+                    writer
+                        .write_all(&sequence[offset..offset + take])
+                        .map_err(|error| error.to_string())?;
+                    current_column += take;
+                    offset += take;
+                    if current_column == line_length {
+                        writer.write_all(b"\n").map_err(|error| error.to_string())?;
+                        current_column = 0;
+                    }
+                }
+            }
         }
+        if current_column != 0 {
+            writer.write_all(b"\n").map_err(|error| error.to_string())?;
+        }
+        writer.flush().map_err(|error| error.to_string())?;
+        fs::rename(&temp_path, output).map_err(|error| error.to_string())
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(&temp_path);
     }
-    flush_fasta_sequence(&mut normalized, &current_sequence, line_length);
-    fs::write(output, normalized).map_err(|error| error.to_string())
+    result
 }
 
 fn run_bedtointervallist(args: &[String]) -> Result<(), String> {
@@ -9549,13 +9593,6 @@ fn derived_dict_path(reference: &str) -> String {
         path.set_extension("");
     }
     path.with_extension("dict").display().to_string()
-}
-
-fn flush_fasta_sequence(output: &mut String, sequence: &[u8], line_length: usize) {
-    for chunk in sequence.chunks(line_length) {
-        output.push_str(&String::from_utf8_lossy(chunk));
-        output.push('\n');
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
