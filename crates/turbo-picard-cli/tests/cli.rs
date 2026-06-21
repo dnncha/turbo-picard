@@ -6486,6 +6486,7 @@ fn setnmmdanduqtags_computes_reference_tags() {
             "read2\t0\tchr1\t5\t60\t2M1I2M\t*\t0\t0\tACGTA\tFFFFF\n",
             "read3\t0\tchr1\t8\t60\t2M1D2M\t*\t0\t0\tTACG\tFFFF\n",
             "read4\t0\tchr1\t1\t60\t12M\t*\t0\t0\tACGTACGTACGT\tFFFFFFFFFFFF\n",
+            "read5\t0\tchr1\t1\t60\t2=1X1=\t*\t0\t0\tACGT\tFFFF\n",
         ),
     )
     .expect("input fixture is written");
@@ -6517,6 +6518,9 @@ fn setnmmdanduqtags_computes_reference_tags() {
     ));
     assert!(tagged.contains(
         "read4\t0\tchr1\t1\t60\t12M\t*\t0\t0\tACGTACGTACGT\tFFFFFFFFFFFF\tMD:Z:12\tNM:i:0\tUQ:i:0\n"
+    ));
+    assert!(tagged.contains(
+        "read5\t0\tchr1\t1\t60\t2=1X1=\t*\t0\t0\tACGT\tFFFF\tMD:Z:2G1\tNM:i:1\tUQ:i:37\n"
     ));
 }
 

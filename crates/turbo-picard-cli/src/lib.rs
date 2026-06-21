@@ -5944,9 +5944,15 @@ fn run_setnmmdanduqtags(args: &[String]) -> Result<(), String> {
         compression_level,
     )?;
 
+    let mut tag_scratch = ReferenceTagScratch::default();
     for record in reader.records() {
         let mut record = record.map_err(|error| error.to_string())?;
-        set_nm_md_uq_tags(&mut record, &references_by_tid, set_only_uq)?;
+        set_nm_md_uq_tags(
+            &mut record,
+            &references_by_tid,
+            set_only_uq,
+            &mut tag_scratch,
+        )?;
         writer.write(&record).map_err(|error| error.to_string())?;
     }
     drop(writer);
@@ -18228,10 +18234,16 @@ fn remove_aux_if_present(record: &mut bam::Record, tag: &[u8]) -> Result<(), Str
     Ok(())
 }
 
+#[derive(Default)]
+struct ReferenceTagScratch {
+    md: String,
+}
+
 fn set_nm_md_uq_tags(
     record: &mut bam::Record,
     references_by_tid: &[Option<&[u8]>],
     set_only_uq: bool,
+    scratch: &mut ReferenceTagScratch,
 ) -> Result<(), String> {
     if record.is_unmapped() || record.is_secondary() || record.is_supplementary() {
         return Ok(());
@@ -18250,7 +18262,9 @@ fn set_nm_md_uq_tags(
     let mut ref_offset = record.pos() as usize;
     let mut nm = 0i32;
     let mut uq = 0i32;
-    let mut md = String::with_capacity(read_bases.len());
+    scratch.md.clear();
+    scratch.md.reserve(read_bases.len());
+    let md = &mut scratch.md;
     let mut matches = 0usize;
     let md_present = record.aux(b"MD").is_ok();
     let nm_present = record.aux(b"NM").is_ok();
@@ -18258,7 +18272,7 @@ fn set_nm_md_uq_tags(
 
     for cigar in &record.cigar() {
         match *cigar {
-            Cigar::Match(length) | Cigar::Equal(length) | Cigar::Diff(length) => {
+            Cigar::Match(length) => {
                 for _ in 0..length {
                     if read_offset >= read_bases.len() {
                         return Err("SetNmMdAndUqTags read sequence shorter than CIGAR".to_string());
@@ -18270,7 +18284,7 @@ fn set_nm_md_uq_tags(
                     if dna_bases_equal(read_base, ref_base) {
                         matches += 1;
                     } else {
-                        push_usize_decimal(&mut md, matches);
+                        push_usize_decimal(md, matches);
                         md.push(ref_base as char);
                         matches = 0;
                         nm += 1;
@@ -18280,12 +18294,41 @@ fn set_nm_md_uq_tags(
                     ref_offset += 1;
                 }
             }
+            Cigar::Equal(length) => {
+                let length = length as usize;
+                if read_offset.saturating_add(length) > read_bases.len() {
+                    return Err("SetNmMdAndUqTags read sequence shorter than CIGAR".to_string());
+                }
+                if ref_offset.saturating_add(length) > reference.len() {
+                    return Err("SetNmMdAndUqTags alignment extends beyond reference".to_string());
+                }
+                read_offset += length;
+                ref_offset += length;
+                matches += length;
+            }
+            Cigar::Diff(length) => {
+                for _ in 0..length {
+                    if read_offset >= read_bases.len() {
+                        return Err("SetNmMdAndUqTags read sequence shorter than CIGAR".to_string());
+                    }
+                    let ref_base = *reference.get(ref_offset).ok_or_else(|| {
+                        "SetNmMdAndUqTags alignment extends beyond reference".to_string()
+                    })?;
+                    push_usize_decimal(md, matches);
+                    md.push(ref_base as char);
+                    matches = 0;
+                    nm += 1;
+                    uq += qualities.get(read_offset).copied().unwrap_or(0) as i32;
+                    read_offset += 1;
+                    ref_offset += 1;
+                }
+            }
             Cigar::Ins(length) => {
                 read_offset += length as usize;
                 nm += length as i32;
             }
             Cigar::Del(length) => {
-                push_usize_decimal(&mut md, matches);
+                push_usize_decimal(md, matches);
                 md.push('^');
                 matches = 0;
                 for _ in 0..length {
@@ -18306,14 +18349,14 @@ fn set_nm_md_uq_tags(
             }
         }
     }
-    push_usize_decimal(&mut md, matches);
+    push_usize_decimal(md, matches);
 
     if !set_only_uq {
         if md_present {
-            replace_aux_string(record, b"MD", &md)?;
+            replace_aux_string(record, b"MD", md)?;
         } else {
             record
-                .push_aux_unchecked(b"MD", Aux::String(&md))
+                .push_aux_unchecked(b"MD", Aux::String(md))
                 .map_err(|error| error.to_string())?;
         }
         if nm_present {
@@ -18335,16 +18378,38 @@ fn set_nm_md_uq_tags(
 }
 
 fn dna_bases_equal(read_base: u8, ref_base: u8) -> bool {
-    if read_base == ref_base {
-        return true;
+    DNA_BASE_EQUAL[read_base as usize][ref_base as usize]
+}
+
+static DNA_BASE_EQUAL: [[bool; 256]; 256] = build_dna_base_equal_table();
+
+const fn build_dna_base_equal_table() -> [[bool; 256]; 256] {
+    let mut table = [[false; 256]; 256];
+    let mut read = 0usize;
+    while read < 256 {
+        let mut reference = 0usize;
+        while reference < 256 {
+            let read_base = read as u8;
+            let reference_base = reference as u8;
+            let read_canonical = canonical_dna_base(read_base);
+            let reference_canonical = canonical_dna_base(reference_base);
+            table[read][reference] = read_base == reference_base
+                || (read_canonical != 0 && read_canonical == reference_canonical);
+            reference += 1;
+        }
+        read += 1;
     }
-    match read_base.to_ascii_uppercase() {
-        b'A' => ref_base.eq_ignore_ascii_case(&b'A'),
-        b'C' => ref_base.eq_ignore_ascii_case(&b'C'),
-        b'G' => ref_base.eq_ignore_ascii_case(&b'G'),
-        b'T' => ref_base.eq_ignore_ascii_case(&b'T'),
-        b'N' => ref_base.eq_ignore_ascii_case(&b'N'),
-        _ => false,
+    table
+}
+
+const fn canonical_dna_base(base: u8) -> u8 {
+    match base {
+        b'A' | b'a' => b'A',
+        b'C' | b'c' => b'C',
+        b'G' | b'g' => b'G',
+        b'T' | b't' => b'T',
+        b'N' | b'n' => b'N',
+        _ => 0,
     }
 }
 
