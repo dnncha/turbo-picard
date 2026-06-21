@@ -5971,6 +5971,7 @@ fn run_validatesamfile(args: &[String]) -> Result<(), String> {
     let ignored = validate_sam_ignored_summary_keys(&args)?;
     let mode = validate_sam_mode(&args)?;
     let max_output = optional_u32(&args, "MAX_OUTPUT")?;
+    let detail_limit = mode.detail_limit(max_output);
     let reference = picard_reference(&args)?;
     if let Some(reference_path) = reference.as_deref() {
         fs::metadata(reference_path).map_err(|_| {
@@ -5984,7 +5985,7 @@ fn run_validatesamfile(args: &[String]) -> Result<(), String> {
     };
 
     let mut report = if has_sam_extension(&input) && mode == ValidateSamMode::Summary {
-        validate_sam_summary_sam_text(&input, skip_mate_validation)?
+        validate_sam_summary_sam_text(&input, skip_mate_validation, detail_limit)?
     } else {
         let mut reader = open_bam_reader_with_reference(&input, reference.as_deref())
             .map_err(|error| error.to_string())?;
@@ -5992,17 +5993,15 @@ fn run_validatesamfile(args: &[String]) -> Result<(), String> {
             &mut reader,
             skip_mate_validation,
             reference_by_name.as_ref(),
+            detail_limit,
         )?
     };
     for key in ignored {
-        report.counts.remove(&key);
-        report.details.retain(|detail| detail.key != key);
+        report.remove_ignored_key(&key);
     }
     match mode {
         ValidateSamMode::Summary => write_validate_sam_summary(output.as_deref(), &report.counts)?,
-        ValidateSamMode::Verbose => {
-            write_validate_sam_verbose(output.as_deref(), &report.details, max_output)?
-        }
+        ValidateSamMode::Verbose => write_validate_sam_verbose(output.as_deref(), &report)?,
     }
 
     if report.counts.is_empty() {
@@ -8631,10 +8630,12 @@ fn reference_sequences_by_name(path: &str) -> Result<BTreeMap<String, Vec<u8>>, 
         .collect())
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 struct ValidateSamReport {
     counts: BTreeMap<String, u64>,
     details: Vec<ValidateSamDetail>,
+    detail_limit: usize,
+    details_truncated: bool,
 }
 
 #[derive(Debug)]
@@ -8643,16 +8644,58 @@ struct ValidateSamDetail {
     line: String,
 }
 
+impl ValidateSamReport {
+    fn new(detail_limit: usize) -> Self {
+        Self {
+            counts: BTreeMap::new(),
+            details: Vec::new(),
+            detail_limit,
+            details_truncated: false,
+        }
+    }
+
+    fn add_issue(&mut self, key: &str, detail: String) {
+        *self.counts.entry(key.to_string()).or_default() += 1;
+        if self.details.len() < self.detail_limit {
+            self.details.push(ValidateSamDetail {
+                key: key.to_string(),
+                line: detail,
+            });
+        } else {
+            self.details_truncated = true;
+        }
+    }
+
+    fn remove_ignored_key(&mut self, key: &str) {
+        self.counts.remove(key);
+        self.details.retain(|detail| detail.key != key);
+        if self.counts.is_empty() {
+            self.details.clear();
+            self.details_truncated = false;
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ValidateSamMode {
     Summary,
     Verbose,
 }
 
+impl ValidateSamMode {
+    fn detail_limit(self, max_output: Option<u32>) -> usize {
+        match self {
+            Self::Summary => 0,
+            Self::Verbose => max_output.map(|value| value as usize).unwrap_or(100),
+        }
+    }
+}
+
 fn validate_sam_summary(
     reader: &mut bam::Reader,
     skip_mate_validation: bool,
     reference_by_name: Option<&BTreeMap<String, Vec<u8>>>,
+    detail_limit: usize,
 ) -> Result<ValidateSamReport, String> {
     let header_text = String::from_utf8_lossy(reader.header().as_bytes()).to_string();
     let read_groups = read_group_platforms(&header_text);
@@ -8669,7 +8712,7 @@ fn validate_sam_summary(
             .map(|name| references.get(name).map(Vec::as_slice))
             .collect::<Vec<_>>()
     });
-    let mut report = ValidateSamReport::default();
+    let mut report = ValidateSamReport::new(detail_limit);
     let mut pending_mates = BTreeMap::<Vec<u8>, ValidateSamMate>::new();
 
     if target_count == 0 {
@@ -8727,12 +8770,13 @@ fn validate_sam_summary(
 fn validate_sam_summary_sam_text(
     input: &str,
     skip_mate_validation: bool,
+    detail_limit: usize,
 ) -> Result<ValidateSamReport, String> {
     let file = fs::File::open(input).map_err(|error| error.to_string())?;
     let mut reader = BufReader::with_capacity(1024 * 1024, file);
     let mut line = Vec::new();
     let mut target_count = 0_u32;
-    let mut report = ValidateSamReport::default();
+    let mut report = ValidateSamReport::new(detail_limit);
     let mut pending_mates = BTreeMap::<Vec<u8>, ValidateSamMate>::new();
     let mut read_groups = BTreeMap::<String, bool>::new();
     let mut record_number = 0_u64;
@@ -9302,15 +9346,7 @@ fn validate_qname(record: &bam::Record) -> String {
 }
 
 fn add_validate_issue(report: &mut ValidateSamReport, key: &str, detail: String) {
-    add_validate_count(report, key);
-    report.details.push(ValidateSamDetail {
-        key: key.to_string(),
-        line: detail,
-    });
-}
-
-fn add_validate_count(report: &mut ValidateSamReport, key: &str) {
-    *report.counts.entry(key.to_string()).or_default() += 1;
+    report.add_issue(key, detail);
 }
 
 fn write_validate_sam_summary(
@@ -9337,19 +9373,18 @@ fn write_validate_sam_summary(
 
 fn write_validate_sam_verbose(
     output: Option<&str>,
-    details: &[ValidateSamDetail],
-    max_output: Option<u32>,
+    report: &ValidateSamReport,
 ) -> Result<(), String> {
-    let text = if details.is_empty() {
+    let text = if report.details.is_empty() && !report.details_truncated {
         "No errors found\n".to_string()
     } else {
         let mut text = String::new();
-        let max_output = max_output.map(|value| value as usize).unwrap_or(100);
-        for detail in details.iter().take(max_output) {
+        for detail in &report.details {
             text.push_str(&detail.line);
             text.push('\n');
         }
-        if details.len() > max_output {
+        if report.details_truncated {
+            let max_output = report.detail_limit;
             text.push_str(&format!(
                 "Maximum output of [{max_output}] errors reached.\n"
             ));
@@ -19758,6 +19793,26 @@ mod tests {
     }
 
     #[test]
+    fn validatesam_report_bounds_retained_details_but_counts_all_issues() {
+        let mut summary = ValidateSamReport::new(0);
+        summary.add_issue("ERROR:ONE", "first".to_string());
+        summary.add_issue("ERROR:ONE", "second".to_string());
+        assert_eq!(summary.counts["ERROR:ONE"], 2);
+        assert!(summary.details.is_empty());
+        assert!(summary.details_truncated);
+
+        let mut verbose = ValidateSamReport::new(1);
+        verbose.add_issue("ERROR:ONE", "first".to_string());
+        verbose.add_issue("ERROR:ONE", "second".to_string());
+        verbose.add_issue("ERROR:TWO", "third".to_string());
+        assert_eq!(verbose.counts["ERROR:ONE"], 2);
+        assert_eq!(verbose.counts["ERROR:TWO"], 1);
+        assert_eq!(verbose.details.len(), 1);
+        assert_eq!(verbose.details[0].line, "first");
+        assert!(verbose.details_truncated);
+    }
+
+    #[test]
     fn bam_sort_buffer_spills_by_record_count_or_estimated_bytes() {
         let mut record = bam::Record::new();
         record.set(b"read-1", None, b"ACGTACGT", b"FFFFFFFF");
@@ -20317,7 +20372,7 @@ mod tests {
         )
         .expect("fixture is written");
 
-        let report = validate_sam_summary_sam_text(path.to_str().unwrap(), true)
+        let report = validate_sam_summary_sam_text(path.to_str().unwrap(), true, 1)
             .expect("validation completes");
 
         assert_eq!(
