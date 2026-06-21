@@ -8579,6 +8579,55 @@ struct FaiEntry {
     offset: u64,
 }
 
+fn read_fai_entries(fai_path: &str) -> Result<Vec<(String, FaiEntry)>, String> {
+    let file = fs::File::open(fai_path).map_err(|error| error.to_string())?;
+    let mut reader = BufReader::new(file);
+    let mut entries = Vec::new();
+    let mut line = String::new();
+    loop {
+        line.clear();
+        let bytes_read = reader
+            .read_line(&mut line)
+            .map_err(|error| error.to_string())?;
+        if bytes_read == 0 {
+            break;
+        }
+        let line = line.trim_end_matches(['\r', '\n']);
+        if line.trim().is_empty() {
+            continue;
+        }
+        let mut fields = line.split('\t');
+        let Some(name) = fields.next() else {
+            continue;
+        };
+        let length = fields
+            .next()
+            .ok_or_else(|| format!("invalid FAI entry in {fai_path}"))?
+            .parse::<usize>()
+            .map_err(|error| format!("invalid FAI length in {fai_path}: {error}"))?;
+        let offset = fields
+            .next()
+            .ok_or_else(|| format!("invalid FAI entry in {fai_path}"))?
+            .parse::<u64>()
+            .map_err(|error| format!("invalid FAI offset in {fai_path}: {error}"))?;
+        fields
+            .next()
+            .ok_or_else(|| format!("invalid FAI entry in {fai_path}"))?
+            .parse::<usize>()
+            .map_err(|error| format!("invalid FAI bases-per-line in {fai_path}: {error}"))?;
+        fields
+            .next()
+            .ok_or_else(|| format!("invalid FAI entry in {fai_path}"))?
+            .parse::<usize>()
+            .map_err(|error| format!("invalid FAI line width in {fai_path}: {error}"))?;
+        entries.push((name.to_string(), FaiEntry { length, offset }));
+    }
+    if entries.is_empty() {
+        return Err(format!("FAI index {fai_path} contains no contigs"));
+    }
+    Ok(entries)
+}
+
 fn read_fai_entry(fai_path: &str, contig: &str) -> Result<FaiEntry, String> {
     let file = fs::File::open(fai_path).map_err(|error| error.to_string())?;
     let mut reader = BufReader::new(file);
@@ -8707,20 +8756,41 @@ fn load_fasta_contig_sequence(path: &str, contig: &str) -> Result<Vec<u8>, Strin
 
 fn count_gc_bias_windows(reference_path: &str, window_size: usize) -> Result<[u64; 101], String> {
     let mut windows = [0u64; 101];
-    for (name, length) in read_reference_contigs_for_wgs(reference_path)? {
+    let fai_path = format!("{reference_path}.fai");
+    if Path::new(&fai_path).is_file() {
+        for (name, entry) in read_fai_entries(&fai_path)? {
+            if entry.length < window_size {
+                continue;
+            }
+            let sequence = load_fasta_contig_sequence_indexed(reference_path, &name, entry)?;
+            add_gc_bias_windows_for_sequence(&sequence, window_size, &mut windows)?;
+        }
+        return Ok(windows);
+    }
+
+    for (name, length) in read_fasta_contig_lengths(reference_path, true)? {
         if length < window_size {
             continue;
         }
-        let sequence = load_fasta_contig_sequence(reference_path, &name)?;
-        let window_count = sequence.len().saturating_sub(window_size + 1);
-        let gc_bins = gc_window_bins(&sequence, window_size)?;
-        for start in 0..window_count {
-            if let Some(gc) = gc_bins.get(start) {
-                windows[*gc as usize] += 1;
-            }
-        }
+        let sequence = load_fasta_contig_sequence_scan(reference_path, &name)?;
+        add_gc_bias_windows_for_sequence(&sequence, window_size, &mut windows)?;
     }
     Ok(windows)
+}
+
+fn add_gc_bias_windows_for_sequence(
+    sequence: &[u8],
+    window_size: usize,
+    windows: &mut [u64; 101],
+) -> Result<(), String> {
+    let window_count = sequence.len().saturating_sub(window_size + 1);
+    let gc_bins = gc_window_bins(sequence, window_size)?;
+    for start in 0..window_count {
+        if let Some(gc) = gc_bins.get(start) {
+            windows[*gc as usize] += 1;
+        }
+    }
+    Ok(())
 }
 
 fn read_fasta_sequences(path: &str, truncate_names: bool) -> Result<Vec<FastaSequence>, String> {
