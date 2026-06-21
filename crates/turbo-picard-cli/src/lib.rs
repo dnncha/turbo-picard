@@ -3365,14 +3365,11 @@ fn run_collecthsmetrics(args: &[String]) -> Result<(), String> {
         .map(|(index, sequence)| (sequence.name.clone(), index))
         .collect::<BTreeMap<_, _>>();
 
-    let bait_text = fs::read_to_string(&bait_intervals_path).map_err(|error| error.to_string())?;
-    let target_text =
-        fs::read_to_string(&target_intervals_path).map_err(|error| error.to_string())?;
-    let bait_intervals = read_interval_list_intervals(&bait_text, &contig_order)?
+    let bait_intervals = read_interval_list_file(&bait_intervals_path, &contig_order)?
         .into_iter()
         .map(hs_metrics_interval_from_bed)
         .collect::<Vec<_>>();
-    let target_intervals = read_interval_list_intervals(&target_text, &contig_order)?
+    let target_intervals = read_interval_list_file(&target_intervals_path, &contig_order)?
         .into_iter()
         .map(hs_metrics_interval_from_bed)
         .collect::<Vec<_>>();
@@ -9780,19 +9777,6 @@ fn interval_list_output_header(header_text: &str, force_unsorted: bool) -> Strin
     }
 }
 
-fn read_interval_list_intervals(
-    text: &str,
-    contig_order: &BTreeMap<String, usize>,
-) -> Result<Vec<BedInterval>, String> {
-    let mut intervals = Vec::new();
-    for (line_index, line) in text.lines().enumerate() {
-        if let Some(interval) = parse_interval_list_interval(line, line_index + 1, contig_order)? {
-            intervals.push(interval);
-        }
-    }
-    Ok(intervals)
-}
-
 fn read_interval_list_file(
     path: &str,
     contig_order: &BTreeMap<String, usize>,
@@ -10005,9 +9989,19 @@ fn read_bed_intervals(
     drop_missing_contigs: bool,
     keep_length_zero_intervals: bool,
 ) -> Result<Vec<BedInterval>, String> {
-    let text = fs::read_to_string(path).map_err(|error| error.to_string())?;
+    let mut reader = open_text_or_gzip_reader(path)?;
     let mut intervals = Vec::new();
-    for (line_index, line) in text.lines().enumerate() {
+    let mut line = String::new();
+    let mut line_number = 0usize;
+    loop {
+        line.clear();
+        let bytes_read = reader
+            .read_line(&mut line)
+            .map_err(|error| error.to_string())?;
+        if bytes_read == 0 {
+            break;
+        }
+        line_number += 1;
         let line = line.trim();
         if line.is_empty()
             || line.starts_with('#')
@@ -10018,7 +10012,7 @@ fn read_bed_intervals(
         }
         let fields = line.split('\t').collect::<Vec<_>>();
         if fields.len() < 3 {
-            return Err(format!("malformed BED line {}", line_index + 1));
+            return Err(format!("malformed BED line {line_number}"));
         }
         let contig = fields[0].to_string();
         let Some(contig_index) = contig_order.get(&contig).copied() else {
@@ -10031,12 +10025,12 @@ fn read_bed_intervals(
         };
         let start0 = fields[1]
             .parse::<u64>()
-            .map_err(|_| format!("malformed BED start on line {}", line_index + 1))?;
+            .map_err(|_| format!("malformed BED start on line {line_number}"))?;
         let end = fields[2]
             .parse::<u64>()
-            .map_err(|_| format!("malformed BED end on line {}", line_index + 1))?;
+            .map_err(|_| format!("malformed BED end on line {line_number}"))?;
         if end < start0 {
-            return Err(format!("BED end before start on line {}", line_index + 1));
+            return Err(format!("BED end before start on line {line_number}"));
         }
         if end == start0 && !keep_length_zero_intervals {
             continue;
