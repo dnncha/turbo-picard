@@ -16114,6 +16114,9 @@ fn run_samtofastq_from_sam_text(
     let mut line = String::new();
     let mut sam_buffers = SamToFastqOwnedBuffers::new();
     let mut first_seen_mates: HashMap<String, SamFastqRecord> = HashMap::new();
+    let mut queryname_order = false;
+    let mut current_qname = None::<String>;
+    let mut pending_queryname_mate = None::<SamFastqRecord>;
     let mut per_rg_outputs =
         per_rg.map(|config| SamToFastqPerRgOutputs::new(config, compression_level));
 
@@ -16130,6 +16133,11 @@ fn run_samtofastq_from_sam_text(
             if let Some(outputs) = per_rg_outputs.as_mut() {
                 outputs.observe_sam_read_group_line(line.trim_end_matches(['\r', '\n']))?;
             }
+            continue;
+        }
+        if line.starts_with("@HD\t") {
+            queryname_order = sam_header_sort_order(line.trim_end_matches(['\r', '\n']))
+                .is_some_and(|sort_order| sort_order == "queryname");
             continue;
         }
         if line.starts_with('@') || line.trim().is_empty() {
@@ -16151,6 +16159,55 @@ fn run_samtofastq_from_sam_text(
             );
         }
 
+        if queryname_order {
+            if current_qname
+                .as_deref()
+                .is_some_and(|current| current != name)
+            {
+                pending_queryname_mate = None;
+                current_qname = Some(name.to_string());
+            } else if current_qname.is_none() {
+                current_qname = Some(name.to_string());
+            }
+            let current_record = sam_fastq_record_from_fields(
+                name,
+                flags,
+                sam_sequence,
+                sam_qualities,
+                line,
+                transform,
+            );
+            if is_paired {
+                if let Some(first_record) = pending_queryname_mate.take() {
+                    write_samtofastq_sam_pair(
+                        line,
+                        &first_record,
+                        &current_record,
+                        &mut first_writer,
+                        &mut second_writer,
+                        &mut per_rg_outputs,
+                        &transform,
+                        re_reverse,
+                        &mut sam_buffers,
+                    )?;
+                } else {
+                    pending_queryname_mate = Some(current_record);
+                }
+            } else {
+                write_samtofastq_sam_unpaired(
+                    line,
+                    &current_record,
+                    &mut first_writer,
+                    &mut unpaired_writer,
+                    &mut per_rg_outputs,
+                    &transform,
+                    re_reverse,
+                    &mut sam_buffers,
+                )?;
+            }
+            continue;
+        }
+
         if is_paired {
             if let Some(first_record) = first_seen_mates.remove(name) {
                 let current_record = sam_fastq_record_from_fields(
@@ -16161,47 +16218,17 @@ fn run_samtofastq_from_sam_text(
                     line,
                     transform,
                 );
-                let (read1, read2) = if flags & 0x40 != 0 {
-                    (&current_record, &first_record)
-                } else {
-                    (&first_record, &current_record)
-                };
-                if let Some(outputs) = per_rg_outputs.as_mut() {
-                    outputs.write_sam_pair(
-                        line,
-                        read1,
-                        read2,
-                        &transform,
-                        re_reverse,
-                        &mut sam_buffers,
-                    )?;
-                } else {
-                    let first = first_writer
-                        .as_mut()
-                        .expect("first writer exists for standard SamToFastq output");
-                    write_sam_fastq_record(
-                        first.as_mut(),
-                        read1,
-                        &transform,
-                        transform.write_options_for_flags(read1.flags, re_reverse),
-                        sam_buffers.as_parts(),
-                    )?;
-                    let writer = if interleave {
-                        first.as_mut()
-                    } else {
-                        second_writer
-                            .as_mut()
-                            .expect("second writer exists for paired output")
-                            .as_mut()
-                    };
-                    write_sam_fastq_record(
-                        writer,
-                        read2,
-                        &transform,
-                        transform.write_options_for_flags(read2.flags, re_reverse),
-                        sam_buffers.as_parts(),
-                    )?;
-                }
+                write_samtofastq_sam_pair(
+                    line,
+                    &first_record,
+                    &current_record,
+                    &mut first_writer,
+                    &mut second_writer,
+                    &mut per_rg_outputs,
+                    &transform,
+                    re_reverse,
+                    &mut sam_buffers,
+                )?;
             } else {
                 let current_record = sam_fastq_record_from_fields(
                     name,
@@ -16222,22 +16249,15 @@ fn run_samtofastq_from_sam_text(
                 line,
                 transform,
             );
-            let writer: &mut dyn Write = if let Some(outputs) = per_rg_outputs.as_mut() {
-                outputs.unpaired_writer_for_sam_record(line)?
-            } else if let Some(writer) = unpaired_writer.as_mut() {
-                writer.as_mut()
-            } else {
-                first_writer
-                    .as_mut()
-                    .expect("first writer exists for standard SamToFastq output")
-                    .as_mut()
-            };
-            write_sam_fastq_record(
-                writer,
+            write_samtofastq_sam_unpaired(
+                line,
                 &current_record,
+                &mut first_writer,
+                &mut unpaired_writer,
+                &mut per_rg_outputs,
                 &transform,
-                transform.write_options_for_flags(current_record.flags, re_reverse),
-                sam_buffers.as_parts(),
+                re_reverse,
+                &mut sam_buffers,
             )?;
         }
     }
@@ -16665,6 +16685,15 @@ fn samtofastq_make_file_name_safe(value: &str) -> String {
         .collect()
 }
 
+fn sam_header_sort_order(line: &str) -> Option<&str> {
+    if !line.starts_with("@HD\t") {
+        return None;
+    }
+    line.split('\t')
+        .skip(1)
+        .find_map(|field| field.strip_prefix("SO:"))
+}
+
 struct SamFastqRecord {
     name: String,
     flags: u16,
@@ -16838,6 +16867,84 @@ fn sam_tag_bytes(value: &str, label: &str) -> Result<[u8; 2], String> {
         return Err(format!("unsupported {label}: {value}"));
     }
     Ok([bytes[0], bytes[1]])
+}
+
+#[allow(clippy::too_many_arguments)]
+fn write_samtofastq_sam_pair(
+    line: &str,
+    pending_record: &SamFastqRecord,
+    current_record: &SamFastqRecord,
+    first_writer: &mut Option<Box<dyn Write>>,
+    second_writer: &mut Option<Box<dyn Write>>,
+    per_rg_outputs: &mut Option<SamToFastqPerRgOutputs>,
+    transform: &SamToFastqTransform,
+    re_reverse: bool,
+    buffers: &mut SamToFastqOwnedBuffers,
+) -> Result<(), String> {
+    let (read1, read2) = if current_record.flags & 0x40 != 0 {
+        (current_record, pending_record)
+    } else {
+        (pending_record, current_record)
+    };
+    if let Some(outputs) = per_rg_outputs.as_mut() {
+        return outputs.write_sam_pair(line, read1, read2, transform, re_reverse, buffers);
+    }
+
+    let first = first_writer
+        .as_mut()
+        .expect("first writer exists for standard SamToFastq output");
+    write_sam_fastq_record(
+        first.as_mut(),
+        read1,
+        transform,
+        transform.write_options_for_flags(read1.flags, re_reverse),
+        buffers.as_parts(),
+    )?;
+    let writer = if second_writer.is_some() {
+        second_writer
+            .as_mut()
+            .expect("second writer exists for paired output")
+            .as_mut()
+    } else {
+        first.as_mut()
+    };
+    write_sam_fastq_record(
+        writer,
+        read2,
+        transform,
+        transform.write_options_for_flags(read2.flags, re_reverse),
+        buffers.as_parts(),
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn write_samtofastq_sam_unpaired(
+    line: &str,
+    record: &SamFastqRecord,
+    first_writer: &mut Option<Box<dyn Write>>,
+    unpaired_writer: &mut Option<Box<dyn Write>>,
+    per_rg_outputs: &mut Option<SamToFastqPerRgOutputs>,
+    transform: &SamToFastqTransform,
+    re_reverse: bool,
+    buffers: &mut SamToFastqOwnedBuffers,
+) -> Result<(), String> {
+    let writer: &mut dyn Write = if let Some(outputs) = per_rg_outputs.as_mut() {
+        outputs.unpaired_writer_for_sam_record(line)?
+    } else if let Some(writer) = unpaired_writer.as_mut() {
+        writer.as_mut()
+    } else {
+        first_writer
+            .as_mut()
+            .expect("first writer exists for standard SamToFastq output")
+            .as_mut()
+    };
+    write_sam_fastq_record(
+        writer,
+        record,
+        transform,
+        transform.write_options_for_flags(record.flags, re_reverse),
+        buffers.as_parts(),
+    )
 }
 
 fn write_sam_fastq_record(
