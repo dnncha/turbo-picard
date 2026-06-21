@@ -32,6 +32,12 @@ separate local defaults.
   `resource_plan_sorter_max_bytes_in_ram`; `TURBO_PICARD_MEMORY_BYTES` caps the
   implicit sorter run buffer at one quarter of the command memory budget, while
   `TURBO_PICARD_SORTER_MAX_BYTES` remains an explicit sorter override.
+- BAM-record temporary-run buffers for SortSam, MergeSamFiles, FixMateInformation,
+  and RevertSam now flush on the shared sorter byte budget as well as
+  `MAX_RECORDS_IN_RAM`.
+- `doctor` reports `resource_plan_mate_cache_records`, with
+  `TURBO_PICARD_MATE_CACHE_RECORDS` available as a diagnostic override for
+  mate-cache sizing assumptions.
 
 ## Tests
 
@@ -71,10 +77,22 @@ sorted_output_check=PASS
 temp_run_cleanup_check=PASS
 ```
 
+```text
+command=SortSam
+records=2500
+TURBO_PICARD_SORTER_MAX_BYTES=2048
+repeats=3
+median_wall_seconds=5.720029
+wall_seconds=6.312250,5.720029,5.689778
+sorted_output_check=PASS
+temp_run_cleanup_check=PASS
+```
+
 The Picard-backed `tools/verify_basic_mergesamfiles_parity.sh` comparison was
 not available in this worktree because `.conda-turbo-picard` did not exist.
 
 Remaining Phase 8 work:
 
-- Add command-specific planning for mate caches and propagate the memory plan
-  into BAM-record temporary-run sorters that still use command-local run code.
+- Propagate the mate-cache plan into additional command-specific caches where
+  an explicit overflow path exists, and add more command-specific memory
+  accounting for non-sorter buffers.

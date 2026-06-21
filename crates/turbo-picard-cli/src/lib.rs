@@ -30,7 +30,7 @@ use std::path::{Path, PathBuf};
 use std::process::{self, Command};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
-use turbo_picard_core::external_sort::{ExternalSortConfig, ExternalSorter};
+use turbo_picard_core::external_sort::{self, ExternalSortConfig, ExternalSorter};
 use turbo_picard_core::hts_io;
 use turbo_picard_core::markdup_config::MarkDuplicatesConfig;
 use turbo_picard_core::picard_args::normalize_picard_args_for_command;
@@ -1036,6 +1036,10 @@ fn print_resource_plan_lines() {
     println!(
         "resource_plan_sorter_max_bytes_in_ram={}",
         plan.sorter_max_bytes_in_ram
+    );
+    println!(
+        "resource_plan_mate_cache_records={}",
+        plan.mate_cache_records
     );
     println!("resource_plan_cmm_batch_size={}", plan.cmm_batch_size);
     println!("resource_plan_cmm_queue_depth={}", plan.cmm_queue_depth);
@@ -4687,6 +4691,8 @@ struct FixMateCoordinateSorter {
     records: Vec<(bam::Record, u64)>,
     next_ordinal: u64,
     max_records_in_ram: usize,
+    max_bytes_in_ram: usize,
+    resident_bytes: usize,
 }
 
 impl FixMateCoordinateSorter {
@@ -4697,6 +4703,8 @@ impl FixMateCoordinateSorter {
             records: Vec::with_capacity(max_records_in_ram.min(8192)),
             next_ordinal: 0,
             max_records_in_ram,
+            max_bytes_in_ram: bam_sort_buffer_max_bytes(),
+            resident_bytes: 0,
         }
     }
 
@@ -4706,15 +4714,24 @@ impl FixMateCoordinateSorter {
         records: Vec<bam::Record>,
     ) -> Result<(), String> {
         for record in records {
+            self.resident_bytes = self
+                .resident_bytes
+                .saturating_add(bam_record_estimated_sort_bytes(&record));
             self.records.push((record, self.next_ordinal));
             self.next_ordinal += 1;
-            if self.records.len() >= self.max_records_in_ram {
+            if bam_sort_buffer_should_spill(
+                self.records.len(),
+                self.resident_bytes,
+                self.max_records_in_ram,
+                self.max_bytes_in_ram,
+            ) {
                 write_sortsam_temp_run(
                     &mut self.run_set,
                     header,
                     SortOrder::Coordinate,
                     &mut self.records,
                 )?;
+                self.resident_bytes = 0;
             }
         }
         Ok(())
@@ -4735,6 +4752,7 @@ impl FixMateCoordinateSorter {
                 SortOrder::Coordinate,
                 &mut self.records,
             )?;
+            self.resident_bytes = 0;
         }
         coalesce_sortsam_runs(&mut self.run_set, header, SortOrder::Coordinate)?;
         write_sortsam_merged_runs(writer, &self.run_set.paths, SortOrder::Coordinate)
@@ -5688,8 +5706,10 @@ fn sort_revertsam_records_bounded(
     options: RevertSamRecordOptions<'_>,
 ) -> Result<(), String> {
     let max_records_in_ram = options.max_records_in_ram.max(1);
+    let max_bytes_in_ram = bam_sort_buffer_max_bytes();
     let mut run_set = SortSamTempRuns::new(options.tmp_dir.to_path_buf());
     let mut records = Vec::<(bam::Record, u64)>::with_capacity(max_records_in_ram.min(8192));
+    let mut resident_bytes = 0usize;
     let mut next_ordinal = 0_u64;
 
     for record in reader.records() {
@@ -5707,10 +5727,17 @@ fn sort_revertsam_records_bounded(
             options.attributes_to_reverse,
             options.attributes_to_reverse_complement,
         )?;
+        resident_bytes = resident_bytes.saturating_add(bam_record_estimated_sort_bytes(&record));
         records.push((record, next_ordinal));
         next_ordinal += 1;
-        if records.len() >= max_records_in_ram {
+        if bam_sort_buffer_should_spill(
+            records.len(),
+            resident_bytes,
+            max_records_in_ram,
+            max_bytes_in_ram,
+        ) {
             write_sortsam_temp_run(&mut run_set, header, options.sort_order, &mut records)?;
+            resident_bytes = 0;
         }
     }
 
@@ -18479,8 +18506,10 @@ fn write_merge_records_bounded(
     }
 
     let max_records_in_ram = max_records_in_ram.max(1);
+    let max_bytes_in_ram = bam_sort_buffer_max_bytes();
     let mut run_set = SortSamTempRuns::new(tmp_dir.to_path_buf());
     let mut records = Vec::<(bam::Record, u64)>::with_capacity(max_records_in_ram.min(8192));
+    let mut resident_bytes = 0usize;
     let mut next_ordinal = 0_u64;
 
     for input in input_plans {
@@ -18492,10 +18521,18 @@ fn write_merge_records_bounded(
                 continue;
             }
             rewrite_record_read_group(&mut record, &input.read_group_renames)?;
+            resident_bytes =
+                resident_bytes.saturating_add(bam_record_estimated_sort_bytes(&record));
             records.push((record, next_ordinal));
             next_ordinal += 1;
-            if records.len() >= max_records_in_ram {
+            if bam_sort_buffer_should_spill(
+                records.len(),
+                resident_bytes,
+                max_records_in_ram,
+                max_bytes_in_ram,
+            ) {
                 write_sortsam_temp_run(&mut run_set, header, sort_order, &mut records)?;
+                resident_bytes = 0;
             }
         }
     }
@@ -18539,8 +18576,10 @@ fn write_sortsam_bounded_records(
     max_records_in_ram: usize,
 ) -> Result<(), String> {
     let max_records_in_ram = max_records_in_ram.max(1);
+    let max_bytes_in_ram = bam_sort_buffer_max_bytes();
     let mut run_set = SortSamTempRuns::new(tmp_dir.to_path_buf());
     let mut records = Vec::<(bam::Record, u64)>::with_capacity(max_records_in_ram.min(8192));
+    let mut resident_bytes = 0usize;
     let mut previous = None::<bam::Record>;
     let mut monotonic = true;
 
@@ -18552,9 +18591,16 @@ fn write_sortsam_bounded_records(
             monotonic = false;
         }
         previous = Some(record.clone());
+        resident_bytes = resident_bytes.saturating_add(bam_record_estimated_sort_bytes(&record));
         records.push((record, ordinal as u64));
-        if records.len() >= max_records_in_ram {
+        if bam_sort_buffer_should_spill(
+            records.len(),
+            resident_bytes,
+            max_records_in_ram,
+            max_bytes_in_ram,
+        ) {
             write_sortsam_temp_run(&mut run_set, header, sort_order, &mut records)?;
+            resident_bytes = 0;
         }
     }
 
@@ -18601,6 +18647,27 @@ fn stable_sort_bam_records(records: &mut [(bam::Record, u64)], sort_order: SortO
     records.sort_by(|left, right| {
         compare_for_sort_order(&left.0, &right.0, sort_order).then_with(|| left.1.cmp(&right.1))
     });
+}
+
+fn bam_sort_buffer_max_bytes() -> usize {
+    external_sort::sorter_max_bytes_in_ram().max(1)
+}
+
+fn bam_record_estimated_sort_bytes(record: &bam::Record) -> usize {
+    record.qname().len()
+        + record.seq_len()
+        + record.qual().len()
+        + record.cigar().len().saturating_mul(8)
+        + 128
+}
+
+fn bam_sort_buffer_should_spill(
+    resident_records: usize,
+    resident_bytes: usize,
+    max_records_in_ram: usize,
+    max_bytes_in_ram: usize,
+) -> bool {
+    resident_records >= max_records_in_ram.max(1) || resident_bytes >= max_bytes_in_ram.max(1)
 }
 
 fn coalesce_sortsam_runs(
@@ -19161,6 +19228,22 @@ fn write_requested_sidecars(
 mod tests {
     use super::*;
     use turbo_picard_core::picard_args::normalize_picard_args;
+
+    #[test]
+    fn bam_sort_buffer_spills_by_record_count_or_estimated_bytes() {
+        let mut record = bam::Record::new();
+        record.set(b"read-1", None, b"ACGTACGT", b"FFFFFFFF");
+        let estimated = bam_record_estimated_sort_bytes(&record);
+        assert!(estimated >= 149);
+        assert!(bam_sort_buffer_should_spill(10, estimated, 10, usize::MAX));
+        assert!(bam_sort_buffer_should_spill(1, estimated, 10, estimated));
+        assert!(!bam_sort_buffer_should_spill(
+            1,
+            estimated - 1,
+            10,
+            estimated
+        ));
+    }
 
     #[test]
     fn wgs_interval_ranges_merge_and_support_membership() {

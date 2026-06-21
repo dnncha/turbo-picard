@@ -5,6 +5,7 @@ use turbo_picard_core::external_sort;
 
 const DEFAULT_CMM_BATCH_SIZE: usize = 512;
 const DEFAULT_CMM_QUEUE_DEPTH: usize = 16;
+const DEFAULT_MATE_CACHE_RECORDS: usize = 500_000;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ResourcePlan {
@@ -17,6 +18,7 @@ pub struct ResourcePlan {
     pub application_worker_budget: usize,
     pub memory_budget_bytes: usize,
     pub sorter_max_bytes_in_ram: usize,
+    pub mate_cache_records: usize,
     pub cmm_batch_size: usize,
     pub cmm_queue_depth: usize,
 }
@@ -41,6 +43,8 @@ fn resolve_from_env(reported_cpus: usize, env: &BTreeMap<String, String>) -> Res
         .max(1);
     let memory_budget_bytes = external_sort::memory_budget_bytes_from_env(env);
     let sorter_max_bytes_in_ram = external_sort::sorter_max_bytes_in_ram_from_env(env);
+    let mate_cache_records = positive_env_usize(env, "TURBO_PICARD_MATE_CACHE_RECORDS")
+        .unwrap_or(DEFAULT_MATE_CACHE_RECORDS);
     let cmm_batch_size =
         positive_env_usize(env, "TURBO_PICARD_CMM_BATCH_SIZE").unwrap_or(DEFAULT_CMM_BATCH_SIZE);
     let cmm_queue_depth =
@@ -55,6 +59,7 @@ fn resolve_from_env(reported_cpus: usize, env: &BTreeMap<String, String>) -> Res
         application_worker_budget,
         memory_budget_bytes,
         sorter_max_bytes_in_ram,
+        mate_cache_records,
         cmm_batch_size,
         cmm_queue_depth,
     }
@@ -111,6 +116,7 @@ mod tests {
                 plan.sorter_max_bytes_in_ram,
                 external_sort::DEFAULT_MAX_BYTES_IN_RAM
             );
+            assert_eq!(plan.mate_cache_records, DEFAULT_MATE_CACHE_RECORDS);
         }
     }
 
@@ -157,6 +163,16 @@ mod tests {
         let plan = resolve_from_env(8, &env);
         assert_eq!(plan.cmm_batch_size, 1024);
         assert_eq!(plan.cmm_queue_depth, 8);
+    }
+
+    #[test]
+    fn mate_cache_override_is_reported() {
+        let env = BTreeMap::from([(
+            "TURBO_PICARD_MATE_CACHE_RECORDS".to_string(),
+            "2048".to_string(),
+        )]);
+        let plan = resolve_from_env(8, &env);
+        assert_eq!(plan.mate_cache_records, 2048);
     }
 
     #[test]
