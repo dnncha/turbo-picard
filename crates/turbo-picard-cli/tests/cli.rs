@@ -8979,6 +8979,54 @@ fn gathervcfs_removes_temp_output_after_header_mismatch() {
 }
 
 #[test]
+fn gathervcfs_rejects_different_sequence_dictionaries() {
+    let tempdir = tempfile::tempdir().expect("tempdir exists");
+    let first = tempdir.path().join("first.vcf");
+    let second = tempdir.path().join("second.vcf");
+    let output = tempdir.path().join("gathered.vcf");
+    fs::write(
+        &first,
+        concat!(
+            "##fileformat=VCFv4.2\n",
+            "##INFO=<ID=DP,Number=1,Type=Integer,Description=\"Depth\">\n",
+            "##INFO=<ID=MQ,Number=1,Type=Integer,Description=\"Mapping quality\">\n",
+            "##contig=<ID=chr1,length=1000>\n",
+            "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\n",
+            "chr1\t1\t.\tA\tC\t.\tPASS\t.\n",
+        ),
+    )
+    .expect("first VCF is written");
+    fs::write(
+        &second,
+        concat!(
+            "##fileformat=VCFv4.2\n",
+            "##INFO=<ID=DP,Number=1,Type=Integer,Description=\"Depth\">\n",
+            "##INFO=<ID=MQ,Number=1,Type=Integer,Description=\"Mapping quality\">\n",
+            "##contig=<ID=chr2,length=1000>\n",
+            "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\n",
+            "chr2\t5\t.\tG\tT\t.\tPASS\t.\n",
+        ),
+    )
+    .expect("second VCF is written");
+
+    Command::cargo_bin("picard")
+        .expect("binary exists")
+        .args([
+            "GatherVcfs",
+            &format!("I={}", first.display()),
+            &format!("I={}", second.display()),
+            &format!("O={}", output.display()),
+            "VALIDATION_STRINGENCY=SILENT",
+            "QUIET=true",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("different sequence dictionaries"));
+
+    assert!(!output.exists());
+}
+
+#[test]
 fn gathervcfs_writes_index_for_vcf_when_requested() {
     let tempdir = tempfile::tempdir().expect("tempdir exists");
     let first = tempdir.path().join("first.vcf");

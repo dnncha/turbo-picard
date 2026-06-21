@@ -7213,7 +7213,7 @@ fn stream_gathervcf_input(
     let mut reader = open_text_or_gzip_reader(input)?;
     let mut line = String::new();
     let mut line_number = 0usize;
-    let mut meta_lines = Vec::new();
+    let mut contig_ids = Vec::new();
     let mut column_header = None::<String>;
     let mut records_seen = 0usize;
 
@@ -7231,7 +7231,9 @@ fn stream_gathervcf_input(
             if column_header.is_some() {
                 return Err(format!("malformed VCF header in {input}"));
             }
-            meta_lines.push(trimmed.to_string());
+            if let Some(contig_id) = parse_vcf_contig_id(trimmed) {
+                contig_ids.push(contig_id);
+            }
             if write_header {
                 writer.write_line(trimmed, false, index.as_deref_mut())?;
             }
@@ -7239,10 +7241,7 @@ fn stream_gathervcf_input(
             column_header = Some(trimmed.to_string());
             let header = GatherVcfHeader {
                 column_header: trimmed.to_string(),
-                contig_ids: meta_lines
-                    .iter()
-                    .filter_map(|line| parse_vcf_contig_id(line.as_str()))
-                    .collect(),
+                contig_ids: contig_ids.clone(),
             };
             validate_gathervcf_header(&header, expected_header)?;
             if write_header {
@@ -7267,10 +7266,7 @@ fn stream_gathervcf_input(
         column_header.ok_or_else(|| format!("VCF input {input} is missing #CHROM header"))?;
     let header = GatherVcfHeader {
         column_header,
-        contig_ids: meta_lines
-            .iter()
-            .filter_map(|line| parse_vcf_contig_id(line.as_str()))
-            .collect(),
+        contig_ids,
     };
     if let Some(expected) = expected_header {
         validate_gathervcf_header(&header, Some(expected))?;
