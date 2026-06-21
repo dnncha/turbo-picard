@@ -8930,7 +8930,11 @@ impl ValidateSamReport {
     }
 
     fn add_issue_with(&mut self, key: &str, detail: impl FnOnce() -> String) {
-        *self.counts.entry(key.to_string()).or_default() += 1;
+        if let Some(count) = self.counts.get_mut(key) {
+            *count += 1;
+        } else {
+            self.counts.insert(key.to_string(), 1);
+        }
         if self.details.len() < self.detail_limit {
             self.details.push(ValidateSamDetail {
                 key: key.to_string(),
