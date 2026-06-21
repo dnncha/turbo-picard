@@ -5257,15 +5257,13 @@ fn run_intervallisttools(args: &[String]) -> Result<(), String> {
     let dont_merge_abutting = optional_bool(&args, "DONT_MERGE_ABUTTING")?.unwrap_or(false);
     let padding = optional_i64(&args, "PADDING")?.unwrap_or(0);
 
-    let first_text = fs::read_to_string(&inputs[0]).map_err(|error| error.to_string())?;
-    let header_text = interval_list_header_text(&first_text);
+    let (header_text, first_intervals) = read_interval_list_with_header(&inputs[0])?;
     let contig_order = dictionary_contig_order(&header_text);
     let contig_lengths = dictionary_contig_lengths(&header_text);
     let mut intervals = Vec::<BedInterval>::new();
-    intervals.extend(read_interval_list_intervals(&first_text, &contig_order)?);
+    intervals.extend(first_intervals);
     for input in inputs.iter().skip(1) {
-        let text = fs::read_to_string(input).map_err(|error| error.to_string())?;
-        intervals.extend(read_interval_list_intervals(&text, &contig_order)?);
+        intervals.extend(read_interval_list_file(input, &contig_order)?);
     }
     if padding > 0 {
         apply_interval_padding(&mut intervals, &contig_lengths, padding as u64)?;
@@ -6636,8 +6634,7 @@ fn viewsam_interval_filter(
         .collect::<BTreeMap<_, _>>();
     let mut intervals_by_tid = IntervalFilter::new();
     for interval_path in interval_paths {
-        let text = read_text_or_gzip(interval_path)?;
-        for interval in read_interval_list_intervals(&text, &contig_order)? {
+        for interval in read_interval_list_file(interval_path, &contig_order)? {
             intervals_by_tid
                 .entry(interval.contig_index as i32)
                 .or_default()
@@ -6661,8 +6658,7 @@ fn merge_interval_filter(
         .collect::<BTreeMap<_, _>>();
     let mut intervals_by_tid = IntervalFilter::new();
     for interval_path in interval_paths {
-        let text = read_text_or_gzip(interval_path)?;
-        for interval in read_interval_list_intervals(&text, &contig_order)? {
+        for interval in read_interval_list_file(interval_path, &contig_order)? {
             intervals_by_tid
                 .entry(interval.contig_index as i32)
                 .or_default()
@@ -9620,22 +9616,6 @@ fn write_validate_sam_verbose(
     }
 }
 
-fn read_text_or_gzip(path: &str) -> Result<String, String> {
-    let file = fs::File::open(path).map_err(|error| error.to_string())?;
-    let mut text = String::new();
-    if has_gzip_extension(path) {
-        GzDecoder::new(file)
-            .read_to_string(&mut text)
-            .map_err(|error| error.to_string())?;
-    } else {
-        let mut reader = std::io::BufReader::new(file);
-        reader
-            .read_to_string(&mut text)
-            .map_err(|error| error.to_string())?;
-    }
-    Ok(text)
-}
-
 fn write_text_or_gzip(path: &str, text: &str) -> Result<(), String> {
     if has_gzip_extension(path) {
         let file = fs::File::create(path).map_err(|error| error.to_string())?;
@@ -9754,21 +9734,6 @@ fn dictionary_contig_lengths(dictionary_text: &str) -> BTreeMap<String, u64> {
         .collect()
 }
 
-fn interval_list_header_text(text: &str) -> String {
-    let mut header = String::new();
-    for line in text.lines() {
-        if line.starts_with('@') {
-            if !line.starts_with("@PG\t") {
-                header.push_str(line);
-                header.push('\n');
-            }
-        } else {
-            break;
-        }
-    }
-    header
-}
-
 fn interval_list_output_header(header_text: &str, force_unsorted: bool) -> String {
     let mut output = String::new();
     let mut saw_hd = false;
@@ -9821,41 +9786,108 @@ fn read_interval_list_intervals(
 ) -> Result<Vec<BedInterval>, String> {
     let mut intervals = Vec::new();
     for (line_index, line) in text.lines().enumerate() {
-        if line.starts_with('@') || line.trim().is_empty() {
-            continue;
+        if let Some(interval) = parse_interval_list_interval(line, line_index + 1, contig_order)? {
+            intervals.push(interval);
         }
-        let fields = line.split('\t').collect::<Vec<_>>();
-        if fields.len() < 5 {
-            return Err(format!("malformed interval_list line {}", line_index + 1));
-        }
-        let contig = fields[0].to_string();
-        let Some(contig_index) = contig_order.get(&contig).copied() else {
-            return Err(format!(
-                "interval_list contig {contig} is not present in sequence dictionary"
-            ));
-        };
-        let start = fields[1]
-            .parse::<u64>()
-            .map_err(|_| format!("malformed interval start on line {}", line_index + 1))?;
-        let end = fields[2]
-            .parse::<u64>()
-            .map_err(|_| format!("malformed interval end on line {}", line_index + 1))?;
-        if end < start {
-            return Err(format!(
-                "interval end before start on line {}",
-                line_index + 1
-            ));
-        }
-        intervals.push(BedInterval {
-            contig,
-            contig_index,
-            start,
-            end,
-            strand: fields[3].to_string(),
-            name: fields[4..].join("\t"),
-        });
     }
     Ok(intervals)
+}
+
+fn read_interval_list_file(
+    path: &str,
+    contig_order: &BTreeMap<String, usize>,
+) -> Result<Vec<BedInterval>, String> {
+    let mut reader = open_text_or_gzip_reader(path)?;
+    let mut intervals = Vec::new();
+    let mut line = String::new();
+    let mut line_number = 0usize;
+    loop {
+        line.clear();
+        let bytes_read = reader
+            .read_line(&mut line)
+            .map_err(|error| error.to_string())?;
+        if bytes_read == 0 {
+            break;
+        }
+        line_number += 1;
+        let line = line.trim_end_matches(['\r', '\n']);
+        if let Some(interval) = parse_interval_list_interval(line, line_number, contig_order)? {
+            intervals.push(interval);
+        }
+    }
+    Ok(intervals)
+}
+
+fn read_interval_list_with_header(path: &str) -> Result<(String, Vec<BedInterval>), String> {
+    let mut reader = open_text_or_gzip_reader(path)?;
+    let mut header = String::new();
+    let mut intervals = Vec::new();
+    let mut contig_order = None::<BTreeMap<String, usize>>;
+    let mut line = String::new();
+    let mut line_number = 0usize;
+    loop {
+        line.clear();
+        let bytes_read = reader
+            .read_line(&mut line)
+            .map_err(|error| error.to_string())?;
+        if bytes_read == 0 {
+            break;
+        }
+        line_number += 1;
+        let line = line.trim_end_matches(['\r', '\n']);
+        if line.starts_with('@') {
+            if !line.starts_with("@PG\t") {
+                header.push_str(line);
+                header.push('\n');
+            }
+            continue;
+        }
+        if line.trim().is_empty() {
+            continue;
+        }
+        let order = contig_order.get_or_insert_with(|| dictionary_contig_order(&header));
+        if let Some(interval) = parse_interval_list_interval(line, line_number, order)? {
+            intervals.push(interval);
+        }
+    }
+    Ok((header, intervals))
+}
+
+fn parse_interval_list_interval(
+    line: &str,
+    line_number: usize,
+    contig_order: &BTreeMap<String, usize>,
+) -> Result<Option<BedInterval>, String> {
+    if line.starts_with('@') || line.trim().is_empty() {
+        return Ok(None);
+    }
+    let fields = line.split('\t').collect::<Vec<_>>();
+    if fields.len() < 5 {
+        return Err(format!("malformed interval_list line {line_number}"));
+    }
+    let contig = fields[0].to_string();
+    let Some(contig_index) = contig_order.get(&contig).copied() else {
+        return Err(format!(
+            "interval_list contig {contig} is not present in sequence dictionary"
+        ));
+    };
+    let start = fields[1]
+        .parse::<u64>()
+        .map_err(|_| format!("malformed interval start on line {line_number}"))?;
+    let end = fields[2]
+        .parse::<u64>()
+        .map_err(|_| format!("malformed interval end on line {line_number}"))?;
+    if end < start {
+        return Err(format!("interval end before start on line {line_number}"));
+    }
+    Ok(Some(BedInterval {
+        contig,
+        contig_index,
+        start,
+        end,
+        strand: fields[3].to_string(),
+        name: fields[4..].join("\t"),
+    }))
 }
 
 fn apply_interval_padding(
@@ -9898,8 +9930,7 @@ fn collectwgs_interval_masks(
         .collect::<BTreeMap<_, _>>();
 
     for interval_path in interval_paths {
-        let text = read_text_or_gzip(interval_path)?;
-        let intervals = read_interval_list_intervals(&text, &contig_order)?;
+        let intervals = read_interval_list_file(interval_path, &contig_order)?;
         for interval in intervals {
             let length = *reference_lengths.get(&interval.contig).ok_or_else(|| {
                 format!(
