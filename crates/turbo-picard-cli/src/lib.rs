@@ -8640,15 +8640,15 @@ fn validate_sam_summary_sam_text(
             if line.starts_with(b"@SQ\t") {
                 target_count += 1;
             }
-            if line.starts_with(b"@RG\t") {
-                if let Some(id) = read_group_id(&text) {
-                    let has_platform = text.split('\t').any(|field| {
-                        field
-                            .strip_prefix("PL:")
-                            .is_some_and(|value| !value.trim_end_matches(['\r', '\n']).is_empty())
-                    });
-                    read_groups.insert(id, has_platform);
-                }
+            if line.starts_with(b"@RG\t")
+                && let Some(id) = read_group_id(&text)
+            {
+                let has_platform = text.split('\t').any(|field| {
+                    field
+                        .strip_prefix("PL:")
+                        .is_some_and(|value| !value.trim_end_matches(['\r', '\n']).is_empty())
+                });
+                read_groups.insert(id, has_platform);
             }
             continue;
         }
@@ -8977,20 +8977,18 @@ fn validate_sam_record_summary(
         }
         match record.aux(b"NM") {
             Ok(aux) => {
-                if let Some(references_by_tid) = references_by_tid {
-                    if let Some(actual_nm) = aux_i32(aux) {
-                        if let Some(expected_nm) = expected_record_nm(record, references_by_tid)? {
-                            if actual_nm != expected_nm {
-                                add_validate_issue(
-                                    report,
-                                    "ERROR:INVALID_TAG_NM",
-                                    format!(
-                                        "ERROR::INVALID_TAG_NM:Record {record_number}, Read name {read_name}, NM tag is incorrect"
-                                    ),
-                                );
-                            }
-                        }
-                    }
+                if let Some(references_by_tid) = references_by_tid
+                    && let Some(actual_nm) = aux_i32(aux)
+                    && let Some(expected_nm) = expected_record_nm(record, references_by_tid)?
+                    && actual_nm != expected_nm
+                {
+                    add_validate_issue(
+                        report,
+                        "ERROR:INVALID_TAG_NM",
+                        format!(
+                            "ERROR::INVALID_TAG_NM:Record {record_number}, Read name {read_name}, NM tag is incorrect"
+                        ),
+                    );
                 }
             }
             Err(_) => {
@@ -9703,21 +9701,23 @@ fn reject_unsupported_collectalignment_args(
                 .to_string(),
         );
     }
-    if let Some(level) = optional_scalar(args, "METRIC_ACCUMULATION_LEVEL")? {
-        if level != "ALL_READS" && level != "SAMPLE" && level != "LIBRARY" && level != "READ_GROUP"
-        {
-            return Err(format!(
-                "unsupported CollectAlignmentSummaryMetrics METRIC_ACCUMULATION_LEVEL={level}"
-            ));
-        }
+    if let Some(level) = optional_scalar(args, "METRIC_ACCUMULATION_LEVEL")?
+        && level != "ALL_READS"
+        && level != "SAMPLE"
+        && level != "LIBRARY"
+        && level != "READ_GROUP"
+    {
+        return Err(format!(
+            "unsupported CollectAlignmentSummaryMetrics METRIC_ACCUMULATION_LEVEL={level}"
+        ));
     }
     optional_u32(args, "STOP_AFTER")?;
-    if let Some(level) = optional_u32(args, "COMPRESSION_LEVEL")? {
-        if level > 9 {
-            return Err(format!(
-                "unsupported CollectAlignmentSummaryMetrics COMPRESSION_LEVEL: {level}"
-            ));
-        }
+    if let Some(level) = optional_u32(args, "COMPRESSION_LEVEL")?
+        && level > 9
+    {
+        return Err(format!(
+            "unsupported CollectAlignmentSummaryMetrics COMPRESSION_LEVEL: {level}"
+        ));
     }
     Ok(())
 }
@@ -9759,12 +9759,12 @@ fn reject_unsupported_collectqualityyield_args(
     optional_bool(args, "QUIET")?;
     let _ = args.get("TMP_DIR");
     optional_u32(args, "MAX_RECORDS_IN_RAM")?;
-    if let Some(level) = optional_u32(args, "COMPRESSION_LEVEL")? {
-        if level > 9 {
-            return Err(format!(
-                "unsupported CollectQualityYieldMetrics COMPRESSION_LEVEL: {level}"
-            ));
-        }
+    if let Some(level) = optional_u32(args, "COMPRESSION_LEVEL")?
+        && level > 9
+    {
+        return Err(format!(
+            "unsupported CollectQualityYieldMetrics COMPRESSION_LEVEL: {level}"
+        ));
     }
     Ok(())
 }
@@ -9799,13 +9799,15 @@ fn reject_unsupported_collectinsertsize_args(
     }
     optional_scalar(args, "REFERENCE_SEQUENCE")?;
     optional_scalar(args, "HISTOGRAM_FILE")?;
-    if let Some(level) = optional_scalar(args, "METRIC_ACCUMULATION_LEVEL")? {
-        if level != "ALL_READS" && level != "SAMPLE" && level != "LIBRARY" && level != "READ_GROUP"
-        {
-            return Err(format!(
-                "unsupported CollectInsertSizeMetrics METRIC_ACCUMULATION_LEVEL={level}"
-            ));
-        }
+    if let Some(level) = optional_scalar(args, "METRIC_ACCUMULATION_LEVEL")?
+        && level != "ALL_READS"
+        && level != "SAMPLE"
+        && level != "LIBRARY"
+        && level != "READ_GROUP"
+    {
+        return Err(format!(
+            "unsupported CollectInsertSizeMetrics METRIC_ACCUMULATION_LEVEL={level}"
+        ));
     }
     optional_bool(args, "INCLUDE_DUPLICATES")?;
     optional_bool(args, "ASSUME_SORTED")?;
@@ -9816,12 +9818,12 @@ fn reject_unsupported_collectinsertsize_args(
     optional_scalar(args, "VALIDATION_STRINGENCY")?;
     optional_scalar(args, "VERBOSITY")?;
     optional_bool(args, "QUIET")?;
-    if let Some(level) = optional_u32(args, "COMPRESSION_LEVEL")? {
-        if level > 9 {
-            return Err(format!(
-                "unsupported CollectInsertSizeMetrics COMPRESSION_LEVEL: {level}"
-            ));
-        }
+    if let Some(level) = optional_u32(args, "COMPRESSION_LEVEL")?
+        && level > 9
+    {
+        return Err(format!(
+            "unsupported CollectInsertSizeMetrics COMPRESSION_LEVEL: {level}"
+        ));
     }
     Ok(())
 }
@@ -9943,12 +9945,12 @@ fn reject_unsupported_collectmultiplemetrics_args(
         }
     }
     optional_u32(args, "STOP_AFTER")?;
-    if let Some(level) = optional_u32(args, "COMPRESSION_LEVEL")? {
-        if level > 9 {
-            return Err(format!(
-                "unsupported CollectMultipleMetrics COMPRESSION_LEVEL: {level}"
-            ));
-        }
+    if let Some(level) = optional_u32(args, "COMPRESSION_LEVEL")?
+        && level > 9
+    {
+        return Err(format!(
+            "unsupported CollectMultipleMetrics COMPRESSION_LEVEL: {level}"
+        ));
     }
     Ok(())
 }
@@ -10061,12 +10063,12 @@ fn reject_unsupported_collectbasedistributionbycycle_args(
     optional_scalar(args, "VALIDATION_STRINGENCY")?;
     optional_scalar(args, "VERBOSITY")?;
     optional_bool(args, "QUIET")?;
-    if let Some(level) = optional_u32(args, "COMPRESSION_LEVEL")? {
-        if level > 9 {
-            return Err(format!(
-                "unsupported CollectBaseDistributionByCycle COMPRESSION_LEVEL: {level}"
-            ));
-        }
+    if let Some(level) = optional_u32(args, "COMPRESSION_LEVEL")?
+        && level > 9
+    {
+        return Err(format!(
+            "unsupported CollectBaseDistributionByCycle COMPRESSION_LEVEL: {level}"
+        ));
     }
     Ok(())
 }
@@ -10107,12 +10109,12 @@ fn reject_unsupported_collectgcbiasmetrics_args(
     if optional_bool(args, "IS_BISULFITE_SEQUENCED")?.unwrap_or(false) {
         return Err("unsupported CollectGcBiasMetrics IS_BISULFITE_SEQUENCED=true".to_string());
     }
-    if let Some(level) = optional_scalar(args, "METRIC_ACCUMULATION_LEVEL")? {
-        if level != "ALL_READS" {
-            return Err(format!(
-                "unsupported CollectGcBiasMetrics METRIC_ACCUMULATION_LEVEL={level}"
-            ));
-        }
+    if let Some(level) = optional_scalar(args, "METRIC_ACCUMULATION_LEVEL")?
+        && level != "ALL_READS"
+    {
+        return Err(format!(
+            "unsupported CollectGcBiasMetrics METRIC_ACCUMULATION_LEVEL={level}"
+        ));
     }
     let window_size = optional_u32(args, "SCAN_WINDOW_SIZE")?.unwrap_or(100);
     if window_size == 0 {
@@ -10123,12 +10125,12 @@ fn reject_unsupported_collectgcbiasmetrics_args(
     optional_scalar(args, "VALIDATION_STRINGENCY")?;
     optional_scalar(args, "VERBOSITY")?;
     optional_bool(args, "QUIET")?;
-    if let Some(level) = optional_u32(args, "COMPRESSION_LEVEL")? {
-        if level > 9 {
-            return Err(format!(
-                "unsupported CollectGcBiasMetrics COMPRESSION_LEVEL: {level}"
-            ));
-        }
+    if let Some(level) = optional_u32(args, "COMPRESSION_LEVEL")?
+        && level > 9
+    {
+        return Err(format!(
+            "unsupported CollectGcBiasMetrics COMPRESSION_LEVEL: {level}"
+        ));
     }
     Ok(())
 }
@@ -10170,19 +10172,19 @@ fn reject_unsupported_collecthsmetrics_args(
     optional_scalar(args, "VALIDATION_STRINGENCY")?;
     optional_scalar(args, "VERBOSITY")?;
     optional_bool(args, "QUIET")?;
-    if let Some(level) = optional_scalar(args, "METRIC_ACCUMULATION_LEVEL")? {
-        if level != "ALL_READS" {
-            return Err(format!(
-                "unsupported CollectHsMetrics METRIC_ACCUMULATION_LEVEL={level}"
-            ));
-        }
+    if let Some(level) = optional_scalar(args, "METRIC_ACCUMULATION_LEVEL")?
+        && level != "ALL_READS"
+    {
+        return Err(format!(
+            "unsupported CollectHsMetrics METRIC_ACCUMULATION_LEVEL={level}"
+        ));
     }
-    if let Some(level) = optional_u32(args, "COMPRESSION_LEVEL")? {
-        if level > 9 {
-            return Err(format!(
-                "unsupported CollectHsMetrics COMPRESSION_LEVEL: {level}"
-            ));
-        }
+    if let Some(level) = optional_u32(args, "COMPRESSION_LEVEL")?
+        && level > 9
+    {
+        return Err(format!(
+            "unsupported CollectHsMetrics COMPRESSION_LEVEL: {level}"
+        ));
     }
     Ok(())
 }
@@ -10237,12 +10239,12 @@ fn reject_unsupported_collectwgsmetrics_args(
     optional_bool(args, "QUIET")?;
     let _ = args.get("TMP_DIR");
     optional_u32(args, "MAX_RECORDS_IN_RAM")?;
-    if let Some(level) = optional_u32(args, "COMPRESSION_LEVEL")? {
-        if level > 9 {
-            return Err(format!(
-                "unsupported CollectWgsMetrics COMPRESSION_LEVEL: {level}"
-            ));
-        }
+    if let Some(level) = optional_u32(args, "COMPRESSION_LEVEL")?
+        && level > 9
+    {
+        return Err(format!(
+            "unsupported CollectWgsMetrics COMPRESSION_LEVEL: {level}"
+        ));
     }
     Ok(())
 }
@@ -10273,12 +10275,14 @@ fn reject_unsupported_fixmateinformation_args(
         }
     }
     required_values_for(args, "INPUT", "FixMateInformation")?;
-    if let Some(sort_order) = optional_scalar(args, "SORT_ORDER")? {
-        if sort_order != "queryname" && sort_order != "coordinate" && sort_order != "unsorted" {
-            return Err(format!(
-                "unsupported FixMateInformation SORT_ORDER={sort_order}"
-            ));
-        }
+    if let Some(sort_order) = optional_scalar(args, "SORT_ORDER")?
+        && sort_order != "queryname"
+        && sort_order != "coordinate"
+        && sort_order != "unsorted"
+    {
+        return Err(format!(
+            "unsupported FixMateInformation SORT_ORDER={sort_order}"
+        ));
     }
     optional_bool(args, "ADD_MATE_CIGAR")?;
     optional_bool(args, "ASSUME_SORTED")?;
@@ -10291,12 +10295,12 @@ fn reject_unsupported_fixmateinformation_args(
     optional_bool(args, "CREATE_INDEX")?;
     let _ = args.get("TMP_DIR");
     optional_u32(args, "MAX_RECORDS_IN_RAM")?;
-    if let Some(level) = optional_u32(args, "COMPRESSION_LEVEL")? {
-        if level > 9 {
-            return Err(format!(
-                "unsupported FixMateInformation COMPRESSION_LEVEL: {level}"
-            ));
-        }
+    if let Some(level) = optional_u32(args, "COMPRESSION_LEVEL")?
+        && level > 9
+    {
+        return Err(format!(
+            "unsupported FixMateInformation COMPRESSION_LEVEL: {level}"
+        ));
     }
     Ok(())
 }
@@ -10341,12 +10345,12 @@ fn reject_unsupported_qualityscoredistribution_args(
     optional_scalar(args, "VALIDATION_STRINGENCY")?;
     optional_scalar(args, "VERBOSITY")?;
     optional_bool(args, "QUIET")?;
-    if let Some(level) = optional_u32(args, "COMPRESSION_LEVEL")? {
-        if level > 9 {
-            return Err(format!(
-                "unsupported QualityScoreDistribution COMPRESSION_LEVEL: {level}"
-            ));
-        }
+    if let Some(level) = optional_u32(args, "COMPRESSION_LEVEL")?
+        && level > 9
+    {
+        return Err(format!(
+            "unsupported QualityScoreDistribution COMPRESSION_LEVEL: {level}"
+        ));
     }
     Ok(())
 }
@@ -10387,12 +10391,12 @@ fn reject_unsupported_meanqualitybycycle_args(
     optional_scalar(args, "VALIDATION_STRINGENCY")?;
     optional_scalar(args, "VERBOSITY")?;
     optional_bool(args, "QUIET")?;
-    if let Some(level) = optional_u32(args, "COMPRESSION_LEVEL")? {
-        if level > 9 {
-            return Err(format!(
-                "unsupported MeanQualityByCycle COMPRESSION_LEVEL: {level}"
-            ));
-        }
+    if let Some(level) = optional_u32(args, "COMPRESSION_LEVEL")?
+        && level > 9
+    {
+        return Err(format!(
+            "unsupported MeanQualityByCycle COMPRESSION_LEVEL: {level}"
+        ));
     }
     Ok(())
 }
