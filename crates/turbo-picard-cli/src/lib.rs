@@ -21,7 +21,7 @@ use rust_htslib::bam::index;
 use rust_htslib::bam::record::{Aux, Cigar, CigarString};
 use rust_htslib::bam::{self, Read};
 use rustc_hash::{FxBuildHasher, FxHashMap};
-use std::cmp::Ordering;
+use std::cmp::{Ordering, Reverse};
 use std::collections::{BTreeMap, BTreeSet, BinaryHeap, HashMap, HashSet, VecDeque};
 use std::env;
 use std::fs;
@@ -2578,8 +2578,15 @@ fn run_samtofastq(args: &[String]) -> Result<(), String> {
         )?;
     } else {
         let mut first_seen_mates: HashMap<Vec<u8>, bam::Record> = HashMap::new();
+        let mut pending_mate_expirations =
+            BinaryHeap::<Reverse<SamToFastqPendingMateExpiry>>::new();
         for record in reader.records() {
             let record = record.map_err(|error| error.to_string())?;
+            prune_expired_samtofastq_bam_mates(
+                &record,
+                &mut first_seen_mates,
+                &mut pending_mate_expirations,
+            );
             if !samtofastq_bam_record_passes_filters(
                 &record,
                 include_non_pf_reads,
@@ -2605,6 +2612,9 @@ fn run_samtofastq(args: &[String]) -> Result<(), String> {
                         re_reverse,
                     )?;
                 } else {
+                    if let Some(expiry) = SamToFastqPendingMateExpiry::for_record(&record) {
+                        pending_mate_expirations.push(Reverse(expiry));
+                    }
                     first_seen_mates.insert(record.qname().to_vec(), record);
                 }
                 continue;
@@ -2808,6 +2818,61 @@ fn write_samtofastq_bam_unpaired(
         transform,
         transform.write_options_for(record, re_reverse),
     )
+}
+
+#[derive(Clone, Eq, PartialEq, Ord, PartialOrd)]
+struct SamToFastqPendingMateExpiry {
+    tid: i32,
+    pos: i64,
+    record_tid: i32,
+    record_pos: i64,
+    qname: Vec<u8>,
+}
+
+impl SamToFastqPendingMateExpiry {
+    fn for_record(record: &bam::Record) -> Option<Self> {
+        if record.mtid() < 0 || record.mpos() < 0 {
+            return None;
+        }
+        Some(Self {
+            tid: record.mtid(),
+            pos: record.mpos(),
+            record_tid: record.tid(),
+            record_pos: record.pos(),
+            qname: record.qname().to_vec(),
+        })
+    }
+
+    fn is_before_record(&self, record: &bam::Record) -> bool {
+        if record.tid() < 0 || record.pos() < 0 {
+            return false;
+        }
+        self.tid < record.tid() || (self.tid == record.tid() && self.pos < record.pos())
+    }
+}
+
+fn prune_expired_samtofastq_bam_mates(
+    current_record: &bam::Record,
+    pending_mates: &mut HashMap<Vec<u8>, bam::Record>,
+    expirations: &mut BinaryHeap<Reverse<SamToFastqPendingMateExpiry>>,
+) {
+    while expirations
+        .peek()
+        .is_some_and(|expiry| expiry.0.is_before_record(current_record))
+    {
+        let expiry = expirations.pop().expect("peek confirmed expiry exists").0;
+        let Some(pending) = pending_mates.get(&expiry.qname) else {
+            continue;
+        };
+        if SamToFastqPendingMateExpiry::for_record(pending).is_some_and(|pending_expiry| {
+            pending_expiry.tid == expiry.tid
+                && pending_expiry.pos == expiry.pos
+                && pending_expiry.record_tid == expiry.record_tid
+                && pending_expiry.record_pos == expiry.record_pos
+        }) {
+            pending_mates.remove(&expiry.qname);
+        }
+    }
 }
 
 fn run_fastqtosam(args: &[String]) -> Result<(), String> {
@@ -20464,6 +20529,56 @@ mod tests {
             10,
             estimated
         ));
+    }
+
+    #[test]
+    fn samtofastq_prunes_pending_mates_behind_coordinate_frontier() {
+        let mut pending_mates = HashMap::new();
+        let mut expirations = BinaryHeap::new();
+        let pending = samtofastq_test_record(b"missing", 0, 10, 0, 20);
+        expirations.push(Reverse(
+            SamToFastqPendingMateExpiry::for_record(&pending).expect("mate expiry exists"),
+        ));
+        pending_mates.insert(b"missing".to_vec(), pending);
+        let current = samtofastq_test_record(b"current", 0, 21, 0, 30);
+
+        prune_expired_samtofastq_bam_mates(&current, &mut pending_mates, &mut expirations);
+
+        assert!(pending_mates.is_empty());
+        assert!(expirations.is_empty());
+    }
+
+    #[test]
+    fn samtofastq_keeps_pending_mates_at_current_coordinate() {
+        let mut pending_mates = HashMap::new();
+        let mut expirations = BinaryHeap::new();
+        let pending = samtofastq_test_record(b"same-position", 0, 10, 0, 20);
+        expirations.push(Reverse(
+            SamToFastqPendingMateExpiry::for_record(&pending).expect("mate expiry exists"),
+        ));
+        pending_mates.insert(b"same-position".to_vec(), pending);
+        let current = samtofastq_test_record(b"current", 0, 20, 0, 30);
+
+        prune_expired_samtofastq_bam_mates(&current, &mut pending_mates, &mut expirations);
+
+        assert!(pending_mates.contains_key(b"same-position".as_slice()));
+        assert_eq!(expirations.len(), 1);
+    }
+
+    fn samtofastq_test_record(
+        qname: &[u8],
+        tid: i32,
+        pos: i64,
+        mtid: i32,
+        mpos: i64,
+    ) -> bam::Record {
+        let mut record = bam::Record::new();
+        record.set(qname, None, b"ACGT", b"FFFF");
+        record.set_tid(tid);
+        record.set_pos(pos);
+        record.set_mtid(mtid);
+        record.set_mpos(mpos);
+        record
     }
 
     #[test]

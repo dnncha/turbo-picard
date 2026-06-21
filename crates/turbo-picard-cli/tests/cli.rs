@@ -2248,6 +2248,60 @@ fn samtofastq_bam_queryname_group_streams_repeated_pairs() {
 }
 
 #[test]
+fn samtofastq_bam_coordinate_prunes_missing_mates_without_losing_later_pairs() {
+    let tempdir = tempfile::tempdir().expect("tempdir exists");
+    let input_sam = tempdir.path().join("input.sam");
+    let input_bam = tempdir.path().join("input.bam");
+    let read1_fastq = tempdir.path().join("read1.fastq");
+    let read2_fastq = tempdir.path().join("read2.fastq");
+    let mut sam = String::from("@HD\tVN:1.6\tSO:coordinate\n@SQ\tSN:chr1\tLN:1000\n");
+    for index in 1..=64 {
+        sam.push_str(&format!(
+            "missing{index}\t67\tchr1\t{index}\t60\t4M\t=\t{mate}\t0\tACGT\tFFFF\n",
+            mate = index + 1
+        ));
+    }
+    sam.push_str("real\t67\tchr1\t900\t60\t4M\t=\t901\t0\tGATT\tHHHH\n");
+    sam.push_str("real\t131\tchr1\t901\t60\t4M\t=\t900\t0\tCAGT\tJJJJ\n");
+    fs::write(&input_sam, sam).expect("input SAM is written");
+
+    Command::cargo_bin("picard")
+        .expect("binary exists")
+        .args([
+            "SortSam",
+            &format!("I={}", input_sam.display()),
+            &format!("O={}", input_bam.display()),
+            "SO=coordinate",
+            "VALIDATION_STRINGENCY=SILENT",
+            "QUIET=true",
+        ])
+        .assert()
+        .success();
+
+    Command::cargo_bin("picard")
+        .expect("binary exists")
+        .args([
+            "SamToFastq",
+            &format!("I={}", input_bam.display()),
+            &format!("FASTQ={}", read1_fastq.display()),
+            &format!("SECOND_END_FASTQ={}", read2_fastq.display()),
+            "VALIDATION_STRINGENCY=SILENT",
+            "QUIET=true",
+        ])
+        .assert()
+        .success();
+
+    assert_eq!(
+        fs::read_to_string(&read1_fastq).expect("read1 FASTQ exists"),
+        "@real/1\nGATT\n+\nHHHH\n",
+    );
+    assert_eq!(
+        fs::read_to_string(&read2_fastq).expect("read2 FASTQ exists"),
+        "@real/2\nCAGT\n+\nJJJJ\n",
+    );
+}
+
+#[test]
 fn fastqtosam_writes_unmapped_paired_sam_with_read_group() {
     let tempdir = tempfile::tempdir().expect("tempdir exists");
     let r1 = tempdir.path().join("r1.fastq");
