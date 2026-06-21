@@ -17682,9 +17682,9 @@ fn revertsam_default_removed_alignment_tag(tag: &[u8]) -> bool {
     )
 }
 
-fn hardclip_restoration_for_revertsam(
-    record: &bam::Record,
-) -> Result<Option<(Vec<u8>, Vec<u8>)>, String> {
+type HardclipRestoration = Option<(Vec<u8>, Vec<u8>)>;
+
+fn hardclip_restoration_for_revertsam(record: &bam::Record) -> Result<HardclipRestoration, String> {
     let Ok(Aux::String(bases)) = record.aux(b"XB") else {
         return Ok(None);
     };
@@ -17969,11 +17969,11 @@ fn dna_bases_equal(read_base: u8, ref_base: u8) -> bool {
         return true;
     }
     match read_base.to_ascii_uppercase() {
-        b'A' => ref_base.to_ascii_uppercase() == b'A',
-        b'C' => ref_base.to_ascii_uppercase() == b'C',
-        b'G' => ref_base.to_ascii_uppercase() == b'G',
-        b'T' => ref_base.to_ascii_uppercase() == b'T',
-        b'N' => ref_base.to_ascii_uppercase() == b'N',
+        b'A' => ref_base.eq_ignore_ascii_case(&b'A'),
+        b'C' => ref_base.eq_ignore_ascii_case(&b'C'),
+        b'G' => ref_base.eq_ignore_ascii_case(&b'G'),
+        b'T' => ref_base.eq_ignore_ascii_case(&b'T'),
+        b'N' => ref_base.eq_ignore_ascii_case(&b'N'),
         _ => false,
     }
 }
@@ -18021,11 +18021,11 @@ fn drain_fixed_mate_group(
             let name = String::from_utf8_lossy(records[0].qname());
             return Err(format!("Missing second read of pair: {name}"));
         }
-        return Ok(records.drain(..).collect());
+        return Ok(std::mem::take(records));
     }
 
     if records.iter().any(|record| record.is_secondary()) {
-        return Ok(records.drain(..).collect());
+        return Ok(std::mem::take(records));
     }
 
     let primary_indices = records
@@ -18043,10 +18043,10 @@ fn drain_fixed_mate_group(
         .iter()
         .any(|record| !record.is_paired() && !record.is_supplementary())
     {
-        return Ok(records.drain(..).collect());
+        return Ok(std::mem::take(records));
     }
 
-    let mut fixed = records.drain(..).collect::<Vec<_>>();
+    let mut fixed = std::mem::take(records);
     let first_index = primary_indices[0];
     let second_index = primary_indices[1];
     fix_mate_pair_by_index(&mut fixed, first_index, second_index, add_mate_cigar)?;
@@ -18369,9 +18369,8 @@ fn build_merge_plan(
             );
         }
         let read_group_renames = header_builder.observe_input_header(&header_text)?;
-        let is_sorted = if assume_sorted {
-            true
-        } else if header_declares_sort_order(reader.header(), sort_order) {
+        let is_sorted = if assume_sorted || header_declares_sort_order(reader.header(), sort_order)
+        {
             true
         } else {
             input_reader_is_sorted(&mut reader, sort_order)?
@@ -18913,10 +18912,10 @@ impl MergeHeaderBuilder {
                 lines.push(header_line_with_sort_order(line, sort_order));
                 seen_hd = true;
             } else {
-                if line.starts_with("@RG\t") {
-                    if let Some(id) = read_group_id(line) {
-                        seen_read_groups.insert(id, line.to_string());
-                    }
+                if line.starts_with("@RG\t")
+                    && let Some(id) = read_group_id(line)
+                {
+                    seen_read_groups.insert(id, line.to_string());
                 }
                 lines.push(line.to_string());
             }
@@ -19202,10 +19201,10 @@ fn discover_upstream_picard_command() -> Option<String> {
             return Some(format!("java -jar {}", quote_fallback_command_arg(trimmed)));
         }
     }
-    if let Ok(prefix) = env::var("CONDA_PREFIX") {
-        if let Some(command) = discover_picard_in_prefix(&prefix) {
-            return Some(command);
-        }
+    if let Ok(prefix) = env::var("CONDA_PREFIX")
+        && let Some(command) = discover_picard_in_prefix(&prefix)
+    {
+        return Some(command);
     }
     discover_picard_on_path()
 }
@@ -19367,13 +19366,13 @@ fn split_fallback_command(command: &str) -> Result<Vec<String>, String> {
 
     while let Some(ch) = chars.next() {
         if ch == '\\' && quoted != Some('\'') {
-            if let Some(&next) = chars.peek() {
-                if next.is_whitespace() || matches!(next, '"' | '\'') {
-                    current.push(next);
-                    chars.next();
-                    in_token = true;
-                    continue;
-                }
+            if let Some(&next) = chars.peek()
+                && (next.is_whitespace() || matches!(next, '"' | '\''))
+            {
+                current.push(next);
+                chars.next();
+                in_token = true;
+                continue;
             }
             current.push('\\');
             in_token = true;
