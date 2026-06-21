@@ -117,6 +117,30 @@ struct BamDuplicateKey {
     barcode_id: Option<InternedBytesId>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+struct FragmentDuplicateKey {
+    library_id: LibraryId,
+    reference_id: i32,
+    position: i64,
+    reverse_strand: bool,
+    barcode_id: Option<InternedBytesId>,
+}
+
+impl FragmentDuplicateKey {
+    fn duplicate_key(self) -> BamDuplicateKey {
+        BamDuplicateKey {
+            library_id: self.library_id,
+            reference_id: self.reference_id,
+            position: self.position,
+            mate_reference_id: -1,
+            mate_position: -1,
+            template_length: 0,
+            reverse_strand: self.reverse_strand,
+            barcode_id: self.barcode_id,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 struct DuplicateCandidate {
     record_index: usize,
@@ -124,7 +148,7 @@ struct DuplicateCandidate {
     flags: CandidateFlags,
     duplicate_score: u64,
     optical_location: Option<ReadLocation>,
-    fragment_key: BamDuplicateKey,
+    fragment_key: FragmentDuplicateKey,
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -165,13 +189,10 @@ impl DuplicateCandidate {
             flags: candidate_flags,
             duplicate_score: quality_score(record),
             optical_location: parse_read_location(record.qname()),
-            fragment_key: BamDuplicateKey {
+            fragment_key: FragmentDuplicateKey {
                 library_id,
                 reference_id,
                 position: five_prime_position,
-                mate_reference_id: -1,
-                mate_position: -1,
-                template_length: 0,
                 reverse_strand,
                 barcode_id,
             },
@@ -1751,7 +1772,9 @@ fn fragment_key_rows(
     candidates
         .iter()
         .enumerate()
-        .map(|(candidate_index, candidate)| (candidate.fragment_key, candidate_index))
+        .map(|(candidate_index, candidate)| {
+            (candidate.fragment_key.duplicate_key(), candidate_index)
+        })
 }
 
 fn scan_fragment_key_rows(
@@ -2965,6 +2988,16 @@ mod tests {
         assert!(candidate.reverse_strand());
         assert_eq!(
             candidate.fragment_key,
+            FragmentDuplicateKey {
+                library_id: 11,
+                reference_id: 2,
+                position: 107,
+                reverse_strand: true,
+                barcode_id: Some(13),
+            }
+        );
+        assert_eq!(
+            candidate.fragment_key.duplicate_key(),
             BamDuplicateKey {
                 library_id: 11,
                 reference_id: 2,
