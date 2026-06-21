@@ -23,6 +23,9 @@ const DECISION_BITS_PER_WORD: usize = u64::BITS as usize;
 type LibraryId = u32;
 type InternedBytesId = u32;
 type OpticalLocationId = u32;
+const DUPLICATE_SORT_KEY_LEN: usize = 42;
+const PAIR_PAYLOAD_LEN: usize = 16;
+const PAIR_ORDER_PAYLOAD_LEN: usize = DUPLICATE_SORT_KEY_LEN + PAIR_PAYLOAD_LEN;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MarkDuplicatesSummary {
@@ -1984,22 +1987,25 @@ fn markdup_sort_config(config: &MarkDuplicatesConfig, prefix: &str) -> ExternalS
 }
 
 fn duplicate_sort_key(key: &BamDuplicateKey) -> Vec<u8> {
-    let mut bytes = Vec::with_capacity(42);
-    bytes.extend_from_slice(&key.library_id.to_be_bytes());
-    bytes.extend_from_slice(&sortable_i32(key.reference_id));
-    bytes.extend_from_slice(&sortable_i64(key.position));
-    bytes.extend_from_slice(&sortable_i32(key.mate_reference_id));
-    bytes.extend_from_slice(&sortable_i64(key.mate_position));
-    bytes.extend_from_slice(&sortable_i64(key.template_length));
-    bytes.push(u8::from(key.reverse_strand));
+    duplicate_sort_key_bytes(key).to_vec()
+}
+
+fn duplicate_sort_key_bytes(key: &BamDuplicateKey) -> [u8; DUPLICATE_SORT_KEY_LEN] {
+    let mut bytes = [0_u8; DUPLICATE_SORT_KEY_LEN];
+    bytes[0..4].copy_from_slice(&key.library_id.to_be_bytes());
+    bytes[4..8].copy_from_slice(&sortable_i32(key.reference_id));
+    bytes[8..16].copy_from_slice(&sortable_i64(key.position));
+    bytes[16..20].copy_from_slice(&sortable_i32(key.mate_reference_id));
+    bytes[20..28].copy_from_slice(&sortable_i64(key.mate_position));
+    bytes[28..36].copy_from_slice(&sortable_i64(key.template_length));
+    bytes[36] = u8::from(key.reverse_strand);
     match key.barcode_id {
         Some(barcode_id) => {
-            bytes.push(1);
-            bytes.extend_from_slice(&barcode_id.to_be_bytes());
+            bytes[37] = 1;
+            bytes[38..42].copy_from_slice(&barcode_id.to_be_bytes());
         }
         None => {
-            bytes.push(0);
-            bytes.extend_from_slice(&0_u32.to_be_bytes());
+            bytes[37] = 0;
         }
     }
     bytes
@@ -2022,7 +2028,7 @@ fn decode_qname_sort_key(bytes: &[u8]) -> Result<InternedBytesId, MarkDuplicates
 }
 
 fn decode_duplicate_sort_key(bytes: &[u8]) -> Result<BamDuplicateKey, MarkDuplicatesError> {
-    if bytes.len() != 42 {
+    if bytes.len() != DUPLICATE_SORT_KEY_LEN {
         return Err(MarkDuplicatesError::Operation(format!(
             "invalid MarkDuplicates duplicate-key sort payload length: {}",
             bytes.len()
@@ -2083,13 +2089,17 @@ fn unsortable_i64(bytes: [u8; 8]) -> i64 {
 }
 
 fn pair_payload(pair_indices: [usize; 2]) -> Vec<u8> {
-    let mut payload = Vec::with_capacity(16);
-    payload.extend_from_slice(
+    pair_payload_bytes(pair_indices).to_vec()
+}
+
+fn pair_payload_bytes(pair_indices: [usize; 2]) -> [u8; PAIR_PAYLOAD_LEN] {
+    let mut payload = [0_u8; PAIR_PAYLOAD_LEN];
+    payload[0..8].copy_from_slice(
         &u64::try_from(pair_indices[0])
             .unwrap_or(u64::MAX)
             .to_le_bytes(),
     );
-    payload.extend_from_slice(
+    payload[8..16].copy_from_slice(
         &u64::try_from(pair_indices[1])
             .unwrap_or(u64::MAX)
             .to_le_bytes(),
@@ -2105,29 +2115,29 @@ fn pair_order_sort_key(pair_indices: [usize; 2]) -> Vec<u8> {
 }
 
 fn pair_order_payload(key: &BamDuplicateKey, pair_indices: [usize; 2]) -> Vec<u8> {
-    let mut payload = Vec::with_capacity(58);
-    payload.extend_from_slice(&duplicate_sort_key(key));
-    payload.extend_from_slice(&pair_payload(pair_indices));
+    let mut payload = Vec::with_capacity(PAIR_ORDER_PAYLOAD_LEN);
+    payload.extend_from_slice(&duplicate_sort_key_bytes(key));
+    payload.extend_from_slice(&pair_payload_bytes(pair_indices));
     payload
 }
 
 fn decode_pair_order_payload(
     payload: &[u8],
 ) -> Result<(BamDuplicateKey, [usize; 2]), MarkDuplicatesError> {
-    if payload.len() != 58 {
+    if payload.len() != PAIR_ORDER_PAYLOAD_LEN {
         return Err(MarkDuplicatesError::Operation(format!(
             "invalid MarkDuplicates qname-pair sort payload length: {}",
             payload.len()
         )));
     }
     Ok((
-        decode_duplicate_sort_key(&payload[..42])?,
-        decode_pair_payload(&payload[42..])?,
+        decode_duplicate_sort_key(&payload[..DUPLICATE_SORT_KEY_LEN])?,
+        decode_pair_payload(&payload[DUPLICATE_SORT_KEY_LEN..])?,
     ))
 }
 
 fn decode_pair_payload(payload: &[u8]) -> Result<[usize; 2], MarkDuplicatesError> {
-    if payload.len() != 16 {
+    if payload.len() != PAIR_PAYLOAD_LEN {
         return Err(MarkDuplicatesError::Operation(format!(
             "invalid MarkDuplicates pair sort payload length: {}",
             payload.len()
@@ -3856,8 +3866,10 @@ mod tests {
 
         assert_eq!(encoded, keys);
         for key in keys {
-            let decoded =
-                decode_duplicate_sort_key(&duplicate_sort_key(&key)).expect("key decodes");
+            let encoded_key = duplicate_sort_key(&key);
+            assert_eq!(encoded_key.len(), DUPLICATE_SORT_KEY_LEN);
+            assert_eq!(duplicate_sort_key_bytes(&key).len(), DUPLICATE_SORT_KEY_LEN);
+            let decoded = decode_duplicate_sort_key(&encoded_key).expect("key decodes");
             assert_eq!(decoded, key);
         }
     }
@@ -3876,8 +3888,11 @@ mod tests {
         };
         let pair_indices = [13, 19];
 
-        let decoded = decode_pair_order_payload(&pair_order_payload(&key, pair_indices))
-            .expect("qname-pair payload decodes");
+        let encoded = pair_order_payload(&key, pair_indices);
+        assert_eq!(encoded.len(), PAIR_ORDER_PAYLOAD_LEN);
+        assert_eq!(pair_payload(pair_indices).len(), PAIR_PAYLOAD_LEN);
+        assert_eq!(pair_payload_bytes(pair_indices).len(), PAIR_PAYLOAD_LEN);
+        let decoded = decode_pair_order_payload(&encoded).expect("qname-pair payload decodes");
 
         assert_eq!(decoded, (key, pair_indices));
         assert_eq!(pair_order_sort_key([1, 2]), pair_order_sort_key([0, 2]));
