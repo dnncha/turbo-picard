@@ -21,6 +21,7 @@ const UNMAPPED_FLAG: u16 = 0x4;
 const DECISION_BITS_PER_WORD: usize = u64::BITS as usize;
 type LibraryId = u32;
 type InternedBytesId = u32;
+type OpticalLocationId = u32;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MarkDuplicatesSummary {
@@ -147,7 +148,7 @@ struct DuplicateCandidate {
     qname_id: InternedBytesId,
     flags: CandidateFlags,
     duplicate_score: u64,
-    optical_location: Option<ReadLocation>,
+    optical_location_id: Option<OpticalLocationId>,
     fragment_key: FragmentDuplicateKey,
 }
 
@@ -186,6 +187,7 @@ impl DuplicateCandidate {
         qname_id: InternedBytesId,
         barcode_id: Option<InternedBytesId>,
         parse_optical_location: bool,
+        optical_locations: &mut OpticalLocations,
     ) -> Self {
         let flags = record.flags();
         let reference_id = record.tid();
@@ -196,9 +198,10 @@ impl DuplicateCandidate {
             qname_id,
             flags: candidate_flags,
             duplicate_score: quality_score(record),
-            optical_location: parse_optical_location
+            optical_location_id: parse_optical_location
                 .then(|| parse_read_location(record.qname()))
-                .flatten(),
+                .flatten()
+                .map(|location| optical_locations.push(location)),
             fragment_key: FragmentDuplicateKey {
                 library_id,
                 reference_id,
@@ -374,6 +377,24 @@ impl ByteInterner {
                     "interned MarkDuplicates byte id {id} is out of range"
                 ))
             })
+    }
+}
+
+#[derive(Debug, Default)]
+struct OpticalLocations {
+    values: Vec<ReadLocation>,
+}
+
+impl OpticalLocations {
+    fn push(&mut self, location: ReadLocation) -> OpticalLocationId {
+        let id = OpticalLocationId::try_from(self.values.len())
+            .expect("optical location id fits in u32");
+        self.values.push(location);
+        id
+    }
+
+    fn get(&self, id: OpticalLocationId) -> Option<ReadLocation> {
+        self.values.get(usize::try_from(id).ok()?).copied()
     }
 }
 
@@ -573,6 +594,7 @@ fn run_hts_container(
     let mut candidates = Vec::new();
     let mut qnames = ByteInterner::default();
     let mut barcodes = ByteInterner::default();
+    let mut optical_locations = OpticalLocations::default();
     let mut record_count = 0usize;
     let seekable_multi_bam_output = config.inputs.len() > 1 && all_inputs_are_bam(config);
     let retain_records = config.inputs.len() > 1 && !seekable_multi_bam_output;
@@ -609,6 +631,7 @@ fn run_hts_container(
             candidates: &mut candidates,
             qnames: &mut qnames,
             barcodes: &mut barcodes,
+            optical_locations: &mut optical_locations,
         },
         &first_library_lookup,
         &mut library_registry,
@@ -640,6 +663,7 @@ fn run_hts_container(
                 candidates: &mut candidates,
                 qnames: &mut qnames,
                 barcodes: &mut barcodes,
+                optical_locations: &mut optical_locations,
             },
             &input_library_lookup,
             &mut library_registry,
@@ -651,6 +675,7 @@ fn run_hts_container(
     let mut decisions = DuplicateDecisions::new(record_count);
     process_pair_duplicate_groups(
         &candidates,
+        &optical_locations,
         &mut decisions,
         &mut summary,
         &mut library_registry,
@@ -731,6 +756,7 @@ struct BamRecordSink<'a> {
     candidates: &'a mut Vec<DuplicateCandidate>,
     qnames: &'a mut ByteInterner,
     barcodes: &'a mut ByteInterner,
+    optical_locations: &'a mut OpticalLocations,
 }
 
 fn read_bam_records<R: bam::Read>(
@@ -816,6 +842,7 @@ fn read_bam_records<R: bam::Read>(
             qname_id,
             barcode_id,
             parse_optical_location,
+            sink.optical_locations,
         ));
         if let Some(records) = sink.records.as_deref_mut() {
             records.push(std::mem::take(&mut record));
@@ -1095,61 +1122,81 @@ fn add_duplicate_type_tag(
 
 fn apply_pair_duplicate_group_members(
     group: &[usize],
-    candidates: &[DuplicateCandidate],
-    decisions: &mut DuplicateDecisions,
-    summary: &mut MarkDuplicatesSummary,
-    library_registry: &mut LibraryRegistry,
     stats: DuplicateGroupStats,
-    config: &MarkDuplicatesConfig,
+    state: &mut PairGroupMemberState<'_>,
 ) -> usize {
-    let duplicate_set_tag = (config.tag_duplicate_set_members
-        && !config.remove_duplicates
+    let duplicate_set_tag = (state.config.tag_duplicate_set_members
+        && !state.config.remove_duplicates
         && stats.has_pair
         && stats.has_multiple_read_names)
         .then(|| DuplicateSetTag {
             size: i32::try_from(stats.unique_read_names).unwrap_or(i32::MAX),
             index: i32::try_from(stats.representative_record_index).unwrap_or(i32::MAX),
         });
-    let representative_location = (config.read_name_regex.as_deref() != Some("null"))
-        .then_some(candidates[stats.representative_candidate_index].optical_location);
-    let pixel_distance = i64::from(config.optical_duplicate_pixel_distance.unwrap_or(100));
+    let representative_location = (state.config.read_name_regex.as_deref() != Some("null"))
+        .then(|| {
+            state.candidates[stats.representative_candidate_index]
+                .optical_location_id
+                .and_then(|id| state.optical_locations.get(id))
+        })
+        .flatten();
+    let pixel_distance = i64::from(state.config.optical_duplicate_pixel_distance.unwrap_or(100));
     let mut optical_names = HashSet::<InternedBytesId>::default();
 
     for index in group.iter().copied() {
-        let candidate = &candidates[index];
+        let candidate = &state.candidates[index];
         if let Some(tag) = duplicate_set_tag {
-            decisions.set_duplicate_set(candidate.record_index, tag.size, tag.index);
+            state
+                .decisions
+                .set_duplicate_set(candidate.record_index, tag.size, tag.index);
         }
         if candidate.qname_id == stats.representative_qname_id {
             continue;
         }
 
-        if let Some(Some(representative_location)) = representative_location {
+        if let Some(representative_location) = representative_location {
             if optical_names.contains(&candidate.qname_id) {
-                decisions.mark_optical_duplicate(candidate.record_index);
-            } else if let Some(location) = candidate.optical_location
+                state
+                    .decisions
+                    .mark_optical_duplicate(candidate.record_index);
+            } else if let Some(location) = candidate
+                .optical_location_id
+                .and_then(|id| state.optical_locations.get(id))
                 && representative_location.is_within(&location, pixel_distance)
             {
                 optical_names.insert(candidate.qname_id);
-                decisions.mark_optical_duplicate(candidate.record_index);
+                state
+                    .decisions
+                    .mark_optical_duplicate(candidate.record_index);
             }
         }
 
         if candidate.is_pair() {
-            summary.duplicate_pair_records += 1;
-            library_registry
+            state.summary.duplicate_pair_records += 1;
+            state
+                .library_registry
                 .summary_mut(candidate.library_id())
                 .duplicate_pair_records += 1;
         } else {
-            summary.unpaired_duplicate_records += 1;
-            library_registry
+            state.summary.unpaired_duplicate_records += 1;
+            state
+                .library_registry
                 .summary_mut(candidate.library_id())
                 .unpaired_duplicate_records += 1;
         }
-        decisions.mark_duplicate(candidate.record_index);
+        state.decisions.mark_duplicate(candidate.record_index);
     }
 
     optical_names.len()
+}
+
+struct PairGroupMemberState<'a> {
+    candidates: &'a [DuplicateCandidate],
+    optical_locations: &'a OpticalLocations,
+    decisions: &'a mut DuplicateDecisions,
+    summary: &'a mut MarkDuplicatesSummary,
+    library_registry: &'a mut LibraryRegistry,
+    config: &'a MarkDuplicatesConfig,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1445,6 +1492,7 @@ fn duplicate_groups(
 
 fn process_pair_duplicate_groups(
     candidates: &[DuplicateCandidate],
+    optical_locations: &OpticalLocations,
     decisions: &mut DuplicateDecisions,
     summary: &mut MarkDuplicatesSummary,
     library_registry: &mut LibraryRegistry,
@@ -1454,6 +1502,7 @@ fn process_pair_duplicate_groups(
         apply_pair_duplicate_group(
             group,
             candidates,
+            optical_locations,
             decisions,
             summary,
             library_registry,
@@ -1465,6 +1514,7 @@ fn process_pair_duplicate_groups(
 fn apply_pair_duplicate_group(
     group: &[usize],
     candidates: &[DuplicateCandidate],
+    optical_locations: &OpticalLocations,
     decisions: &mut DuplicateDecisions,
     summary: &mut MarkDuplicatesSummary,
     library_registry: &mut LibraryRegistry,
@@ -1490,12 +1540,15 @@ fn apply_pair_duplicate_group(
 
     let optical_duplicate_read_names = apply_pair_duplicate_group_members(
         group,
-        candidates,
-        decisions,
-        summary,
-        library_registry,
         stats,
-        config,
+        &mut PairGroupMemberState {
+            candidates,
+            optical_locations,
+            decisions,
+            summary,
+            library_registry,
+            config,
+        },
     );
     if let Some(set_size) = stats.paired_set_size {
         let optical_names = u64::try_from(optical_duplicate_read_names).unwrap_or(u64::MAX);
@@ -3068,19 +3121,42 @@ mod tests {
         candidates_and_qnames_for_records(records).0
     }
 
+    fn candidates_and_locations_for_records(
+        records: &[bam::Record],
+    ) -> (Vec<DuplicateCandidate>, OpticalLocations) {
+        let (candidates, locations, _) = candidates_locations_and_qnames_for_records(records);
+        (candidates, locations)
+    }
+
     fn candidates_and_qnames_for_records(
         records: &[bam::Record],
     ) -> (Vec<DuplicateCandidate>, ByteInterner) {
+        let (candidates, _, qnames) = candidates_locations_and_qnames_for_records(records);
+        (candidates, qnames)
+    }
+
+    fn candidates_locations_and_qnames_for_records(
+        records: &[bam::Record],
+    ) -> (Vec<DuplicateCandidate>, OpticalLocations, ByteInterner) {
         let mut qnames = ByteInterner::default();
+        let mut optical_locations = OpticalLocations::default();
         let candidates = records
             .iter()
             .enumerate()
             .map(|(index, record)| {
                 let qname_id = qnames.intern(record.qname());
-                DuplicateCandidate::from_record(index, record, 0, qname_id, None, true)
+                DuplicateCandidate::from_record(
+                    index,
+                    record,
+                    0,
+                    qname_id,
+                    None,
+                    true,
+                    &mut optical_locations,
+                )
             })
             .collect();
-        (candidates, qnames)
+        (candidates, optical_locations, qnames)
     }
 
     #[test]
@@ -3094,7 +3170,16 @@ mod tests {
         record.set_flags(0x10);
         record.set_tid(2);
         record.set_pos(100);
-        let candidate = DuplicateCandidate::from_record(4, &record, 11, 7, Some(13), true);
+        let mut optical_locations = OpticalLocations::default();
+        let candidate = DuplicateCandidate::from_record(
+            4,
+            &record,
+            11,
+            7,
+            Some(13),
+            true,
+            &mut optical_locations,
+        );
 
         assert!(!candidate.is_pair());
         assert!(candidate.reverse_strand());
@@ -3131,9 +3216,18 @@ mod tests {
         mate_unmapped.set_tid(0);
         mate_unmapped.set_pos(20);
 
-        let paired_candidate = DuplicateCandidate::from_record(0, &paired, 0, 1, None, true);
-        let mate_unmapped_candidate =
-            DuplicateCandidate::from_record(1, &mate_unmapped, 0, 2, None, true);
+        let mut optical_locations = OpticalLocations::default();
+        let paired_candidate =
+            DuplicateCandidate::from_record(0, &paired, 0, 1, None, true, &mut optical_locations);
+        let mate_unmapped_candidate = DuplicateCandidate::from_record(
+            1,
+            &mate_unmapped,
+            0,
+            2,
+            None,
+            true,
+            &mut optical_locations,
+        );
 
         assert!(paired_candidate.is_pair());
         assert!(!mate_unmapped_candidate.is_pair());
@@ -3143,18 +3237,25 @@ mod tests {
     fn duplicate_candidate_skips_optical_location_when_disabled() {
         let record = record_with_name_and_flags(b"INST:1:2:3:4", 0);
 
-        let parsed = DuplicateCandidate::from_record(0, &record, 0, 1, None, true);
-        let skipped = DuplicateCandidate::from_record(0, &record, 0, 1, None, false);
+        let mut parsed_locations = OpticalLocations::default();
+        let parsed =
+            DuplicateCandidate::from_record(0, &record, 0, 1, None, true, &mut parsed_locations);
+        let mut skipped_locations = OpticalLocations::default();
+        let skipped =
+            DuplicateCandidate::from_record(0, &record, 0, 1, None, false, &mut skipped_locations);
 
         assert_eq!(
-            parsed.optical_location,
+            parsed
+                .optical_location_id
+                .and_then(|id| parsed_locations.get(id)),
             Some(ReadLocation {
                 tile: 2,
                 x: 3,
                 y: 4,
             })
         );
-        assert_eq!(skipped.optical_location, None);
+        assert_eq!(skipped.optical_location_id, None);
+        assert!(skipped_locations.values.is_empty());
     }
 
     #[test]
@@ -3661,7 +3762,7 @@ mod tests {
             record_with_name_and_flags(b"dup-b", 0x1),
             record_with_name_and_flags(b"dup-c", 0x1),
         ];
-        let candidates = candidates_for_records(&records);
+        let (candidates, optical_locations) = candidates_and_locations_for_records(&records);
         let mut decisions = DuplicateDecisions::new(records.len());
         let stats = DuplicateGroupStats::from_group(&[0, 1, 2, 3], &candidates);
         let config = MarkDuplicatesConfig {
@@ -3672,12 +3773,15 @@ mod tests {
 
         apply_pair_duplicate_group_members(
             &[0, 1, 2, 3],
-            &candidates,
-            &mut decisions,
-            &mut summary,
-            &mut library_registry,
             stats,
-            &config,
+            &mut PairGroupMemberState {
+                candidates: &candidates,
+                optical_locations: &optical_locations,
+                decisions: &mut decisions,
+                summary: &mut summary,
+                library_registry: &mut library_registry,
+                config: &config,
+            },
         );
 
         for index in [0usize, 1, 2, 3] {
@@ -3696,7 +3800,7 @@ mod tests {
             record_with_name_and_flags(b"dup-a", 0x0),
             record_with_name_and_flags(b"dup-a", 0x0),
         ];
-        let candidates = candidates_for_records(&records);
+        let (candidates, optical_locations) = candidates_and_locations_for_records(&records);
         let mut decisions = DuplicateDecisions::new(records.len());
         let stats = DuplicateGroupStats::from_group(&[0, 1], &candidates);
         let config = MarkDuplicatesConfig {
@@ -3707,12 +3811,15 @@ mod tests {
 
         apply_pair_duplicate_group_members(
             &[0, 1],
-            &candidates,
-            &mut decisions,
-            &mut summary,
-            &mut library_registry,
             stats,
-            &config,
+            &mut PairGroupMemberState {
+                candidates: &candidates,
+                optical_locations: &optical_locations,
+                decisions: &mut decisions,
+                summary: &mut summary,
+                library_registry: &mut library_registry,
+                config: &config,
+            },
         );
 
         assert!(
@@ -3736,7 +3843,7 @@ mod tests {
             record_with_name_and_qualities(b"INST:1:FC:1:1101:105:105", &[20], 0x1),
             record_with_name_and_qualities(b"INST:1:FC:1:1101:105:105", &[20], 0x1),
         ];
-        let candidates = candidates_for_records(&records);
+        let (candidates, optical_locations) = candidates_and_locations_for_records(&records);
         let stats = DuplicateGroupStats::from_group(&[0, 1, 2], &candidates);
         let config = MarkDuplicatesConfig {
             read_name_regex: None,
@@ -3747,7 +3854,9 @@ mod tests {
         let (mut summary, mut library_registry) = summary_and_library_registry();
 
         assert_eq!(
-            candidates[0].optical_location,
+            candidates[0]
+                .optical_location_id
+                .and_then(|id| optical_locations.get(id)),
             Some(ReadLocation {
                 tile: 1101,
                 x: 100,
@@ -3756,12 +3865,15 @@ mod tests {
         );
         let optical_read_names = apply_pair_duplicate_group_members(
             &[0, 1, 2],
-            &candidates,
-            &mut decisions,
-            &mut summary,
-            &mut library_registry,
             stats,
-            &config,
+            &mut PairGroupMemberState {
+                candidates: &candidates,
+                optical_locations: &optical_locations,
+                decisions: &mut decisions,
+                summary: &mut summary,
+                library_registry: &mut library_registry,
+                config: &config,
+            },
         );
 
         assert_eq!(optical_read_names, 1);
@@ -3970,6 +4082,6 @@ mod tests {
     #[test]
     fn duplicate_candidate_layout_stays_compact() {
         assert_eq!(std::mem::size_of::<FragmentDuplicateKey>(), 24);
-        assert_eq!(std::mem::size_of::<DuplicateCandidate>(), 80);
+        assert_eq!(std::mem::size_of::<DuplicateCandidate>(), 56);
     }
 }
