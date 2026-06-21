@@ -1575,7 +1575,11 @@ fn collate_pair_key_rows_by_qname_into(
         }
     }
 
-    let mut keyed_pairs = Vec::<(BamDuplicateKey, [usize; 2])>::new();
+    let mut pair_order_sorter = ExternalSorter::new(markdup_sort_config(
+        config,
+        "turbo-picard-markdup-qname-pairs",
+    ))
+    .map_err(MarkDuplicatesError::Operation)?;
     let mut first_index = None::<usize>;
     let mut current_qname_id = None::<InternedBytesId>;
     sorter
@@ -1589,7 +1593,14 @@ fn collate_pair_key_rows_by_qname_into(
                 return Ok(());
             }
             if let Some(first) = first_index.take() {
-                push_pair_key_row(first, candidate_index, candidates, &mut keyed_pairs);
+                let (key, pair_indices) = pair_key_row(first, candidate_index, candidates);
+                pair_order_sorter
+                    .push(
+                        pair_order_sort_key(pair_indices),
+                        pair_order_payload(&key, pair_indices),
+                    )
+                    .map(|_| ())
+                    .map_err(|error| error.to_string())?;
             } else {
                 first_index = Some(candidate_index);
             }
@@ -1597,10 +1608,13 @@ fn collate_pair_key_rows_by_qname_into(
         })
         .map_err(MarkDuplicatesError::Operation)?;
 
-    keyed_pairs.sort_by_key(|(_, pair)| pair[1]);
-    for (key, pair_indices) in keyed_pairs {
-        emit_pair(key, pair_indices)?;
-    }
+    pair_order_sorter
+        .finish_into(|item| {
+            let (key, pair_indices) =
+                decode_pair_order_payload(&item.payload).map_err(|error| error.to_string())?;
+            emit_pair(key, pair_indices).map_err(|error| error.to_string())
+        })
+        .map_err(MarkDuplicatesError::Operation)?;
     Ok(())
 }
 
@@ -1638,6 +1652,7 @@ fn insert_pending_pair_candidate(
     true
 }
 
+#[cfg(test)]
 fn push_pair_key_row(
     first_index: usize,
     second_index: usize,
@@ -1947,6 +1962,35 @@ fn pair_payload(pair_indices: [usize; 2]) -> Vec<u8> {
             .to_le_bytes(),
     );
     payload
+}
+
+fn pair_order_sort_key(pair_indices: [usize; 2]) -> Vec<u8> {
+    u64::try_from(pair_indices[1])
+        .unwrap_or(u64::MAX)
+        .to_be_bytes()
+        .to_vec()
+}
+
+fn pair_order_payload(key: &BamDuplicateKey, pair_indices: [usize; 2]) -> Vec<u8> {
+    let mut payload = Vec::with_capacity(58);
+    payload.extend_from_slice(&duplicate_sort_key(key));
+    payload.extend_from_slice(&pair_payload(pair_indices));
+    payload
+}
+
+fn decode_pair_order_payload(
+    payload: &[u8],
+) -> Result<(BamDuplicateKey, [usize; 2]), MarkDuplicatesError> {
+    if payload.len() != 58 {
+        return Err(MarkDuplicatesError::Operation(format!(
+            "invalid MarkDuplicates qname-pair sort payload length: {}",
+            payload.len()
+        )));
+    }
+    Ok((
+        decode_duplicate_sort_key(&payload[..42])?,
+        decode_pair_payload(&payload[42..])?,
+    ))
 }
 
 fn decode_pair_payload(payload: &[u8]) -> Result<[usize; 2], MarkDuplicatesError> {
@@ -3438,6 +3482,28 @@ mod tests {
                 decode_duplicate_sort_key(&duplicate_sort_key(&key)).expect("key decodes");
             assert_eq!(decoded, key);
         }
+    }
+
+    #[test]
+    fn pair_order_payload_round_trips_duplicate_key_and_pair_indices() {
+        let key = BamDuplicateKey {
+            library_id: 7,
+            reference_id: 3,
+            position: 11,
+            mate_reference_id: 4,
+            mate_position: 17,
+            template_length: -29,
+            reverse_strand: true,
+            barcode_id: Some(5),
+        };
+        let pair_indices = [13, 19];
+
+        let decoded = decode_pair_order_payload(&pair_order_payload(&key, pair_indices))
+            .expect("qname-pair payload decodes");
+
+        assert_eq!(decoded, (key, pair_indices));
+        assert_eq!(pair_order_sort_key([1, 2]), pair_order_sort_key([0, 2]));
+        assert!(pair_order_sort_key([0, 2]) < pair_order_sort_key([0, 3]));
     }
 
     #[test]
