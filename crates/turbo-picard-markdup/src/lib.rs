@@ -8,9 +8,9 @@ use std::cmp::Ordering;
 use std::collections::BTreeMap;
 use std::env;
 use std::fmt;
-use std::fs;
-use std::io::{BufReader, Read as IoRead};
-use std::path::Path;
+use std::fs::{self, File, OpenOptions};
+use std::io::{BufRead, BufReader, BufWriter, Read as IoRead, Write};
+use std::path::{Path, PathBuf};
 use turbo_picard_core::external_sort::{ExternalSortConfig, ExternalSorter};
 use turbo_picard_core::hts_io;
 use turbo_picard_core::markdup_config::MarkDuplicatesConfig;
@@ -207,9 +207,16 @@ pub fn run(config: &MarkDuplicatesConfig) -> Result<MarkDuplicatesSummary, MarkD
     }
     ensure_sam_input(&config.input)?;
 
-    let input = fs::read_to_string(&config.input)?;
+    run_sam_text(config)
+}
+
+fn run_sam_text(
+    config: &MarkDuplicatesConfig,
+) -> Result<MarkDuplicatesSummary, MarkDuplicatesError> {
+    let input = File::open(&config.input)?;
+    let mut reader = BufReader::with_capacity(1024 * 1024, input);
+    let mut output = AtomicSamTextOutput::create(&config.output)?;
     let mut seen = HashMap::<DuplicateKey, usize>::default();
-    let mut output = String::with_capacity(input.len());
     let mut summary = MarkDuplicatesSummary {
         library: "Unknown Library".to_string(),
         unpaired_reads_examined: 0,
@@ -222,13 +229,29 @@ pub fn run(config: &MarkDuplicatesConfig) -> Result<MarkDuplicatesSummary, MarkD
         unmapped_records: 0,
         duplicate_set_histogram: BTreeMap::new(),
     };
+    let mut header_lines = Vec::<String>::new();
+    let mut header_written = false;
+    let mut line = String::new();
+    let mut line_number = 0usize;
 
-    for (line_index, line) in input.lines().enumerate() {
-        let line_number = line_index + 1;
+    loop {
+        line.clear();
+        if reader.read_line(&mut line)? == 0 {
+            break;
+        }
+        line_number += 1;
+        let line = line.trim_end_matches(['\r', '\n']);
         if line.starts_with('@') {
-            output.push_str(line);
-            output.push('\n');
+            if header_written {
+                output.write_line(line)?;
+            } else {
+                header_lines.push(line.to_string());
+            }
             continue;
+        }
+        if !header_written {
+            output.write_header_lines(&header_lines, config.add_pg_tag_to_reads)?;
+            header_written = true;
         }
 
         let mut fields = line.split('\t').map(str::to_string).collect::<Vec<_>>();
@@ -248,14 +271,12 @@ pub fn run(config: &MarkDuplicatesConfig) -> Result<MarkDuplicatesSummary, MarkD
 
         if flag & UNMAPPED_FLAG != 0 {
             summary.unmapped_records += 1;
-            output.push_str(line);
-            output.push('\n');
+            output.write_line(line)?;
             continue;
         }
         if flag & SECONDARY_OR_SUPPLEMENTARY_FLAGS != 0 {
             summary.secondary_or_supplementary_records += 1;
-            output.push_str(line);
-            output.push('\n');
+            output.write_line(line)?;
             continue;
         }
 
@@ -289,16 +310,15 @@ pub fn run(config: &MarkDuplicatesConfig) -> Result<MarkDuplicatesSummary, MarkD
             if config.add_pg_tag_to_reads {
                 add_program_group_to_sam_fields(&mut fields);
             }
-            output.push_str(&fields.join("\t"));
-            output.push('\n');
+            output.write_line(&fields.join("\t"))?;
         }
     }
 
-    if config.add_pg_tag_to_reads {
-        add_program_group_to_sam_header(&mut output);
+    if !header_written {
+        output.write_header_lines(&header_lines, config.add_pg_tag_to_reads)?;
     }
-    fs::write(&config.output, output)?;
     fs::write(&config.metrics_file, metrics_text(&summary))?;
+    output.persist()?;
     Ok(summary)
 }
 
@@ -1000,19 +1020,99 @@ fn add_program_group_to_sam_fields(fields: &mut Vec<String>) {
     fields.push("PG:Z:MarkDuplicates".to_string());
 }
 
-fn add_program_group_to_sam_header(output: &mut String) {
-    if output
-        .lines()
-        .any(|line| line.starts_with("@PG") && line.contains("ID:MarkDuplicates"))
-    {
-        return;
+struct AtomicSamTextOutput {
+    final_path: PathBuf,
+    temp_path: PathBuf,
+    writer: Option<BufWriter<File>>,
+    persisted: bool,
+}
+
+impl AtomicSamTextOutput {
+    fn create(output: &str) -> Result<Self, MarkDuplicatesError> {
+        let final_path = PathBuf::from(output);
+        let (temp_path, temp_file) = create_atomic_temp_file(&final_path, "markduplicates-sam")?;
+        let writer = BufWriter::with_capacity(1024 * 1024, temp_file);
+        Ok(Self {
+            final_path,
+            temp_path,
+            writer: Some(writer),
+            persisted: false,
+        })
     }
-    let insert_at = output
-        .lines()
-        .take_while(|line| line.starts_with('@'))
-        .map(|line| line.len() + 1)
-        .sum::<usize>();
-    output.insert_str(insert_at, "@PG\tID:MarkDuplicates\tPN:MarkDuplicates\n");
+
+    fn write_header_lines(
+        &mut self,
+        header_lines: &[String],
+        add_pg_tag: bool,
+    ) -> Result<(), MarkDuplicatesError> {
+        let has_markdup_pg = header_lines
+            .iter()
+            .any(|line| line.starts_with("@PG") && line.contains("ID:MarkDuplicates"));
+        for line in header_lines {
+            self.write_line(line)?;
+        }
+        if add_pg_tag && !has_markdup_pg {
+            self.write_line("@PG\tID:MarkDuplicates\tPN:MarkDuplicates")?;
+        }
+        Ok(())
+    }
+
+    fn write_line(&mut self, line: &str) -> Result<(), MarkDuplicatesError> {
+        let writer = self.writer.as_mut().ok_or_else(|| {
+            MarkDuplicatesError::Operation("MarkDuplicates output is closed".into())
+        })?;
+        writer.write_all(line.as_bytes())?;
+        writer.write_all(b"\n")?;
+        Ok(())
+    }
+
+    fn persist(mut self) -> Result<(), MarkDuplicatesError> {
+        if let Some(mut writer) = self.writer.take() {
+            writer.flush()?;
+        }
+        fs::rename(&self.temp_path, &self.final_path)?;
+        self.persisted = true;
+        Ok(())
+    }
+}
+
+impl Drop for AtomicSamTextOutput {
+    fn drop(&mut self) {
+        if !self.persisted {
+            let _ = fs::remove_file(&self.temp_path);
+        }
+    }
+}
+
+fn create_atomic_temp_file(
+    final_path: &Path,
+    prefix: &str,
+) -> Result<(PathBuf, File), MarkDuplicatesError> {
+    let parent = final_path.parent().unwrap_or_else(|| Path::new("."));
+    let file_name = final_path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("output");
+    for attempt in 0..1000u32 {
+        let candidate = parent.join(format!(
+            ".{file_name}.{prefix}.{}.{}.tmp",
+            std::process::id(),
+            attempt
+        ));
+        match OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&candidate)
+        {
+            Ok(file) => return Ok((candidate, file)),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(error.into()),
+        }
+    }
+    Err(MarkDuplicatesError::Operation(format!(
+        "could not create temporary output for {}",
+        final_path.display()
+    )))
 }
 
 fn push_markdup_pg_header_if_needed(header: &mut bam::Header) {

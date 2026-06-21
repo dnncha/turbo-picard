@@ -363,6 +363,54 @@ fn markduplicates_marks_duplicate_sam_records() {
 }
 
 #[test]
+fn markduplicates_sam_error_does_not_leave_partial_output() {
+    let tempdir = tempfile::tempdir().expect("tempdir exists");
+    let input = tempdir.path().join("input.sam");
+    let output = tempdir.path().join("output.sam");
+    let metrics = tempdir.path().join("metrics.txt");
+    fs::write(
+        &input,
+        concat!(
+            "@HD\tVN:1.6\tSO:coordinate\n",
+            "@SQ\tSN:chr1\tLN:1000\n",
+            "read-a\t0\tchr1\t10\t60\t10M\t*\t0\t0\tAAAAAAAAAA\tFFFFFFFFFF\n",
+            "malformed\t0\tchr1\n",
+        ),
+    )
+    .expect("input fixture is written");
+
+    Command::cargo_bin("turbo-picard")
+        .expect("binary exists")
+        .args([
+            "MarkDuplicates",
+            &format!("I={}", input.display()),
+            &format!("O={}", output.display()),
+            &format!("M={}", metrics.display()),
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("malformed SAM"));
+
+    assert!(
+        !output.exists(),
+        "failed SAM streaming should not persist output"
+    );
+    assert!(
+        fs::read_dir(tempdir.path())
+            .expect("tempdir readable")
+            .all(|entry| {
+                let name = entry
+                    .expect("dir entry")
+                    .file_name()
+                    .to_string_lossy()
+                    .into_owned();
+                !name.contains("markduplicates-sam")
+            }),
+        "failed SAM streaming should clean temporary output"
+    );
+}
+
+#[test]
 fn sortsam_sorts_sam_by_coordinate() {
     let tempdir = tempfile::tempdir().expect("tempdir exists");
     let input = tempdir.path().join("input.sam");
