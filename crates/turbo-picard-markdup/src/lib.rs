@@ -26,6 +26,10 @@ type OpticalLocationId = u32;
 const DUPLICATE_SORT_KEY_LEN: usize = 42;
 const PAIR_PAYLOAD_LEN: usize = 16;
 const PAIR_ORDER_PAYLOAD_LEN: usize = DUPLICATE_SORT_KEY_LEN + PAIR_PAYLOAD_LEN;
+const QNAME_SORT_KEY_LEN: usize = 4;
+const INDEX_PAYLOAD_LEN: usize = 8;
+const LOCATOR_PAYLOAD_LEN: usize = 20;
+const PAIR_ORDER_SORT_KEY_LEN: usize = 8;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MarkDuplicatesSummary {
@@ -1044,19 +1048,23 @@ struct OutputLocatorPayload {
 }
 
 fn locator_payload(locator: &OutputRecordLocator) -> Vec<u8> {
-    let mut payload = Vec::with_capacity(20);
-    payload.extend_from_slice(&locator.input_index.to_le_bytes());
-    payload.extend_from_slice(
+    locator_payload_bytes(locator).to_vec()
+}
+
+fn locator_payload_bytes(locator: &OutputRecordLocator) -> [u8; LOCATOR_PAYLOAD_LEN] {
+    let mut payload = [0_u8; LOCATOR_PAYLOAD_LEN];
+    payload[0..4].copy_from_slice(&locator.input_index.to_le_bytes());
+    payload[4..12].copy_from_slice(
         &u64::try_from(locator.record_index)
             .unwrap_or(u64::MAX)
             .to_le_bytes(),
     );
-    payload.extend_from_slice(&locator.offset.to_le_bytes());
+    payload[12..20].copy_from_slice(&locator.offset.to_le_bytes());
     payload
 }
 
 fn decode_locator_payload(payload: &[u8]) -> Result<OutputLocatorPayload, MarkDuplicatesError> {
-    if payload.len() != 20 {
+    if payload.len() != LOCATOR_PAYLOAD_LEN {
         return Err(MarkDuplicatesError::Operation(format!(
             "invalid MarkDuplicates output locator payload length: {}",
             payload.len()
@@ -2012,11 +2020,15 @@ fn duplicate_sort_key_bytes(key: &BamDuplicateKey) -> [u8; DUPLICATE_SORT_KEY_LE
 }
 
 fn qname_sort_key(qname_id: InternedBytesId) -> Vec<u8> {
-    qname_id.to_be_bytes().to_vec()
+    qname_sort_key_bytes(qname_id).to_vec()
+}
+
+fn qname_sort_key_bytes(qname_id: InternedBytesId) -> [u8; QNAME_SORT_KEY_LEN] {
+    qname_id.to_be_bytes()
 }
 
 fn decode_qname_sort_key(bytes: &[u8]) -> Result<InternedBytesId, MarkDuplicatesError> {
-    if bytes.len() != 4 {
+    if bytes.len() != QNAME_SORT_KEY_LEN {
         return Err(MarkDuplicatesError::Operation(format!(
             "invalid MarkDuplicates qname sort key length: {}",
             bytes.len()
@@ -2108,10 +2120,13 @@ fn pair_payload_bytes(pair_indices: [usize; 2]) -> [u8; PAIR_PAYLOAD_LEN] {
 }
 
 fn pair_order_sort_key(pair_indices: [usize; 2]) -> Vec<u8> {
+    pair_order_sort_key_bytes(pair_indices).to_vec()
+}
+
+fn pair_order_sort_key_bytes(pair_indices: [usize; 2]) -> [u8; PAIR_ORDER_SORT_KEY_LEN] {
     u64::try_from(pair_indices[1])
         .unwrap_or(u64::MAX)
         .to_be_bytes()
-        .to_vec()
 }
 
 fn pair_order_payload(key: &BamDuplicateKey, pair_indices: [usize; 2]) -> Vec<u8> {
@@ -2150,14 +2165,15 @@ fn decode_pair_payload(payload: &[u8]) -> Result<[usize; 2], MarkDuplicatesError
 }
 
 fn index_payload(index: usize) -> Vec<u8> {
-    u64::try_from(index)
-        .unwrap_or(u64::MAX)
-        .to_le_bytes()
-        .to_vec()
+    index_payload_bytes(index).to_vec()
+}
+
+fn index_payload_bytes(index: usize) -> [u8; INDEX_PAYLOAD_LEN] {
+    u64::try_from(index).unwrap_or(u64::MAX).to_le_bytes()
 }
 
 fn decode_index_payload(payload: &[u8]) -> Result<usize, MarkDuplicatesError> {
-    if payload.len() != 8 {
+    if payload.len() != INDEX_PAYLOAD_LEN {
         return Err(MarkDuplicatesError::Operation(format!(
             "invalid MarkDuplicates fragment sort payload length: {}",
             payload.len()
@@ -3895,6 +3911,14 @@ mod tests {
         let decoded = decode_pair_order_payload(&encoded).expect("qname-pair payload decodes");
 
         assert_eq!(decoded, (key, pair_indices));
+        assert_eq!(
+            pair_order_sort_key(pair_indices).len(),
+            PAIR_ORDER_SORT_KEY_LEN
+        );
+        assert_eq!(
+            pair_order_sort_key_bytes(pair_indices).len(),
+            PAIR_ORDER_SORT_KEY_LEN
+        );
         assert_eq!(pair_order_sort_key([1, 2]), pair_order_sort_key([0, 2]));
         assert!(pair_order_sort_key([0, 2]) < pair_order_sort_key([0, 3]));
     }
@@ -4360,6 +4384,37 @@ mod tests {
 
         assert_eq!(&key[12..18], b"read-a");
         assert_eq!(&key[19..21], &DUPLICATE_FLAG.to_be_bytes());
+        assert_eq!(qname_sort_key(qname_id).len(), QNAME_SORT_KEY_LEN);
+        assert_eq!(qname_sort_key_bytes(qname_id).len(), QNAME_SORT_KEY_LEN);
+    }
+
+    #[test]
+    fn locator_payload_round_trips_fixed_width_fields() {
+        let locator = OutputRecordLocator {
+            input_index: 3,
+            record_index: 7,
+            offset: 123,
+            reference_id: 1,
+            position: 99,
+            qname_id: 0,
+            flags: 0,
+        };
+
+        let encoded = locator_payload(&locator);
+        assert_eq!(encoded.len(), LOCATOR_PAYLOAD_LEN);
+        assert_eq!(locator_payload_bytes(&locator).len(), LOCATOR_PAYLOAD_LEN);
+
+        let decoded = decode_locator_payload(&encoded).expect("locator decodes");
+        assert_eq!(decoded.input_index, locator.input_index);
+        assert_eq!(decoded.record_index, locator.record_index);
+        assert_eq!(decoded.offset, locator.offset);
+
+        let index = index_payload(locator.record_index);
+        assert_eq!(index.len(), INDEX_PAYLOAD_LEN);
+        assert_eq!(
+            index_payload_bytes(locator.record_index).len(),
+            INDEX_PAYLOAD_LEN
+        );
     }
 
     #[test]
