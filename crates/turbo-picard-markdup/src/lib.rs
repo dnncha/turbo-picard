@@ -126,7 +126,6 @@ struct DuplicateCandidate {
     five_prime_position: i64,
     duplicate_score: u64,
     optical_location: Option<ReadLocation>,
-    barcode_id: Option<InternedBytesId>,
     fragment_key: BamDuplicateKey,
 }
 
@@ -178,7 +177,6 @@ impl DuplicateCandidate {
             five_prime_position,
             duplicate_score: quality_score(record),
             optical_location: parse_read_location(record.qname()),
-            barcode_id,
             fragment_key: BamDuplicateKey {
                 library_id,
                 reference_id,
@@ -2031,7 +2029,7 @@ fn sam_tag_value(fields: &[String], tag: &str) -> Option<Vec<u8>> {
 fn first_barcode(candidates: &[DuplicateCandidate], indices: &[usize]) -> Option<InternedBytesId> {
     indices
         .iter()
-        .find_map(|index| candidates[*index].barcode_id)
+        .find_map(|index| candidates[*index].fragment_key.barcode_id)
 }
 
 fn bam_barcode(record: &bam::Record, config: &MarkDuplicatesConfig) -> Option<Vec<u8>> {
