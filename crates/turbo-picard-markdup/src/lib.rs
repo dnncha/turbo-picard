@@ -769,6 +769,7 @@ fn read_bam_records<R: bam::Read>(
 ) -> Result<(), MarkDuplicatesError> {
     let mut record = bam::Record::new();
     let parse_optical_location = parse_optical_locations(config);
+    let barcode_extractor = BamBarcodeExtractor::from_config(config);
     loop {
         let offset = sink.output_locs.as_ref().map(|_| reader.tell());
         let Some(result) = reader.read(&mut record) else {
@@ -834,7 +835,7 @@ fn read_bam_records<R: bam::Read>(
                 .unpaired_reads_examined += 1;
         }
         let qname_id = locator_qname_id.unwrap_or_else(|| sink.qnames.intern(record.qname()));
-        let barcode_id = bam_barcode_id(&record, config, sink.barcodes);
+        let barcode_id = barcode_extractor.id(&record, sink.barcodes);
         sink.candidates.push(DuplicateCandidate::from_record(
             record_index,
             &record,
@@ -2253,26 +2254,43 @@ fn first_barcode(candidates: &[DuplicateCandidate], indices: &[usize]) -> Option
         .find_map(|index| candidates[*index].fragment_key.barcode_id)
 }
 
-fn bam_barcode_id(
-    record: &bam::Record,
-    config: &MarkDuplicatesConfig,
-    interner: &mut ByteInterner,
-) -> Option<InternedBytesId> {
-    if let Some(tag) = config.barcode_tag.as_deref() {
-        return bam_tag_value_id(record, tag, interner);
+#[derive(Debug, Clone, Copy)]
+enum BamBarcodeExtractor<'a> {
+    None,
+    Single(&'a str),
+    Pair {
+        read_one: Option<&'a str>,
+        read_two: Option<&'a str>,
+    },
+}
+
+impl<'a> BamBarcodeExtractor<'a> {
+    fn from_config(config: &'a MarkDuplicatesConfig) -> Self {
+        if let Some(tag) = config.barcode_tag.as_deref() {
+            return Self::Single(tag);
+        }
+        match (
+            config.read_one_barcode_tag.as_deref(),
+            config.read_two_barcode_tag.as_deref(),
+        ) {
+            (None, None) => Self::None,
+            (read_one, read_two) => Self::Pair { read_one, read_two },
+        }
     }
 
-    let barcode = combined_barcode(
-        config
-            .read_one_barcode_tag
-            .as_deref()
-            .and_then(|tag| bam_tag_value(record, tag)),
-        config
-            .read_two_barcode_tag
-            .as_deref()
-            .and_then(|tag| bam_tag_value(record, tag)),
-    )?;
-    Some(interner.intern(&barcode))
+    fn id(&self, record: &bam::Record, interner: &mut ByteInterner) -> Option<InternedBytesId> {
+        match *self {
+            Self::None => None,
+            Self::Single(tag) => bam_tag_value_id(record, tag, interner),
+            Self::Pair { read_one, read_two } => {
+                let barcode = combined_barcode(
+                    read_one.and_then(|tag| bam_tag_value(record, tag)),
+                    read_two.and_then(|tag| bam_tag_value(record, tag)),
+                )?;
+                Some(interner.intern(&barcode))
+            }
+        }
+    }
 }
 
 fn bam_tag_value_id(
@@ -4014,9 +4032,10 @@ mod tests {
             .push_aux(b"BC", Aux::String("ACGT"))
             .expect("push barcode");
         let mut interner = ByteInterner::default();
+        let extractor = BamBarcodeExtractor::from_config(&config);
 
-        let first = bam_barcode_id(&record, &config, &mut interner).expect("barcode id");
-        let second = bam_barcode_id(&record, &config, &mut interner).expect("barcode id");
+        let first = extractor.id(&record, &mut interner).expect("barcode id");
+        let second = extractor.id(&record, &mut interner).expect("barcode id");
 
         assert_eq!(first, second);
         assert_eq!(interner.values.len(), 1);
@@ -4035,12 +4054,53 @@ mod tests {
             .push_aux(b"BC", Aux::Char(b'A'))
             .expect("push barcode");
         let mut interner = ByteInterner::default();
+        let extractor = BamBarcodeExtractor::from_config(&config);
 
-        let barcode_id = bam_barcode_id(&record, &config, &mut interner).expect("barcode id");
+        let barcode_id = extractor.id(&record, &mut interner).expect("barcode id");
 
         assert_eq!(
             interner.values[usize::try_from(barcode_id).unwrap()].as_ref(),
             b"A"
+        );
+    }
+
+    #[test]
+    fn bam_barcode_extractor_skips_unconfigured_tags() {
+        let config = sam_markdup_config();
+        let record = record_with_name_and_flags(b"read", 0);
+        let mut interner = ByteInterner::default();
+
+        let barcode_id = BamBarcodeExtractor::from_config(&config).id(&record, &mut interner);
+
+        assert!(barcode_id.is_none());
+        assert!(interner.values.is_empty());
+    }
+
+    #[test]
+    fn bam_barcode_extractor_prefers_single_barcode_tag() {
+        let mut config = sam_markdup_config();
+        config.barcode_tag = Some("BC".to_string());
+        config.read_one_barcode_tag = Some("BX".to_string());
+        config.read_two_barcode_tag = Some("BY".to_string());
+        let mut record = record_with_name_and_flags(b"read", 0);
+        record
+            .push_aux(b"BC", Aux::String("single"))
+            .expect("push barcode");
+        record
+            .push_aux(b"BX", Aux::String("read-one"))
+            .expect("push read-one barcode");
+        record
+            .push_aux(b"BY", Aux::String("read-two"))
+            .expect("push read-two barcode");
+        let mut interner = ByteInterner::default();
+
+        let barcode_id = BamBarcodeExtractor::from_config(&config)
+            .id(&record, &mut interner)
+            .expect("barcode id");
+
+        assert_eq!(
+            interner.values[usize::try_from(barcode_id).unwrap()].as_ref(),
+            b"single"
         );
     }
 
