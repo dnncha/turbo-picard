@@ -3662,15 +3662,14 @@ fn run_collectmultiplemetrics_single_pass(
             _include_bq_histogram,
         )) = wgs.as_mut()
         {
-            metrics.observe(
-                record,
-                &target_names,
-                *minimum_mapping_quality,
-                *minimum_base_quality,
-                *coverage_cap,
-                *locus_accumulation_cap,
-                *count_unpaired,
-            )?;
+            let options = WgsObservationOptions {
+                minimum_mapping_quality: *minimum_mapping_quality,
+                minimum_base_quality: *minimum_base_quality,
+                coverage_cap: *coverage_cap,
+                locus_accumulation_cap: *locus_accumulation_cap,
+                count_unpaired: *count_unpaired,
+            };
+            metrics.observe(record, &target_names, &options)?;
         }
         Ok(())
     };
@@ -3984,6 +3983,13 @@ fn run_collectmultiplemetrics_single_pass(
             let coverage_cap = *coverage_cap;
             let locus_accumulation_cap = *locus_accumulation_cap;
             let count_unpaired = *count_unpaired;
+            let options = WgsObservationOptions {
+                minimum_mapping_quality,
+                minimum_base_quality,
+                coverage_cap,
+                locus_accumulation_cap,
+                count_unpaired,
+            };
             handlers.push(Box::new(move |batch| {
                 let mut metrics = worker.lock().expect("wgs collector lock");
                 for entry in batch {
@@ -3991,15 +3997,7 @@ fn run_collectmultiplemetrics_single_pass(
                         continue;
                     }
                     let record = &entry.record;
-                    if let Err(error) = metrics.observe(
-                        record,
-                        target_names.as_slice(),
-                        minimum_mapping_quality,
-                        minimum_base_quality,
-                        coverage_cap,
-                        locus_accumulation_cap,
-                        count_unpaired,
-                    ) {
+                    if let Err(error) = metrics.observe(record, target_names.as_slice(), &options) {
                         return Err(format!("CollectWgsMetrics failed: {error}"));
                     }
                 }
@@ -4519,6 +4517,13 @@ fn run_collectwgsmetrics(args: &[String]) -> Result<(), String> {
     let locus_accumulation_cap = optional_u32(&args, "LOCUS_ACCUMULATION_CAP")?.unwrap_or(100_000);
     let stop_after = optional_i64(&args, "STOP_AFTER")?.unwrap_or(-1);
     let count_unpaired = optional_bool(&args, "COUNT_UNPAIRED")?.unwrap_or(false);
+    let observation_options = WgsObservationOptions {
+        minimum_mapping_quality: minimum_mapping_quality as u8,
+        minimum_base_quality: minimum_base_quality as u8,
+        coverage_cap,
+        locus_accumulation_cap,
+        count_unpaired,
+    };
     let use_fast_algorithm =
         if let Some(use_fast_algorithm) = optional_bool(&args, "USE_FAST_ALGORITHM")? {
             use_fast_algorithm
@@ -4545,28 +4550,12 @@ fn run_collectwgsmetrics(args: &[String]) -> Result<(), String> {
     let stop_after_u32 = if stop_after < 0 { 0 } else { stop_after as u32 };
     if hts_io::is_hts_container_input(&input) {
         cmm_pipeline::pipeline_bam_records(reader, stop_after_u32, 8192, |record| {
-            summary.observe(
-                &record,
-                &target_names,
-                minimum_mapping_quality as u8,
-                minimum_base_quality as u8,
-                coverage_cap,
-                locus_accumulation_cap,
-                count_unpaired,
-            )
+            summary.observe(&record, &target_names, &observation_options)
         })?;
     } else {
         for record in limited_records(&mut reader, stop_after_u32) {
             let record = record.map_err(|error| error.to_string())?;
-            summary.observe(
-                &record,
-                &target_names,
-                minimum_mapping_quality as u8,
-                minimum_base_quality as u8,
-                coverage_cap,
-                locus_accumulation_cap,
-                count_unpaired,
-            )?;
+            summary.observe(&record, &target_names, &observation_options)?;
         }
     }
     summary.finish();
@@ -10457,6 +10446,17 @@ struct AlignmentSummaryReadGroup {
     summary: AlignmentSummarySet,
 }
 
+#[derive(Clone, Copy)]
+struct AlignmentSamParts<'a> {
+    flags: u16,
+    read_length: u64,
+    sequence_bases: &'a [u8],
+    aligned_length: u64,
+    mapq: u8,
+    cigar: CigarSummary,
+    chimeric: bool,
+}
+
 impl AlignmentSummaryCollection {
     fn new(accumulation: AlignmentAccumulation) -> Self {
         Self {
@@ -10488,58 +10488,33 @@ impl AlignmentSummaryCollection {
                     .summary
                     .observe(record);
             }
-        } else if self.accumulation == AlignmentAccumulation::ReadGroup {
-            if let Some(read_group) = read_group {
-                self.read_groups
-                    .entry(read_group.platform_unit.clone())
-                    .or_insert_with(|| AlignmentSummaryReadGroup {
-                        sample: read_group.sample.clone(),
-                        library: read_group.library.clone(),
-                        summary: AlignmentSummarySet::default(),
-                    })
-                    .summary
-                    .observe(record);
-            }
+        } else if self.accumulation == AlignmentAccumulation::ReadGroup
+            && let Some(read_group) = read_group
+        {
+            self.read_groups
+                .entry(read_group.platform_unit.clone())
+                .or_insert_with(|| AlignmentSummaryReadGroup {
+                    sample: read_group.sample.clone(),
+                    library: read_group.library.clone(),
+                    summary: AlignmentSummarySet::default(),
+                })
+                .summary
+                .observe(record);
         }
     }
 
     fn observe_sam_parts(
         &mut self,
-        flags: u16,
-        read_length: u64,
-        sequence_bases: &[u8],
-        aligned_length: u64,
-        mapq: u8,
-        qualities: &[u8],
-        cigar: CigarSummary,
-        chimeric: bool,
+        parts: AlignmentSamParts<'_>,
         read_group: Option<&InsertSizeReadGroup>,
     ) {
-        self.all_reads.observe_sam_parts(
-            flags,
-            read_length,
-            sequence_bases,
-            aligned_length,
-            mapq,
-            qualities,
-            cigar,
-            chimeric,
-        );
+        self.all_reads.observe_sam_parts(parts);
         if self.accumulation == AlignmentAccumulation::Sample {
             if let Some(read_group) = read_group {
                 self.samples
                     .entry(read_group.sample.clone())
                     .or_default()
-                    .observe_sam_parts(
-                        flags,
-                        read_length,
-                        sequence_bases,
-                        aligned_length,
-                        mapq,
-                        qualities,
-                        cigar,
-                        chimeric,
-                    );
+                    .observe_sam_parts(parts);
             }
         } else if self.accumulation == AlignmentAccumulation::Library {
             if let Some(read_group) = read_group {
@@ -10550,38 +10525,20 @@ impl AlignmentSummaryCollection {
                         summary: AlignmentSummarySet::default(),
                     })
                     .summary
-                    .observe_sam_parts(
-                        flags,
-                        read_length,
-                        sequence_bases,
-                        aligned_length,
-                        mapq,
-                        qualities,
-                        cigar,
-                        chimeric,
-                    );
+                    .observe_sam_parts(parts);
             }
-        } else if self.accumulation == AlignmentAccumulation::ReadGroup {
-            if let Some(read_group) = read_group {
-                self.read_groups
-                    .entry(read_group.platform_unit.clone())
-                    .or_insert_with(|| AlignmentSummaryReadGroup {
-                        sample: read_group.sample.clone(),
-                        library: read_group.library.clone(),
-                        summary: AlignmentSummarySet::default(),
-                    })
-                    .summary
-                    .observe_sam_parts(
-                        flags,
-                        read_length,
-                        sequence_bases,
-                        aligned_length,
-                        mapq,
-                        qualities,
-                        cigar,
-                        chimeric,
-                    );
-            }
+        } else if self.accumulation == AlignmentAccumulation::ReadGroup
+            && let Some(read_group) = read_group
+        {
+            self.read_groups
+                .entry(read_group.platform_unit.clone())
+                .or_insert_with(|| AlignmentSummaryReadGroup {
+                    sample: read_group.sample.clone(),
+                    library: read_group.library.clone(),
+                    summary: AlignmentSummarySet::default(),
+                })
+                .summary
+                .observe_sam_parts(parts);
         }
     }
 
@@ -10608,7 +10565,7 @@ impl AlignmentSummaryCollection {
                 ));
             }
         }
-        AlignmentSummary::to_picard_text_for_rows(&rows, &self.all_reads.histogram_summary())
+        AlignmentSummary::to_picard_text_for_rows(&rows, self.all_reads.histogram_summary())
     }
 }
 
@@ -10630,66 +10587,20 @@ impl AlignmentSummarySet {
         }
     }
 
-    fn observe_sam_parts(
-        &mut self,
-        flags: u16,
-        read_length: u64,
-        sequence_bases: &[u8],
-        aligned_length: u64,
-        mapq: u8,
-        qualities: &[u8],
-        cigar: CigarSummary,
-        chimeric: bool,
-    ) {
-        if flags & (0x100 | 0x800) != 0 {
+    fn observe_sam_parts(&mut self, parts: AlignmentSamParts<'_>) {
+        if parts.flags & (0x100 | 0x800) != 0 {
             return;
         }
-        if flags & 0x1 != 0 {
+        if parts.flags & 0x1 != 0 {
             self.saw_paired = true;
-            if flags & 0x40 != 0 {
-                self.first.observe_sam_parts(
-                    flags,
-                    read_length,
-                    sequence_bases,
-                    aligned_length,
-                    mapq,
-                    qualities,
-                    cigar,
-                    chimeric,
-                );
-            } else if flags & 0x80 != 0 {
-                self.second.observe_sam_parts(
-                    flags,
-                    read_length,
-                    sequence_bases,
-                    aligned_length,
-                    mapq,
-                    qualities,
-                    cigar,
-                    chimeric,
-                );
+            if parts.flags & 0x40 != 0 {
+                self.first.observe_sam_parts(parts);
+            } else if parts.flags & 0x80 != 0 {
+                self.second.observe_sam_parts(parts);
             }
-            self.pair.observe_sam_parts(
-                flags,
-                read_length,
-                sequence_bases,
-                aligned_length,
-                mapq,
-                qualities,
-                cigar,
-                chimeric,
-            );
+            self.pair.observe_sam_parts(parts);
         } else {
-            self.unpaired.observe_sam_parts(
-                flags,
-                read_length,
-                sequence_bases,
-                aligned_length,
-                mapq,
-                qualities,
-                cigar,
-                chimeric,
-            );
+            self.unpaired.observe_sam_parts(parts);
         }
     }
 
@@ -10862,70 +10773,65 @@ impl AlignmentSummary {
         self.aligned_read_lengths[aligned_read_length as usize] += 1;
     }
 
-    fn observe_sam_parts(
-        &mut self,
-        flags: u16,
-        read_length: u64,
-        sequence_bases: &[u8],
-        aligned_length: u64,
-        mapq: u8,
-        _qualities: &[u8],
-        cigar: CigarSummary,
-        chimeric: bool,
-    ) {
+    fn observe_sam_parts(&mut self, parts: AlignmentSamParts<'_>) {
         self.total_reads += 1;
-        ensure_histogram_len(&mut self.total_read_lengths, read_length as usize);
-        self.total_read_lengths[read_length as usize] += 1;
+        ensure_histogram_len(&mut self.total_read_lengths, parts.read_length as usize);
+        self.total_read_lengths[parts.read_length as usize] += 1;
 
-        if flags & 0x200 != 0 {
+        if parts.flags & 0x200 != 0 {
             return;
         }
 
         self.pf_reads += 1;
-        self.pf_read_bases += read_length;
-        self.observe_bad_cycle_bases(sequence_bases);
-        if is_adapter_read(sequence_bases, flags & 0x4 != 0, mapq, flags & 0x10 != 0) {
+        self.pf_read_bases += parts.read_length;
+        self.observe_bad_cycle_bases(parts.sequence_bases);
+        if is_adapter_read(
+            parts.sequence_bases,
+            parts.flags & 0x4 != 0,
+            parts.mapq,
+            parts.flags & 0x10 != 0,
+        ) {
             self.adapter_reads += 1;
         }
-        let is_aligned = flags & 0x4 == 0;
+        let is_aligned = parts.flags & 0x4 == 0;
         if is_aligned {
             self.pf_reads_aligned += 1;
-            self.pf_aligned_bases += aligned_length;
-            self.pf_read_aligned_bases += cigar.read_aligned_length;
-            if mapq >= 20 {
+            self.pf_aligned_bases += parts.aligned_length;
+            self.pf_read_aligned_bases += parts.cigar.read_aligned_length;
+            if parts.mapq >= 20 {
                 self.pf_hq_aligned_reads += 1;
-                self.pf_hq_aligned_bases += aligned_length;
-                self.pf_hq_aligned_q20_bases += cigar.q20_match_bases;
+                self.pf_hq_aligned_bases += parts.aligned_length;
+                self.pf_hq_aligned_q20_bases += parts.cigar.q20_match_bases;
             }
-            if flags & 0x10 != 0 {
+            if parts.flags & 0x10 != 0 {
                 self.reverse_aligned_reads += 1;
             } else {
                 self.forward_aligned_reads += 1;
             }
-            if flags & 0x1 != 0 {
-                if flags & 0x8 != 0 {
+            if parts.flags & 0x1 != 0 {
+                if parts.flags & 0x8 != 0 {
                     self.pf_reads_improper_pairs += 1;
-                    if chimeric {
+                    if parts.chimeric {
                         self.chimeras += 1;
                     }
                 } else {
                     self.reads_aligned_in_pairs += 1;
-                    if flags & 0x2 == 0 {
+                    if parts.flags & 0x2 == 0 {
                         self.pf_reads_improper_pairs += 1;
                     }
-                    if chimeric {
+                    if parts.chimeric {
                         self.chimeras += 1;
                     }
                 }
             }
-            self.observe_cigar_summary(cigar);
+            self.observe_cigar_summary(parts.cigar);
         }
 
         ensure_histogram_len(
             &mut self.aligned_read_lengths,
-            cigar.read_aligned_length as usize,
+            parts.cigar.read_aligned_length as usize,
         );
-        self.aligned_read_lengths[cigar.read_aligned_length as usize] += 1;
+        self.aligned_read_lengths[parts.cigar.read_aligned_length as usize] += 1;
     }
 
     fn observe_cigar_summary(&mut self, cigar: CigarSummary) {
@@ -11461,14 +11367,15 @@ fn observe_alignment_sam_line(
         has_sa,
     );
     metrics.observe_sam_parts(
-        flags,
-        read_length,
-        if sequence == b"*" { &[][..] } else { sequence },
-        aligned_length,
-        mapq,
-        qualities,
-        cigar_summary,
-        chimeric,
+        AlignmentSamParts {
+            flags,
+            read_length,
+            sequence_bases: if sequence == b"*" { &[][..] } else { sequence },
+            aligned_length,
+            mapq,
+            cigar: cigar_summary,
+            chimeric,
+        },
         read_group.as_ref(),
     );
     Ok(())
@@ -11645,11 +11552,7 @@ impl QualityYieldSummary {
     }
 
     fn to_picard_text(&self) -> String {
-        let read_length = if self.total_reads == 0 {
-            0
-        } else {
-            self.total_bases / self.total_reads
-        };
+        let read_length = self.total_bases.checked_div(self.total_reads).unwrap_or(0);
         format!(
             "## METRICS CLASS\tpicard.analysis.CollectQualityYieldMetrics$QualityYieldMetrics\n\
              TOTAL_READS\tPF_READS\tREAD_LENGTH\tTOTAL_BASES\tPF_BASES\tQ20_BASES\tPF_Q20_BASES\tQ30_BASES\tPF_Q30_BASES\tQ20_EQUIVALENT_YIELD\tPF_Q20_EQUIVALENT_YIELD\n\
@@ -12306,7 +12209,7 @@ fn wgs_locus_included_at(
     index: usize,
     contig_length: usize,
 ) -> bool {
-    index < contig_length && ranges.map_or(true, |ranges| WgsIntervalRange::contains(ranges, index))
+    index < contig_length && ranges.is_none_or(|ranges| WgsIntervalRange::contains(ranges, index))
 }
 
 fn wgs_count_included_loci_between(
@@ -12511,6 +12414,26 @@ struct WgsMetricsSummary {
     mate_buffer: WgsMateBuffer,
 }
 
+#[derive(Debug, Clone, Copy)]
+struct WgsObservationOptions {
+    minimum_mapping_quality: u8,
+    minimum_base_quality: u8,
+    coverage_cap: u32,
+    locus_accumulation_cap: u32,
+    count_unpaired: bool,
+}
+
+struct WgsCigarObservation<'a> {
+    contig: &'a str,
+    reference_offset_start: usize,
+    qualities: &'a [u8],
+    is_duplicate: bool,
+    mapq: u8,
+    is_paired: bool,
+    options: &'a WgsObservationOptions,
+    overlap_mode: Option<WgsOverlapMode<'a>>,
+}
+
 #[derive(Debug)]
 struct WgsContigMetadata {
     length: usize,
@@ -12630,11 +12553,7 @@ impl WgsMetricsSummary {
         &mut self,
         record: &bam::Record,
         target_names: &[String],
-        minimum_mapping_quality: u8,
-        minimum_base_quality: u8,
-        coverage_cap: u32,
-        locus_accumulation_cap: u32,
-        count_unpaired: bool,
+        options: &WgsObservationOptions,
     ) -> Result<(), String> {
         if record.is_unmapped() || record.is_secondary() || record.is_supplementary() {
             return Ok(());
@@ -12652,19 +12571,17 @@ impl WgsMetricsSummary {
         self.finalize_active_contig_until(record_start);
         match self.mate_buffer.probe(record) {
             WgsMatePeek::Alone => self.observe_cigar_ops(
-                contig,
-                record_start,
-                record.qual(),
-                record.is_duplicate(),
-                record.mapq(),
-                record.is_paired(),
+                WgsCigarObservation {
+                    contig,
+                    reference_offset_start: record_start,
+                    qualities: record.qual(),
+                    is_duplicate: record.is_duplicate(),
+                    mapq: record.mapq(),
+                    is_paired: record.is_paired(),
+                    options,
+                    overlap_mode: None,
+                },
                 &record.cigar(),
-                minimum_mapping_quality,
-                minimum_base_quality,
-                coverage_cap,
-                locus_accumulation_cap,
-                count_unpaired,
-                None,
             ),
             WgsMatePeek::WouldBuffer {
                 overlap_start,
@@ -12672,22 +12589,20 @@ impl WgsMetricsSummary {
             } => {
                 let mut bitmap = WgsOverlapBitmap::with_bit_len(overlap_len as usize);
                 self.observe_cigar_ops(
-                    contig,
-                    record.pos().max(0) as usize,
-                    record.qual(),
-                    record.is_duplicate(),
-                    record.mapq(),
-                    record.is_paired(),
+                    WgsCigarObservation {
+                        contig,
+                        reference_offset_start: record.pos().max(0) as usize,
+                        qualities: record.qual(),
+                        is_duplicate: record.is_duplicate(),
+                        mapq: record.mapq(),
+                        is_paired: record.is_paired(),
+                        options,
+                        overlap_mode: Some(WgsOverlapMode::Buffer {
+                            overlap_start,
+                            bitmap: &mut bitmap,
+                        }),
+                    },
                     &record.cigar(),
-                    minimum_mapping_quality,
-                    minimum_base_quality,
-                    coverage_cap,
-                    locus_accumulation_cap,
-                    count_unpaired,
-                    Some(WgsOverlapMode::Buffer {
-                        overlap_start,
-                        bitmap: &mut bitmap,
-                    }),
                 )?;
                 self.mate_buffer.insert(
                     record.qname(),
@@ -12700,88 +12615,59 @@ impl WgsMetricsSummary {
                 Ok(())
             }
             WgsMatePeek::PairWith(cached) => self.observe_cigar_ops(
-                contig,
-                record_start,
-                record.qual(),
-                record.is_duplicate(),
-                record.mapq(),
-                record.is_paired(),
+                WgsCigarObservation {
+                    contig,
+                    reference_offset_start: record_start,
+                    qualities: record.qual(),
+                    is_duplicate: record.is_duplicate(),
+                    mapq: record.mapq(),
+                    is_paired: record.is_paired(),
+                    options,
+                    overlap_mode: Some(WgsOverlapMode::Pair(&cached)),
+                },
                 &record.cigar(),
-                minimum_mapping_quality,
-                minimum_base_quality,
-                coverage_cap,
-                locus_accumulation_cap,
-                count_unpaired,
-                Some(WgsOverlapMode::Pair(&cached)),
             ),
         }
     }
 
     fn observe_cigar_ops(
         &mut self,
-        contig: &str,
-        reference_offset_start: usize,
-        qualities: &[u8],
-        is_duplicate: bool,
-        mapq: u8,
-        is_paired: bool,
+        observation: WgsCigarObservation<'_>,
         cigars: &bam::record::CigarStringView,
-        minimum_mapping_quality: u8,
-        minimum_base_quality: u8,
-        coverage_cap: u32,
-        locus_accumulation_cap: u32,
-        count_unpaired: bool,
-        overlap_mode: Option<WgsOverlapMode<'_>>,
     ) -> Result<(), String> {
-        self.observe_cigar_ops_iter(
-            contig,
-            reference_offset_start,
-            qualities,
-            is_duplicate,
-            mapq,
-            is_paired,
-            cigars.iter().copied(),
-            minimum_mapping_quality,
-            minimum_base_quality,
-            coverage_cap,
-            locus_accumulation_cap,
-            count_unpaired,
-            overlap_mode,
-        )
+        self.observe_cigar_ops_iter(observation, cigars.iter().copied())
     }
 
     fn observe_cigar_ops_iter<I>(
         &mut self,
-        contig: &str,
-        reference_offset_start: usize,
-        qualities: &[u8],
-        is_duplicate: bool,
-        mapq: u8,
-        is_paired: bool,
+        mut observation: WgsCigarObservation<'_>,
         cigars: I,
-        minimum_mapping_quality: u8,
-        minimum_base_quality: u8,
-        coverage_cap: u32,
-        locus_accumulation_cap: u32,
-        count_unpaired: bool,
-        mut overlap_mode: Option<WgsOverlapMode<'_>>,
     ) -> Result<(), String>
     where
         I: Iterator<Item = Cigar>,
     {
-        self.ensure_contig(contig)?;
-        self.active_depths.record_start(reference_offset_start)?;
-        self.finalize_active_contig_until(reference_offset_start);
+        self.ensure_contig(observation.contig)?;
+        self.active_depths
+            .record_start(observation.reference_offset_start)?;
+        self.finalize_active_contig_until(observation.reference_offset_start);
         let contig_length = self
             .contigs
-            .get(contig)
+            .get(observation.contig)
             .map(|metadata| metadata.length)
-            .ok_or_else(|| format!("CollectWgsMetrics reference missing contig {contig}"))?;
+            .ok_or_else(|| {
+                format!(
+                    "CollectWgsMetrics reference missing contig {}",
+                    observation.contig
+                )
+            })?;
         let mut read_offset = 0usize;
-        let mut reference_offset = reference_offset_start;
-        let exclude_unpaired = !count_unpaired && !is_paired;
-        let low_mapq = mapq < minimum_mapping_quality;
-        let locus_accumulation_cap = locus_accumulation_cap.min(u16::MAX as u32) as u16;
+        let mut reference_offset = observation.reference_offset_start;
+        let exclude_unpaired = !observation.options.count_unpaired && !observation.is_paired;
+        let low_mapq = observation.mapq < observation.options.minimum_mapping_quality;
+        let locus_accumulation_cap = observation
+            .options
+            .locus_accumulation_cap
+            .min(u16::MAX as u32) as u16;
 
         let locus_ranges = self.active_included_ranges.clone();
         for cigar in cigars {
@@ -12808,45 +12694,47 @@ impl WgsMetricsSummary {
                             continue;
                         }
                         self.total_aligned_bases += 1;
-                        if is_duplicate {
+                        if observation.is_duplicate {
                             self.excluded_duplicate += 1;
                         } else if low_mapq {
                             self.excluded_mapq += 1;
                         } else if exclude_unpaired {
                             self.excluded_unpaired += 1;
-                        } else if qualities
-                            .get(read_index)
-                            .is_none_or(|quality| *quality < minimum_base_quality)
-                        {
+                        } else if observation.qualities.get(read_index).is_none_or(|quality| {
+                            *quality < observation.options.minimum_base_quality
+                        }) {
                             self.excluded_baseq += 1;
-                        } else if overlap_mode
+                        } else if observation
+                            .overlap_mode
                             .as_ref()
                             .is_some_and(|mode| mode.is_mate_covered(reference_index))
                         {
                             self.excluded_overlap += 1;
-                        } else if {
-                            let depth = self.active_depth_at(reference_index)?;
-                            depth >= coverage_cap as u16 || depth >= locus_accumulation_cap
-                        } {
-                            if let Some(quality) = qualities.get(read_index) {
-                                let index = *quality as usize;
-                                self.base_quality_histogram[index] += 1;
-                                if *quality >= 30 {
-                                    self.sensitivity_base_quality_histogram[index] += 1;
-                                }
-                            }
-                            self.excluded_capped += 1;
                         } else {
-                            if let Some(quality) = qualities.get(read_index) {
-                                let index = *quality as usize;
-                                self.base_quality_histogram[index] += 1;
-                                if *quality >= 30 {
-                                    self.sensitivity_base_quality_histogram[index] += 1;
+                            let depth = self.active_depth_at(reference_index)?;
+                            if depth >= observation.options.coverage_cap as u16
+                                || depth >= locus_accumulation_cap
+                            {
+                                if let Some(quality) = observation.qualities.get(read_index) {
+                                    let index = *quality as usize;
+                                    self.base_quality_histogram[index] += 1;
+                                    if *quality >= 30 {
+                                        self.sensitivity_base_quality_histogram[index] += 1;
+                                    }
                                 }
-                            }
-                            self.increment_filtered_depth(reference_index)?;
-                            if let Some(mode) = overlap_mode.as_mut() {
-                                mode.on_depth_counted(reference_index);
+                                self.excluded_capped += 1;
+                            } else {
+                                if let Some(quality) = observation.qualities.get(read_index) {
+                                    let index = *quality as usize;
+                                    self.base_quality_histogram[index] += 1;
+                                    if *quality >= 30 {
+                                        self.sensitivity_base_quality_histogram[index] += 1;
+                                    }
+                                }
+                                self.increment_filtered_depth(reference_index)?;
+                                if let Some(mode) = observation.overlap_mode.as_mut() {
+                                    mode.on_depth_counted(reference_index);
+                                }
                             }
                         }
                     }
@@ -12902,17 +12790,17 @@ impl WgsMetricsSummary {
     fn to_picard_text(&self, sample_size: u32, include_bq_histogram: bool) -> String {
         let histogram = &self.coverage_histogram;
         let genome_territory = histogram.iter().sum::<u64>();
-        let mean_coverage = mean_from_histogram_u32(&histogram);
-        let sd_coverage = sample_standard_deviation_from_histogram_u32(&histogram, mean_coverage);
+        let mean_coverage = mean_from_histogram_u32(histogram);
+        let sd_coverage = sample_standard_deviation_from_histogram_u32(histogram, mean_coverage);
         let median_coverage = if genome_territory <= 1 {
             0.0
         } else {
-            median_f64_from_histogram_u64(&histogram)
+            median_f64_from_histogram_u64(histogram)
         };
         let mad_coverage = if genome_territory <= 1 {
             0.0
         } else {
-            mad_f64_from_histogram_u64(&histogram, median_coverage)
+            mad_f64_from_histogram_u64(histogram, median_coverage)
         };
         let pct_exc_total = ratio(
             self.excluded_mapq
@@ -12925,7 +12813,7 @@ impl WgsMetricsSummary {
         );
         let het_sensitivity = if sample_size > 0 && genome_territory > 0 {
             format_float(het_snp_sensitivity_from_histograms(
-                &histogram,
+                histogram,
                 &self.sensitivity_base_quality_histogram,
                 sample_size,
             ))
@@ -12955,23 +12843,23 @@ impl WgsMetricsSummary {
             format_float(ratio(self.excluded_overlap, self.total_aligned_bases)),
             format_float(ratio(self.excluded_capped, self.total_aligned_bases)),
             format_float(pct_exc_total),
-            format_float(pct_at_least(&histogram, 1)),
-            format_float(pct_at_least(&histogram, 5)),
-            format_float(pct_at_least(&histogram, 10)),
-            format_float(pct_at_least(&histogram, 15)),
-            format_float(pct_at_least(&histogram, 20)),
-            format_float(pct_at_least(&histogram, 25)),
-            format_float(pct_at_least(&histogram, 30)),
-            format_float(pct_at_least(&histogram, 40)),
-            format_float(pct_at_least(&histogram, 50)),
-            format_float(pct_at_least(&histogram, 60)),
-            format_float(pct_at_least(&histogram, 70)),
-            format_float(pct_at_least(&histogram, 80)),
-            format_float(pct_at_least(&histogram, 90)),
-            format_float(pct_at_least(&histogram, 100)),
-            fold_base_penalty(&histogram, mean_coverage, 80.0),
-            fold_base_penalty(&histogram, mean_coverage, 90.0),
-            fold_base_penalty(&histogram, mean_coverage, 95.0),
+            format_float(pct_at_least(histogram, 1)),
+            format_float(pct_at_least(histogram, 5)),
+            format_float(pct_at_least(histogram, 10)),
+            format_float(pct_at_least(histogram, 15)),
+            format_float(pct_at_least(histogram, 20)),
+            format_float(pct_at_least(histogram, 25)),
+            format_float(pct_at_least(histogram, 30)),
+            format_float(pct_at_least(histogram, 40)),
+            format_float(pct_at_least(histogram, 50)),
+            format_float(pct_at_least(histogram, 60)),
+            format_float(pct_at_least(histogram, 70)),
+            format_float(pct_at_least(histogram, 80)),
+            format_float(pct_at_least(histogram, 90)),
+            format_float(pct_at_least(histogram, 100)),
+            fold_base_penalty(histogram, mean_coverage, 80.0),
+            fold_base_penalty(histogram, mean_coverage, 90.0),
+            fold_base_penalty(histogram, mean_coverage, 95.0),
             het_sensitivity,
             het_q,
         ));
@@ -19750,6 +19638,34 @@ mod tests {
         assert!((mad - expected).abs() < 1e-9);
     }
 
+    fn test_wgs_options() -> WgsObservationOptions {
+        WgsObservationOptions {
+            minimum_mapping_quality: 20,
+            minimum_base_quality: 20,
+            coverage_cap: 250,
+            locus_accumulation_cap: 100_000,
+            count_unpaired: false,
+        }
+    }
+
+    fn test_wgs_observation<'a>(
+        contig: &'a str,
+        reference_offset_start: usize,
+        qualities: &'a [u8],
+        options: &'a WgsObservationOptions,
+    ) -> WgsCigarObservation<'a> {
+        WgsCigarObservation {
+            contig,
+            reference_offset_start,
+            qualities,
+            is_duplicate: false,
+            mapq: 30,
+            is_paired: true,
+            options,
+            overlap_mode: None,
+        }
+    }
+
     #[test]
     fn wgs_coverage_histogram_matches_included_loci() {
         let reference_contigs = vec![("chr1".to_string(), 12usize)];
@@ -19757,21 +19673,11 @@ mod tests {
         assert_eq!(summary.coverage_histogram[0], 0);
 
         let qualities = vec![30_u8; 12];
+        let options = test_wgs_options();
         summary
             .observe_cigar_ops_iter(
-                "chr1",
-                0,
-                &qualities,
-                false,
-                30,
-                true,
+                test_wgs_observation("chr1", 0, &qualities, &options),
                 std::iter::once(Cigar::Match(12)),
-                20,
-                20,
-                250,
-                100_000,
-                false,
-                None,
             )
             .expect("fixture alignment is valid");
 
@@ -19786,22 +19692,12 @@ mod tests {
         let reference_contigs = vec![("chr1".to_string(), 1_000_000usize)];
         let mut summary = WgsMetricsSummary::new(&reference_contigs, None, 250);
         let qualities = vec![30_u8; 4];
+        let options = test_wgs_options();
 
         summary
             .observe_cigar_ops_iter(
-                "chr1",
-                999_990,
-                &qualities,
-                false,
-                30,
-                true,
+                test_wgs_observation("chr1", 999_990, &qualities, &options),
                 std::iter::once(Cigar::Match(4)),
-                20,
-                20,
-                250,
-                100_000,
-                false,
-                None,
             )
             .expect("fixture alignment is valid");
 
@@ -19817,39 +19713,18 @@ mod tests {
         let reference_contigs = vec![("chr1".to_string(), 100usize)];
         let mut summary = WgsMetricsSummary::new(&reference_contigs, None, 250);
         let qualities = vec![30_u8; 4];
+        let options = test_wgs_options();
 
         summary
             .observe_cigar_ops_iter(
-                "chr1",
-                20,
-                &qualities,
-                false,
-                30,
-                true,
+                test_wgs_observation("chr1", 20, &qualities, &options),
                 std::iter::once(Cigar::Match(4)),
-                20,
-                20,
-                250,
-                100_000,
-                false,
-                None,
             )
             .expect("first fixture alignment is valid");
         let error = summary
             .observe_cigar_ops_iter(
-                "chr1",
-                19,
-                &qualities,
-                false,
-                30,
-                true,
+                test_wgs_observation("chr1", 19, &qualities, &options),
                 std::iter::once(Cigar::Match(4)),
-                20,
-                20,
-                250,
-                100_000,
-                false,
-                None,
             )
             .expect_err("coordinate regression should be rejected");
 
