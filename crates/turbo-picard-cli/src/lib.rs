@@ -7602,14 +7602,23 @@ enum LiftoverRecordResult {
 }
 
 fn read_simple_chain_mappings(path: &str) -> Result<Vec<ChainMapping>, String> {
-    let text = read_text_or_gzip(path)?;
+    let mut reader = open_text_or_gzip_reader(path)?;
     let mut mappings = Vec::new();
-    let mut lines = text.lines().peekable();
-    while let Some(line) = lines.next() {
-        if line.trim().is_empty() {
+    let mut line = String::new();
+    let mut block = String::new();
+    loop {
+        line.clear();
+        let bytes_read = reader
+            .read_line(&mut line)
+            .map_err(|error| error.to_string())?;
+        if bytes_read == 0 {
+            break;
+        }
+        let header_line = line.trim_end_matches(['\r', '\n']);
+        if header_line.trim().is_empty() {
             continue;
         }
-        let Some(header) = line.strip_prefix("chain ") else {
+        let Some(header) = header_line.strip_prefix("chain ") else {
             return Err("unsupported LiftoverVcf chain file without chain header".to_string());
         };
         let fields = header.split_whitespace().collect::<Vec<_>>();
@@ -7644,9 +7653,14 @@ fn read_simple_chain_mappings(path: &str) -> Result<Vec<ChainMapping>, String> {
         if target_end > target_size || source_end > source_size || target_start >= target_end {
             return Err("unsupported LiftoverVcf malformed chain bounds".to_string());
         }
-        let block = lines
-            .next()
-            .ok_or_else(|| "unsupported LiftoverVcf chain without block".to_string())?;
+        block.clear();
+        let block_bytes = reader
+            .read_line(&mut block)
+            .map_err(|error| error.to_string())?;
+        if block_bytes == 0 {
+            return Err("unsupported LiftoverVcf chain without block".to_string());
+        }
+        let block = block.trim_end_matches(['\r', '\n']);
         let block_fields = block.split_whitespace().collect::<Vec<_>>();
         if block_fields.len() != 1 {
             return Err("unsupported LiftoverVcf gapped or multi-block chain".to_string());
