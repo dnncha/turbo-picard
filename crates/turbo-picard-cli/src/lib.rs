@@ -15141,27 +15141,21 @@ fn detect_fastqtosam_quality_format(
     allow_and_ignore_empty_lines: bool,
 ) -> Result<FastqQualityFormat, String> {
     let mut saw_quality = false;
-    let mut saw_standard_only_quality = false;
     for fastq in fastq_paths {
-        scan_fastqtosam_quality_file(
-            fastq,
-            allow_and_ignore_empty_lines,
-            &mut saw_quality,
-            &mut saw_standard_only_quality,
-        )?;
+        if scan_fastqtosam_quality_file(fastq, allow_and_ignore_empty_lines, &mut saw_quality)? {
+            return Ok(FastqQualityFormat::Standard);
+        }
     }
     if let Some(fastq2_paths) = fastq2_paths {
         for fastq2 in fastq2_paths {
-            scan_fastqtosam_quality_file(
-                fastq2,
-                allow_and_ignore_empty_lines,
-                &mut saw_quality,
-                &mut saw_standard_only_quality,
-            )?;
+            if scan_fastqtosam_quality_file(fastq2, allow_and_ignore_empty_lines, &mut saw_quality)?
+            {
+                return Ok(FastqQualityFormat::Standard);
+            }
         }
     }
 
-    if !saw_quality || saw_standard_only_quality {
+    if !saw_quality {
         Ok(FastqQualityFormat::Standard)
     } else {
         Ok(FastqQualityFormat::Illumina)
@@ -15172,8 +15166,7 @@ fn scan_fastqtosam_quality_file(
     path: &str,
     allow_and_ignore_empty_lines: bool,
     saw_quality: &mut bool,
-    saw_standard_only_quality: &mut bool,
-) -> Result<(), String> {
+) -> Result<bool, String> {
     let file = fs::File::open(path).map_err(|error| error.to_string())?;
     let mut reader = if has_gzip_extension(path) {
         FastqBytesReaderSource::Gzip(BufReader::with_capacity(1024 * 1024, GzDecoder::new(file)))
@@ -15187,7 +15180,7 @@ fn scan_fastqtosam_quality_file(
 
     loop {
         if !read_fastq_bytes_line(&mut reader, &mut name, allow_and_ignore_empty_lines)? {
-            return Ok(());
+            return Ok(false);
         }
         if !read_fastq_bytes_line(&mut reader, &mut sequence, allow_and_ignore_empty_lines)?
             || !read_fastq_bytes_line(&mut reader, &mut plus, allow_and_ignore_empty_lines)?
@@ -15202,7 +15195,7 @@ fn scan_fastqtosam_quality_file(
             *saw_quality = true;
         }
         if qualities.iter().any(|quality| *quality < 64) {
-            *saw_standard_only_quality = true;
+            return Ok(true);
         }
     }
 }
@@ -19497,6 +19490,23 @@ mod tests {
         apply_markduplicates_resource_plan(&mut config, plan, true);
         assert_eq!(config.mate_cache_records, 3);
         assert_eq!(config.max_records_in_ram, 17);
+    }
+
+    #[test]
+    fn fastqtosam_auto_detection_stops_after_standard_only_quality() {
+        let tempdir = tempfile::tempdir().expect("tempdir exists");
+        let standard_fastq = tempdir.path().join("standard.fastq");
+        let missing_fastq = tempdir.path().join("missing.fastq");
+        fs::write(&standard_fastq, b"@read1\nACGT\n+\n!!!!\n").expect("standard FASTQ is written");
+
+        let detected = detect_fastqtosam_quality_format(
+            &[standard_fastq.display().to_string()],
+            Some(&[missing_fastq.display().to_string()]),
+            false,
+        )
+        .expect("standard quality is detected before opening later files");
+
+        assert!(matches!(detected, FastqQualityFormat::Standard));
     }
 
     #[test]
