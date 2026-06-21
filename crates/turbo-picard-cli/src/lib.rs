@@ -8482,9 +8482,19 @@ struct FastaSequence {
 }
 
 fn read_fai_contig_lengths(path: &str) -> Result<Vec<(String, usize)>, String> {
-    let text = fs::read_to_string(path).map_err(|error| error.to_string())?;
+    let file = fs::File::open(path).map_err(|error| error.to_string())?;
+    let mut reader = BufReader::new(file);
     let mut contigs = Vec::new();
-    for line in text.lines() {
+    let mut line = String::new();
+    loop {
+        line.clear();
+        let bytes_read = reader
+            .read_line(&mut line)
+            .map_err(|error| error.to_string())?;
+        if bytes_read == 0 {
+            break;
+        }
+        let line = line.trim_end_matches(['\r', '\n']);
         if line.trim().is_empty() {
             continue;
         }
@@ -8510,12 +8520,21 @@ fn read_fasta_contig_lengths(
     path: &str,
     truncate_names: bool,
 ) -> Result<Vec<(String, usize)>, String> {
-    let text = read_text_or_gzip(path)?;
+    let mut reader = open_text_or_gzip_reader(path)?;
     let mut contigs = Vec::new();
     let mut current_name: Option<String> = None;
     let mut current_length = 0usize;
+    let mut line = String::new();
 
-    for line in text.lines() {
+    loop {
+        line.clear();
+        let bytes_read = reader
+            .read_line(&mut line)
+            .map_err(|error| error.to_string())?;
+        if bytes_read == 0 {
+            break;
+        }
+        let line = line.trim_end_matches(['\r', '\n']);
         if let Some(header) = line.strip_prefix('>') {
             if let Some(name) = current_name.take() {
                 contigs.push((name, current_length));
@@ -8561,8 +8580,18 @@ struct FaiEntry {
 }
 
 fn read_fai_entry(fai_path: &str, contig: &str) -> Result<FaiEntry, String> {
-    let text = fs::read_to_string(fai_path).map_err(|error| error.to_string())?;
-    for line in text.lines() {
+    let file = fs::File::open(fai_path).map_err(|error| error.to_string())?;
+    let mut reader = BufReader::new(file);
+    let mut line = String::new();
+    loop {
+        line.clear();
+        let bytes_read = reader
+            .read_line(&mut line)
+            .map_err(|error| error.to_string())?;
+        if bytes_read == 0 {
+            break;
+        }
+        let line = line.trim_end_matches(['\r', '\n']);
         let mut fields = line.split('\t');
         let Some(name) = fields.next() else {
             continue;
@@ -8596,10 +8625,19 @@ fn read_fai_entry(fai_path: &str, contig: &str) -> Result<FaiEntry, String> {
 }
 
 fn load_fasta_contig_sequence_scan(path: &str, contig: &str) -> Result<Vec<u8>, String> {
-    let text = read_text_or_gzip(path)?;
+    let mut reader = open_text_or_gzip_reader(path)?;
     let mut current_name: Option<String> = None;
     let mut sequence = Vec::new();
-    for line in text.lines() {
+    let mut line = String::new();
+    loop {
+        line.clear();
+        let bytes_read = reader
+            .read_line(&mut line)
+            .map_err(|error| error.to_string())?;
+        if bytes_read == 0 {
+            break;
+        }
+        let line = line.trim_end_matches(['\r', '\n']);
         if let Some(header) = line.strip_prefix('>') {
             if let Some(name) = current_name.take() {
                 if name == contig {
