@@ -14872,63 +14872,81 @@ impl InsertSizeCollection {
         }
         output.push('\n');
 
+        let all_reads_widths = self.all_reads.trimmed_widths(&orientations, deviations);
+        let sample_widths = self
+            .samples
+            .values()
+            .map(|summary| (summary, summary.trimmed_widths(&orientations, deviations)))
+            .collect::<Vec<_>>();
+        let library_widths = self
+            .libraries
+            .values()
+            .map(|summary| {
+                (
+                    &summary.summary,
+                    summary.summary.trimmed_widths(&orientations, deviations),
+                )
+            })
+            .collect::<Vec<_>>();
+        let read_group_widths = self
+            .read_groups
+            .values()
+            .map(|summary| {
+                (
+                    &summary.summary,
+                    summary.summary.trimmed_widths(&orientations, deviations),
+                )
+            })
+            .collect::<Vec<_>>();
+
         let mut insert_sizes = self
             .all_reads
-            .trimmed_insert_sizes(&orientations, deviations);
-        for summary in self.samples.values() {
-            insert_sizes.extend(summary.trimmed_insert_sizes(&orientations, deviations));
+            .trimmed_insert_sizes_with_widths(&orientations, &all_reads_widths);
+        for (summary, widths) in &sample_widths {
+            insert_sizes.extend(summary.trimmed_insert_sizes_with_widths(&orientations, widths));
         }
-        for summary in self.libraries.values() {
-            insert_sizes.extend(
-                summary
-                    .summary
-                    .trimmed_insert_sizes(&orientations, deviations),
-            );
+        for (summary, widths) in &library_widths {
+            insert_sizes.extend(summary.trimmed_insert_sizes_with_widths(&orientations, widths));
         }
-        for summary in self.read_groups.values() {
-            insert_sizes.extend(
-                summary
-                    .summary
-                    .trimmed_insert_sizes(&orientations, deviations),
-            );
+        for (summary, widths) in &read_group_widths {
+            insert_sizes.extend(summary.trimmed_insert_sizes_with_widths(&orientations, widths));
         }
         for insert_size in insert_sizes {
             output.push_str(&format!("{insert_size}"));
             for orientation in &orientations {
                 output.push_str(&format!(
                     "\t{}",
-                    self.all_reads
-                        .trimmed_count(*orientation, insert_size, deviations)
+                    self.all_reads.trimmed_count_with_widths(
+                        *orientation,
+                        insert_size,
+                        &all_reads_widths
+                    )
                 ));
             }
             if self.accumulation == InsertSizeAccumulation::Sample {
-                for summary in self.samples.values() {
+                for (summary, widths) in &sample_widths {
                     for orientation in &orientations {
                         output.push_str(&format!(
                             "\t{}",
-                            summary.trimmed_count(*orientation, insert_size, deviations)
+                            summary.trimmed_count_with_widths(*orientation, insert_size, widths)
                         ));
                     }
                 }
             } else if self.accumulation == InsertSizeAccumulation::Library {
-                for summary in self.libraries.values() {
+                for (summary, widths) in &library_widths {
                     for orientation in &orientations {
                         output.push_str(&format!(
                             "\t{}",
-                            summary
-                                .summary
-                                .trimmed_count(*orientation, insert_size, deviations)
+                            summary.trimmed_count_with_widths(*orientation, insert_size, widths)
                         ));
                     }
                 }
             } else if self.accumulation == InsertSizeAccumulation::ReadGroup {
-                for summary in self.read_groups.values() {
+                for (summary, widths) in &read_group_widths {
                     for orientation in &orientations {
                         output.push_str(&format!(
                             "\t{}",
-                            summary
-                                .summary
-                                .trimmed_count(*orientation, insert_size, deviations)
+                            summary.trimmed_count_with_widths(*orientation, insert_size, widths)
                         ));
                     }
                 }
@@ -15063,31 +15081,55 @@ impl InsertSizeSummary {
         self.histograms.keys().copied().collect()
     }
 
-    fn trimmed_insert_sizes(
+    fn trimmed_widths(
         &self,
         orientations: &[InsertSizeOrientation],
         deviations: f64,
+    ) -> BTreeMap<InsertSizeOrientation, u64> {
+        orientations
+            .iter()
+            .filter_map(|orientation| {
+                self.histograms.get(orientation).map(|histogram| {
+                    (
+                        *orientation,
+                        insert_size_histogram_width(histogram, deviations),
+                    )
+                })
+            })
+            .collect()
+    }
+
+    fn trimmed_insert_sizes_with_widths(
+        &self,
+        orientations: &[InsertSizeOrientation],
+        widths: &BTreeMap<InsertSizeOrientation, u64>,
     ) -> BTreeSet<u64> {
         orientations
             .iter()
-            .filter_map(|orientation| self.histograms.get(orientation))
-            .flat_map(|histogram| {
-                let width = insert_size_histogram_width(histogram, deviations);
+            .filter_map(|orientation| {
+                self.histograms
+                    .get(orientation)
+                    .zip(widths.get(orientation).copied())
+            })
+            .flat_map(|(histogram, width)| {
                 histogram.keys().copied().filter(move |size| *size <= width)
             })
             .collect()
     }
 
-    fn trimmed_count(
+    fn trimmed_count_with_widths(
         &self,
         orientation: InsertSizeOrientation,
         insert_size: u64,
-        deviations: f64,
+        widths: &BTreeMap<InsertSizeOrientation, u64>,
     ) -> u64 {
         let Some(histogram) = self.histograms.get(&orientation) else {
             return 0;
         };
-        if insert_size > insert_size_histogram_width(histogram, deviations) {
+        let Some(width) = widths.get(&orientation) else {
+            return 0;
+        };
+        if insert_size > *width {
             return 0;
         }
         histogram.get(&insert_size).copied().unwrap_or(0)
@@ -15136,15 +15178,14 @@ fn picard_insert_size_metric_row(
     let mad = histogram_median_absolute_deviation(histogram, median);
     let min = histogram.keys().next().copied().unwrap_or(0);
     let max = histogram.keys().next_back().copied().unwrap_or(0);
-    let trimmed = trimmed_histogram(
-        histogram,
-        insert_size_histogram_width(histogram, deviations),
-    );
-    let mean = histogram_mean(&trimmed);
+    let width = insert_size_histogram_width_from_median_mad(median, mad, deviations);
+    let mean = histogram_mean_up_to(histogram, width);
     let stddev = if read_pairs < 2 {
         "?".to_string()
     } else {
-        format_float(histogram_sample_standard_deviation(&trimmed, mean))
+        format_float(histogram_sample_standard_deviation_up_to(
+            histogram, width, mean,
+        ))
     };
     let mode = mode_from_histogram(histogram);
     let widths = insert_size_widths(histogram);
@@ -15180,20 +15221,11 @@ fn picard_insert_size_metric_row(
 fn insert_size_histogram_width(histogram: &BTreeMap<u64, u64>, deviations: f64) -> u64 {
     let median = histogram_median_f64(histogram);
     let mad = histogram_median_absolute_deviation(histogram, median);
-    (median + deviations * mad).max(0.0) as u64
+    insert_size_histogram_width_from_median_mad(median, mad, deviations)
 }
 
-fn trimmed_histogram(histogram: &BTreeMap<u64, u64>, width: u64) -> BTreeMap<u64, u64> {
-    histogram
-        .iter()
-        .filter_map(|(insert_size, count)| {
-            if *insert_size <= width {
-                Some((*insert_size, *count))
-            } else {
-                None
-            }
-        })
-        .collect()
+fn insert_size_histogram_width_from_median_mad(median: f64, mad: f64, deviations: f64) -> u64 {
+    (median + deviations * mad).max(0.0) as u64
 }
 
 fn histogram_total_count(histogram: &BTreeMap<u64, u64>) -> u64 {
@@ -15255,25 +15287,33 @@ fn weighted_f64_value_at_zero_based_rank(values: &[(f64, u64)], rank: u64) -> f6
     values.last().map(|(value, _)| *value).unwrap_or(0.0)
 }
 
-fn histogram_mean(histogram: &BTreeMap<u64, u64>) -> f64 {
-    let total_count = histogram_total_count(histogram);
-    if total_count == 0 {
+fn histogram_mean_up_to(histogram: &BTreeMap<u64, u64>, max_value: u64) -> f64 {
+    let (total, weighted_sum) = histogram.range(..=max_value).fold(
+        (0_u64, 0_f64),
+        |(total, weighted_sum), (value, count)| {
+            (total + *count, weighted_sum + *value as f64 * *count as f64)
+        },
+    );
+    if total == 0 {
         return 0.0;
     }
-    histogram
-        .iter()
-        .map(|(value, count)| *value as f64 * *count as f64)
-        .sum::<f64>()
-        / total_count as f64
+    weighted_sum / total as f64
 }
 
-fn histogram_sample_standard_deviation(histogram: &BTreeMap<u64, u64>, mean: f64) -> f64 {
-    let total_count = histogram_total_count(histogram);
+fn histogram_sample_standard_deviation_up_to(
+    histogram: &BTreeMap<u64, u64>,
+    max_value: u64,
+    mean: f64,
+) -> f64 {
+    let total_count = histogram
+        .range(..=max_value)
+        .map(|(_, count)| *count)
+        .sum::<u64>();
     if total_count < 2 {
         return 0.0;
     }
     let variance = histogram
-        .iter()
+        .range(..=max_value)
         .map(|(value, count)| {
             let delta = *value as f64 - mean;
             delta * delta * *count as f64
@@ -20493,6 +20533,22 @@ mod tests {
         let sidecar =
             fs::read_to_string(format!("{}.md5", output.display())).expect("sidecar can be read");
         assert_eq!(sidecar, format!("{:x}", md5::compute(bytes)));
+    }
+
+    #[test]
+    fn insert_size_bounded_stats_ignore_values_above_trim_width() {
+        let histogram = BTreeMap::from([(10_u64, 1_u64), (20, 2), (100, 10)]);
+
+        let mean = histogram_mean_up_to(&histogram, 20);
+        let standard_deviation = histogram_sample_standard_deviation_up_to(&histogram, 20, mean);
+
+        assert!((mean - 16.666_666_666_666_668).abs() < 1e-12);
+        assert!((standard_deviation - 5.773_502_691_896_257).abs() < 1e-12);
+        assert_eq!(histogram_mean_up_to(&histogram, 9), 0.0);
+        assert_eq!(
+            histogram_sample_standard_deviation_up_to(&histogram, 10, 10.0),
+            0.0
+        );
     }
 
     #[test]
