@@ -1648,7 +1648,7 @@ fn emit_completed_pair_group(
 }
 
 fn scan_pair_key_rows(
-    keyed_pairs: Vec<(BamDuplicateKey, [usize; 2])>,
+    keyed_pairs: impl IntoIterator<Item = (BamDuplicateKey, [usize; 2])>,
     config: &MarkDuplicatesConfig,
     mut emit_group: impl FnMut(&[usize]),
 ) -> Result<(), MarkDuplicatesError> {
