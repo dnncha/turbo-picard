@@ -1019,40 +1019,60 @@ fn add_duplicate_type_tag(
     Ok(())
 }
 
-fn mark_optical_duplicate_records(
+fn apply_pair_duplicate_group_members(
     group: &[usize],
     candidates: &[DuplicateCandidate],
-    representative_candidate_index: usize,
     decisions: &mut DuplicateDecisions,
+    summary: &mut MarkDuplicatesSummary,
+    library_registry: &mut LibraryRegistry,
+    stats: DuplicateGroupStats,
     config: &MarkDuplicatesConfig,
 ) -> usize {
-    if config.read_name_regex.as_deref() == Some("null") {
-        return 0;
-    }
-    let representative = &candidates[representative_candidate_index];
-    let representative_qname_id = representative.qname_id;
-    let Some(representative_location) = representative.optical_location else {
-        return 0;
-    };
+    let duplicate_set_tag = (config.tag_duplicate_set_members
+        && !config.remove_duplicates
+        && stats.has_pair
+        && stats.has_multiple_read_names)
+        .then(|| DuplicateSetTag {
+            size: i32::try_from(stats.unique_read_names).unwrap_or(i32::MAX),
+            index: i32::try_from(stats.representative_record_index).unwrap_or(i32::MAX),
+        });
+    let representative_location = (config.read_name_regex.as_deref() != Some("null"))
+        .then_some(candidates[stats.representative_candidate_index].optical_location);
     let pixel_distance = i64::from(config.optical_duplicate_pixel_distance.unwrap_or(100));
     let mut optical_names = HashSet::<InternedBytesId>::default();
 
     for index in group.iter().copied() {
         let candidate = &candidates[index];
-        if candidate.qname_id == representative_qname_id {
+        if let Some(tag) = duplicate_set_tag {
+            decisions.set_duplicate_set(candidate.record_index, tag.size, tag.index);
+        }
+        if candidate.qname_id == stats.representative_qname_id {
             continue;
         }
-        if optical_names.contains(&candidate.qname_id) {
-            decisions.mark_optical_duplicate(candidate.record_index);
-            continue;
+
+        if let Some(Some(representative_location)) = representative_location {
+            if optical_names.contains(&candidate.qname_id) {
+                decisions.mark_optical_duplicate(candidate.record_index);
+            } else if let Some(location) = candidate.optical_location
+                && representative_location.is_within(&location, pixel_distance)
+            {
+                optical_names.insert(candidate.qname_id);
+                decisions.mark_optical_duplicate(candidate.record_index);
+            }
         }
-        let Some(location) = candidate.optical_location else {
-            continue;
-        };
-        if representative_location.is_within(&location, pixel_distance) {
-            optical_names.insert(candidate.qname_id);
-            decisions.mark_optical_duplicate(candidate.record_index);
+
+        if candidate.is_pair() {
+            summary.duplicate_pair_records += 1;
+            library_registry
+                .summary_mut(candidate.library_id())
+                .duplicate_pair_records += 1;
+        } else {
+            summary.unpaired_duplicate_records += 1;
+            library_registry
+                .summary_mut(candidate.library_id())
+                .unpaired_duplicate_records += 1;
         }
+        decisions.mark_duplicate(candidate.record_index);
     }
 
     optical_names.len()
@@ -1080,25 +1100,6 @@ fn parse_read_location(name: &[u8]) -> Option<ReadLocation> {
     let x = parts.next()?.parse::<i64>().ok()?;
     let tile = parts.next()?.parse::<i64>().ok()?;
     Some(ReadLocation { tile, x, y })
-}
-
-fn add_duplicate_set_member_tags(
-    group: &[usize],
-    candidates: &[DuplicateCandidate],
-    decisions: &mut DuplicateDecisions,
-    stats: DuplicateGroupStats,
-) {
-    if !stats.has_pair || !stats.has_multiple_read_names {
-        return;
-    }
-
-    let duplicate_set_size = i32::try_from(stats.unique_read_names).unwrap_or(i32::MAX);
-    let duplicate_set_index = i32::try_from(stats.representative_record_index).unwrap_or(i32::MAX);
-
-    for index in group.iter().copied() {
-        let record_index = candidates[index].record_index;
-        decisions.set_duplicate_set(record_index, duplicate_set_size, duplicate_set_index);
-    }
 }
 
 fn replace_i32_aux(
@@ -1382,11 +1383,13 @@ fn apply_pair_duplicate_group(
         return;
     }
 
-    let optical_duplicate_read_names = mark_optical_duplicate_records(
+    let optical_duplicate_read_names = apply_pair_duplicate_group_members(
         group,
         candidates,
-        stats.representative_candidate_index,
         decisions,
+        summary,
+        library_registry,
+        stats,
         config,
     );
     if let Some(set_size) = stats.paired_set_size {
@@ -1404,29 +1407,6 @@ fn apply_pair_duplicate_group(
         library_registry
             .summary_mut(candidates[*candidate_index].library_id())
             .read_pair_optical_duplicates += optical_duplicate_read_names as u64;
-    }
-    if config.tag_duplicate_set_members && !config.remove_duplicates {
-        add_duplicate_set_member_tags(group, candidates, decisions, stats);
-    }
-
-    for candidate_index in group.iter().copied() {
-        if candidates[candidate_index].qname_id == stats.representative_qname_id {
-            continue;
-        }
-        let candidate = &candidates[candidate_index];
-        let index = candidate.record_index;
-        if candidate.is_pair() {
-            summary.duplicate_pair_records += 1;
-            library_registry
-                .summary_mut(candidate.library_id())
-                .duplicate_pair_records += 1;
-        } else {
-            summary.unpaired_duplicate_records += 1;
-            library_registry
-                .summary_mut(candidate.library_id())
-                .unpaired_duplicate_records += 1;
-        }
-        decisions.mark_duplicate(index);
     }
 }
 
@@ -2836,6 +2816,27 @@ mod tests {
         }
     }
 
+    fn empty_summary() -> MarkDuplicatesSummary {
+        MarkDuplicatesSummary {
+            library: "Unknown Library".to_string(),
+            unpaired_reads_examined: 0,
+            read_pairs_examined: 0,
+            paired_records_examined: 0,
+            secondary_or_supplementary_records: 0,
+            unpaired_duplicate_records: 0,
+            duplicate_pair_records: 0,
+            read_pair_optical_duplicates: 0,
+            unmapped_records: 0,
+            duplicate_set_histogram: BTreeMap::new(),
+        }
+    }
+
+    fn summary_and_library_registry() -> (MarkDuplicatesSummary, LibraryRegistry) {
+        let mut registry = LibraryRegistry::new();
+        registry.intern("Unknown Library");
+        (empty_summary(), registry)
+    }
+
     fn valid_sam_fields() -> Vec<String> {
         vec![
             "r1".to_string(),
@@ -3382,8 +3383,21 @@ mod tests {
         let candidates = candidates_for_records(&records);
         let mut decisions = DuplicateDecisions::new(records.len());
         let stats = DuplicateGroupStats::from_group(&[0, 1, 2, 3], &candidates);
+        let config = MarkDuplicatesConfig {
+            tag_duplicate_set_members: true,
+            ..sam_markdup_config()
+        };
+        let (mut summary, mut library_registry) = summary_and_library_registry();
 
-        add_duplicate_set_member_tags(&[0, 1, 2, 3], &candidates, &mut decisions, stats);
+        apply_pair_duplicate_group_members(
+            &[0, 1, 2, 3],
+            &candidates,
+            &mut decisions,
+            &mut summary,
+            &mut library_registry,
+            stats,
+            &config,
+        );
 
         for index in [0usize, 1, 2, 3] {
             assert_eq!(
@@ -3404,8 +3418,21 @@ mod tests {
         let candidates = candidates_for_records(&records);
         let mut decisions = DuplicateDecisions::new(records.len());
         let stats = DuplicateGroupStats::from_group(&[0, 1], &candidates);
+        let config = MarkDuplicatesConfig {
+            tag_duplicate_set_members: true,
+            ..sam_markdup_config()
+        };
+        let (mut summary, mut library_registry) = summary_and_library_registry();
 
-        add_duplicate_set_member_tags(&[0, 1], &candidates, &mut decisions, stats);
+        apply_pair_duplicate_group_members(
+            &[0, 1],
+            &candidates,
+            &mut decisions,
+            &mut summary,
+            &mut library_registry,
+            stats,
+            &config,
+        );
 
         assert!(
             decisions
@@ -3422,19 +3449,21 @@ mod tests {
     }
 
     #[test]
-    fn optical_duplicate_records_count_unique_interned_read_names() {
+    fn pair_group_member_actions_count_unique_optical_read_names() {
         let records = [
-            record_with_name_and_flags(b"INST:1:FC:1:1101:100:100", 0x1),
-            record_with_name_and_flags(b"INST:1:FC:1:1101:105:105", 0x1),
-            record_with_name_and_flags(b"INST:1:FC:1:1101:105:105", 0x1),
+            record_with_name_and_qualities(b"INST:1:FC:1:1101:100:100", &[40], 0x1),
+            record_with_name_and_qualities(b"INST:1:FC:1:1101:105:105", &[20], 0x1),
+            record_with_name_and_qualities(b"INST:1:FC:1:1101:105:105", &[20], 0x1),
         ];
         let candidates = candidates_for_records(&records);
+        let stats = DuplicateGroupStats::from_group(&[0, 1, 2], &candidates);
         let config = MarkDuplicatesConfig {
             read_name_regex: None,
             optical_duplicate_pixel_distance: Some(100),
             ..sam_markdup_config()
         };
         let mut decisions = DuplicateDecisions::new(records.len());
+        let (mut summary, mut library_registry) = summary_and_library_registry();
 
         assert_eq!(
             candidates[0].optical_location,
@@ -3444,13 +3473,21 @@ mod tests {
                 y: 100
             })
         );
-        let optical_read_names =
-            mark_optical_duplicate_records(&[0, 1, 2], &candidates, 0, &mut decisions, &config);
+        let optical_read_names = apply_pair_duplicate_group_members(
+            &[0, 1, 2],
+            &candidates,
+            &mut decisions,
+            &mut summary,
+            &mut library_registry,
+            stats,
+            &config,
+        );
 
         assert_eq!(optical_read_names, 1);
         assert!(!decisions.decision(0).expect("decision").optical_duplicate());
         assert!(decisions.decision(1).expect("decision").optical_duplicate());
         assert!(decisions.decision(2).expect("decision").optical_duplicate());
+        assert_eq!(summary.duplicate_pair_records, 2);
     }
 
     #[test]
