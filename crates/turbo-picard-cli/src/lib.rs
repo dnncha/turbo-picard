@@ -29,6 +29,7 @@ use std::io::{BufRead, BufReader, BufWriter, Read as IoRead, Seek, SeekFrom, Wri
 use std::path::{Path, PathBuf};
 use std::process::{self, Command};
 use std::sync::{Arc, Mutex, OnceLock};
+use std::thread;
 use std::time::{SystemTime, UNIX_EPOCH};
 use turbo_picard_core::external_sort::{self, ExternalSortConfig, ExternalSorter};
 use turbo_picard_core::hts_io;
@@ -5944,17 +5945,7 @@ fn run_setnmmdanduqtags(args: &[String]) -> Result<(), String> {
         compression_level,
     )?;
 
-    let mut tag_scratch = ReferenceTagScratch::default();
-    for record in reader.records() {
-        let mut record = record.map_err(|error| error.to_string())?;
-        set_nm_md_uq_tags(
-            &mut record,
-            &references_by_tid,
-            set_only_uq,
-            &mut tag_scratch,
-        )?;
-        writer.write(&record).map_err(|error| error.to_string())?;
-    }
+    write_setnmmd_records_ordered(&mut reader, &mut writer, &references_by_tid, set_only_uq)?;
     drop(writer);
 
     write_requested_sidecars(
@@ -18232,6 +18223,220 @@ fn remove_aux_if_present(record: &mut bam::Record, tag: &[u8]) -> Result<(), Str
         record.remove_aux(tag).map_err(|error| error.to_string())?;
     }
     Ok(())
+}
+
+fn write_setnmmd_records_ordered(
+    reader: &mut bam::Reader,
+    writer: &mut bam::Writer,
+    references_by_tid: &[Option<&[u8]>],
+    set_only_uq: bool,
+) -> Result<(), String> {
+    let plan = resource_plan::resolve_current();
+    let worker_count = plan.application_worker_budget;
+    let batch_size = plan.cmm_batch_size.max(1);
+    if worker_count <= 1 {
+        return write_setnmmd_records_serial(reader, writer, references_by_tid, set_only_uq);
+    }
+    write_setnmmd_records_parallel(
+        reader,
+        writer,
+        references_by_tid,
+        set_only_uq,
+        worker_count,
+        batch_size,
+        plan.cmm_queue_depth.max(1),
+    )
+}
+
+fn write_setnmmd_records_serial(
+    reader: &mut bam::Reader,
+    writer: &mut bam::Writer,
+    references_by_tid: &[Option<&[u8]>],
+    set_only_uq: bool,
+) -> Result<(), String> {
+    let mut tag_scratch = ReferenceTagScratch::default();
+    for record in reader.records() {
+        let mut record = record.map_err(|error| error.to_string())?;
+        set_nm_md_uq_tags(
+            &mut record,
+            references_by_tid,
+            set_only_uq,
+            &mut tag_scratch,
+        )?;
+        writer.write(&record).map_err(|error| error.to_string())?;
+    }
+    Ok(())
+}
+
+fn write_setnmmd_records_parallel(
+    reader: &mut bam::Reader,
+    writer: &mut bam::Writer,
+    references_by_tid: &[Option<&[u8]>],
+    set_only_uq: bool,
+    worker_count: usize,
+    batch_size: usize,
+    queue_depth: usize,
+) -> Result<(), String> {
+    let (work_tx, work_rx) = crossbeam_channel::bounded::<SetNmMdBatch>(queue_depth);
+    let (result_tx, result_rx) = crossbeam_channel::unbounded::<SetNmMdBatchResult>();
+    let mut send_error: Option<String> = None;
+
+    thread::scope(|scope| {
+        let mut handles = Vec::with_capacity(worker_count);
+        for _ in 0..worker_count {
+            let work_rx = work_rx.clone();
+            let result_tx = result_tx.clone();
+            handles.push(scope.spawn(move || {
+                let mut tag_scratch = ReferenceTagScratch::default();
+                while let Ok(mut batch) = work_rx.recv() {
+                    let result = batch
+                        .records
+                        .iter_mut()
+                        .try_for_each(|record| {
+                            set_nm_md_uq_tags(
+                                record,
+                                references_by_tid,
+                                set_only_uq,
+                                &mut tag_scratch,
+                            )
+                        })
+                        .map(|()| batch.records);
+                    if result_tx
+                        .send(SetNmMdBatchResult {
+                            index: batch.index,
+                            result,
+                        })
+                        .is_err()
+                    {
+                        break;
+                    }
+                }
+            }));
+        }
+        drop(result_tx);
+
+        let mut pending = BTreeMap::<usize, Result<Vec<bam::Record>, String>>::new();
+        let mut next_batch_index = 0usize;
+        let mut next_write_index = 0usize;
+        let mut outstanding = 0usize;
+        let mut batch = Vec::with_capacity(batch_size);
+
+        let receive_one_result =
+            |pending: &mut BTreeMap<usize, Result<Vec<bam::Record>, String>>,
+             outstanding: &mut usize|
+             -> Result<(), String> {
+                let result = result_rx.recv().map_err(|_| {
+                    "SetNmMdAndUqTags worker stopped before returning a batch".to_string()
+                })?;
+                *outstanding = outstanding.saturating_sub(1);
+                pending.insert(result.index, result.result);
+                Ok(())
+            };
+
+        let flush_ready_batches =
+            |pending: &mut BTreeMap<usize, Result<Vec<bam::Record>, String>>,
+             next_write_index: &mut usize,
+             writer: &mut bam::Writer|
+             -> Result<(), String> {
+                while let Some(result) = pending.remove(next_write_index) {
+                    let records = result?;
+                    for record in records {
+                        writer.write(&record).map_err(|error| error.to_string())?;
+                    }
+                    *next_write_index += 1;
+                }
+                Ok(())
+            };
+
+        for record in reader.records() {
+            match record {
+                Ok(record) => batch.push(record),
+                Err(error) => {
+                    send_error = Some(error.to_string());
+                    break;
+                }
+            }
+            if batch.len() < batch_size {
+                continue;
+            }
+            let full_batch = std::mem::replace(&mut batch, Vec::with_capacity(batch_size));
+            if work_tx
+                .send(SetNmMdBatch {
+                    index: next_batch_index,
+                    records: full_batch,
+                })
+                .is_err()
+            {
+                send_error =
+                    Some("SetNmMdAndUqTags worker stopped before accepting a batch".to_string());
+                break;
+            }
+            next_batch_index += 1;
+            outstanding += 1;
+            while outstanding >= queue_depth {
+                if let Err(error) = receive_one_result(&mut pending, &mut outstanding) {
+                    send_error = Some(error);
+                    break;
+                }
+                if let Err(error) = flush_ready_batches(&mut pending, &mut next_write_index, writer)
+                {
+                    send_error = Some(error);
+                    break;
+                }
+            }
+            if send_error.is_some() {
+                break;
+            }
+        }
+
+        if send_error.is_none() && !batch.is_empty() {
+            if work_tx
+                .send(SetNmMdBatch {
+                    index: next_batch_index,
+                    records: batch,
+                })
+                .is_err()
+            {
+                send_error =
+                    Some("SetNmMdAndUqTags worker stopped before accepting a batch".to_string());
+            } else {
+                outstanding += 1;
+            }
+        }
+        drop(work_tx);
+
+        while outstanding > 0 {
+            if let Err(error) = receive_one_result(&mut pending, &mut outstanding) {
+                send_error.get_or_insert(error);
+                break;
+            }
+            if let Err(error) = flush_ready_batches(&mut pending, &mut next_write_index, writer) {
+                send_error.get_or_insert(error);
+                break;
+            }
+        }
+
+        for handle in handles {
+            if handle.join().is_err() {
+                send_error.get_or_insert_with(|| "SetNmMdAndUqTags worker panicked".to_string());
+            }
+        }
+    });
+
+    match send_error {
+        Some(error) => Err(error),
+        None => Ok(()),
+    }
+}
+
+struct SetNmMdBatch {
+    index: usize,
+    records: Vec<bam::Record>,
+}
+
+struct SetNmMdBatchResult {
+    index: usize,
+    result: Result<Vec<bam::Record>, String>,
 }
 
 #[derive(Default)]

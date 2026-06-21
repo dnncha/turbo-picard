@@ -6564,6 +6564,57 @@ fn setnmmdanduqtags_set_only_uq_preserves_existing_nm_md() {
 }
 
 #[test]
+fn setnmmdanduqtags_output_is_identical_across_worker_budgets() {
+    let tempdir = tempfile::tempdir().expect("tempdir exists");
+    let reference = tempdir.path().join("ref.fa");
+    let input = tempdir.path().join("input.sam");
+    let serial_output = tempdir.path().join("serial.sam");
+    let parallel_output = tempdir.path().join("parallel.sam");
+    let reference_sequence = "ACGT".repeat(128);
+    fs::write(&reference, format!(">chr1\n{reference_sequence}\n")).expect("reference is written");
+
+    let mut sam = format!(
+        "@HD\tVN:1.6\tSO:coordinate\n@SQ\tSN:chr1\tLN:{}\n",
+        reference_sequence.len()
+    );
+    for index in 0..48 {
+        let pos = index + 1;
+        let cigar = match index % 3 {
+            0 => "8M",
+            1 => "4=1X3=",
+            _ => "4M1I3M",
+        };
+        let read = &reference_sequence[pos - 1..pos + 7];
+        sam.push_str(&format!(
+            "read{index}\t0\tchr1\t{pos}\t60\t{cigar}\t*\t0\t0\t{read}\tFFFFFFFF\n"
+        ));
+    }
+    fs::write(&input, sam).expect("input fixture is written");
+
+    for (output, max_threads) in [(&serial_output, "1"), (&parallel_output, "8")] {
+        Command::cargo_bin("picard")
+            .expect("binary exists")
+            .args([
+                "SetNmMdAndUqTags",
+                &format!("I={}", input.display()),
+                &format!("O={}", output.display()),
+                &format!("R={}", reference.display()),
+                "VALIDATION_STRINGENCY=SILENT",
+                "QUIET=true",
+            ])
+            .env("TURBO_PICARD_MAX_THREADS", max_threads)
+            .env("TURBO_PICARD_PIPELINE_READER_THREADS", "1")
+            .env("TURBO_PICARD_CMM_BATCH_SIZE", "3")
+            .assert()
+            .success();
+    }
+
+    let serial = fs::read_to_string(serial_output).expect("serial output exists");
+    let parallel = fs::read_to_string(parallel_output).expect("parallel output exists");
+    assert_eq!(parallel, serial);
+}
+
+#[test]
 fn setnmmdanduqtags_writes_md5_sidecar_but_no_index_for_sam_output() {
     let tempdir = tempfile::tempdir().expect("tempdir exists");
     let reference = tempdir.path().join("ref.fa");
