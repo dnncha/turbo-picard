@@ -186,8 +186,13 @@ impl DuplicateCandidate {
 #[derive(Debug, Clone, Copy, Default)]
 struct RecordDecision {
     flags: u8,
-    duplicate_set_size: Option<i32>,
-    duplicate_set_index: Option<i32>,
+    duplicate_set: Option<DuplicateSetTag>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct DuplicateSetTag {
+    size: i32,
+    index: i32,
 }
 
 impl RecordDecision {
@@ -208,6 +213,10 @@ impl RecordDecision {
 
     fn mark_optical_duplicate(&mut self) {
         self.flags |= Self::OPTICAL_DUPLICATE;
+    }
+
+    fn set_duplicate_set(&mut self, size: i32, index: i32) {
+        self.duplicate_set = Some(DuplicateSetTag { size, index });
     }
 }
 
@@ -910,11 +919,9 @@ fn write_bam_record(
     {
         add_duplicate_type_tag(&mut record, duplicate_type)?;
     }
-    if let Some(duplicate_set_size) = decision.duplicate_set_size {
-        replace_i32_aux(&mut record, b"DS", duplicate_set_size)?;
-    }
-    if let Some(duplicate_set_index) = decision.duplicate_set_index {
-        replace_i32_aux(&mut record, b"DI", duplicate_set_index)?;
+    if let Some(duplicate_set) = decision.duplicate_set {
+        replace_i32_aux(&mut record, b"DS", duplicate_set.size)?;
+        replace_i32_aux(&mut record, b"DI", duplicate_set.index)?;
     }
     if config.add_pg_tag_to_reads {
         add_program_group_to_bam_record(&mut record)?;
@@ -1054,8 +1061,7 @@ fn add_duplicate_set_member_tags(
 
     for index in group.iter().copied() {
         let record_index = candidates[index].record_index;
-        decisions[record_index].duplicate_set_size = Some(duplicate_set_size);
-        decisions[record_index].duplicate_set_index = Some(duplicate_set_index);
+        decisions[record_index].set_duplicate_set(duplicate_set_size, duplicate_set_index);
     }
 }
 
@@ -2834,13 +2840,19 @@ mod tests {
         let mut decision = RecordDecision::default();
         assert!(!decision.duplicate());
         assert!(!decision.optical_duplicate());
+        assert!(decision.duplicate_set.is_none());
 
         decision.mark_duplicate();
         decision.mark_optical_duplicate();
+        decision.set_duplicate_set(7, 3);
 
         assert!(decision.duplicate());
         assert!(decision.optical_duplicate());
         assert_eq!(decision.flags, 0b0000_0011);
+        assert_eq!(
+            decision.duplicate_set,
+            Some(DuplicateSetTag { size: 7, index: 3 })
+        );
     }
 
     #[test]
@@ -3208,8 +3220,10 @@ mod tests {
         add_duplicate_set_member_tags(&[0, 1, 2, 3], &candidates, &mut decisions, stats);
 
         for index in [0usize, 1, 2, 3] {
-            assert_eq!(decisions[index].duplicate_set_index, Some(0));
-            assert_eq!(decisions[index].duplicate_set_size, Some(3));
+            assert_eq!(
+                decisions[index].duplicate_set,
+                Some(DuplicateSetTag { size: 3, index: 0 })
+            );
         }
     }
 
@@ -3225,8 +3239,8 @@ mod tests {
 
         add_duplicate_set_member_tags(&[0, 1], &candidates, &mut decisions, stats);
 
-        assert!(decisions[0].duplicate_set_index.is_none());
-        assert!(decisions[1].duplicate_set_index.is_none());
+        assert!(decisions[0].duplicate_set.is_none());
+        assert!(decisions[1].duplicate_set.is_none());
     }
 
     #[test]
