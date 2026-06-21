@@ -21,6 +21,7 @@ use rust_htslib::bam::index;
 use rust_htslib::bam::record::{Aux, Cigar, CigarString};
 use rust_htslib::bam::{self, Read};
 use rustc_hash::{FxBuildHasher, FxHashMap};
+use std::borrow::Cow;
 use std::cmp::{Ordering, Reverse};
 use std::collections::{BTreeMap, BTreeSet, BinaryHeap, HashMap, HashSet, VecDeque};
 use std::env;
@@ -12010,7 +12011,7 @@ impl QualityYieldSummary {
             self.pf_bases += qualities.len() as u64;
         }
 
-        for quality in qualities {
+        for quality in qualities.iter().copied() {
             let quality = quality as u64;
             self.total_quality += quality;
             if quality >= 20 {
@@ -15427,11 +15428,11 @@ fn skip_quality_metric_record(
         || (pf_reads_only && record.is_quality_check_failed())
 }
 
-fn quality_values(record: &bam::Record, use_original_qualities: bool) -> Vec<u8> {
+fn quality_values<'a>(record: &'a bam::Record, use_original_qualities: bool) -> Cow<'a, [u8]> {
     if use_original_qualities && let Some(qualities) = original_quality_values(record) {
-        return qualities;
+        return Cow::Owned(qualities);
     }
-    record.qual().to_vec()
+    Cow::Borrowed(record.qual())
 }
 
 fn original_quality_values(record: &bam::Record) -> Option<Vec<u8>> {
