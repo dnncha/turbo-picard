@@ -2780,48 +2780,25 @@ fn run_fastqtosam(args: &[String]) -> Result<(), String> {
     };
     writer.write_header(&read_group)?;
 
-    let mut first_readers = fastq_paths
-        .iter()
-        .map(|path| FastqReader::from_path(path, options))
-        .collect::<Result<Vec<_>, _>>()?;
-    let mut second_readers = match fastq2_paths.as_ref() {
-        Some(paths) => Some(
-            paths
-                .iter()
-                .map(|path| FastqReader::from_path(path, options))
-                .collect::<Result<Vec<_>, _>>()?,
-        ),
-        None => None,
-    };
-    let mut first_reader_index = 0usize;
-    let mut second_reader_index = 0usize;
+    let mut first_readers = FastqReaderSet::new(&fastq_paths, options);
+    let mut second_readers = fastq2_paths
+        .as_ref()
+        .map(|paths| FastqReaderSet::new(paths, options));
 
     let mut first_record = FastqRecord::default();
     let mut second_record = FastqRecord::default();
     let mut records_written = 0_u64;
     loop {
-        if !next_fastq_record_from_readers(
-            &mut first_readers,
-            &mut first_reader_index,
-            &mut first_record,
-        )? {
+        if !first_readers.next_record_into(&mut first_record)? {
             if let Some(readers) = second_readers.as_mut()
-                && next_fastq_record_from_readers(
-                    readers,
-                    &mut second_reader_index,
-                    &mut second_record,
-                )?
+                && readers.next_record_into(&mut second_record)?
             {
                 return Err("malformed FastqToSam FASTQ2 has more records than FASTQ".to_string());
             }
             break;
         }
         if let Some(readers) = second_readers.as_mut() {
-            if !next_fastq_record_from_readers(
-                readers,
-                &mut second_reader_index,
-                &mut second_record,
-            )? {
+            if !readers.next_record_into(&mut second_record)? {
                 return Err("malformed FastqToSam FASTQ has more records than FASTQ2".to_string());
             }
             if first_record.name != second_record.name {
@@ -14889,6 +14866,13 @@ struct FastqReader {
     qualities_buf: String,
 }
 
+struct FastqReaderSet<'a> {
+    paths: &'a [String],
+    options: FastqToSamOptions,
+    next_path_index: usize,
+    current: Option<FastqReader>,
+}
+
 #[derive(Clone, Copy)]
 struct FastqToSamOptions {
     quality_format: FastqQualityFormat,
@@ -14953,48 +14937,23 @@ fn run_fastqtosam_standard_sam(
     writer
         .write_all(fastqtosam_header_text(read_group).as_bytes())
         .map_err(|error| error.to_string())?;
-    let mut first_readers = fastq_paths
-        .iter()
-        .map(|path| FastqBytesReader::from_path(path, options))
-        .collect::<Result<Vec<_>, _>>()?;
-    let mut second_readers = match fastq2_paths {
-        Some(paths) => Some(
-            paths
-                .iter()
-                .map(|path| FastqBytesReader::from_path(path, options))
-                .collect::<Result<Vec<_>, _>>()?,
-        ),
-        None => None,
-    };
-    let mut first_reader_index = 0usize;
-    let mut second_reader_index = 0usize;
+    let mut first_readers = FastqBytesReaderSet::new(fastq_paths, options);
+    let mut second_readers = fastq2_paths.map(|paths| FastqBytesReaderSet::new(paths, options));
     let mut first = FastqBytesRecord::default();
     let mut second = FastqBytesRecord::default();
     let mut output_buffer = Vec::with_capacity(8 * 1024 * 1024);
     let mut records_written = 0_u64;
     loop {
-        if !next_fastq_bytes_record_from_readers(
-            &mut first_readers,
-            &mut first_reader_index,
-            &mut first,
-        )? {
+        if !first_readers.next_record_into(&mut first)? {
             if let Some(readers) = second_readers.as_mut()
-                && next_fastq_bytes_record_from_readers(
-                    readers,
-                    &mut second_reader_index,
-                    &mut second,
-                )?
+                && readers.next_record_into(&mut second)?
             {
                 return Err("malformed FastqToSam FASTQ2 has more records than FASTQ".to_string());
             }
             break;
         }
         if let Some(readers) = second_readers.as_mut() {
-            if !next_fastq_bytes_record_from_readers(
-                readers,
-                &mut second_reader_index,
-                &mut second,
-            )? {
+            if !readers.next_record_into(&mut second)? {
                 return Err("malformed FastqToSam FASTQ has more records than FASTQ2".to_string());
             }
             if first.name != second.name {
@@ -15050,6 +15009,13 @@ struct FastqBytesReader {
     options: FastqToSamOptions,
     name_buf: Vec<u8>,
     plus_buf: Vec<u8>,
+}
+
+struct FastqBytesReaderSet<'a> {
+    paths: &'a [String],
+    options: FastqToSamOptions,
+    next_path_index: usize,
+    current: Option<FastqBytesReader>,
 }
 
 enum FastqBytesReaderSource {
@@ -15121,18 +15087,36 @@ impl FastqBytesReader {
     }
 }
 
-fn next_fastq_bytes_record_from_readers(
-    readers: &mut [FastqBytesReader],
-    index: &mut usize,
-    record: &mut FastqBytesRecord,
-) -> Result<bool, String> {
-    while *index < readers.len() {
-        if readers[*index].next_record_into(record)? {
-            return Ok(true);
+impl<'a> FastqBytesReaderSet<'a> {
+    fn new(paths: &'a [String], options: FastqToSamOptions) -> Self {
+        Self {
+            paths,
+            options,
+            next_path_index: 0,
+            current: None,
         }
-        *index += 1;
     }
-    Ok(false)
+
+    fn next_record_into(&mut self, record: &mut FastqBytesRecord) -> Result<bool, String> {
+        loop {
+            if self.current.is_none() {
+                let Some(path) = self.paths.get(self.next_path_index) else {
+                    return Ok(false);
+                };
+                self.next_path_index += 1;
+                self.current = Some(FastqBytesReader::from_path(path, self.options)?);
+            }
+
+            let reader = self
+                .current
+                .as_mut()
+                .expect("current reader exists after opening path");
+            if reader.next_record_into(record)? {
+                return Ok(true);
+            }
+            self.current = None;
+        }
+    }
 }
 
 fn detect_fastqtosam_quality_format(
@@ -15304,18 +15288,36 @@ impl FastqReader {
     }
 }
 
-fn next_fastq_record_from_readers(
-    readers: &mut [FastqReader],
-    index: &mut usize,
-    record: &mut FastqRecord,
-) -> Result<bool, String> {
-    while *index < readers.len() {
-        if readers[*index].next_record_into(record)? {
-            return Ok(true);
+impl<'a> FastqReaderSet<'a> {
+    fn new(paths: &'a [String], options: FastqToSamOptions) -> Self {
+        Self {
+            paths,
+            options,
+            next_path_index: 0,
+            current: None,
         }
-        *index += 1;
     }
-    Ok(false)
+
+    fn next_record_into(&mut self, record: &mut FastqRecord) -> Result<bool, String> {
+        loop {
+            if self.current.is_none() {
+                let Some(path) = self.paths.get(self.next_path_index) else {
+                    return Ok(false);
+                };
+                self.next_path_index += 1;
+                self.current = Some(FastqReader::from_path(path, self.options)?);
+            }
+
+            let reader = self
+                .current
+                .as_mut()
+                .expect("current reader exists after opening path");
+            if reader.next_record_into(record)? {
+                return Ok(true);
+            }
+            self.current = None;
+        }
+    }
 }
 
 fn read_fastq_string_line(
@@ -19507,6 +19509,70 @@ mod tests {
         .expect("standard quality is detected before opening later files");
 
         assert!(matches!(detected, FastqQualityFormat::Standard));
+    }
+
+    #[test]
+    fn fastqtosam_byte_reader_set_opens_sequential_shards_lazily() {
+        let tempdir = tempfile::tempdir().expect("tempdir exists");
+        let first_fastq = tempdir.path().join("first.fastq");
+        let missing_fastq = tempdir.path().join("missing.fastq");
+        fs::write(&first_fastq, b"@read1\nACGT\n+\n!!!!\n").expect("first FASTQ is written");
+        let paths = vec![
+            first_fastq.display().to_string(),
+            missing_fastq.display().to_string(),
+        ];
+        let mut readers = FastqBytesReaderSet::new(&paths, standard_fastqtosam_options());
+        let mut record = FastqBytesRecord::default();
+
+        assert!(
+            readers
+                .next_record_into(&mut record)
+                .expect("first shard opens")
+        );
+        assert_eq!(record.name, b"read1");
+        assert!(
+            readers
+                .next_record_into(&mut record)
+                .expect_err("second shard opens only after first is exhausted")
+                .contains("No such file or directory")
+        );
+    }
+
+    #[test]
+    fn fastqtosam_string_reader_set_opens_sequential_shards_lazily() {
+        let tempdir = tempfile::tempdir().expect("tempdir exists");
+        let first_fastq = tempdir.path().join("first.fastq");
+        let missing_fastq = tempdir.path().join("missing.fastq");
+        fs::write(&first_fastq, b"@read1\nACGT\n+\n!!!!\n").expect("first FASTQ is written");
+        let paths = vec![
+            first_fastq.display().to_string(),
+            missing_fastq.display().to_string(),
+        ];
+        let mut readers = FastqReaderSet::new(&paths, standard_fastqtosam_options());
+        let mut record = FastqRecord::default();
+
+        assert!(
+            readers
+                .next_record_into(&mut record)
+                .expect("first shard opens")
+        );
+        assert_eq!(record.name, "read1");
+        assert!(
+            readers
+                .next_record_into(&mut record)
+                .expect_err("second shard opens only after first is exhausted")
+                .contains("No such file or directory")
+        );
+    }
+
+    fn standard_fastqtosam_options() -> FastqToSamOptions {
+        FastqToSamOptions {
+            quality_format: FastqQualityFormat::Standard,
+            min_q: 0,
+            max_q: 93,
+            allow_and_ignore_empty_lines: false,
+            allow_empty_fastq: false,
+        }
     }
 
     #[test]
