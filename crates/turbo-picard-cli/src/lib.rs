@@ -19283,7 +19283,7 @@ fn build_merge_plan(
 
     let mut input_plans = Vec::with_capacity(inputs.len());
     for input in inputs {
-        let mut reader =
+        let reader =
             open_bam_reader_with_reference(input, reference).map_err(|error| error.to_string())?;
         let header_text = String::from_utf8_lossy(reader.header().as_bytes()).into_owned();
         if sequence_dictionary_lines(&header_text) != first_sequence_dictionary {
@@ -19292,12 +19292,7 @@ fn build_merge_plan(
             );
         }
         let read_group_renames = header_builder.observe_input_header(&header_text)?;
-        let is_sorted = if assume_sorted || header_declares_sort_order(reader.header(), sort_order)
-        {
-            true
-        } else {
-            input_reader_is_sorted(&mut reader, sort_order)?
-        };
+        let is_sorted = assume_sorted || header_declares_sort_order(reader.header(), sort_order);
         input_plans.push(MergeInputPlan {
             path: input.clone(),
             read_group_renames,
@@ -19687,25 +19682,6 @@ impl PartialEq for SortSamRunRecord {
 }
 
 impl Eq for SortSamRunRecord {}
-
-fn input_reader_is_sorted(reader: &mut bam::Reader, sort_order: SortOrder) -> Result<bool, String> {
-    if sort_order == SortOrder::Unsorted {
-        return Ok(true);
-    }
-
-    let mut previous: Option<bam::Record> = None;
-    for record in reader.records() {
-        let record = record.map_err(|error| error.to_string())?;
-        if let Some(previous) = previous.as_ref() {
-            let ordering = compare_for_sort_order(previous, &record, sort_order);
-            if ordering == Ordering::Greater {
-                return Ok(false);
-            }
-        }
-        previous = Some(record);
-    }
-    Ok(true)
-}
 
 fn write_kway_merged_records(
     writer: &mut bam::Writer,
