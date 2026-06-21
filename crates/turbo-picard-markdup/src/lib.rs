@@ -1531,7 +1531,7 @@ fn collate_pair_key_rows_by_qname(
         }
     }
 
-    let mut pairs = Vec::<[usize; 2]>::new();
+    let mut keyed_pairs = Vec::<(BamDuplicateKey, [usize; 2])>::new();
     let mut first_index = None::<usize>;
     let mut current_qname_id = None::<InternedBytesId>;
     sorter
@@ -1545,7 +1545,7 @@ fn collate_pair_key_rows_by_qname(
                 return Ok(());
             }
             if let Some(first) = first_index.take() {
-                pairs.push([first, candidate_index]);
+                push_pair_key_row(first, candidate_index, candidates, &mut keyed_pairs);
             } else {
                 first_index = Some(candidate_index);
             }
@@ -1553,19 +1553,8 @@ fn collate_pair_key_rows_by_qname(
         })
         .map_err(MarkDuplicatesError::Operation)?;
 
-    pairs.sort_by_key(|pair| pair[1]);
-    Ok(pair_rows_from_pairs(pairs, candidates))
-}
-
-fn pair_rows_from_pairs(
-    pairs: Vec<[usize; 2]>,
-    candidates: &[DuplicateCandidate],
-) -> Vec<(BamDuplicateKey, [usize; 2])> {
-    let mut keyed_pairs = Vec::<(BamDuplicateKey, [usize; 2])>::with_capacity(pairs.len());
-    for [first_index, second_index] in pairs {
-        push_pair_key_row(first_index, second_index, candidates, &mut keyed_pairs);
-    }
-    keyed_pairs
+    keyed_pairs.sort_by_key(|(_, pair)| pair[1]);
+    Ok(keyed_pairs)
 }
 
 fn collate_displaced_pair_candidate(
