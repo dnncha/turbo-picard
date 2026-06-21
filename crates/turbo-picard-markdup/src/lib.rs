@@ -1168,12 +1168,43 @@ impl ReadLocation {
 }
 
 fn parse_read_location(name: &[u8]) -> Option<ReadLocation> {
-    let text = std::str::from_utf8(name).ok()?;
-    let mut parts = text.rsplit(':');
-    let y = parts.next()?.parse::<i64>().ok()?;
-    let x = parts.next()?.parse::<i64>().ok()?;
-    let tile = parts.next()?.parse::<i64>().ok()?;
+    let (prefix, y_bytes) = rsplit_once_byte(name, b':')?;
+    let (prefix, x_bytes) = rsplit_once_byte(prefix, b':')?;
+    let (_, tile_bytes) = rsplit_once_byte(prefix, b':')?;
+    let y = parse_i64_bytes(y_bytes)?;
+    let x = parse_i64_bytes(x_bytes)?;
+    let tile = parse_i64_bytes(tile_bytes)?;
     Some(ReadLocation { tile, x, y })
+}
+
+fn rsplit_once_byte(bytes: &[u8], delimiter: u8) -> Option<(&[u8], &[u8])> {
+    let position = bytes.iter().rposition(|byte| *byte == delimiter)?;
+    Some((&bytes[..position], &bytes[position + 1..]))
+}
+
+fn parse_i64_bytes(bytes: &[u8]) -> Option<i64> {
+    let (negative, digits) = match bytes.split_first()? {
+        (b'-', digits) => (true, digits),
+        (b'+', digits) => (false, digits),
+        _ => (false, bytes),
+    };
+    if digits.is_empty() {
+        return None;
+    }
+
+    let mut value = 0i64;
+    for digit in digits {
+        if !digit.is_ascii_digit() {
+            return None;
+        }
+        let digit = i64::from(*digit - b'0');
+        value = if negative {
+            value.checked_mul(10)?.checked_sub(digit)?
+        } else {
+            value.checked_mul(10)?.checked_add(digit)?
+        };
+    }
+    Some(value)
 }
 
 fn replace_i32_aux(
@@ -3124,6 +3155,47 @@ mod tests {
             })
         );
         assert_eq!(skipped.optical_location, None);
+    }
+
+    #[test]
+    fn parse_read_location_uses_last_three_colon_fields() {
+        assert_eq!(
+            parse_read_location(b"INST:1:FCID:2:1101:123:456"),
+            Some(ReadLocation {
+                tile: 1101,
+                x: 123,
+                y: 456,
+            })
+        );
+    }
+
+    #[test]
+    fn parse_read_location_preserves_integer_parse_edges() {
+        assert_eq!(
+            parse_read_location(b"prefix:-7:+8:-9"),
+            Some(ReadLocation {
+                tile: -7,
+                x: 8,
+                y: -9,
+            })
+        );
+        assert_eq!(
+            parse_read_location(b"prefix:0:0:-9223372036854775808"),
+            Some(ReadLocation {
+                tile: 0,
+                x: 0,
+                y: i64::MIN,
+            })
+        );
+        assert_eq!(parse_read_location(b"prefix:0:0:9223372036854775808"), None);
+    }
+
+    #[test]
+    fn parse_read_location_rejects_missing_or_malformed_fields() {
+        assert_eq!(parse_read_location(b"INST:1101:123"), None);
+        assert_eq!(parse_read_location(b"INST:1101:123:"), None);
+        assert_eq!(parse_read_location(b"INST:1101:12x:456"), None);
+        assert_eq!(parse_read_location(b"INST:1101:+:456"), None);
     }
 
     #[test]
