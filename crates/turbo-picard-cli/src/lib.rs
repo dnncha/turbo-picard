@@ -2580,8 +2580,7 @@ fn run_samtofastq(args: &[String]) -> Result<(), String> {
             );
         }
         if record.is_paired() {
-            let key = record.qname().to_vec();
-            if let Some(first_record) = first_seen_mates.remove(&key) {
+            if let Some(first_record) = first_seen_mates.remove(record.qname()) {
                 let (read1, read2) = if record.is_first_in_template() {
                     (&record, &first_record)
                 } else {
@@ -2614,7 +2613,7 @@ fn run_samtofastq(args: &[String]) -> Result<(), String> {
                     )?;
                 }
             } else {
-                first_seen_mates.insert(key, record);
+                first_seen_mates.insert(record.qname().to_vec(), record);
             }
             continue;
         }
@@ -15976,15 +15975,16 @@ fn run_samtofastq_from_sam_text(
             );
         }
 
-        let current_record = SamFastqRecord {
-            name: name.to_string(),
-            flags,
-            sequence: sam_sequence.to_string(),
-            qualities: sam_qualities.to_string(),
-            clip_point: sam_clip_point(line, transform.clipping),
-        };
         if is_paired {
             if let Some(first_record) = first_seen_mates.remove(name) {
+                let current_record = sam_fastq_record_from_fields(
+                    name,
+                    flags,
+                    sam_sequence,
+                    sam_qualities,
+                    line,
+                    transform,
+                );
                 let (read1, read2) = if flags & 0x40 != 0 {
                     (&current_record, &first_record)
                 } else {
@@ -16027,9 +16027,25 @@ fn run_samtofastq_from_sam_text(
                     )?;
                 }
             } else {
+                let current_record = sam_fastq_record_from_fields(
+                    name,
+                    flags,
+                    sam_sequence,
+                    sam_qualities,
+                    line,
+                    transform,
+                );
                 first_seen_mates.insert(name.to_string(), current_record);
             }
         } else {
+            let current_record = sam_fastq_record_from_fields(
+                name,
+                flags,
+                sam_sequence,
+                sam_qualities,
+                line,
+                transform,
+            );
             let writer: &mut dyn Write = if let Some(outputs) = per_rg_outputs.as_mut() {
                 outputs.unpaired_writer_for_sam_record(line)?
             } else if let Some(writer) = unpaired_writer.as_mut() {
@@ -16479,6 +16495,23 @@ struct SamFastqRecord {
     sequence: String,
     qualities: String,
     clip_point: Option<usize>,
+}
+
+fn sam_fastq_record_from_fields(
+    name: &str,
+    flags: u16,
+    sequence: &str,
+    qualities: &str,
+    line: &str,
+    transform: SamToFastqTransform,
+) -> SamFastqRecord {
+    SamFastqRecord {
+        name: name.to_string(),
+        flags,
+        sequence: sequence.to_string(),
+        qualities: qualities.to_string(),
+        clip_point: sam_clip_point(line, transform.clipping),
+    }
 }
 
 #[derive(Clone, Copy)]
