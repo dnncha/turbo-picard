@@ -6220,9 +6220,8 @@ fn run_updatevcfsequencedictionary(args: &[String]) -> Result<(), String> {
         required_scalar_for(&args, "SEQUENCE_DICTIONARY", "UpdateVcfSequenceDictionary")?;
     let create_index = optional_bool(&args, "CREATE_INDEX")?.unwrap_or(false);
 
-    let dictionary_text = fs::read_to_string(dictionary_path).map_err(|error| error.to_string())?;
-    let contig_lines = vcf_contig_lines_from_dictionary(&dictionary_text)?;
-    stream_vcf_contig_header_replacement(&input, &output, &contig_lines, create_index)
+    let dictionary = read_vcf_dictionary(&dictionary_path)?;
+    stream_vcf_contig_header_replacement(&input, &output, &dictionary.contig_lines, create_index)
 }
 
 fn run_liftovervcf(args: &[String]) -> Result<(), String> {
@@ -6245,10 +6244,9 @@ fn run_liftovervcf(args: &[String]) -> Result<(), String> {
     let mappings = read_simple_chain_mappings(&chain)?;
     let (input_header, mut input_stream) = open_streaming_vcf_input(&input)?;
     let reference_sequences = reference_sequences_by_name(&reference)?;
-    let dictionary_text = fs::read_to_string(reference_dictionary_path(&reference)?)
-        .map_err(|error| error.to_string())?;
-    let contig_lines = vcf_contig_lines_from_dictionary(&dictionary_text)?;
-    let contig_order = dictionary_contig_order(&dictionary_text);
+    let dictionary = read_vcf_dictionary(&reference_dictionary_path(&reference)?)?;
+    let contig_lines = dictionary.contig_lines;
+    let contig_order = dictionary.contig_order;
     let reference_line = format!("##reference=file:{}", reference);
 
     let mut sort_config = ExternalSortConfig::new(tmp_dir);
@@ -6367,14 +6365,10 @@ fn run_sortvcf(args: &[String]) -> Result<(), String> {
     }
 
     let (contig_order, contig_lines) = if let Some(dictionary_path) = dictionary_path {
-        let dictionary_text =
-            fs::read_to_string(dictionary_path).map_err(|error| error.to_string())?;
-        let contig_lines = vcf_contig_lines_from_dictionary(&dictionary_text)?;
+        let dictionary = read_vcf_dictionary(&dictionary_path)?;
+        let contig_lines = dictionary.contig_lines;
         validate_streaming_vcf_sequence_dictionaries(&headers, &contig_lines, "SortVcf")?;
-        (
-            dictionary_contig_order(&dictionary_text),
-            Some(contig_lines),
-        )
+        (dictionary.contig_order, Some(contig_lines))
     } else {
         let contig_lines = first.contig_lines();
         validate_streaming_vcf_sequence_dictionaries(&headers, &contig_lines, "SortVcf")?;
@@ -6471,14 +6465,10 @@ fn run_mergevcfs_external_sort(
     }
 
     let (contig_order, contig_lines) = if let Some(dictionary_path) = dictionary_path {
-        let dictionary_text =
-            fs::read_to_string(dictionary_path).map_err(|error| error.to_string())?;
-        let contig_lines = vcf_contig_lines_from_dictionary(&dictionary_text)?;
+        let dictionary = read_vcf_dictionary(dictionary_path)?;
+        let contig_lines = dictionary.contig_lines;
         validate_streaming_vcf_sequence_dictionaries(&headers, &contig_lines, "MergeVcfs")?;
-        (
-            dictionary_contig_order(&dictionary_text),
-            Some(contig_lines),
-        )
+        (dictionary.contig_order, Some(contig_lines))
     } else {
         let contig_lines = first.contig_lines();
         validate_streaming_vcf_sequence_dictionaries(&headers, &contig_lines, "MergeVcfs")?;
@@ -7283,14 +7273,10 @@ fn try_stream_mergevcfs(
     }
 
     let (contig_order, contig_lines) = if let Some(dictionary_path) = dictionary_path {
-        let dictionary_text =
-            fs::read_to_string(dictionary_path).map_err(|error| error.to_string())?;
-        let contig_lines = vcf_contig_lines_from_dictionary(&dictionary_text)?;
+        let dictionary = read_vcf_dictionary(dictionary_path)?;
+        let contig_lines = dictionary.contig_lines;
         validate_streaming_vcf_sequence_dictionaries(&headers, &contig_lines, "MergeVcfs")?;
-        (
-            dictionary_contig_order(&dictionary_text),
-            Some(contig_lines),
-        )
+        (dictionary.contig_order, Some(contig_lines))
     } else {
         let contig_lines = first.contig_lines();
         validate_streaming_vcf_sequence_dictionaries(&headers, &contig_lines, "MergeVcfs")?;
@@ -7853,12 +7839,21 @@ fn parse_vcf_contig_id(line: &str) -> Option<String> {
     })
 }
 
-fn vcf_contig_lines_from_dictionary(dictionary_text: &str) -> Result<Vec<String>, String> {
-    let mut contigs = Vec::new();
-    for line in dictionary_text
-        .lines()
-        .filter(|line| line.starts_with("@SQ\t"))
-    {
+struct VcfDictionary {
+    contig_order: BTreeMap<String, usize>,
+    contig_lines: Vec<String>,
+}
+
+fn read_vcf_dictionary(path: &str) -> Result<VcfDictionary, String> {
+    let file = fs::File::open(path).map_err(|error| error.to_string())?;
+    let reader = BufReader::new(file);
+    let mut contig_order = BTreeMap::new();
+    let mut contig_lines = Vec::new();
+    for line in reader.lines() {
+        let line = line.map_err(|error| error.to_string())?;
+        if !line.starts_with("@SQ\t") {
+            continue;
+        }
         let fields = line
             .split('\t')
             .skip(1)
@@ -7883,12 +7878,16 @@ fn vcf_contig_lines_from_dictionary(dictionary_text: &str) -> Result<Vec<String>
         if let Some(uri) = fields.get("UR") {
             attributes.push(format!("URI={uri}"));
         }
-        contigs.push(format!("##contig=<{}>", attributes.join(",")));
+        contig_order.insert((*id).to_string(), contig_lines.len());
+        contig_lines.push(format!("##contig=<{}>", attributes.join(",")));
     }
-    if contigs.is_empty() {
+    if contig_lines.is_empty() {
         return Err("sequence dictionary contains no @SQ records".to_string());
     }
-    Ok(contigs)
+    Ok(VcfDictionary {
+        contig_order,
+        contig_lines,
+    })
 }
 
 fn replace_vcf_contig_header(input_text: &str, contig_lines: &[String]) -> Result<String, String> {
