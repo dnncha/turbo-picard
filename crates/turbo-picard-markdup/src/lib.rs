@@ -1978,10 +1978,7 @@ fn apply_fragment_duplicate_group(
         return;
     }
 
-    let contains_complete_pair = group
-        .iter()
-        .any(|candidate_index| candidates[*candidate_index].is_pair());
-    if contains_complete_pair {
+    if stats.has_pair {
         for candidate_index in group.iter().copied() {
             if candidates[candidate_index].is_pair() {
                 continue;
@@ -2301,6 +2298,12 @@ struct DuplicateGroupStats {
 
 impl DuplicateGroupStats {
     fn from_group(group: &[usize], candidates: &[DuplicateCandidate]) -> Self {
+        const SMALL_GROUP_NAME_CAPACITY: usize = 4;
+
+        if group.len() <= SMALL_GROUP_NAME_CAPACITY {
+            return Self::from_small_group::<SMALL_GROUP_NAME_CAPACITY>(group, candidates);
+        }
+
         let mut scores_by_name = HashMap::<InternedBytesId, DuplicateNameStats>::default();
         let mut has_pair = false;
 
@@ -2311,6 +2314,7 @@ impl DuplicateGroupStats {
                 scores_by_name
                     .entry(candidate.qname_id)
                     .or_insert_with(|| DuplicateNameStats {
+                        qname_id: candidate.qname_id,
                         first_candidate_index: index,
                         duplicate_score: 0,
                         min_record_index: candidate.record_index,
@@ -2319,19 +2323,69 @@ impl DuplicateGroupStats {
             entry.min_record_index = entry.min_record_index.min(candidate.record_index);
         }
 
-        let unique_name_count = scores_by_name.len();
-        let representative = scores_by_name
-            .into_values()
-            .max_by(|left, right| {
-                left.duplicate_score
-                    .cmp(&right.duplicate_score)
-                    .then_with(|| {
-                        candidates[right.first_candidate_index]
-                            .record_index
-                            .cmp(&candidates[left.first_candidate_index].record_index)
-                    })
-            })
-            .expect("non-empty duplicate group");
+        Self::from_name_stats(scores_by_name.into_values(), has_pair, candidates)
+    }
+
+    fn from_small_group<const CAPACITY: usize>(
+        group: &[usize],
+        candidates: &[DuplicateCandidate],
+    ) -> Self {
+        let mut name_stats = [None::<DuplicateNameStats>; CAPACITY];
+        let mut unique_name_count = 0usize;
+        let mut has_pair = false;
+
+        for index in group.iter().copied() {
+            let candidate = &candidates[index];
+            has_pair |= candidate.is_pair();
+            let existing_position = name_stats[..unique_name_count]
+                .iter()
+                .position(|stats| stats.is_some_and(|stats| stats.qname_id == candidate.qname_id));
+            if let Some(position) = existing_position {
+                let stats = name_stats[position]
+                    .as_mut()
+                    .expect("occupied prefix contains name stats");
+                stats.duplicate_score += candidate.duplicate_score;
+                stats.min_record_index = stats.min_record_index.min(candidate.record_index);
+            } else {
+                name_stats[unique_name_count] = Some(DuplicateNameStats {
+                    qname_id: candidate.qname_id,
+                    first_candidate_index: index,
+                    duplicate_score: candidate.duplicate_score,
+                    min_record_index: candidate.record_index,
+                });
+                unique_name_count += 1;
+            }
+        }
+
+        Self::from_name_stats(
+            name_stats.into_iter().take(unique_name_count).flatten(),
+            has_pair,
+            candidates,
+        )
+    }
+
+    fn from_name_stats(
+        name_stats: impl IntoIterator<Item = DuplicateNameStats>,
+        has_pair: bool,
+        candidates: &[DuplicateCandidate],
+    ) -> Self {
+        let mut unique_name_count = 0usize;
+        let mut representative = None::<DuplicateNameStats>;
+
+        for stats in name_stats {
+            unique_name_count += 1;
+            let should_replace = representative.is_none_or(|current| {
+                stats.duplicate_score > current.duplicate_score
+                    || (stats.duplicate_score == current.duplicate_score
+                        && candidates[stats.first_candidate_index].record_index
+                            < candidates[current.first_candidate_index].record_index)
+            });
+            if should_replace {
+                representative = Some(stats);
+            }
+        }
+
+        let representative = representative.expect("non-empty duplicate group");
         let paired_set_size = has_pair
             .then(|| u64::try_from(unique_name_count).ok())
             .flatten()
@@ -2351,6 +2405,7 @@ impl DuplicateGroupStats {
 
 #[derive(Debug, Clone, Copy)]
 struct DuplicateNameStats {
+    qname_id: InternedBytesId,
     first_candidate_index: usize,
     duplicate_score: u64,
     min_record_index: usize,
@@ -3010,6 +3065,27 @@ mod tests {
             stats.representative_record_index,
             candidates[2].record_index
         );
+    }
+
+    #[test]
+    fn duplicate_group_stats_handles_large_name_sets() {
+        let records = [
+            record_with_name_and_qualities(b"dup-a", &[10], 0x1),
+            record_with_name_and_qualities(b"dup-b", &[15], 0x1),
+            record_with_name_and_qualities(b"dup-c", &[20], 0x1),
+            record_with_name_and_qualities(b"dup-d", &[25], 0x0),
+            record_with_name_and_qualities(b"dup-e", &[20], 0x1),
+        ];
+        let candidates = candidates_for_records(&records);
+
+        let stats = DuplicateGroupStats::from_group(&[0, 1, 2, 3, 4], &candidates);
+
+        assert!(stats.has_multiple_read_names);
+        assert!(stats.has_pair);
+        assert_eq!(stats.unique_read_names, 5);
+        assert_eq!(stats.paired_set_size, Some(5));
+        assert_eq!(stats.representative_candidate_index, 3);
+        assert_eq!(stats.representative_qname_id, candidates[3].qname_id);
     }
 
     #[test]
