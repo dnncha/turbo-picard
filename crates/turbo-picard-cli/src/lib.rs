@@ -3222,7 +3222,7 @@ fn run_collectalignmentsummarymetrics(args: &[String]) -> Result<(), String> {
     for record in limited_records(&mut reader, stop_after) {
         let record = record.map_err(|error| error.to_string())?;
         let read_group = insert_size_read_group_for_bam_record(&record, &read_groups);
-        metrics.observe(&record, read_group.as_ref());
+        metrics.observe(&record, read_group);
     }
 
     fs::write(output, metrics.to_picard_text()).map_err(|error| error.to_string())
@@ -3294,7 +3294,7 @@ fn run_collectinsertsizemetrics(args: &[String]) -> Result<(), String> {
     for record in limited_records(&mut reader, stop_after) {
         let record = record.map_err(|error| error.to_string())?;
         let read_group = insert_size_read_group_for_bam_record(&record, &read_groups);
-        metrics.observe(&record, include_duplicates, read_group.as_ref());
+        metrics.observe(&record, include_duplicates, read_group);
     }
 
     fs::write(output, metrics.to_picard_text(minimum_pct, deviations))
@@ -3784,10 +3784,10 @@ fn run_collectmultiplemetrics_single_pass(
         };
 
         if let Some((metrics, ..)) = alignment.as_mut() {
-            metrics.observe(record, read_group.as_ref());
+            metrics.observe(record, read_group);
         }
         if let Some((metrics, _, _, include_duplicates, ..)) = insert_size.as_mut() {
-            metrics.observe(record, *include_duplicates, read_group.as_ref());
+            metrics.observe(record, *include_duplicates, read_group);
         }
         if let Some((metrics, .., aligned_reads_only, pf_reads_only)) = base_distribution.as_mut() {
             metrics.observe(record, *aligned_reads_only, *pf_reads_only);
@@ -3986,14 +3986,10 @@ fn run_collectmultiplemetrics_single_pass(
                     let read_group =
                         insert_size_read_group_for_bam_record(record, read_groups.as_ref());
                     if entry.gates.alignment {
-                        alignment_metrics.observe(record, read_group.as_ref());
+                        alignment_metrics.observe(record, read_group);
                     }
                     if entry.gates.insert_size {
-                        insert_size_metrics.observe(
-                            record,
-                            include_duplicates,
-                            read_group.as_ref(),
-                        );
+                        insert_size_metrics.observe(record, include_duplicates, read_group);
                     }
                 }
                 Ok(())
@@ -4012,7 +4008,7 @@ fn run_collectmultiplemetrics_single_pass(
                     let record = &entry.record;
                     let read_group =
                         insert_size_read_group_for_bam_record(record, read_groups.as_ref());
-                    metrics.observe(record, read_group.as_ref());
+                    metrics.observe(record, read_group);
                 }
                 Ok(())
             }));
@@ -4032,7 +4028,7 @@ fn run_collectmultiplemetrics_single_pass(
                     let record = &entry.record;
                     let read_group =
                         insert_size_read_group_for_bam_record(record, read_groups.as_ref());
-                    metrics.observe(record, include_duplicates, read_group.as_ref());
+                    metrics.observe(record, include_duplicates, read_group);
                 }
                 Ok(())
             }));
@@ -9610,14 +9606,14 @@ fn insert_size_read_groups_from_header(header_text: &str) -> BTreeMap<String, In
     read_groups
 }
 
-fn insert_size_read_group_for_bam_record(
+fn insert_size_read_group_for_bam_record<'a>(
     record: &bam::Record,
-    read_groups: &BTreeMap<String, InsertSizeReadGroup>,
-) -> Option<InsertSizeReadGroup> {
+    read_groups: &'a BTreeMap<String, InsertSizeReadGroup>,
+) -> Option<&'a InsertSizeReadGroup> {
     let Ok(Aux::String(read_group)) = record.aux(b"RG") else {
         return None;
     };
-    read_groups.get(read_group).cloned()
+    read_groups.get(read_group)
 }
 
 fn validate_qname(record: &bam::Record) -> String {
@@ -10933,34 +10929,46 @@ impl AlignmentSummaryCollection {
         self.all_reads.observe(record);
         if self.accumulation == AlignmentAccumulation::Sample {
             if let Some(read_group) = read_group {
-                self.samples
-                    .entry(read_group.sample.clone())
-                    .or_default()
-                    .observe(record);
+                if let Some(summary) = self.samples.get_mut(read_group.sample.as_str()) {
+                    summary.observe(record);
+                } else {
+                    self.samples
+                        .entry(read_group.sample.clone())
+                        .or_default()
+                        .observe(record);
+                }
             }
         } else if self.accumulation == AlignmentAccumulation::Library {
             if let Some(read_group) = read_group {
-                self.libraries
-                    .entry(read_group.library.clone())
-                    .or_insert_with(|| AlignmentSummaryLibrary {
+                if let Some(summary) = self.libraries.get_mut(read_group.library.as_str()) {
+                    summary.summary.observe(record);
+                } else {
+                    self.libraries
+                        .entry(read_group.library.clone())
+                        .or_insert_with(|| AlignmentSummaryLibrary {
+                            sample: read_group.sample.clone(),
+                            summary: AlignmentSummarySet::default(),
+                        })
+                        .summary
+                        .observe(record);
+                }
+            }
+        } else if self.accumulation == AlignmentAccumulation::ReadGroup
+            && let Some(read_group) = read_group
+        {
+            if let Some(summary) = self.read_groups.get_mut(read_group.platform_unit.as_str()) {
+                summary.summary.observe(record);
+            } else {
+                self.read_groups
+                    .entry(read_group.platform_unit.clone())
+                    .or_insert_with(|| AlignmentSummaryReadGroup {
                         sample: read_group.sample.clone(),
+                        library: read_group.library.clone(),
                         summary: AlignmentSummarySet::default(),
                     })
                     .summary
                     .observe(record);
             }
-        } else if self.accumulation == AlignmentAccumulation::ReadGroup
-            && let Some(read_group) = read_group
-        {
-            self.read_groups
-                .entry(read_group.platform_unit.clone())
-                .or_insert_with(|| AlignmentSummaryReadGroup {
-                    sample: read_group.sample.clone(),
-                    library: read_group.library.clone(),
-                    summary: AlignmentSummarySet::default(),
-                })
-                .summary
-                .observe(record);
         }
     }
 
@@ -10972,34 +10980,46 @@ impl AlignmentSummaryCollection {
         self.all_reads.observe_sam_parts(parts);
         if self.accumulation == AlignmentAccumulation::Sample {
             if let Some(read_group) = read_group {
-                self.samples
-                    .entry(read_group.sample.clone())
-                    .or_default()
-                    .observe_sam_parts(parts);
+                if let Some(summary) = self.samples.get_mut(read_group.sample.as_str()) {
+                    summary.observe_sam_parts(parts);
+                } else {
+                    self.samples
+                        .entry(read_group.sample.clone())
+                        .or_default()
+                        .observe_sam_parts(parts);
+                }
             }
         } else if self.accumulation == AlignmentAccumulation::Library {
             if let Some(read_group) = read_group {
-                self.libraries
-                    .entry(read_group.library.clone())
-                    .or_insert_with(|| AlignmentSummaryLibrary {
+                if let Some(summary) = self.libraries.get_mut(read_group.library.as_str()) {
+                    summary.summary.observe_sam_parts(parts);
+                } else {
+                    self.libraries
+                        .entry(read_group.library.clone())
+                        .or_insert_with(|| AlignmentSummaryLibrary {
+                            sample: read_group.sample.clone(),
+                            summary: AlignmentSummarySet::default(),
+                        })
+                        .summary
+                        .observe_sam_parts(parts);
+                }
+            }
+        } else if self.accumulation == AlignmentAccumulation::ReadGroup
+            && let Some(read_group) = read_group
+        {
+            if let Some(summary) = self.read_groups.get_mut(read_group.platform_unit.as_str()) {
+                summary.summary.observe_sam_parts(parts);
+            } else {
+                self.read_groups
+                    .entry(read_group.platform_unit.clone())
+                    .or_insert_with(|| AlignmentSummaryReadGroup {
                         sample: read_group.sample.clone(),
+                        library: read_group.library.clone(),
                         summary: AlignmentSummarySet::default(),
                     })
                     .summary
                     .observe_sam_parts(parts);
             }
-        } else if self.accumulation == AlignmentAccumulation::ReadGroup
-            && let Some(read_group) = read_group
-        {
-            self.read_groups
-                .entry(read_group.platform_unit.clone())
-                .or_insert_with(|| AlignmentSummaryReadGroup {
-                    sample: read_group.sample.clone(),
-                    library: read_group.library.clone(),
-                    summary: AlignmentSummarySet::default(),
-                })
-                .summary
-                .observe_sam_parts(parts);
         }
     }
 
@@ -11837,7 +11857,7 @@ fn observe_alignment_sam_line(
             cigar: cigar_summary,
             chimeric,
         },
-        read_group.as_ref(),
+        read_group,
     );
     Ok(())
 }
@@ -12219,7 +12239,7 @@ fn observe_insert_size_sam_line(
             .ok_or_else(|| "malformed CollectInsertSizeMetrics SAM record".to_string())?;
     }
     let read_group = insert_size_read_group_for_sam_tags(fields, read_groups);
-    metrics.observe_sam_parts(flags, insert_size, include_duplicates, read_group.as_ref());
+    metrics.observe_sam_parts(flags, insert_size, include_duplicates, read_group);
     Ok(())
 }
 
@@ -12257,13 +12277,11 @@ fn observe_sam_insert_size_read_group(
 
 fn insert_size_read_group_for_sam_tags<'a>(
     tags: impl Iterator<Item = &'a [u8]>,
-    read_groups: &BTreeMap<String, InsertSizeReadGroup>,
-) -> Option<InsertSizeReadGroup> {
+    read_groups: &'a BTreeMap<String, InsertSizeReadGroup>,
+) -> Option<&'a InsertSizeReadGroup> {
     for tag in tags {
         if let Some(read_group) = tag.strip_prefix(b"RG:Z:") {
-            return read_groups
-                .get(String::from_utf8_lossy(read_group).as_ref())
-                .cloned();
+            return read_groups.get(String::from_utf8_lossy(read_group).as_ref());
         }
     }
     None
@@ -14727,31 +14745,45 @@ impl InsertSizeCollection {
         if self.all_reads.observe(record, include_duplicates) {
             match (self.accumulation, read_group) {
                 (InsertSizeAccumulation::Sample, Some(read_group)) => {
-                    self.samples
-                        .entry(read_group.sample.clone())
-                        .or_default()
-                        .observe(record, include_duplicates);
+                    if let Some(summary) = self.samples.get_mut(read_group.sample.as_str()) {
+                        summary.observe(record, include_duplicates);
+                    } else {
+                        self.samples
+                            .entry(read_group.sample.clone())
+                            .or_default()
+                            .observe(record, include_duplicates);
+                    }
                 }
                 (InsertSizeAccumulation::Library, Some(read_group)) => {
-                    self.libraries
-                        .entry(read_group.library.clone())
-                        .or_insert_with(|| InsertSizeLibrarySummary {
-                            sample: read_group.sample.clone(),
-                            summary: InsertSizeSummary::default(),
-                        })
-                        .summary
-                        .observe(record, include_duplicates);
+                    if let Some(summary) = self.libraries.get_mut(read_group.library.as_str()) {
+                        summary.summary.observe(record, include_duplicates);
+                    } else {
+                        self.libraries
+                            .entry(read_group.library.clone())
+                            .or_insert_with(|| InsertSizeLibrarySummary {
+                                sample: read_group.sample.clone(),
+                                summary: InsertSizeSummary::default(),
+                            })
+                            .summary
+                            .observe(record, include_duplicates);
+                    }
                 }
                 (InsertSizeAccumulation::ReadGroup, Some(read_group)) => {
-                    self.read_groups
-                        .entry(read_group.platform_unit.clone())
-                        .or_insert_with(|| InsertSizeReadGroupSummary {
-                            sample: read_group.sample.clone(),
-                            library: read_group.library.clone(),
-                            summary: InsertSizeSummary::default(),
-                        })
-                        .summary
-                        .observe(record, include_duplicates);
+                    if let Some(summary) =
+                        self.read_groups.get_mut(read_group.platform_unit.as_str())
+                    {
+                        summary.summary.observe(record, include_duplicates);
+                    } else {
+                        self.read_groups
+                            .entry(read_group.platform_unit.clone())
+                            .or_insert_with(|| InsertSizeReadGroupSummary {
+                                sample: read_group.sample.clone(),
+                                library: read_group.library.clone(),
+                                summary: InsertSizeSummary::default(),
+                            })
+                            .summary
+                            .observe(record, include_duplicates);
+                    }
                 }
                 _ => {}
             }
@@ -14771,31 +14803,49 @@ impl InsertSizeCollection {
         {
             match (self.accumulation, read_group) {
                 (InsertSizeAccumulation::Sample, Some(read_group)) => {
-                    self.samples
-                        .entry(read_group.sample.clone())
-                        .or_default()
-                        .observe_sam_parts(flags, insert_size, include_duplicates);
+                    if let Some(summary) = self.samples.get_mut(read_group.sample.as_str()) {
+                        summary.observe_sam_parts(flags, insert_size, include_duplicates);
+                    } else {
+                        self.samples
+                            .entry(read_group.sample.clone())
+                            .or_default()
+                            .observe_sam_parts(flags, insert_size, include_duplicates);
+                    }
                 }
                 (InsertSizeAccumulation::Library, Some(read_group)) => {
-                    self.libraries
-                        .entry(read_group.library.clone())
-                        .or_insert_with(|| InsertSizeLibrarySummary {
-                            sample: read_group.sample.clone(),
-                            summary: InsertSizeSummary::default(),
-                        })
-                        .summary
-                        .observe_sam_parts(flags, insert_size, include_duplicates);
+                    if let Some(summary) = self.libraries.get_mut(read_group.library.as_str()) {
+                        summary
+                            .summary
+                            .observe_sam_parts(flags, insert_size, include_duplicates);
+                    } else {
+                        self.libraries
+                            .entry(read_group.library.clone())
+                            .or_insert_with(|| InsertSizeLibrarySummary {
+                                sample: read_group.sample.clone(),
+                                summary: InsertSizeSummary::default(),
+                            })
+                            .summary
+                            .observe_sam_parts(flags, insert_size, include_duplicates);
+                    }
                 }
                 (InsertSizeAccumulation::ReadGroup, Some(read_group)) => {
-                    self.read_groups
-                        .entry(read_group.platform_unit.clone())
-                        .or_insert_with(|| InsertSizeReadGroupSummary {
-                            sample: read_group.sample.clone(),
-                            library: read_group.library.clone(),
-                            summary: InsertSizeSummary::default(),
-                        })
-                        .summary
-                        .observe_sam_parts(flags, insert_size, include_duplicates);
+                    if let Some(summary) =
+                        self.read_groups.get_mut(read_group.platform_unit.as_str())
+                    {
+                        summary
+                            .summary
+                            .observe_sam_parts(flags, insert_size, include_duplicates);
+                    } else {
+                        self.read_groups
+                            .entry(read_group.platform_unit.clone())
+                            .or_insert_with(|| InsertSizeReadGroupSummary {
+                                sample: read_group.sample.clone(),
+                                library: read_group.library.clone(),
+                                summary: InsertSizeSummary::default(),
+                            })
+                            .summary
+                            .observe_sam_parts(flags, insert_size, include_duplicates);
+                    }
                 }
                 _ => {}
             }
