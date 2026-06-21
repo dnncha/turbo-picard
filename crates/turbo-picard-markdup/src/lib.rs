@@ -121,7 +121,8 @@ struct DuplicateCandidate {
     record_index: usize,
     library_id: LibraryId,
     qname_id: InternedBytesId,
-    flags: u16,
+    is_pair: bool,
+    reverse_strand: bool,
     reference_id: i32,
     five_prime_position: i64,
     _mate_reference_id: i32,
@@ -145,11 +146,13 @@ impl DuplicateCandidate {
         let reference_id = record.tid();
         let five_prime_position = unclipped_record_position(record);
         let reverse_strand = flags & 0x10 != 0;
+        let is_pair = duplicate_candidate_is_pair(flags);
         Self {
             record_index,
             library_id,
             qname_id,
-            flags,
+            is_pair,
+            reverse_strand,
             reference_id,
             five_prime_position,
             _mate_reference_id: record.mtid(),
@@ -172,11 +175,11 @@ impl DuplicateCandidate {
     }
 
     fn is_pair(&self) -> bool {
-        duplicate_candidate_is_pair(self.flags)
+        self.is_pair
     }
 
     fn reverse_strand(&self) -> bool {
-        self.flags & 0x10 != 0
+        self.reverse_strand
     }
 }
 
@@ -2770,6 +2773,8 @@ mod tests {
         record.set_pos(100);
         let candidate = DuplicateCandidate::from_record(4, &record, 11, 7, Some(13));
 
+        assert!(!candidate.is_pair());
+        assert!(candidate.reverse_strand());
         assert_eq!(
             candidate.fragment_key,
             BamDuplicateKey {
@@ -2783,6 +2788,25 @@ mod tests {
                 barcode_id: Some(13),
             }
         );
+    }
+
+    #[test]
+    fn duplicate_candidate_caches_pair_eligibility() {
+        let mut paired = record_with_name_and_flags(b"paired", 0x1 | 0x2);
+        paired.set_tid(0);
+        paired.set_pos(10);
+        let mut mate_unmapped = record_with_name_and_flags(b"mate-unmapped", 0x1 | 0x8);
+        mate_unmapped.set_tid(0);
+        mate_unmapped.set_pos(20);
+
+        let paired_candidate = DuplicateCandidate::from_record(0, &paired, 0, 1, None);
+        let mate_unmapped_candidate =
+            DuplicateCandidate::from_record(1, &mate_unmapped, 0, 2, None);
+
+        assert!(paired_candidate.is_pair);
+        assert!(paired_candidate.is_pair());
+        assert!(!mate_unmapped_candidate.is_pair);
+        assert!(!mate_unmapped_candidate.is_pair());
     }
 
     #[test]
