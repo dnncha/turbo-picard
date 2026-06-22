@@ -16216,11 +16216,7 @@ fn set_fastq_bam_record(
     quality_format: FastqQualityFormat,
     quality_scratch: &mut Vec<u8>,
 ) -> Result<(), String> {
-    quality_scratch.clear();
-    quality_scratch.reserve(read.qualities.len());
-    for quality in &read.qualities {
-        quality_scratch.push(decode_fastq_quality(*quality, quality_format)?);
-    }
+    fill_decoded_fastq_qualities(&read.qualities, quality_format, quality_scratch)?;
     record.set(
         read.name.as_bytes(),
         None,
@@ -16235,6 +16231,34 @@ fn set_fastq_bam_record(
     record.set_mpos(-1);
     record.set_insert_size(0);
     set_record_read_group(record, read_group_id)?;
+    Ok(())
+}
+
+fn fill_decoded_fastq_qualities(
+    qualities: &[u8],
+    quality_format: FastqQualityFormat,
+    output: &mut Vec<u8>,
+) -> Result<(), String> {
+    output.clear();
+    output.reserve(qualities.len());
+    let offset = match quality_format {
+        FastqQualityFormat::Standard => Some(33),
+        FastqQualityFormat::Illumina => Some(64),
+        FastqQualityFormat::Solexa => None,
+    };
+    if let Some(offset) = offset {
+        for quality in qualities {
+            output.push(
+                quality.checked_sub(offset).ok_or_else(|| {
+                    "malformed FastqToSam quality below encoding offset".to_string()
+                })?,
+            );
+        }
+        return Ok(());
+    }
+    for quality in qualities {
+        output.push(decode_fastq_quality(*quality, quality_format)?);
+    }
     Ok(())
 }
 
