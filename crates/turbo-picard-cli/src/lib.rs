@@ -2993,7 +2993,11 @@ fn run_fastqtosam(args: &[String]) -> Result<(), String> {
             None,
             Some(compression_level),
         )?;
-        FastqToSamWriter::Bam(writer)
+        FastqToSamWriter::Bam {
+            writer,
+            quality_scratch: Vec::new(),
+            record_scratch: bam::Record::new(),
+        }
     };
     writer.write_header(&read_group)?;
 
@@ -15538,7 +15542,11 @@ enum FastqToSamWriter {
         writer: BufWriter<fs::File>,
         quality_scratch: Vec<u8>,
     },
-    Bam(bam::Writer),
+    Bam {
+        writer: bam::Writer,
+        quality_scratch: Vec<u8>,
+        record_scratch: bam::Record,
+    },
 }
 
 impl FastqToSamWriter {
@@ -15547,7 +15555,7 @@ impl FastqToSamWriter {
             Self::Sam { writer, .. } => writer
                 .write_all(fastqtosam_header_text(read_group).as_bytes())
                 .map_err(|error| error.to_string()),
-            Self::Bam(_) => Ok(()),
+            Self::Bam { .. } => Ok(()),
         }
     }
 
@@ -15570,9 +15578,22 @@ impl FastqToSamWriter {
                 quality_format,
                 quality_scratch,
             ),
-            Self::Bam(writer) => {
-                let record = fastq_bam_record(read, flags, read_group_id, quality_format)?;
-                writer.write(&record).map_err(|error| error.to_string())
+            Self::Bam {
+                writer,
+                quality_scratch,
+                record_scratch,
+            } => {
+                set_fastq_bam_record(
+                    record_scratch,
+                    read,
+                    flags,
+                    read_group_id,
+                    quality_format,
+                    quality_scratch,
+                )?;
+                writer
+                    .write(record_scratch)
+                    .map_err(|error| error.to_string())
             }
         }
     }
@@ -16187,19 +16208,25 @@ fn push_normalized_fastq_read_name_bytes(name: &[u8], output: &mut Vec<u8>) {
     output.extend_from_slice(name);
 }
 
-fn fastq_bam_record(
+fn set_fastq_bam_record(
+    record: &mut bam::Record,
     read: &FastqRecord,
     flags: u16,
     read_group_id: &str,
     quality_format: FastqQualityFormat,
-) -> Result<bam::Record, String> {
-    let qualities = read
-        .qualities
-        .iter()
-        .map(|quality| decode_fastq_quality(*quality, quality_format))
-        .collect::<Result<Vec<_>, _>>()?;
-    let mut record = bam::Record::new();
-    record.set(read.name.as_bytes(), None, &read.sequence, &qualities);
+    quality_scratch: &mut Vec<u8>,
+) -> Result<(), String> {
+    quality_scratch.clear();
+    quality_scratch.reserve(read.qualities.len());
+    for quality in &read.qualities {
+        quality_scratch.push(decode_fastq_quality(*quality, quality_format)?);
+    }
+    record.set(
+        read.name.as_bytes(),
+        None,
+        &read.sequence,
+        quality_scratch.as_slice(),
+    );
     record.set_flags(flags);
     record.set_tid(-1);
     record.set_pos(-1);
@@ -16207,8 +16234,8 @@ fn fastq_bam_record(
     record.set_mtid(-1);
     record.set_mpos(-1);
     record.set_insert_size(0);
-    set_record_read_group(&mut record, read_group_id)?;
-    Ok(record)
+    set_record_read_group(record, read_group_id)?;
+    Ok(())
 }
 
 fn fastqtosam_header(read_group: &FastqReadGroup) -> bam::Header {
