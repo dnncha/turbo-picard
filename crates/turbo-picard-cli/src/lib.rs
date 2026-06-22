@@ -19719,17 +19719,18 @@ fn write_sortsam_bounded_records(
     let mut run_set = SortSamTempRuns::new(tmp_dir.to_path_buf());
     let mut records = Vec::<(bam::Record, u64)>::with_capacity(max_records_in_ram.min(8192));
     let mut resident_bytes = 0usize;
-    let mut previous = None::<bam::Record>;
+    let mut previous_key = None::<SortSamMonotonicKey>;
     let mut monotonic = true;
 
     for (ordinal, record) in reader.records().enumerate() {
         let record = record.map_err(|error| error.to_string())?;
-        if let Some(previous) = previous.as_ref()
-            && compare_for_sort_order(previous, &record, sort_order) == Ordering::Greater
+        let key = SortSamMonotonicKey::from_record(&record);
+        if let Some(previous) = previous_key.as_ref()
+            && previous.compare(&key, sort_order) == Ordering::Greater
         {
             monotonic = false;
         }
-        previous = Some(record.clone());
+        previous_key = Some(key);
         resident_bytes = resident_bytes.saturating_add(bam_record_estimated_sort_bytes(&record));
         records.push((record, ordinal as u64));
         if bam_sort_buffer_should_spill(
@@ -19773,6 +19774,43 @@ fn write_sortsam_bounded_records(
     } else {
         coalesce_sortsam_runs(&mut run_set, header, sort_order)?;
         write_sortsam_merged_runs(writer, &run_set.paths, sort_order)
+    }
+}
+
+struct SortSamMonotonicKey {
+    coordinate_tid: i32,
+    pos: i64,
+    qname: Vec<u8>,
+    flags: u16,
+}
+
+impl SortSamMonotonicKey {
+    fn from_record(record: &bam::Record) -> Self {
+        Self {
+            coordinate_tid: coordinate_tid(record),
+            pos: record.pos(),
+            qname: record.qname().to_vec(),
+            flags: record.flags(),
+        }
+    }
+
+    fn compare(&self, other: &Self, sort_order: SortOrder) -> Ordering {
+        match sort_order {
+            SortOrder::Coordinate => self.compare_coordinate(other),
+            SortOrder::QueryName => self
+                .qname
+                .cmp(&other.qname)
+                .then_with(|| self.compare_coordinate(other)),
+            SortOrder::Unsorted => Ordering::Equal,
+        }
+    }
+
+    fn compare_coordinate(&self, other: &Self) -> Ordering {
+        self.coordinate_tid
+            .cmp(&other.coordinate_tid)
+            .then_with(|| self.pos.cmp(&other.pos))
+            .then_with(|| self.qname.cmp(&other.qname))
+            .then_with(|| self.flags.cmp(&other.flags))
     }
 }
 
