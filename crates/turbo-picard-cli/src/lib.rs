@@ -7020,15 +7020,20 @@ struct StreamingVcfInput {
 }
 
 enum StreamingVcfRecord {
-    Record(VcfRecord, VcfRecordOrderKey),
+    Record(StreamingVcfLineRecord, VcfRecordOrderKey),
     End,
     Unsorted,
+}
+
+struct StreamingVcfLineRecord {
+    line: String,
+    serial: usize,
 }
 
 struct MergeVcfHeapItem {
     key: VcfRecordOrderKey,
     input_index: usize,
-    record: VcfRecord,
+    record: StreamingVcfLineRecord,
 }
 
 impl PartialEq for MergeVcfHeapItem {
@@ -7520,27 +7525,26 @@ fn next_streaming_vcf_record(
                 input.line_number, input.source
             ));
         }
-        let record = parse_vcf_record(
-            trimmed,
-            input.record_serial,
-            &input.source,
-            input.line_number,
-        )?;
-        input.record_serial += 1;
-        let Some(contig_rank) = contig_order.get(&record.contig).copied() else {
+        let (contig, position) = parse_vcf_record_key(trimmed, &input.source, input.line_number)?;
+        let Some(contig_rank) = contig_order.get(contig).copied() else {
             return Err(format!(
                 "VCF contig {} is not present in sequence dictionary",
-                record.contig
+                contig
             ));
         };
         let key = VcfRecordOrderKey {
             contig_rank,
-            position: record.position,
+            position,
         };
         if input.last_key.is_some_and(|last_key| key < last_key) {
             return Ok(StreamingVcfRecord::Unsorted);
         }
         input.last_key = Some(key);
+        let record = StreamingVcfLineRecord {
+            line: trimmed.to_string(),
+            serial: input.record_serial,
+        };
+        input.record_serial += 1;
         return Ok(StreamingVcfRecord::Record(record, key));
     }
 }
