@@ -2832,16 +2832,21 @@ struct SamToFastqPendingMateExpiry {
 
 impl SamToFastqPendingMateExpiry {
     fn for_record(record: &bam::Record) -> Option<Self> {
+        let (tid, pos, record_tid, record_pos) = Self::coordinates_for_record(record)?;
+        Some(Self {
+            tid,
+            pos,
+            record_tid,
+            record_pos,
+            qname: record.qname().to_vec(),
+        })
+    }
+
+    fn coordinates_for_record(record: &bam::Record) -> Option<(i32, i64, i32, i64)> {
         if record.mtid() < 0 || record.mpos() < 0 {
             return None;
         }
-        Some(Self {
-            tid: record.mtid(),
-            pos: record.mpos(),
-            record_tid: record.tid(),
-            record_pos: record.pos(),
-            qname: record.qname().to_vec(),
-        })
+        Some((record.mtid(), record.mpos(), record.tid(), record.pos()))
     }
 
     fn is_before_record(&self, record: &bam::Record) -> bool {
@@ -2865,12 +2870,14 @@ fn prune_expired_samtofastq_bam_mates(
         let Some(pending) = pending_mates.get(&expiry.qname) else {
             continue;
         };
-        if SamToFastqPendingMateExpiry::for_record(pending).is_some_and(|pending_expiry| {
-            pending_expiry.tid == expiry.tid
-                && pending_expiry.pos == expiry.pos
-                && pending_expiry.record_tid == expiry.record_tid
-                && pending_expiry.record_pos == expiry.record_pos
-        }) {
+        if SamToFastqPendingMateExpiry::coordinates_for_record(pending).is_some_and(
+            |(tid, pos, record_tid, record_pos)| {
+                tid == expiry.tid
+                    && pos == expiry.pos
+                    && record_tid == expiry.record_tid
+                    && record_pos == expiry.record_pos
+            },
+        ) {
             pending_mates.remove(&expiry.qname);
         }
     }
