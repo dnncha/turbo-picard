@@ -18113,15 +18113,29 @@ fn scalar_value(values: &[String], key: &str) -> Result<String, String> {
     Ok(values[0].clone())
 }
 
-fn limited_records<'a>(
-    reader: &'a mut bam::Reader,
-    stop_after: u32,
-) -> Box<dyn Iterator<Item = Result<bam::Record, rust_htslib::errors::Error>> + 'a> {
-    let records = reader.records();
-    if stop_after == 0 {
-        Box::new(records)
-    } else {
-        Box::new(records.take(stop_after as usize))
+struct LimitedRecords<'a> {
+    records: bam::Records<'a, bam::Reader>,
+    remaining: Option<u32>,
+}
+
+impl Iterator for LimitedRecords<'_> {
+    type Item = Result<bam::Record, rust_htslib::errors::Error>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if let Some(remaining) = self.remaining.as_mut() {
+            if *remaining == 0 {
+                return None;
+            }
+            *remaining -= 1;
+        }
+        self.records.next()
+    }
+}
+
+fn limited_records(reader: &mut bam::Reader, stop_after: u32) -> LimitedRecords<'_> {
+    LimitedRecords {
+        records: reader.records(),
+        remaining: (stop_after > 0).then_some(stop_after),
     }
 }
 
