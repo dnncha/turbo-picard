@@ -2978,10 +2978,13 @@ fn run_fastqtosam(args: &[String]) -> Result<(), String> {
         return write_requested_sidecars(&output, create_md5_file, false);
     }
     let mut writer = if matches!(output_format, bam::Format::Sam) {
-        FastqToSamWriter::Sam(BufWriter::with_capacity(
-            1024 * 1024,
-            fs::File::create(&output).map_err(|error| error.to_string())?,
-        ))
+        FastqToSamWriter::Sam {
+            writer: BufWriter::with_capacity(
+                1024 * 1024,
+                fs::File::create(&output).map_err(|error| error.to_string())?,
+            ),
+            quality_scratch: Vec::new(),
+        }
     } else {
         let writer = hts_io::open_writer(
             &output,
@@ -15531,14 +15534,17 @@ enum FastqQualityFormat {
 }
 
 enum FastqToSamWriter {
-    Sam(BufWriter<fs::File>),
+    Sam {
+        writer: BufWriter<fs::File>,
+        quality_scratch: Vec<u8>,
+    },
     Bam(bam::Writer),
 }
 
 impl FastqToSamWriter {
     fn write_header(&mut self, read_group: &FastqReadGroup) -> Result<(), String> {
         match self {
-            Self::Sam(writer) => writer
+            Self::Sam { writer, .. } => writer
                 .write_all(fastqtosam_header_text(read_group).as_bytes())
                 .map_err(|error| error.to_string()),
             Self::Bam(_) => Ok(()),
@@ -15553,9 +15559,17 @@ impl FastqToSamWriter {
         quality_format: FastqQualityFormat,
     ) -> Result<(), String> {
         match self {
-            Self::Sam(writer) => {
-                write_fastq_sam_record(writer, read, flags, read_group_id, quality_format)
-            }
+            Self::Sam {
+                writer,
+                quality_scratch,
+            } => write_fastq_sam_record(
+                writer,
+                read,
+                flags,
+                read_group_id,
+                quality_format,
+                quality_scratch,
+            ),
             Self::Bam(writer) => {
                 let record = fastq_bam_record(read, flags, read_group_id, quality_format)?;
                 writer.write(&record).map_err(|error| error.to_string())
@@ -16119,17 +16133,17 @@ fn write_fastq_sam_record(
     flags: u16,
     read_group_id: &str,
     quality_format: FastqQualityFormat,
+    quality_scratch: &mut Vec<u8>,
 ) -> Result<(), String> {
-    let converted_qualities;
     let qualities = if quality_format == FastqQualityFormat::Standard {
         read.qualities.as_slice()
     } else {
-        converted_qualities = read
-            .qualities
-            .iter()
-            .map(|quality| decode_fastq_quality(*quality, quality_format).map(|value| value + 33))
-            .collect::<Result<Vec<_>, _>>()?;
-        converted_qualities.as_slice()
+        quality_scratch.clear();
+        quality_scratch.reserve(read.qualities.len());
+        for quality in &read.qualities {
+            quality_scratch.push(decode_fastq_quality(*quality, quality_format)? + 33);
+        }
+        quality_scratch.as_slice()
     };
     writer
         .write_all(read.name.as_bytes())
