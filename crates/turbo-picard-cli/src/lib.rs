@@ -15985,6 +15985,32 @@ fn read_fastq_string_line(
 }
 
 fn validate_fastq_qualities(qualities: &[u8], options: FastqToSamOptions) -> Result<(), String> {
+    let offset = match options.quality_format {
+        FastqQualityFormat::Standard => Some(33),
+        FastqQualityFormat::Illumina => Some(64),
+        FastqQualityFormat::Solexa => None,
+    };
+    if let Some(offset) = offset {
+        for quality in qualities {
+            let Some(decoded) = quality.checked_sub(offset) else {
+                return Err("malformed FastqToSam quality below encoding offset".to_string());
+            };
+            if decoded < options.min_q {
+                return Err(format!(
+                    "malformed FastqToSam quality below MIN_Q: {decoded} < {}",
+                    options.min_q
+                ));
+            }
+            if decoded > options.max_q {
+                return Err(format!(
+                    "malformed FastqToSam quality above MAX_Q: {decoded} > {}",
+                    options.max_q
+                ));
+            }
+        }
+        return Ok(());
+    }
+
     for quality in qualities {
         let decoded = decode_fastq_quality(*quality, options.quality_format)?;
         if decoded < options.min_q {
