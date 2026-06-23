@@ -28,7 +28,7 @@ documented, tested against Picard 3.4.0, and kept explicit.
 
 - URL: `https://github.com/dnncha/turbo-picard/archive/refs/tags/v0.1.6.tar.gz`
 Archive SHA-256:
-`<github-v0.1.6-source-archive-sha256>`
+`ba6708a025e5e53e85a1637a5e28dc31d40f72c0d2fcc1fdb5e3e728f1981a5c`
 
 ## Evidence
 
