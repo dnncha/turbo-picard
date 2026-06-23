@@ -14036,11 +14036,7 @@ fn percent(numerator: u64, denominator: u64) -> f64 {
 struct GcBiasMetricsSummary {
     windows: [u64; 101],
     read_starts: [u64; 101],
-    quality_sums: [u64; 101],
-    quality_counts: [u64; 101],
     unique_read_starts: [u64; 101],
-    unique_quality_sums: [u64; 101],
-    unique_quality_counts: [u64; 101],
     reference_path: String,
     window_size: usize,
     active_contig: Option<String>,
@@ -14055,8 +14051,6 @@ struct GcBiasMetricsSummary {
 struct GcBiasDetailRows<'a> {
     reads_used: &'a str,
     read_starts_by_gc: &'a [u64; 101],
-    quality_sums_by_gc: &'a [u64; 101],
-    quality_counts_by_gc: &'a [u64; 101],
     aligned_reads: u64,
     minimum_genome_fraction: f64,
 }
@@ -14075,11 +14069,7 @@ impl GcBiasMetricsSummary {
         Ok(Self {
             windows: count_gc_bias_windows(reference_path, window_size)?,
             read_starts: [0; 101],
-            quality_sums: [0; 101],
-            quality_counts: [0; 101],
             unique_read_starts: [0; 101],
-            unique_quality_sums: [0; 101],
-            unique_quality_counts: [0; 101],
             reference_path: reference_path.to_string(),
             window_size,
             active_contig: None,
@@ -14126,19 +14116,9 @@ impl GcBiasMetricsSummary {
         }
         let start = (record.pos().max(0) as usize).min(self.active_gc_bins.len() - 1);
         let gc = self.active_gc_bins[start] as usize;
-        let quality_sum = record
-            .qual()
-            .iter()
-            .map(|quality| *quality as u64)
-            .sum::<u64>();
-        let quality_count = record.qual().len() as u64;
         self.read_starts[gc] += 1;
-        self.quality_sums[gc] += quality_sum;
-        self.quality_counts[gc] += quality_count;
         if self.emit_unique && !record.is_duplicate() {
             self.unique_read_starts[gc] += 1;
-            self.unique_quality_sums[gc] += quality_sum;
-            self.unique_quality_counts[gc] += quality_count;
         }
         Ok(())
     }
@@ -14152,8 +14132,6 @@ impl GcBiasMetricsSummary {
             GcBiasDetailRows {
                 reads_used: "ALL",
                 read_starts_by_gc: &self.read_starts,
-                quality_sums_by_gc: &self.quality_sums,
-                quality_counts_by_gc: &self.quality_counts,
                 aligned_reads: self.aligned_reads,
                 minimum_genome_fraction,
             },
@@ -14164,8 +14142,6 @@ impl GcBiasMetricsSummary {
                 GcBiasDetailRows {
                     reads_used: "UNIQUE",
                     read_starts_by_gc: &self.unique_read_starts,
-                    quality_sums_by_gc: &self.unique_quality_sums,
-                    quality_counts_by_gc: &self.unique_quality_counts,
                     aligned_reads: self.unique_aligned_reads,
                     minimum_genome_fraction,
                 },
@@ -14202,12 +14178,9 @@ impl GcBiasMetricsSummary {
             } else {
                 normalized_coverage / (read_starts as f64).sqrt()
             };
-            let mean_base_quality =
-                ratio(rows.quality_sums_by_gc[gc], rows.quality_counts_by_gc[gc]);
             output.push_str(&format!(
-                "All Reads\t{}\t{gc}\t{windows}\t{read_starts}\t{}\t{}\t{}\t\t\t\n",
+                "All Reads\t{}\t{gc}\t{windows}\t{read_starts}\t0\t{}\t{}\t\t\t\n",
                 rows.reads_used,
-                format_float(mean_base_quality),
                 format_float(normalized_coverage),
                 format_float(error_bar_width),
             ));
@@ -21301,7 +21274,7 @@ mod tests {
     }
 
     #[test]
-    fn gc_bias_detail_reports_mean_base_quality() {
+    fn gc_bias_detail_matches_picard_zero_mean_base_quality() {
         let summary = GcBiasMetricsSummary {
             windows: {
                 let mut windows = [0_u64; 101];
@@ -21313,19 +21286,7 @@ mod tests {
                 read_starts[50] = 1;
                 read_starts
             },
-            quality_sums: {
-                let mut quality_sums = [0_u64; 101];
-                quality_sums[50] = 120;
-                quality_sums
-            },
-            quality_counts: {
-                let mut quality_counts = [0_u64; 101];
-                quality_counts[50] = 4;
-                quality_counts
-            },
             unique_read_starts: [0; 101],
-            unique_quality_sums: [0; 101],
-            unique_quality_counts: [0; 101],
             reference_path: String::new(),
             window_size: 100,
             active_contig: None,
@@ -21338,7 +21299,7 @@ mod tests {
         };
 
         let text = summary.detail_text(100, 0.0);
-        assert!(text.contains("All Reads\tALL\t50\t2\t1\t30\t1\t1"));
+        assert!(text.contains("All Reads\tALL\t50\t2\t1\t0\t1\t1"));
     }
 
     #[test]
