@@ -38,8 +38,8 @@ as Python wheel scripts:
 
    python3 -m pip install turbo-picard
 
-Release ``0.1.6`` is prepared to publish a macOS Apple Silicon wheel and a
-source distribution. If ``pip`` builds from source, the machine needs a Rust
+Release ``0.1.6`` publishes a macOS Apple Silicon wheel and a source
+distribution. If ``pip`` builds from source, the machine needs a Rust
 toolchain and native build dependencies. For Linux clusters and shared
 environments, Bioconda is the cleaner target once the recipe is accepted.
 
