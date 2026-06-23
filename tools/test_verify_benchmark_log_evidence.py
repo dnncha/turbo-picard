@@ -43,7 +43,7 @@ class BenchmarkLogEvidenceTests(unittest.TestCase):
                 "top_command": "BuildBamIndex",
                 "floor_speedup": 20.0,
                 "floor_command": "SortSam",
-                "median_speedup": 40.0,
+                "median_speedup": 30.0,
                 "geometric_mean_speedup": 28.28,
             },
             "benchmarks": [

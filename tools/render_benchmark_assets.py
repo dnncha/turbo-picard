@@ -8,6 +8,7 @@ import html
 import json
 import math
 import pathlib
+import statistics
 
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -68,7 +69,7 @@ def build_benchmark_data_from_rows(
             "top_command": top["command"],
             "floor_speedup": float(floor["speedup"]),
             "floor_command": floor["command"],
-            "median_speedup": round(sorted(speedups)[len(speedups) // 2], 2),
+            "median_speedup": round(statistics.median(speedups), 2),
             "geometric_mean_speedup": round(geometric_mean, 2),
         },
         "benchmarks": [

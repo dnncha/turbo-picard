@@ -9,8 +9,8 @@ work to a GPU just because one is present.
 They also explain the scalability story. Faster wall time matters, but so does
 the ability to fan out many Picard-shaped tasks without paying Picard-scale JVM
 startup and memory costs on every shard. The saved benchmark suite currently
-shows a ``6.86x`` floor speedup, ``24.94x`` geometric mean speedup, and
-``94.36x`` top speedup against Picard 3.4.0, while the checked
+shows an ``8.01x`` floor speedup, ``26.67x`` geometric mean speedup, and
+``75.77x`` top speedup against Picard 3.4.0, while the checked
 ``MarkDuplicates`` performance run in this repository dropped median RSS from
 about ``1.2 GB`` to about ``8.7 MB``.
 
@@ -117,7 +117,7 @@ Use the suite profiler when working on speed claims:
 
 .. code-block:: bash
 
-   python3 tools/bench_suite.py --repeats 3 --skip-build \
+   python3 tools/bench_suite.py --repeats 5 --skip-build \
      --profile-output benchmarks/runs/bench-suite-profile.json
 
 The JSON artifact records per-command wall time, wrapper CPU time, observed RSS,

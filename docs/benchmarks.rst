@@ -7,8 +7,8 @@ coverage and Picard-compatible behavior visible.
 
 The current saved suite is already strong enough to support a plain-language
 claim: for the commands ``turbo-picard`` has accelerated and parity-checked, it
-is materially faster than Picard across the board, with a ``6.86x`` slowest
-saved speedup, ``24.94x`` geometric mean speedup, and ``94.36x`` top speedup.
+is materially faster than Picard across the board, with an ``8.01x`` slowest
+saved speedup, ``26.67x`` geometric mean speedup, and ``75.77x`` top speedup.
 The companion ``MarkDuplicates`` performance run is also a useful reminder that
 "more scalable" is not marketing filler here; it cut median RSS from about
 ``1.2 GB`` in Picard 3.4.0 to about ``8.7 MB`` on the checked fixture.

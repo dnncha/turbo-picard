@@ -24,8 +24,8 @@ md5 = "0.7.0"
 flate2 = "1.1.5"
 rustc-hash = "2.1"
 crossbeam-channel = "0.5"
-turbo-picard-core = { path = "../turbo-picard-core", version = "0.1.5" }
-turbo-picard-markdup = { path = "../turbo-picard-markdup", version = "0.1.5" }
+turbo-picard-core = { path = "../turbo-picard-core", version = "0.1.6" }
+turbo-picard-markdup = { path = "../turbo-picard-markdup", version = "0.1.6" }
 
 [dev-dependencies]
 assert_cmd = "2.0.17"

@@ -91,9 +91,9 @@ What you get in return
 The current checked benchmark suite reports:
 
 * ``32/32`` parity-checked commands;
-* ``6.86x`` slowest saved speedup;
-* ``24.94x`` geometric mean speedup;
-* ``94.36x`` top saved speedup.
+* ``8.01x`` slowest saved speedup;
+* ``26.67x`` geometric mean speedup;
+* ``75.77x`` top saved speedup.
 
 The saved ``MarkDuplicates`` performance run in the repository also shows why
 the project is more scalable in practice, not just faster in a micro-benchmark:
