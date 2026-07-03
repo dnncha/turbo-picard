@@ -117,6 +117,10 @@ Benchmark details, scope notes, real-data evidence, and reproduction commands
 are in the [benchmark docs](https://turbo-picard.readthedocs.io/en/latest/benchmarks.html).
 The [parity guide](https://turbo-picard.readthedocs.io/en/latest/parity.html)
 explains what the comparisons do and do not prove.
+For `CollectBaseDistributionByCycle`, `CollectGcBiasMetrics`,
+`CollectInsertSizeMetrics`, `MeanQualityByCycle`, and
+`QualityScoreDistribution`, metrics text is the parity target; chart outputs are
+lightweight PDF summaries, not Picard-equivalent rendered plots.
 
 Saved benchmark run:
 
