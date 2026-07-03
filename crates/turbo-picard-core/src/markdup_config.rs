@@ -1,5 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet};
-use std::fmt;
+use thiserror::Error;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MarkDuplicatesConfig {
@@ -29,37 +29,17 @@ pub struct MarkDuplicatesConfig {
     pub reference_sequence: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Error, PartialEq, Eq)]
 pub enum MarkDuplicatesConfigError {
+    #[error("missing required MarkDuplicates argument: {0}")]
     MissingRequired(&'static str),
+    #[error("duplicate scalar MarkDuplicates argument: {0}")]
     DuplicateScalar(String),
+    #[error("invalid boolean for MarkDuplicates argument {key}: {value}")]
     InvalidBoolean { key: String, value: String },
+    #[error("unsupported MarkDuplicates argument: {0}")]
     UnsupportedOption(String),
 }
-
-impl fmt::Display for MarkDuplicatesConfigError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::MissingRequired(key) => {
-                write!(f, "missing required MarkDuplicates argument: {key}")
-            }
-            Self::DuplicateScalar(key) => {
-                write!(f, "duplicate scalar MarkDuplicates argument: {key}")
-            }
-            Self::InvalidBoolean { key, value } => {
-                write!(
-                    f,
-                    "invalid boolean for MarkDuplicates argument {key}: {value}"
-                )
-            }
-            Self::UnsupportedOption(key) => {
-                write!(f, "unsupported MarkDuplicates argument: {key}")
-            }
-        }
-    }
-}
-
-impl std::error::Error for MarkDuplicatesConfigError {}
 
 impl MarkDuplicatesConfig {
     pub fn try_from_args(

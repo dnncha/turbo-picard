@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "turbo-picard"
-version = "0.1.5"
+version = "0.1.7"
 description = "Fast Rust command-line tools for selected Picard-compatible genomics workflows."
 readme = "README.md"
 requires-python = ">=3.8"

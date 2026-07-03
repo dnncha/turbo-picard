@@ -11,7 +11,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 PAPER = ROOT / "paper" / "paper.md"
 BIB = ROOT / "paper" / "paper.bib"
-CHECKLIST = ROOT / "docs" / "joss-submission.md"
+CHECKLIST = ROOT / "docs" / "joss-submission.rst"
 README = ROOT / "README.md"
 WORKFLOW = ROOT / ".github" / "workflows" / "joss-paper.yml"
 
@@ -95,12 +95,12 @@ def validate() -> list[str]:
         errors.append("paper must include a clear AI usage disclosure")
     if "No external funding" not in paper:
         errors.append("paper must include funding acknowledgement")
-    if "docs/joss-submission.md" not in readme:
+    if "docs/joss-submission.rst" not in readme:
         errors.append("README must link to the JOSS submission checklist")
     for needle in [
         "python3 tools/verify_joss_paper.py",
-        "paper/paper.md",
-        "10.5281/zenodo.20541928",
+        "``paper/paper.md``",
+        "https://doi.org/10.5281/zenodo.20541928",
     ]:
         if needle not in checklist:
             errors.append(f"JOSS submission checklist missing {needle}")

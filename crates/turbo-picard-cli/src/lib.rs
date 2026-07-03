@@ -1,4 +1,9 @@
 #![forbid(unsafe_code)]
+#![allow(
+    clippy::items_after_test_module,
+    clippy::too_many_arguments,
+    clippy::type_complexity
+)]
 
 mod cmm_pipeline;
 mod hs_metrics;
@@ -32,6 +37,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use turbo_picard_core::hts_io;
 use turbo_picard_core::markdup_config::MarkDuplicatesConfig;
 use turbo_picard_core::picard_args::normalize_picard_args_for_command;
+
+type IntervalFilter = BTreeMap<i32, Vec<(u64, u64)>>;
 
 pub fn run_cli(program_name: &str, raw_args: impl IntoIterator<Item = String>) -> i32 {
     let raw_args = raw_args.into_iter().collect::<Vec<_>>();
@@ -5839,12 +5846,12 @@ fn run_viewsam_records_only(
     compression_level: Option<u32>,
     alignment_status: &str,
     pf_status: &str,
-    interval_filter: Option<&BTreeMap<i32, Vec<(u64, u64)>>>,
+    interval_filter: Option<&IntervalFilter>,
 ) -> Result<(), String> {
-    if let Some(output) = output {
-        if !has_sam_extension(output) {
-            return Err("unsupported ViewSam RECORDS_ONLY=true with non-SAM OUTPUT".to_string());
-        }
+    if let Some(output) = output
+        && !has_sam_extension(output)
+    {
+        return Err("unsupported ViewSam RECORDS_ONLY=true with non-SAM OUTPUT".to_string());
     }
 
     let temp_path = env::temp_dir().join(format!(
@@ -6258,11 +6265,7 @@ fn reject_unsupported_viewsam_args(args: &BTreeMap<String, Vec<String>>) -> Resu
     if header_only && records_only {
         return Err("unsupported ViewSam HEADER_ONLY=true with RECORDS_ONLY=true".to_string());
     }
-    if let Some(level) = optional_u32(args, "COMPRESSION_LEVEL")? {
-        if level > 9 {
-            return Err(format!("unsupported ViewSam COMPRESSION_LEVEL: {level}"));
-        }
-    }
+    reject_unsupported_compression_level(args, "ViewSam")?;
     Ok(())
 }
 
@@ -6270,7 +6273,7 @@ fn viewsam_record_matches(
     record: &bam::Record,
     alignment_status: &str,
     pf_status: &str,
-    interval_filter: Option<&BTreeMap<i32, Vec<(u64, u64)>>>,
+    interval_filter: Option<&IntervalFilter>,
 ) -> Result<bool, String> {
     let alignment_matches = match alignment_status {
         "All" => true,
@@ -6290,7 +6293,7 @@ fn viewsam_record_matches(
 fn viewsam_interval_filter(
     interval_paths: Option<&Vec<String>>,
     header: &bam::HeaderView,
-) -> Result<Option<BTreeMap<i32, Vec<(u64, u64)>>>, String> {
+) -> Result<Option<IntervalFilter>, String> {
     let Some(interval_paths) = interval_paths else {
         return Ok(None);
     };
@@ -6300,7 +6303,7 @@ fn viewsam_interval_filter(
         .enumerate()
         .map(|(index, name)| (String::from_utf8_lossy(name).to_string(), index))
         .collect::<BTreeMap<_, _>>();
-    let mut intervals_by_tid = BTreeMap::<i32, Vec<(u64, u64)>>::new();
+    let mut intervals_by_tid = IntervalFilter::new();
     for interval_path in interval_paths {
         let text = read_text_or_gzip(interval_path)?;
         for interval in read_interval_list_intervals(&text, &contig_order)? {
@@ -6316,7 +6319,7 @@ fn viewsam_interval_filter(
 fn merge_interval_filter(
     interval_paths: Option<&Vec<String>>,
     target_names: &[String],
-) -> Result<Option<BTreeMap<i32, Vec<(u64, u64)>>>, String> {
+) -> Result<Option<IntervalFilter>, String> {
     let Some(interval_paths) = interval_paths else {
         return Ok(None);
     };
@@ -6325,7 +6328,7 @@ fn merge_interval_filter(
         .enumerate()
         .map(|(index, name)| (name.clone(), index))
         .collect::<BTreeMap<_, _>>();
-    let mut intervals_by_tid = BTreeMap::<i32, Vec<(u64, u64)>>::new();
+    let mut intervals_by_tid = IntervalFilter::new();
     for interval_path in interval_paths {
         let text = read_text_or_gzip(interval_path)?;
         for interval in read_interval_list_intervals(&text, &contig_order)? {
@@ -6340,7 +6343,7 @@ fn merge_interval_filter(
 
 fn record_overlaps_intervals(
     record: &bam::Record,
-    interval_filter: Option<&BTreeMap<i32, Vec<(u64, u64)>>>,
+    interval_filter: Option<&IntervalFilter>,
 ) -> bool {
     let Some(interval_filter) = interval_filter else {
         return true;
@@ -6395,13 +6398,7 @@ fn reject_unsupported_updatevcfsequencedictionary_args(
     optional_u32(args, "MAX_RECORDS_IN_RAM")?;
     optional_bool(args, "USE_JDK_DEFLATER")?;
     optional_bool(args, "USE_JDK_INFLATER")?;
-    if let Some(level) = optional_u32(args, "COMPRESSION_LEVEL")? {
-        if level > 9 {
-            return Err(format!(
-                "unsupported UpdateVcfSequenceDictionary COMPRESSION_LEVEL: {level}"
-            ));
-        }
-    }
+    reject_unsupported_compression_level(args, "UpdateVcfSequenceDictionary")?;
     Ok(())
 }
 
@@ -6439,13 +6436,7 @@ fn reject_unsupported_liftovervcf_args(args: &BTreeMap<String, Vec<String>>) -> 
     optional_u32(args, "MAX_RECORDS_IN_RAM")?;
     optional_bool(args, "USE_JDK_DEFLATER")?;
     optional_bool(args, "USE_JDK_INFLATER")?;
-    if let Some(level) = optional_u32(args, "COMPRESSION_LEVEL")? {
-        if level > 9 {
-            return Err(format!(
-                "unsupported LiftoverVcf COMPRESSION_LEVEL: {level}"
-            ));
-        }
-    }
+    reject_unsupported_compression_level(args, "LiftoverVcf")?;
     Ok(())
 }
 
@@ -6480,11 +6471,7 @@ fn reject_unsupported_gathervcfs_args(args: &BTreeMap<String, Vec<String>>) -> R
     optional_u32(args, "MAX_RECORDS_IN_RAM")?;
     optional_bool(args, "USE_JDK_DEFLATER")?;
     optional_bool(args, "USE_JDK_INFLATER")?;
-    if let Some(level) = optional_u32(args, "COMPRESSION_LEVEL")? {
-        if level > 9 {
-            return Err(format!("unsupported GatherVcfs COMPRESSION_LEVEL: {level}"));
-        }
-    }
+    reject_unsupported_compression_level(args, "GatherVcfs")?;
     Ok(())
 }
 
@@ -6514,11 +6501,7 @@ fn reject_unsupported_sortvcf_args(args: &BTreeMap<String, Vec<String>>) -> Resu
     optional_scalar(args, "VALIDATION_STRINGENCY")?;
     optional_scalar(args, "VERBOSITY")?;
     optional_bool(args, "QUIET")?;
-    if let Some(level) = optional_u32(args, "COMPRESSION_LEVEL")? {
-        if level > 9 {
-            return Err(format!("unsupported SortVcf COMPRESSION_LEVEL: {level}"));
-        }
-    }
+    reject_unsupported_compression_level(args, "SortVcf")?;
     Ok(())
 }
 
@@ -6548,11 +6531,7 @@ fn reject_unsupported_mergevcfs_args(args: &BTreeMap<String, Vec<String>>) -> Re
     optional_scalar(args, "VALIDATION_STRINGENCY")?;
     optional_scalar(args, "VERBOSITY")?;
     optional_bool(args, "QUIET")?;
-    if let Some(level) = optional_u32(args, "COMPRESSION_LEVEL")? {
-        if level > 9 {
-            return Err(format!("unsupported MergeVcfs COMPRESSION_LEVEL: {level}"));
-        }
-    }
+    reject_unsupported_compression_level(args, "MergeVcfs")?;
     Ok(())
 }
 
@@ -7084,13 +7063,7 @@ fn reject_unsupported_replacesamheader_args(
     optional_u32(args, "MAX_RECORDS_IN_RAM")?;
     optional_bool(args, "USE_JDK_DEFLATER")?;
     optional_bool(args, "USE_JDK_INFLATER")?;
-    if let Some(level) = optional_u32(args, "COMPRESSION_LEVEL")? {
-        if level > 9 {
-            return Err(format!(
-                "unsupported ReplaceSamHeader COMPRESSION_LEVEL: {level}"
-            ));
-        }
-    }
+    reject_unsupported_compression_level(args, "ReplaceSamHeader")?;
     Ok(())
 }
 
@@ -7134,13 +7107,7 @@ fn reject_unsupported_createsequencedictionary_args(
     optional_u32(args, "NUM_SEQUENCES")?;
     optional_bool(args, "CREATE_INDEX")?;
     optional_bool(args, "CREATE_MD5_FILE")?;
-    if let Some(level) = optional_u32(args, "COMPRESSION_LEVEL")? {
-        if level > 9 {
-            return Err(format!(
-                "unsupported CreateSequenceDictionary COMPRESSION_LEVEL: {level}"
-            ));
-        }
-    }
+    reject_unsupported_compression_level(args, "CreateSequenceDictionary")?;
     optional_u32(args, "MAX_RECORDS_IN_RAM")?;
     optional_scalar(args, "TMP_DIR")?;
     optional_bool(args, "USE_JDK_DEFLATER")?;
@@ -7181,13 +7148,7 @@ fn reject_unsupported_normalizefasta_args(
     optional_scalar(args, "REFERENCE_SEQUENCE")?;
     optional_bool(args, "CREATE_INDEX")?;
     optional_bool(args, "CREATE_MD5_FILE")?;
-    if let Some(level) = optional_u32(args, "COMPRESSION_LEVEL")? {
-        if level > 9 {
-            return Err(format!(
-                "unsupported NormalizeFasta COMPRESSION_LEVEL: {level}"
-            ));
-        }
-    }
+    reject_unsupported_compression_level(args, "NormalizeFasta")?;
     optional_u32(args, "MAX_RECORDS_IN_RAM")?;
     optional_scalar(args, "TMP_DIR")?;
     optional_bool(args, "USE_JDK_DEFLATER")?;
@@ -7233,13 +7194,7 @@ fn reject_unsupported_bedtointervallist_args(
     optional_scalar(args, "REFERENCE_SEQUENCE")?;
     optional_bool(args, "CREATE_INDEX")?;
     optional_bool(args, "CREATE_MD5_FILE")?;
-    if let Some(level) = optional_u32(args, "COMPRESSION_LEVEL")? {
-        if level > 9 {
-            return Err(format!(
-                "unsupported BedToIntervalList COMPRESSION_LEVEL: {level}"
-            ));
-        }
-    }
+    reject_unsupported_compression_level(args, "BedToIntervalList")?;
     optional_u32(args, "MAX_RECORDS_IN_RAM")?;
     optional_scalar(args, "TMP_DIR")?;
     optional_bool(args, "USE_JDK_DEFLATER")?;
@@ -7278,10 +7233,10 @@ fn reject_unsupported_intervallisttools_args(
             return Err(format!("unsupported IntervalListTools argument: {key}"));
         }
     }
-    if let Some(action) = optional_scalar(args, "ACTION")? {
-        if action != "CONCAT" {
-            return Err(format!("unsupported IntervalListTools ACTION={action}"));
-        }
+    if let Some(action) = optional_scalar(args, "ACTION")?
+        && action != "CONCAT"
+    {
+        return Err(format!("unsupported IntervalListTools ACTION={action}"));
     }
     optional_bool(args, "SORT")?;
     optional_bool(args, "UNIQUE")?;
@@ -7292,13 +7247,7 @@ fn reject_unsupported_intervallisttools_args(
     optional_scalar(args, "VALIDATION_STRINGENCY")?;
     optional_scalar(args, "VERBOSITY")?;
     optional_bool(args, "QUIET")?;
-    if let Some(level) = optional_u32(args, "COMPRESSION_LEVEL")? {
-        if level > 9 {
-            return Err(format!(
-                "unsupported IntervalListTools COMPRESSION_LEVEL: {level}"
-            ));
-        }
-    }
+    reject_unsupported_compression_level(args, "IntervalListTools")?;
     Ok(())
 }
 
@@ -7345,10 +7294,12 @@ fn reject_unsupported_revertsam_args(args: &BTreeMap<String, Vec<String>>) -> Re
     optional_bool(args, "RESTORE_ORIGINAL_QUALITIES")?;
     let explicit_sort_order = optional_scalar(args, "SORT_ORDER")?;
     optional_bool(args, "CREATE_INDEX")?;
-    if let Some(sort_order) = explicit_sort_order {
-        if sort_order != "queryname" && sort_order != "coordinate" && sort_order != "unsorted" {
-            return Err(format!("unsupported RevertSam SORT_ORDER={sort_order}"));
-        }
+    if let Some(sort_order) = explicit_sort_order
+        && sort_order != "queryname"
+        && sort_order != "coordinate"
+        && sort_order != "unsorted"
+    {
+        return Err(format!("unsupported RevertSam SORT_ORDER={sort_order}"));
     }
     let _ = attributes_to_clear_for_revertsam(args)?;
     let _ = attributes_for_revertsam(args, "ATTRIBUTE_TO_REVERSE")?;
@@ -7361,11 +7312,7 @@ fn reject_unsupported_revertsam_args(args: &BTreeMap<String, Vec<String>>) -> Re
     optional_u32(args, "MAX_RECORDS_IN_RAM")?;
     optional_bool(args, "USE_JDK_DEFLATER")?;
     optional_bool(args, "USE_JDK_INFLATER")?;
-    if let Some(level) = optional_u32(args, "COMPRESSION_LEVEL")? {
-        if level > 9 {
-            return Err(format!("unsupported RevertSam COMPRESSION_LEVEL: {level}"));
-        }
-    }
+    reject_unsupported_compression_level(args, "RevertSam")?;
     Ok(())
 }
 
@@ -7428,13 +7375,7 @@ fn reject_unsupported_setnmmdanduqtags_args(
     optional_scalar(args, "VALIDATION_STRINGENCY")?;
     optional_scalar(args, "VERBOSITY")?;
     optional_bool(args, "QUIET")?;
-    if let Some(level) = optional_u32(args, "COMPRESSION_LEVEL")? {
-        if level > 9 {
-            return Err(format!(
-                "unsupported SetNmMdAndUqTags COMPRESSION_LEVEL: {level}"
-            ));
-        }
-    }
+    reject_unsupported_compression_level(args, "SetNmMdAndUqTags")?;
     Ok(())
 }
 
@@ -7475,13 +7416,7 @@ fn reject_unsupported_validatesamfile_args(
     optional_u32(args, "MAX_RECORDS_IN_RAM")?;
     optional_bool(args, "USE_JDK_DEFLATER")?;
     optional_bool(args, "USE_JDK_INFLATER")?;
-    if let Some(level) = optional_u32(args, "COMPRESSION_LEVEL")? {
-        if level > 9 {
-            return Err(format!(
-                "unsupported ValidateSamFile COMPRESSION_LEVEL: {level}"
-            ));
-        }
-    }
+    reject_unsupported_compression_level(args, "ValidateSamFile")?;
     optional_scalar(args, "VALIDATION_STRINGENCY")?;
     optional_scalar(args, "VERBOSITY")?;
     optional_bool(args, "QUIET")?;
@@ -7867,15 +7802,15 @@ fn validate_sam_summary_sam_text(
             if line.starts_with(b"@SQ\t") {
                 target_count += 1;
             }
-            if line.starts_with(b"@RG\t") {
-                if let Some(id) = read_group_id(&text) {
-                    let has_platform = text.split('\t').any(|field| {
-                        field
-                            .strip_prefix("PL:")
-                            .is_some_and(|value| !value.trim_end_matches(['\r', '\n']).is_empty())
-                    });
-                    read_groups.insert(id, has_platform);
-                }
+            if line.starts_with(b"@RG\t")
+                && let Some(id) = read_group_id(&text)
+            {
+                let has_platform = text.split('\t').any(|field| {
+                    field
+                        .strip_prefix("PL:")
+                        .is_some_and(|value| !value.trim_end_matches(['\r', '\n']).is_empty())
+                });
+                read_groups.insert(id, has_platform);
             }
             continue;
         }
@@ -8204,20 +8139,18 @@ fn validate_sam_record_summary(
         }
         match record.aux(b"NM") {
             Ok(aux) => {
-                if let Some(references_by_tid) = references_by_tid {
-                    if let Some(actual_nm) = aux_i32(aux) {
-                        if let Some(expected_nm) = expected_record_nm(record, references_by_tid)? {
-                            if actual_nm != expected_nm {
-                                add_validate_issue(
-                                    report,
-                                    "ERROR:INVALID_TAG_NM",
-                                    format!(
-                                        "ERROR::INVALID_TAG_NM:Record {record_number}, Read name {read_name}, NM tag is incorrect"
-                                    ),
-                                );
-                            }
-                        }
-                    }
+                if let Some(references_by_tid) = references_by_tid
+                    && let Some(actual_nm) = aux_i32(aux)
+                    && let Some(expected_nm) = expected_record_nm(record, references_by_tid)?
+                    && actual_nm != expected_nm
+                {
+                    add_validate_issue(
+                        report,
+                        "ERROR:INVALID_TAG_NM",
+                        format!(
+                            "ERROR::INVALID_TAG_NM:Record {record_number}, Read name {read_name}, NM tag is incorrect"
+                        ),
+                    );
                 }
             }
             Err(_) => {
@@ -8929,22 +8862,18 @@ fn reject_unsupported_collectalignment_args(
                 .to_string(),
         );
     }
-    if let Some(level) = optional_scalar(args, "METRIC_ACCUMULATION_LEVEL")? {
-        if level != "ALL_READS" && level != "SAMPLE" && level != "LIBRARY" && level != "READ_GROUP"
-        {
-            return Err(format!(
-                "unsupported CollectAlignmentSummaryMetrics METRIC_ACCUMULATION_LEVEL={level}"
-            ));
-        }
+    if let Some(level) = optional_scalar(args, "METRIC_ACCUMULATION_LEVEL")?
+        && level != "ALL_READS"
+        && level != "SAMPLE"
+        && level != "LIBRARY"
+        && level != "READ_GROUP"
+    {
+        return Err(format!(
+            "unsupported CollectAlignmentSummaryMetrics METRIC_ACCUMULATION_LEVEL={level}"
+        ));
     }
     optional_u32(args, "STOP_AFTER")?;
-    if let Some(level) = optional_u32(args, "COMPRESSION_LEVEL")? {
-        if level > 9 {
-            return Err(format!(
-                "unsupported CollectAlignmentSummaryMetrics COMPRESSION_LEVEL: {level}"
-            ));
-        }
-    }
+    reject_unsupported_compression_level(args, "CollectAlignmentSummaryMetrics")?;
     Ok(())
 }
 
@@ -8985,13 +8914,7 @@ fn reject_unsupported_collectqualityyield_args(
     optional_bool(args, "QUIET")?;
     let _ = args.get("TMP_DIR");
     optional_u32(args, "MAX_RECORDS_IN_RAM")?;
-    if let Some(level) = optional_u32(args, "COMPRESSION_LEVEL")? {
-        if level > 9 {
-            return Err(format!(
-                "unsupported CollectQualityYieldMetrics COMPRESSION_LEVEL: {level}"
-            ));
-        }
-    }
+    reject_unsupported_compression_level(args, "CollectQualityYieldMetrics")?;
     Ok(())
 }
 
@@ -9025,13 +8948,15 @@ fn reject_unsupported_collectinsertsize_args(
     }
     optional_scalar(args, "REFERENCE_SEQUENCE")?;
     optional_scalar(args, "HISTOGRAM_FILE")?;
-    if let Some(level) = optional_scalar(args, "METRIC_ACCUMULATION_LEVEL")? {
-        if level != "ALL_READS" && level != "SAMPLE" && level != "LIBRARY" && level != "READ_GROUP"
-        {
-            return Err(format!(
-                "unsupported CollectInsertSizeMetrics METRIC_ACCUMULATION_LEVEL={level}"
-            ));
-        }
+    if let Some(level) = optional_scalar(args, "METRIC_ACCUMULATION_LEVEL")?
+        && level != "ALL_READS"
+        && level != "SAMPLE"
+        && level != "LIBRARY"
+        && level != "READ_GROUP"
+    {
+        return Err(format!(
+            "unsupported CollectInsertSizeMetrics METRIC_ACCUMULATION_LEVEL={level}"
+        ));
     }
     optional_bool(args, "INCLUDE_DUPLICATES")?;
     optional_bool(args, "ASSUME_SORTED")?;
@@ -9042,13 +8967,7 @@ fn reject_unsupported_collectinsertsize_args(
     optional_scalar(args, "VALIDATION_STRINGENCY")?;
     optional_scalar(args, "VERBOSITY")?;
     optional_bool(args, "QUIET")?;
-    if let Some(level) = optional_u32(args, "COMPRESSION_LEVEL")? {
-        if level > 9 {
-            return Err(format!(
-                "unsupported CollectInsertSizeMetrics COMPRESSION_LEVEL: {level}"
-            ));
-        }
-    }
+    reject_unsupported_compression_level(args, "CollectInsertSizeMetrics")?;
     Ok(())
 }
 
@@ -9169,13 +9088,7 @@ fn reject_unsupported_collectmultiplemetrics_args(
         }
     }
     optional_u32(args, "STOP_AFTER")?;
-    if let Some(level) = optional_u32(args, "COMPRESSION_LEVEL")? {
-        if level > 9 {
-            return Err(format!(
-                "unsupported CollectMultipleMetrics COMPRESSION_LEVEL: {level}"
-            ));
-        }
-    }
+    reject_unsupported_compression_level(args, "CollectMultipleMetrics")?;
     Ok(())
 }
 
@@ -9287,13 +9200,7 @@ fn reject_unsupported_collectbasedistributionbycycle_args(
     optional_scalar(args, "VALIDATION_STRINGENCY")?;
     optional_scalar(args, "VERBOSITY")?;
     optional_bool(args, "QUIET")?;
-    if let Some(level) = optional_u32(args, "COMPRESSION_LEVEL")? {
-        if level > 9 {
-            return Err(format!(
-                "unsupported CollectBaseDistributionByCycle COMPRESSION_LEVEL: {level}"
-            ));
-        }
-    }
+    reject_unsupported_compression_level(args, "CollectBaseDistributionByCycle")?;
     Ok(())
 }
 
@@ -9333,12 +9240,12 @@ fn reject_unsupported_collectgcbiasmetrics_args(
     if optional_bool(args, "IS_BISULFITE_SEQUENCED")?.unwrap_or(false) {
         return Err("unsupported CollectGcBiasMetrics IS_BISULFITE_SEQUENCED=true".to_string());
     }
-    if let Some(level) = optional_scalar(args, "METRIC_ACCUMULATION_LEVEL")? {
-        if level != "ALL_READS" {
-            return Err(format!(
-                "unsupported CollectGcBiasMetrics METRIC_ACCUMULATION_LEVEL={level}"
-            ));
-        }
+    if let Some(level) = optional_scalar(args, "METRIC_ACCUMULATION_LEVEL")?
+        && level != "ALL_READS"
+    {
+        return Err(format!(
+            "unsupported CollectGcBiasMetrics METRIC_ACCUMULATION_LEVEL={level}"
+        ));
     }
     let window_size = optional_u32(args, "SCAN_WINDOW_SIZE")?.unwrap_or(100);
     if window_size == 0 {
@@ -9349,13 +9256,7 @@ fn reject_unsupported_collectgcbiasmetrics_args(
     optional_scalar(args, "VALIDATION_STRINGENCY")?;
     optional_scalar(args, "VERBOSITY")?;
     optional_bool(args, "QUIET")?;
-    if let Some(level) = optional_u32(args, "COMPRESSION_LEVEL")? {
-        if level > 9 {
-            return Err(format!(
-                "unsupported CollectGcBiasMetrics COMPRESSION_LEVEL: {level}"
-            ));
-        }
-    }
+    reject_unsupported_compression_level(args, "CollectGcBiasMetrics")?;
     Ok(())
 }
 
@@ -9396,20 +9297,14 @@ fn reject_unsupported_collecthsmetrics_args(
     optional_scalar(args, "VALIDATION_STRINGENCY")?;
     optional_scalar(args, "VERBOSITY")?;
     optional_bool(args, "QUIET")?;
-    if let Some(level) = optional_scalar(args, "METRIC_ACCUMULATION_LEVEL")? {
-        if level != "ALL_READS" {
-            return Err(format!(
-                "unsupported CollectHsMetrics METRIC_ACCUMULATION_LEVEL={level}"
-            ));
-        }
+    if let Some(level) = optional_scalar(args, "METRIC_ACCUMULATION_LEVEL")?
+        && level != "ALL_READS"
+    {
+        return Err(format!(
+            "unsupported CollectHsMetrics METRIC_ACCUMULATION_LEVEL={level}"
+        ));
     }
-    if let Some(level) = optional_u32(args, "COMPRESSION_LEVEL")? {
-        if level > 9 {
-            return Err(format!(
-                "unsupported CollectHsMetrics COMPRESSION_LEVEL: {level}"
-            ));
-        }
-    }
+    reject_unsupported_compression_level(args, "CollectHsMetrics")?;
     Ok(())
 }
 
@@ -9463,13 +9358,7 @@ fn reject_unsupported_collectwgsmetrics_args(
     optional_bool(args, "QUIET")?;
     let _ = args.get("TMP_DIR");
     optional_u32(args, "MAX_RECORDS_IN_RAM")?;
-    if let Some(level) = optional_u32(args, "COMPRESSION_LEVEL")? {
-        if level > 9 {
-            return Err(format!(
-                "unsupported CollectWgsMetrics COMPRESSION_LEVEL: {level}"
-            ));
-        }
-    }
+    reject_unsupported_compression_level(args, "CollectWgsMetrics")?;
     Ok(())
 }
 
@@ -9499,12 +9388,14 @@ fn reject_unsupported_fixmateinformation_args(
         }
     }
     required_values_for(args, "INPUT", "FixMateInformation")?;
-    if let Some(sort_order) = optional_scalar(args, "SORT_ORDER")? {
-        if sort_order != "queryname" && sort_order != "coordinate" && sort_order != "unsorted" {
-            return Err(format!(
-                "unsupported FixMateInformation SORT_ORDER={sort_order}"
-            ));
-        }
+    if let Some(sort_order) = optional_scalar(args, "SORT_ORDER")?
+        && sort_order != "queryname"
+        && sort_order != "coordinate"
+        && sort_order != "unsorted"
+    {
+        return Err(format!(
+            "unsupported FixMateInformation SORT_ORDER={sort_order}"
+        ));
     }
     optional_bool(args, "ADD_MATE_CIGAR")?;
     optional_bool(args, "ASSUME_SORTED")?;
@@ -9517,13 +9408,7 @@ fn reject_unsupported_fixmateinformation_args(
     optional_bool(args, "CREATE_INDEX")?;
     let _ = args.get("TMP_DIR");
     optional_u32(args, "MAX_RECORDS_IN_RAM")?;
-    if let Some(level) = optional_u32(args, "COMPRESSION_LEVEL")? {
-        if level > 9 {
-            return Err(format!(
-                "unsupported FixMateInformation COMPRESSION_LEVEL: {level}"
-            ));
-        }
-    }
+    reject_unsupported_compression_level(args, "FixMateInformation")?;
     Ok(())
 }
 
@@ -9567,13 +9452,7 @@ fn reject_unsupported_qualityscoredistribution_args(
     optional_scalar(args, "VALIDATION_STRINGENCY")?;
     optional_scalar(args, "VERBOSITY")?;
     optional_bool(args, "QUIET")?;
-    if let Some(level) = optional_u32(args, "COMPRESSION_LEVEL")? {
-        if level > 9 {
-            return Err(format!(
-                "unsupported QualityScoreDistribution COMPRESSION_LEVEL: {level}"
-            ));
-        }
-    }
+    reject_unsupported_compression_level(args, "QualityScoreDistribution")?;
     Ok(())
 }
 
@@ -9613,13 +9492,7 @@ fn reject_unsupported_meanqualitybycycle_args(
     optional_scalar(args, "VALIDATION_STRINGENCY")?;
     optional_scalar(args, "VERBOSITY")?;
     optional_bool(args, "QUIET")?;
-    if let Some(level) = optional_u32(args, "COMPRESSION_LEVEL")? {
-        if level > 9 {
-            return Err(format!(
-                "unsupported MeanQualityByCycle COMPRESSION_LEVEL: {level}"
-            ));
-        }
-    }
+    reject_unsupported_compression_level(args, "MeanQualityByCycle")?;
     Ok(())
 }
 
@@ -9710,18 +9583,18 @@ impl AlignmentSummaryCollection {
                     .summary
                     .observe(record);
             }
-        } else if self.accumulation == AlignmentAccumulation::ReadGroup {
-            if let Some(read_group) = read_group {
-                self.read_groups
-                    .entry(read_group.platform_unit.clone())
-                    .or_insert_with(|| AlignmentSummaryReadGroup {
-                        sample: read_group.sample.clone(),
-                        library: read_group.library.clone(),
-                        summary: AlignmentSummarySet::default(),
-                    })
-                    .summary
-                    .observe(record);
-            }
+        } else if self.accumulation == AlignmentAccumulation::ReadGroup
+            && let Some(read_group) = read_group
+        {
+            self.read_groups
+                .entry(read_group.platform_unit.clone())
+                .or_insert_with(|| AlignmentSummaryReadGroup {
+                    sample: read_group.sample.clone(),
+                    library: read_group.library.clone(),
+                    summary: AlignmentSummarySet::default(),
+                })
+                .summary
+                .observe(record);
         }
     }
 
@@ -9783,27 +9656,27 @@ impl AlignmentSummaryCollection {
                         chimeric,
                     );
             }
-        } else if self.accumulation == AlignmentAccumulation::ReadGroup {
-            if let Some(read_group) = read_group {
-                self.read_groups
-                    .entry(read_group.platform_unit.clone())
-                    .or_insert_with(|| AlignmentSummaryReadGroup {
-                        sample: read_group.sample.clone(),
-                        library: read_group.library.clone(),
-                        summary: AlignmentSummarySet::default(),
-                    })
-                    .summary
-                    .observe_sam_parts(
-                        flags,
-                        read_length,
-                        sequence_bases,
-                        aligned_length,
-                        mapq,
-                        qualities,
-                        cigar,
-                        chimeric,
-                    );
-            }
+        } else if self.accumulation == AlignmentAccumulation::ReadGroup
+            && let Some(read_group) = read_group
+        {
+            self.read_groups
+                .entry(read_group.platform_unit.clone())
+                .or_insert_with(|| AlignmentSummaryReadGroup {
+                    sample: read_group.sample.clone(),
+                    library: read_group.library.clone(),
+                    summary: AlignmentSummarySet::default(),
+                })
+                .summary
+                .observe_sam_parts(
+                    flags,
+                    read_length,
+                    sequence_bases,
+                    aligned_length,
+                    mapq,
+                    qualities,
+                    cigar,
+                    chimeric,
+                );
         }
     }
 
@@ -9830,7 +9703,7 @@ impl AlignmentSummaryCollection {
                 ));
             }
         }
-        AlignmentSummary::to_picard_text_for_rows(&rows, &self.all_reads.histogram_summary())
+        AlignmentSummary::to_picard_text_for_rows(&rows, self.all_reads.histogram_summary())
     }
 }
 
@@ -10867,11 +10740,7 @@ impl QualityYieldSummary {
     }
 
     fn to_picard_text(&self) -> String {
-        let read_length = if self.total_reads == 0 {
-            0
-        } else {
-            self.total_bases / self.total_reads
-        };
+        let read_length = self.total_bases.checked_div(self.total_reads).unwrap_or(0);
         format!(
             "## METRICS CLASS\tpicard.analysis.CollectQualityYieldMetrics$QualityYieldMetrics\n\
              TOTAL_READS\tPF_READS\tREAD_LENGTH\tTOTAL_BASES\tPF_BASES\tQ20_BASES\tPF_Q20_BASES\tQ30_BASES\tPF_Q30_BASES\tQ20_EQUIVALENT_YIELD\tPF_Q20_EQUIVALENT_YIELD\n\
@@ -11471,9 +11340,8 @@ fn wgs_locus_included(contig: &WgsContigMetadata, index: usize) -> bool {
 
 #[inline]
 fn wgs_locus_included_at(mask: Option<&[bool]>, index: usize, contig_length: usize) -> bool {
-    mask.map_or(true, |included| {
-        included.get(index).copied().unwrap_or(false)
-    }) && index < contig_length
+    mask.is_none_or(|included| included.get(index).copied().unwrap_or(false))
+        && index < contig_length
 }
 
 fn wgs_included_loci(contig: &WgsContigMetadata) -> usize {
@@ -11532,10 +11400,7 @@ impl WgsMetricsSummary {
                 )
             })
             .collect::<BTreeMap<_, _>>();
-        let included_loci = contigs
-            .values()
-            .map(|contig| wgs_included_loci(contig))
-            .sum::<usize>();
+        let included_loci = contigs.values().map(wgs_included_loci).sum::<usize>();
         let mut coverage_histogram = vec![0; coverage_cap as usize + 1];
         if included_loci > 0 {
             coverage_histogram[0] = included_loci as u64;
@@ -11882,19 +11747,19 @@ impl WgsMetricsSummary {
     }
 
     fn to_picard_text(&self, sample_size: u32, include_bq_histogram: bool) -> String {
-        let histogram = &self.coverage_histogram;
+        let histogram = self.coverage_histogram.as_slice();
         let genome_territory = histogram.iter().sum::<u64>();
-        let mean_coverage = mean_from_histogram_u32(&histogram);
-        let sd_coverage = sample_standard_deviation_from_histogram_u32(&histogram, mean_coverage);
+        let mean_coverage = mean_from_histogram_u32(histogram);
+        let sd_coverage = sample_standard_deviation_from_histogram_u32(histogram, mean_coverage);
         let median_coverage = if genome_territory <= 1 {
             0.0
         } else {
-            median_f64_from_histogram_u64(&histogram)
+            median_f64_from_histogram_u64(histogram)
         };
         let mad_coverage = if genome_territory <= 1 {
             0.0
         } else {
-            mad_f64_from_histogram_u64(&histogram, median_coverage)
+            mad_f64_from_histogram_u64(histogram, median_coverage)
         };
         let pct_exc_total = ratio(
             self.excluded_mapq
@@ -11907,7 +11772,7 @@ impl WgsMetricsSummary {
         );
         let het_sensitivity = if sample_size > 0 && genome_territory > 0 {
             format_float(het_snp_sensitivity_from_histograms(
-                &histogram,
+                histogram,
                 &self.sensitivity_base_quality_histogram,
                 sample_size,
             ))
@@ -11937,23 +11802,23 @@ impl WgsMetricsSummary {
             format_float(ratio(self.excluded_overlap, self.total_aligned_bases)),
             format_float(ratio(self.excluded_capped, self.total_aligned_bases)),
             format_float(pct_exc_total),
-            format_float(pct_at_least(&histogram, 1)),
-            format_float(pct_at_least(&histogram, 5)),
-            format_float(pct_at_least(&histogram, 10)),
-            format_float(pct_at_least(&histogram, 15)),
-            format_float(pct_at_least(&histogram, 20)),
-            format_float(pct_at_least(&histogram, 25)),
-            format_float(pct_at_least(&histogram, 30)),
-            format_float(pct_at_least(&histogram, 40)),
-            format_float(pct_at_least(&histogram, 50)),
-            format_float(pct_at_least(&histogram, 60)),
-            format_float(pct_at_least(&histogram, 70)),
-            format_float(pct_at_least(&histogram, 80)),
-            format_float(pct_at_least(&histogram, 90)),
-            format_float(pct_at_least(&histogram, 100)),
-            fold_base_penalty(&histogram, mean_coverage, 80.0),
-            fold_base_penalty(&histogram, mean_coverage, 90.0),
-            fold_base_penalty(&histogram, mean_coverage, 95.0),
+            format_float(pct_at_least(histogram, 1)),
+            format_float(pct_at_least(histogram, 5)),
+            format_float(pct_at_least(histogram, 10)),
+            format_float(pct_at_least(histogram, 15)),
+            format_float(pct_at_least(histogram, 20)),
+            format_float(pct_at_least(histogram, 25)),
+            format_float(pct_at_least(histogram, 30)),
+            format_float(pct_at_least(histogram, 40)),
+            format_float(pct_at_least(histogram, 50)),
+            format_float(pct_at_least(histogram, 60)),
+            format_float(pct_at_least(histogram, 70)),
+            format_float(pct_at_least(histogram, 80)),
+            format_float(pct_at_least(histogram, 90)),
+            format_float(pct_at_least(histogram, 100)),
+            fold_base_penalty(histogram, mean_coverage, 80.0),
+            fold_base_penalty(histogram, mean_coverage, 90.0),
+            fold_base_penalty(histogram, mean_coverage, 95.0),
             het_sensitivity,
             het_q,
         ));
@@ -12633,11 +12498,11 @@ fn percent(numerator: u64, denominator: u64) -> f64 {
 struct GcBiasMetricsSummary {
     windows: [u64; 101],
     read_starts: [u64; 101],
-    quality_sums: [u64; 101],
-    quality_counts: [u64; 101],
     unique_read_starts: [u64; 101],
-    unique_quality_sums: [u64; 101],
-    unique_quality_counts: [u64; 101],
+    base_quality_sums: [u64; 101],
+    base_quality_counts: [u64; 101],
+    unique_base_quality_sums: [u64; 101],
+    unique_base_quality_counts: [u64; 101],
     reference_path: String,
     active_contig: Option<String>,
     active_sequence: Vec<u8>,
@@ -12653,11 +12518,11 @@ impl GcBiasMetricsSummary {
         Ok(Self {
             windows: count_gc_bias_windows(reference_path, window_size)?,
             read_starts: [0; 101],
-            quality_sums: [0; 101],
-            quality_counts: [0; 101],
             unique_read_starts: [0; 101],
-            unique_quality_sums: [0; 101],
-            unique_quality_counts: [0; 101],
+            base_quality_sums: [0; 101],
+            base_quality_counts: [0; 101],
+            unique_base_quality_sums: [0; 101],
+            unique_base_quality_counts: [0; 101],
             reference_path: reference_path.to_string(),
             active_contig: None,
             active_sequence: Vec::new(),
@@ -12708,19 +12573,19 @@ impl GcBiasMetricsSummary {
         }
         let start = (record.pos().max(0) as usize).min(reference.len() - window_size);
         let gc = gc_percent(&reference[start..start + window_size], window_size);
+        self.read_starts[gc] += 1;
         let quality_sum = record
             .qual()
             .iter()
             .map(|quality| *quality as u64)
             .sum::<u64>();
         let quality_count = record.qual().len() as u64;
-        self.read_starts[gc] += 1;
-        self.quality_sums[gc] += quality_sum;
-        self.quality_counts[gc] += quality_count;
+        self.base_quality_sums[gc] += quality_sum;
+        self.base_quality_counts[gc] += quality_count;
         if self.emit_unique && !record.is_duplicate() {
             self.unique_read_starts[gc] += 1;
-            self.unique_quality_sums[gc] += quality_sum;
-            self.unique_quality_counts[gc] += quality_count;
+            self.unique_base_quality_sums[gc] += quality_sum;
+            self.unique_base_quality_counts[gc] += quality_count;
         }
         Ok(())
     }
@@ -12733,8 +12598,8 @@ impl GcBiasMetricsSummary {
             &mut output,
             "ALL",
             &self.read_starts,
-            &self.quality_sums,
-            &self.quality_counts,
+            &self.base_quality_sums,
+            &self.base_quality_counts,
             self.aligned_reads,
             minimum_genome_fraction,
         );
@@ -12743,8 +12608,8 @@ impl GcBiasMetricsSummary {
                 &mut output,
                 "UNIQUE",
                 &self.unique_read_starts,
-                &self.unique_quality_sums,
-                &self.unique_quality_counts,
+                &self.unique_base_quality_sums,
+                &self.unique_base_quality_counts,
                 self.unique_aligned_reads,
                 minimum_genome_fraction,
             );
@@ -12757,8 +12622,8 @@ impl GcBiasMetricsSummary {
         output: &mut String,
         reads_used: &str,
         read_starts_by_gc: &[u64; 101],
-        quality_sums_by_gc: &[u64; 101],
-        quality_counts_by_gc: &[u64; 101],
+        base_quality_sums_by_gc: &[u64; 101],
+        base_quality_counts_by_gc: &[u64; 101],
         aligned_reads: u64,
         minimum_genome_fraction: f64,
     ) {
@@ -12768,14 +12633,13 @@ impl GcBiasMetricsSummary {
         } else {
             aligned_reads as f64 / total_windows as f64
         };
-        for gc in 0..=100 {
+        for (gc, read_starts) in read_starts_by_gc.iter().copied().enumerate() {
             let windows = self.windows[gc];
             let genome_fraction = if total_windows == 0 {
                 0.0
             } else {
                 windows as f64 / total_windows as f64
             };
-            let read_starts = read_starts_by_gc[gc];
             let normalized_coverage = if windows == 0
                 || mean_reads_per_window == 0.0
                 || genome_fraction < minimum_genome_fraction
@@ -12789,7 +12653,11 @@ impl GcBiasMetricsSummary {
             } else {
                 normalized_coverage / (read_starts as f64).sqrt()
             };
-            let mean_base_quality = ratio(quality_sums_by_gc[gc], quality_counts_by_gc[gc]);
+            let mean_base_quality = if read_starts == 0 || base_quality_counts_by_gc[gc] == 0 {
+                0.0
+            } else {
+                base_quality_sums_by_gc[gc] as f64 / base_quality_counts_by_gc[gc] as f64
+            };
             output.push_str(&format!(
                 "All Reads\t{reads_used}\t{gc}\t{windows}\t{read_starts}\t{}\t{}\t{}\t\t\t\n",
                 format_float(mean_base_quality),
@@ -12910,11 +12778,16 @@ impl GcBiasMetricsSummary {
         }
         let mut windows = 0_u64;
         let mut read_starts = 0_u64;
-        for gc in low..=high {
+        for (gc, read_starts_for_gc) in read_starts_by_gc
+            .iter()
+            .enumerate()
+            .take(high + 1)
+            .skip(low)
+        {
             let genome_fraction = self.windows[gc] as f64 / total_windows as f64;
             if genome_fraction >= minimum_genome_fraction {
                 windows += self.windows[gc];
-                read_starts += read_starts_by_gc[gc];
+                read_starts += *read_starts_for_gc;
             }
         }
         if windows == 0 {
@@ -12938,7 +12811,12 @@ impl GcBiasMetricsSummary {
         }
         let mean_reads_per_window = aligned_reads as f64 / total_windows as f64;
         let mut dropout = 0.0;
-        for gc in low..=high {
+        for (gc, read_starts_for_gc) in read_starts_by_gc
+            .iter()
+            .enumerate()
+            .take(high + 1)
+            .skip(low)
+        {
             let windows = self.windows[gc];
             if windows == 0 {
                 continue;
@@ -12948,7 +12826,7 @@ impl GcBiasMetricsSummary {
                 continue;
             }
             let normalized_coverage =
-                (read_starts_by_gc[gc] as f64 / windows as f64) / mean_reads_per_window;
+                (*read_starts_for_gc as f64 / windows as f64) / mean_reads_per_window;
             if normalized_coverage < 1.0 {
                 dropout += genome_fraction * (1.0 - normalized_coverage);
             }
@@ -13697,8 +13575,6 @@ fn insert_size_orientation(
         InsertSizeOrientation::Tandem
     } else if (!read_reverse && insert_size > 0) || (read_reverse && insert_size < 0) {
         InsertSizeOrientation::Fr
-    } else if read_reverse {
-        InsertSizeOrientation::Rf
     } else {
         InsertSizeOrientation::Rf
     }
@@ -13924,10 +13800,8 @@ fn skip_quality_metric_record(
 }
 
 fn quality_values(record: &bam::Record, use_original_qualities: bool) -> Vec<u8> {
-    if use_original_qualities {
-        if let Some(qualities) = original_quality_values(record) {
-            return qualities;
-        }
+    if use_original_qualities && let Some(qualities) = original_quality_values(record) {
+        return qualities;
     }
     record.qual().to_vec()
 }
@@ -14082,27 +13956,27 @@ fn run_fastqtosam_standard_sam(
             &mut first_reader_index,
             &mut first,
         )? {
-            if let Some(readers) = second_readers.as_mut() {
-                if next_fastq_bytes_record_from_readers(
+            if let Some(readers) = second_readers.as_mut()
+                && next_fastq_bytes_record_from_readers(
                     readers,
                     &mut second_reader_index,
                     &mut second,
-                )? {
-                    return Err(
-                        "malformed FastqToSam FASTQ2 has more records than FASTQ".to_string()
-                    );
-                }
+                )?
+            {
+                return Err("malformed FastqToSam FASTQ2 has more records than FASTQ".to_string());
             }
             break;
         }
-        if let Some(readers) = second_readers.as_mut() {
-            if !next_fastq_bytes_record_from_readers(
+        if let Some(readers) = second_readers.as_mut()
+            && !next_fastq_bytes_record_from_readers(
                 readers,
                 &mut second_reader_index,
                 &mut second,
-            )? {
-                return Err("malformed FastqToSam FASTQ has more records than FASTQ2".to_string());
-            }
+            )?
+        {
+            return Err("malformed FastqToSam FASTQ has more records than FASTQ2".to_string());
+        }
+        if second_readers.is_some() {
             if first.name != second.name {
                 return Err(format!(
                     "malformed FastqToSam paired read names differ: {} vs {}",
@@ -14580,7 +14454,7 @@ fn write_fastq_sam_record(
         .and_then(|_| writer.write_all(fastqtosam_flag_prefix(flags)))
         .and_then(|_| writer.write_all(&read.sequence))
         .and_then(|_| writer.write_all(b"\t"))
-        .and_then(|_| writer.write_all(&qualities))
+        .and_then(|_| writer.write_all(qualities))
         .and_then(|_| writer.write_all(b"\tRG:Z:"))
         .and_then(|_| writer.write_all(read_group_id.as_bytes()))
         .and_then(|_| writer.write_all(b"\n"))
@@ -14722,13 +14596,7 @@ fn reject_unsupported_addorreplacereadgroups_args(
     optional_scalar(args, "REFERENCE_SEQUENCE")?;
     optional_bool(args, "CREATE_INDEX")?;
     optional_bool(args, "CREATE_MD5_FILE")?;
-    if let Some(level) = optional_u32(args, "COMPRESSION_LEVEL")? {
-        if level > 9 {
-            return Err(format!(
-                "unsupported AddOrReplaceReadGroups COMPRESSION_LEVEL: {level}"
-            ));
-        }
-    }
+    reject_unsupported_compression_level(args, "AddOrReplaceReadGroups")?;
     optional_u32(args, "MAX_RECORDS_IN_RAM")?;
     optional_scalar(args, "TMP_DIR")?;
     optional_bool(args, "USE_JDK_DEFLATER")?;
@@ -14909,10 +14777,11 @@ fn reject_unsupported_samtofastq_args(
                 .to_string(),
         );
     }
-    if let Some(action) = optional_scalar(args, "CLIPPING_ACTION")? {
-        if !matches!(action.as_str(), "N" | "X") && action.parse::<i32>().is_err() {
-            return Err("unsupported SamToFastq CLIPPING_ACTION".to_string());
-        }
+    if let Some(action) = optional_scalar(args, "CLIPPING_ACTION")?
+        && !matches!(action.as_str(), "N" | "X")
+        && action.parse::<i32>().is_err()
+    {
+        return Err("unsupported SamToFastq CLIPPING_ACTION".to_string());
     }
     optional_bool(args, "INCLUDE_NON_PF_READS")?;
     optional_bool(args, "INCLUDE_NON_PRIMARY_ALIGNMENTS")?;
@@ -14923,11 +14792,7 @@ fn reject_unsupported_samtofastq_args(
     optional_u32(args, "MAX_RECORDS_IN_RAM")?;
     optional_bool(args, "USE_JDK_DEFLATER")?;
     optional_bool(args, "USE_JDK_INFLATER")?;
-    if let Some(level) = optional_u32(args, "COMPRESSION_LEVEL")? {
-        if level > 9 {
-            return Err(format!("unsupported SamToFastq COMPRESSION_LEVEL: {level}"));
-        }
-    }
+    reject_unsupported_compression_level(args, "SamToFastq")?;
     Ok(())
 }
 
@@ -14974,10 +14839,12 @@ fn reject_unsupported_fastqtosam_args(
             return Err(format!("unsupported FastqToSam argument: {key}"));
         }
     }
-    if let Some(sort_order) = optional_scalar(args, "SORT_ORDER")? {
-        if sort_order != "queryname" && sort_order != "coordinate" && sort_order != "unsorted" {
-            return Err(format!("unsupported FastqToSam SORT_ORDER={sort_order}"));
-        }
+    if let Some(sort_order) = optional_scalar(args, "SORT_ORDER")?
+        && sort_order != "queryname"
+        && sort_order != "coordinate"
+        && sort_order != "unsorted"
+    {
+        return Err(format!("unsupported FastqToSam SORT_ORDER={sort_order}"));
     }
     optional_u32(args, "MIN_Q")?;
     optional_u32(args, "MAX_Q")?;
@@ -14994,11 +14861,7 @@ fn reject_unsupported_fastqtosam_args(
     optional_u32(args, "MAX_RECORDS_IN_RAM")?;
     optional_bool(args, "USE_JDK_DEFLATER")?;
     optional_bool(args, "USE_JDK_INFLATER")?;
-    if let Some(level) = optional_u32(args, "COMPRESSION_LEVEL")? {
-        if level > 9 {
-            return Err(format!("unsupported FastqToSam COMPRESSION_LEVEL: {level}"));
-        }
-    }
+    reject_unsupported_compression_level(args, "FastqToSam")?;
     Ok(())
 }
 
@@ -15964,7 +15827,7 @@ fn clip_fastq_component(
     if let Some(replacement) = replacement {
         let replacement_count = len - point + 1;
         if positive_strand {
-            result.extend(std::iter::repeat(replacement).take(replacement_count));
+            result.extend(std::iter::repeat_n(replacement, replacement_count));
         } else {
             let mut prefixed = vec![replacement; replacement_count];
             prefixed.extend_from_slice(&result);
@@ -16119,11 +15982,7 @@ fn reject_unsupported_sortsam_args(
     optional_scalar(args, "VALIDATION_STRINGENCY")?;
     optional_scalar(args, "VERBOSITY")?;
     optional_u32(args, "MAX_RECORDS_IN_RAM")?;
-    if let Some(level) = optional_u32(args, "COMPRESSION_LEVEL")? {
-        if level > 9 {
-            return Err(format!("unsupported SortSam COMPRESSION_LEVEL: {level}"));
-        }
-    }
+    reject_unsupported_compression_level(args, "SortSam")?;
     Ok(())
 }
 
@@ -16156,11 +16015,7 @@ fn reject_unsupported_cleansam_args(args: &BTreeMap<String, Vec<String>>) -> Res
     optional_scalar(args, "VALIDATION_STRINGENCY")?;
     optional_scalar(args, "VERBOSITY")?;
     optional_u32(args, "MAX_RECORDS_IN_RAM")?;
-    if let Some(level) = optional_u32(args, "COMPRESSION_LEVEL")? {
-        if level > 9 {
-            return Err(format!("unsupported CleanSam COMPRESSION_LEVEL: {level}"));
-        }
-    }
+    reject_unsupported_compression_level(args, "CleanSam")?;
     Ok(())
 }
 
@@ -16203,13 +16058,7 @@ fn reject_unsupported_mergesamfiles_args(
     optional_scalar(args, "VALIDATION_STRINGENCY")?;
     optional_scalar(args, "VERBOSITY")?;
     optional_u32(args, "MAX_RECORDS_IN_RAM")?;
-    if let Some(level) = optional_u32(args, "COMPRESSION_LEVEL")? {
-        if level > 9 {
-            return Err(format!(
-                "unsupported MergeSamFiles COMPRESSION_LEVEL: {level}"
-            ));
-        }
-    }
+    reject_unsupported_compression_level(args, "MergeSamFiles")?;
     Ok(())
 }
 
@@ -16310,6 +16159,18 @@ fn optional_u32(
         .parse::<u32>()
         .map(Some)
         .map_err(|_| format!("unsupported SortSam argument {key}={value}"))
+}
+
+fn reject_unsupported_compression_level(
+    args: &std::collections::BTreeMap<String, Vec<String>>,
+    command: &str,
+) -> Result<(), String> {
+    if let Some(level) = optional_u32(args, "COMPRESSION_LEVEL")?
+        && level > 9
+    {
+        return Err(format!("unsupported {command} COMPRESSION_LEVEL: {level}"));
+    }
+    Ok(())
 }
 
 fn optional_i64(
@@ -16470,11 +16331,11 @@ fn push_merged_cigar(cigars: &mut Vec<Cigar>, cigar: Cigar) {
     if cigar.is_empty() {
         return;
     }
-    if let Some(last) = cigars.last_mut() {
-        if last.char() == cigar.char() {
-            *last = cigar_with_len(*last, last.len() + cigar.len());
-            return;
-        }
+    if let Some(last) = cigars.last_mut()
+        && last.char() == cigar.char()
+    {
+        *last = cigar_with_len(*last, last.len() + cigar.len());
+        return;
     }
     cigars.push(cigar);
 }
@@ -17065,11 +16926,11 @@ fn dna_bases_equal(read_base: u8, ref_base: u8) -> bool {
         return true;
     }
     match read_base.to_ascii_uppercase() {
-        b'A' => ref_base.to_ascii_uppercase() == b'A',
-        b'C' => ref_base.to_ascii_uppercase() == b'C',
-        b'G' => ref_base.to_ascii_uppercase() == b'G',
-        b'T' => ref_base.to_ascii_uppercase() == b'T',
-        b'N' => ref_base.to_ascii_uppercase() == b'N',
+        b'A' => ref_base.eq_ignore_ascii_case(&b'A'),
+        b'C' => ref_base.eq_ignore_ascii_case(&b'C'),
+        b'G' => ref_base.eq_ignore_ascii_case(&b'G'),
+        b'T' => ref_base.eq_ignore_ascii_case(&b'T'),
+        b'N' => ref_base.eq_ignore_ascii_case(&b'N'),
         _ => false,
     }
 }
@@ -17117,11 +16978,11 @@ fn drain_fixed_mate_group(
             let name = String::from_utf8_lossy(records[0].qname());
             return Err(format!("Missing second read of pair: {name}"));
         }
-        return Ok(records.drain(..).collect());
+        return Ok(std::mem::take(records));
     }
 
     if records.iter().any(|record| record.is_secondary()) {
-        return Ok(records.drain(..).collect());
+        return Ok(std::mem::take(records));
     }
 
     let primary_indices = records
@@ -17139,10 +17000,10 @@ fn drain_fixed_mate_group(
         .iter()
         .any(|record| !record.is_paired() && !record.is_supplementary())
     {
-        return Ok(records.drain(..).collect());
+        return Ok(std::mem::take(records));
     }
 
-    let mut fixed = records.drain(..).collect::<Vec<_>>();
+    let mut fixed = std::mem::take(records);
     let first_index = primary_indices[0];
     let second_index = primary_indices[1];
     fix_mate_pair_by_index(&mut fixed, first_index, second_index, add_mate_cigar)?;
@@ -17465,9 +17326,8 @@ fn build_merge_plan(
             );
         }
         let read_group_renames = header_builder.observe_input_header(&header_text)?;
-        let is_sorted = if assume_sorted {
-            true
-        } else if header_declares_sort_order(reader.header(), sort_order) {
+        let is_sorted = if assume_sorted || header_declares_sort_order(reader.header(), sort_order)
+        {
             true
         } else {
             input_reader_is_sorted(&mut reader, sort_order)?
@@ -17671,10 +17531,10 @@ impl MergeHeaderBuilder {
                 lines.push(header_line_with_sort_order(line, sort_order));
                 seen_hd = true;
             } else {
-                if line.starts_with("@RG\t") {
-                    if let Some(id) = read_group_id(line) {
-                        seen_read_groups.insert(id, line.to_string());
-                    }
+                if line.starts_with("@RG\t")
+                    && let Some(id) = read_group_id(line)
+                {
+                    seen_read_groups.insert(id, line.to_string());
                 }
                 lines.push(line.to_string());
             }
@@ -18164,19 +18024,19 @@ mod tests {
                 read_starts[50] = 1;
                 read_starts
             },
-            quality_sums: {
-                let mut quality_sums = [0_u64; 101];
-                quality_sums[50] = 120;
-                quality_sums
-            },
-            quality_counts: {
-                let mut quality_counts = [0_u64; 101];
-                quality_counts[50] = 4;
-                quality_counts
-            },
             unique_read_starts: [0; 101],
-            unique_quality_sums: [0; 101],
-            unique_quality_counts: [0; 101],
+            base_quality_sums: {
+                let mut base_quality_sums = [0_u64; 101];
+                base_quality_sums[50] = 148;
+                base_quality_sums
+            },
+            base_quality_counts: {
+                let mut base_quality_counts = [0_u64; 101];
+                base_quality_counts[50] = 4;
+                base_quality_counts
+            },
+            unique_base_quality_sums: [0; 101],
+            unique_base_quality_counts: [0; 101],
             reference_path: String::new(),
             active_contig: None,
             active_sequence: Vec::new(),
@@ -18188,7 +18048,7 @@ mod tests {
         };
 
         let text = summary.detail_text(100, 0.0);
-        assert!(text.contains("All Reads\tALL\t50\t2\t1\t30\t1\t1"));
+        assert!(text.contains("All Reads\tALL\t50\t2\t1\t37\t1\t1"));
     }
 
     #[test]
@@ -18554,10 +18414,10 @@ fn discover_upstream_picard_command() -> Option<String> {
             return Some(format!("java -jar {}", quote_fallback_command_arg(trimmed)));
         }
     }
-    if let Ok(prefix) = env::var("CONDA_PREFIX") {
-        if let Some(command) = discover_picard_in_prefix(&prefix) {
-            return Some(command);
-        }
+    if let Ok(prefix) = env::var("CONDA_PREFIX")
+        && let Some(command) = discover_picard_in_prefix(&prefix)
+    {
+        return Some(command);
     }
     discover_picard_on_path()
 }
@@ -18719,13 +18579,13 @@ fn split_fallback_command(command: &str) -> Result<Vec<String>, String> {
 
     while let Some(ch) = chars.next() {
         if ch == '\\' && quoted != Some('\'') {
-            if let Some(&next) = chars.peek() {
-                if next.is_whitespace() || matches!(next, '"' | '\'') {
-                    current.push(next);
-                    chars.next();
-                    in_token = true;
-                    continue;
-                }
+            if let Some(&next) = chars.peek()
+                && (next.is_whitespace() || matches!(next, '"' | '\''))
+            {
+                current.push(next);
+                chars.next();
+                in_token = true;
+                continue;
             }
             current.push('\\');
             in_token = true;

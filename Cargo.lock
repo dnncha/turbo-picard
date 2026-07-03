@@ -629,12 +629,6 @@ dependencies = [
 
 [[package]]
 name = "md5"
-version = "0.7.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "490cc448043f947bae3cbee9c203358d62dbee0db12107a74be5c30ccfd09771"
-
-[[package]]
-name = "md5"
 version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ae960838283323069879657ca3de837e9f7bbb4c7bf6ea7f1b290d5e9476d2e0"
@@ -1095,12 +1089,12 @@ dependencies = [
 
 [[package]]
 name = "turbo-picard-cli"
-version = "0.1.5"
+version = "0.1.7"
 dependencies = [
  "assert_cmd",
  "crossbeam-channel",
  "flate2",
- "md5 0.7.0",
+ "md5",
  "predicates",
  "rust-htslib",
  "rustc-hash 2.1.2",
@@ -1111,19 +1105,21 @@ dependencies = [
 
 [[package]]
 name = "turbo-picard-core"
-version = "0.1.5"
+version = "0.1.7"
 dependencies = [
  "rust-htslib",
+ "thiserror 2.0.18",
 ]
 
 [[package]]
 name = "turbo-picard-markdup"
-version = "0.1.5"
+version = "0.1.7"
 dependencies = [
- "md5 0.8.0",
+ "md5",
  "rust-htslib",
- "rustc-hash 1.1.0",
+ "rustc-hash 2.1.2",
  "tempfile",
+ "thiserror 2.0.18",
  "turbo-picard-core",
 ]
 

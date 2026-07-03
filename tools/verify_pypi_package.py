@@ -233,6 +233,9 @@ def validate_publish_workflow(root: Path = ROOT) -> list[str]:
     checks = [
         ("release:", "PyPI workflow must run from GitHub releases"),
         ("workflow_dispatch:", "PyPI workflow must support manual dispatch"),
+        ("Build Linux wheels", "PyPI workflow must build Linux wheels"),
+        ("wheels-linux-x86_64", "PyPI workflow must upload Linux wheel artifacts"),
+        ("manylinux: auto", "PyPI workflow must build manylinux-compatible Linux wheels"),
         ("PyO3/maturin-action@v1", "PyPI workflow must build with maturin-action"),
         ("--compatibility pypi", "PyPI workflow must run maturin's PyPI compatibility check"),
         ("pypa/gh-action-pypi-publish@release/v1", "PyPI workflow must publish with the PyPA action"),

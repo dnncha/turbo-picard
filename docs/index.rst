@@ -113,6 +113,7 @@ Start here
    benchmarks
    performance
    citation
+   joss-submission
    packaging
    troubleshooting
 

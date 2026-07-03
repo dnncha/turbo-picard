@@ -19,15 +19,15 @@ name = "picard"
 path = "src/bin/picard.rs"
 
 [dependencies]
-rust-htslib = "1.0.0"
-md5 = "0.7.0"
-flate2 = "1.1.5"
-rustc-hash = "2.1"
-crossbeam-channel = "0.5"
-turbo-picard-core = { path = "../turbo-picard-core", version = "0.1.5" }
-turbo-picard-markdup = { path = "../turbo-picard-markdup", version = "0.1.5" }
+rust-htslib.workspace = true
+md5.workspace = true
+flate2.workspace = true
+rustc-hash.workspace = true
+crossbeam-channel.workspace = true
+turbo-picard-core = { path = "../turbo-picard-core", version = "0.1.7" }
+turbo-picard-markdup = { path = "../turbo-picard-markdup", version = "0.1.7" }
 
 [dev-dependencies]
-assert_cmd = "2.0.17"
-predicates = "3.1.3"
-tempfile = "3.23.0"
+assert_cmd.workspace = true
+predicates.workspace = true
+tempfile.workspace = true

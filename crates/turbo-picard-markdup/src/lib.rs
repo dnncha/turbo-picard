@@ -6,9 +6,9 @@ use rust_htslib::bam::{self, Read, index};
 use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
-use std::fmt;
 use std::fs;
 use std::path::Path;
+use thiserror::Error;
 use turbo_picard_core::hts_io;
 use turbo_picard_core::markdup_config::MarkDuplicatesConfig;
 
@@ -36,45 +36,20 @@ struct DuplicateSetCounts {
     non_optical_sets: u64,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Error)]
 pub enum MarkDuplicatesError {
+    #[error(
+        "unsupported MarkDuplicates input format for {0}; this engine supports BAM inputs and single SAM text input"
+    )]
     UnsupportedInputFormat(String),
-    Io(std::io::Error),
-    Htslib(rust_htslib::errors::Error),
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
+    #[error(transparent)]
+    Htslib(#[from] rust_htslib::errors::Error),
+    #[error("{0}")]
     Operation(String),
+    #[error("malformed SAM at line {line_number}: {reason}")]
     MalformedSam { line_number: usize, reason: String },
-}
-
-impl fmt::Display for MarkDuplicatesError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::UnsupportedInputFormat(path) => write!(
-                f,
-                "unsupported MarkDuplicates input format for {path}; this engine supports BAM inputs and single SAM text input"
-            ),
-            Self::Io(error) => write!(f, "{error}"),
-            Self::Htslib(error) => write!(f, "{error}"),
-            Self::Operation(message) => write!(f, "{message}"),
-            Self::MalformedSam {
-                line_number,
-                reason,
-            } => write!(f, "malformed SAM at line {line_number}: {reason}"),
-        }
-    }
-}
-
-impl std::error::Error for MarkDuplicatesError {}
-
-impl From<std::io::Error> for MarkDuplicatesError {
-    fn from(value: std::io::Error) -> Self {
-        Self::Io(value)
-    }
-}
-
-impl From<rust_htslib::errors::Error> for MarkDuplicatesError {
-    fn from(value: rust_htslib::errors::Error) -> Self {
-        Self::Htslib(value)
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]

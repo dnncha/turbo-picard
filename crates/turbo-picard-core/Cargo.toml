@@ -10,4 +10,5 @@ homepage.workspace = true
 description = "Shared Picard argument and MarkDuplicates configuration types for turbo-picard."
 
 [dependencies]
-rust-htslib = "1.0.0"
+rust-htslib.workspace = true
+thiserror.workspace = true

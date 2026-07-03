@@ -28,3 +28,6 @@ For a methods section, include:
 
 For checked-in public real-data evidence, see :doc:`benchmarks`. For practical
 pipeline testing, see :doc:`adoption`.
+
+The JOSS paper draft and submission timing are tracked separately in
+:doc:`joss-submission`.

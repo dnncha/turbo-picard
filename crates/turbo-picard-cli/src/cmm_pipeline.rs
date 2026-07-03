@@ -1,3 +1,5 @@
+#![allow(clippy::items_after_test_module)]
+
 use crossbeam_channel::{Receiver, Sender, bounded};
 use rust_htslib::bam::{self, Read};
 use std::any::Any;
