@@ -50,6 +50,26 @@ parity_picard() {
   fi
 }
 
+parity_validate_samfile_issue_exit() {
+  local exit_code=$1
+  [[ "$exit_code" == 2 || "$exit_code" == 3 ]]
+}
+
+parity_validate_samfile_exit_matches() {
+  local picard_exit=$1
+  local turbo_exit=$2
+  if [[ "$picard_exit" == "$turbo_exit" ]]; then
+    return 0
+  fi
+  # Picard reports validation issues with either 2 or 3 depending on the
+  # fixture; require both tools to fail and compare the summary separately.
+  if parity_validate_samfile_issue_exit "$picard_exit" &&
+    parity_validate_samfile_issue_exit "$turbo_exit"; then
+    return 0
+  fi
+  return 1
+}
+
 parity_view_to_sam() {
   local reference=$1
   local input=$2

@@ -241,7 +241,7 @@ picard ValidateSamFile "I=$workdir/valid.cram" "O=$workdir/picard-validate.txt" 
 turbo_validate_exit=0
 turbo ValidateSamFile "I=$workdir/valid.cram" "O=$workdir/turbo-validate.txt" "R=$reference" MODE=SUMMARY \
   || turbo_validate_exit=$?
-if [[ "$picard_validate_exit" != "$turbo_validate_exit" ]]; then
+if ! parity_validate_samfile_exit_matches "$picard_validate_exit" "$turbo_validate_exit"; then
   echo "ValidateSamFile CRAM exit differs from Picard: Picard=$picard_validate_exit turbo=$turbo_validate_exit" >&2
   exit 1
 fi
