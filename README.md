@@ -168,11 +168,18 @@ Saved benchmark run:
 Release evidence checks:
 
 ```bash
+python3 tools/update_real_data_manifest.py
 python3 tools/verify_benchmark_log_evidence.py
 python3 tools/verify_benchmark_suite_coverage.py
 python3 tools/verify_benchmark_thresholds.py
+python3 tools/verify_real_data_evidence.py
 python3 tools/verify_real_data_evidence.py --release-ready
 ```
+
+Real-data evidence lives in `benchmarks/real-data/` and records pinned input
+sources, command scopes, and input SHA-256 hashes. Current release-candidate
+dataset IDs are `gatk-na12878-mito`, `picard-snvq`, and
+`gatk-na12878-mito-cram`.
 
 ## Packaging Status
 
