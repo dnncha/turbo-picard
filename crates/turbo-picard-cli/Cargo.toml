@@ -20,6 +20,7 @@ path = "src/bin/picard.rs"
 
 [dependencies]
 rust-htslib.workspace = true
+hts-sys.workspace = true
 md5.workspace = true
 flate2.workspace = true
 rustc-hash.workspace = true

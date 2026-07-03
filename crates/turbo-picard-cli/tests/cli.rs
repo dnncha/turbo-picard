@@ -3140,6 +3140,53 @@ fn collectgcbiasmetrics_writes_detail_summary_and_chart() {
 }
 
 #[test]
+fn collectgcbiasmetrics_counts_picard_summary_clusters() {
+    let tempdir = tempfile::tempdir().expect("tempdir exists");
+    let input = tempdir.path().join("input.sam");
+    let reference = tempdir.path().join("ref.fa");
+    let detail = tempdir.path().join("gc_bias.detail.txt");
+    let summary = tempdir.path().join("gc_bias.summary.txt");
+    let chart = tempdir.path().join("gc_bias.pdf");
+    fs::write(
+        &reference,
+        concat!(">low\n", "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\n",),
+    )
+    .expect("reference is written");
+    fs::write(
+        &input,
+        concat!(
+            "@HD\tVN:1.6\tSO:coordinate\n",
+            "@SQ\tSN:low\tLN:40\n",
+            "pair1\t99\tlow\t1\t60\t20M\t=\t5\t24\tAAAAAAAAAAAAAAAAAAAA\tFFFFFFFFFFFFFFFFFFFF\n",
+            "pair1\t147\tlow\t5\t60\t20M\t=\t1\t-24\tAAAAAAAAAAAAAAAAAAAA\tFFFFFFFFFFFFFFFFFFFF\n",
+            "pair1\t2113\tlow\t10\t60\t20M\t=\t1\t0\tAAAAAAAAAAAAAAAAAAAA\tFFFFFFFFFFFFFFFFFFFF\n",
+            "pair2\t77\t*\t0\t0\t*\t*\t0\t0\tAAAAAAAAAAAAAAAAAAAA\tFFFFFFFFFFFFFFFFFFFF\n",
+        ),
+    )
+    .expect("input fixture is written");
+
+    Command::cargo_bin("picard")
+        .expect("binary exists")
+        .args([
+            "CollectGcBiasMetrics",
+            &format!("I={}", input.display()),
+            &format!("O={}", detail.display()),
+            &format!("S={}", summary.display()),
+            &format!("CHART={}", chart.display()),
+            &format!("R={}", reference.display()),
+            "SCAN_WINDOW_SIZE=20",
+            "MINIMUM_GENOME_FRACTION=0",
+            "VALIDATION_STRINGENCY=SILENT",
+            "QUIET=true",
+        ])
+        .assert()
+        .success();
+
+    let summary_text = fs::read_to_string(&summary).expect("summary metrics exist");
+    assert!(summary_text.contains("All Reads\tALL\t20\t3\t3\t"));
+}
+
+#[test]
 fn collectgcbiasmetrics_honors_stop_after_and_assume_sorted_alias() {
     let tempdir = tempfile::tempdir().expect("tempdir exists");
     let input = tempdir.path().join("input.sam");
@@ -6132,7 +6179,7 @@ fn validatesamfile_writes_summary_for_valid_and_warning_inputs() {
         ])
         .assert()
         .failure()
-        .code(3)
+        .code(2)
         .stdout(predicate::str::contains("ERROR:MISSING_READ_GROUP\t1"))
         .stdout(predicate::str::contains("WARNING:MISSING_TAG_NM\t1"))
         .stdout(predicate::str::contains(
@@ -6141,6 +6188,36 @@ fn validatesamfile_writes_summary_for_valid_and_warning_inputs() {
         .stderr(predicate::str::contains(
             "ValidateSamFile found validation issues",
         ));
+}
+
+#[test]
+fn validatesamfile_counts_missing_nm_for_reference_backed_cram() {
+    let repo_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../..")
+        .canonicalize()
+        .expect("repo root resolves");
+    let input = repo_root
+        .join("benchmarks")
+        .join("real-data")
+        .join("gatk-na12878-mito-cram")
+        .join("input.cram");
+    let reference = repo_root.join("fixtures").join("reference").join("chrM.fa");
+
+    Command::cargo_bin("picard")
+        .expect("binary exists")
+        .args([
+            "ValidateSamFile",
+            &format!("I={}", input.display()),
+            &format!("R={}", reference.display()),
+            "MODE=SUMMARY",
+            "VALIDATION_STRINGENCY=SILENT",
+            "QUIET=true",
+        ])
+        .assert()
+        .failure()
+        .code(2)
+        .stdout(predicate::str::contains("ERROR:MATE_NOT_FOUND\t2548"))
+        .stdout(predicate::str::contains("WARNING:MISSING_TAG_NM\t14705"));
 }
 
 #[test]
@@ -6901,7 +6978,8 @@ fn meanqualitybycycle_uses_original_quality_cycles_when_present() {
         .success();
 
     let metrics = fs::read_to_string(&output).expect("metrics output exists");
-    assert!(metrics.contains("CYCLE\tMEAN_ORIGINAL_QUALITY\n1\t4\n2\t3\n3\t2\n4\t1\n"));
+    assert!(metrics.contains("CYCLE\tMEAN_QUALITY\tMEAN_ORIGINAL_QUALITY\n"));
+    assert!(metrics.contains("1\t0\t4\n2\t0\t3\n3\t0\t2\n4\t0\t1\n"));
     assert!(chart.metadata().expect("chart exists").len() > 0);
 }
 
@@ -7670,6 +7748,50 @@ fn replacesamheader_streams_records_with_replacement_header() {
     assert!(output.contains("@SQ\tSN:chr1\tLN:2000"));
     assert!(output.contains("@CO\treplacement header"));
     assert_eq!(record_names(&output), vec!["read-a"]);
+}
+
+#[test]
+fn replacesamheader_preserves_read_groups_missing_from_replacement_header_for_sam() {
+    let tempdir = tempfile::tempdir().expect("tempdir exists");
+    let input = tempdir.path().join("input.sam");
+    let header = tempdir.path().join("header.sam");
+    let output = tempdir.path().join("output.sam");
+    fs::write(
+        &input,
+        concat!(
+            "@HD\tVN:1.6\tSO:coordinate\n",
+            "@SQ\tSN:chr1\tLN:1000\n",
+            "@RG\tID:old\tSM:sample\tPL:ILLUMINA\n",
+            "@RG\tID:new\tSM:sample\tPL:ILLUMINA\n",
+            "read-a\t0\tchr1\t10\t60\t4M\t*\t0\t0\tACGT\tFFFF\tRG:Z:old\n",
+            "read-b\t0\tchr1\t20\t60\t4M\t*\t0\t0\tTGCA\tFFFF\tRG:Z:new\n",
+        ),
+    )
+    .expect("input SAM is written");
+    fs::write(
+        &header,
+        concat!(
+            "@HD\tVN:1.6\tSO:coordinate\n",
+            "@SQ\tSN:chr1\tLN:1000\n",
+            "@RG\tID:new\tSM:sample\tPL:ILLUMINA\n",
+        ),
+    )
+    .expect("header SAM is written");
+
+    Command::cargo_bin("picard")
+        .expect("binary exists")
+        .args([
+            "ReplaceSamHeader",
+            &format!("I={}", input.display()),
+            &format!("O={}", output.display()),
+            &format!("HEADER={}", header.display()),
+        ])
+        .assert()
+        .success();
+
+    let output = fs::read_to_string(output).expect("ReplaceSamHeader SAM output exists");
+    assert!(output.contains("read-a\t0\tchr1\t10\t60\t4M\t*\t0\t0\tACGT\tFFFF\tRG:Z:old\n"));
+    assert!(output.contains("read-b\t0\tchr1\t20\t60\t4M\t*\t0\t0\tTGCA\tFFFF\tRG:Z:new\n"));
 }
 
 #[test]

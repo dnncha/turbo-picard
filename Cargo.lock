@@ -1094,6 +1094,7 @@ dependencies = [
  "assert_cmd",
  "crossbeam-channel",
  "flate2",
+ "hts-sys",
  "md5",
  "predicates",
  "rust-htslib",

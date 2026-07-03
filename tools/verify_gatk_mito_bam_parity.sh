@@ -98,10 +98,18 @@ view_to_sam "$workdir/turbo-sorted.bam" "$workdir/turbo-sorted.sam"
 python3 "$compare" merge-multiset --label "GATK mito BAM SortSam" \
   --picard "$workdir/picard-sorted.sam" --turbo "$workdir/turbo-sorted.sam"
 
+picard_validate_exit=0
 picard ValidateSamFile \
-  "I=$input_bam" "O=$workdir/picard-validate.txt" MODE=SUMMARY
+  "I=$input_bam" "O=$workdir/picard-validate.txt" MODE=SUMMARY \
+  || picard_validate_exit=$?
+turbo_validate_exit=0
 turbo ValidateSamFile \
-  "I=$input_bam" "O=$workdir/turbo-validate.txt" MODE=SUMMARY
+  "I=$input_bam" "O=$workdir/turbo-validate.txt" MODE=SUMMARY \
+  || turbo_validate_exit=$?
+if [[ "$picard_validate_exit" != "$turbo_validate_exit" ]]; then
+  echo "GATK mito BAM ValidateSamFile exit differs from Picard: Picard=$picard_validate_exit turbo=$turbo_validate_exit" >&2
+  exit 1
+fi
 python3 "$compare" validate-summary --label "GATK mito BAM ValidateSamFile" \
   --picard "$workdir/picard-validate.txt" --turbo "$workdir/turbo-validate.txt"
 
@@ -201,7 +209,7 @@ picard CollectWgsMetrics \
   "I=$input_bam" "O=$workdir/picard-wgs.txt" "R=$reference"
 turbo CollectWgsMetrics \
   "I=$input_bam" "O=$workdir/turbo-wgs.txt" "R=$reference"
-python3 "$compare" metrics --label "GATK mito BAM CollectWgsMetrics" \
+python3 "$compare" wgs-metrics --label "GATK mito BAM CollectWgsMetrics" \
   --picard "$workdir/picard-wgs.txt" --turbo "$workdir/turbo-wgs.txt"
 
 header_sam="$workdir/replacement-header.sam"

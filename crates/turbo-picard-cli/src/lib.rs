@@ -488,7 +488,7 @@ pub fn run_cli(program_name: &str, raw_args: impl IntoIterator<Item = String>) -
                 }
                 eprintln!("{error}");
                 if error == "ValidateSamFile found validation issues" {
-                    return 3;
+                    return 2;
                 }
                 return 2;
             }
@@ -5731,7 +5731,7 @@ fn run_validatesamfile(args: &[String]) -> Result<(), String> {
     let mut report = if has_sam_extension(&input) && mode == ValidateSamMode::Summary {
         validate_sam_summary_sam_text(&input, skip_mate_validation)?
     } else {
-        let mut reader = open_bam_reader_with_reference(&input, reference.as_deref())
+        let mut reader = open_bam_reader_for_validate_sam_file(&input, reference.as_deref())
             .map_err(|error| error.to_string())?;
         validate_sam_summary(
             &mut reader,
@@ -5934,6 +5934,7 @@ fn run_replacesamheader(args: &[String]) -> Result<(), String> {
         .map_err(|error| error.to_string())?;
     let header = bam::Header::from_template(header_reader.header());
     let replacement_sort_order = header_sort_order(header_reader.header());
+    let replacement_read_groups = read_group_ids_from_header(header_reader.header());
     drop(header_reader);
 
     let mut reader = open_bam_reader_with_reference(&input, reference.as_deref())
@@ -5947,6 +5948,7 @@ fn run_replacesamheader(args: &[String]) -> Result<(), String> {
         ));
     }
     let format = output_format_for(&output, "ReplaceSamHeader")?;
+    let remove_stale_read_groups = matches!(format, bam::Format::Cram);
     let mut writer = bam_writer_for_path_with_reference(
         &output,
         &header,
@@ -5955,7 +5957,10 @@ fn run_replacesamheader(args: &[String]) -> Result<(), String> {
         compression_level,
     )?;
     for record in reader.records() {
-        let record = record.map_err(|error| error.to_string())?;
+        let mut record = record.map_err(|error| error.to_string())?;
+        if remove_stale_read_groups {
+            remove_stale_read_group(&mut record, &replacement_read_groups)?;
+        }
         writer.write(&record).map_err(|error| error.to_string())?;
     }
     drop(writer);
@@ -7623,10 +7628,12 @@ fn count_gc_bias_windows(reference_path: &str, window_size: usize) -> Result<[u6
             continue;
         }
         let sequence = load_fasta_contig_sequence(reference_path, &name)?;
-        let window_count = sequence.len().saturating_sub(window_size + 1);
-        for start in 0..window_count {
+        let window_end = sequence.len().saturating_sub(window_size);
+        for start in 1..window_end {
             if let Some(window) = sequence.get(start..start + window_size) {
-                windows[gc_percent(window, window_size)] += 1;
+                if let Some(gc) = gc_percent(window, window_size) {
+                    windows[gc] += 1;
+                }
             }
         }
     }
@@ -9863,6 +9870,9 @@ struct AlignmentSummary {
     pf_hq_aligned_reads: u64,
     pf_hq_aligned_bases: u64,
     pf_hq_aligned_q20_bases: u64,
+    mismatch_bases: u64,
+    hq_mismatch_bases: u64,
+    hq_mismatches_by_read: Vec<u64>,
     reads_aligned_in_pairs: u64,
     pf_reads_improper_pairs: u64,
     forward_aligned_reads: u64,
@@ -9920,14 +9930,18 @@ impl AlignmentSummary {
 
         let is_aligned = !record.is_unmapped();
         if is_aligned {
+            let mismatch_bases = record_mismatch_bases(record, cigar);
             self.pf_reads_aligned += 1;
             self.pf_aligned_bases += aligned_length;
             self.pf_read_aligned_bases += aligned_read_length;
+            self.mismatch_bases += mismatch_bases;
             if is_hq_aligned(record) {
                 self.pf_hq_aligned_reads += 1;
                 self.pf_hq_aligned_bases += aligned_length;
                 self.pf_hq_aligned_q20_bases +=
                     q20_match_bases(record.cigar().iter(), record.qual());
+                self.hq_mismatch_bases += mismatch_bases;
+                observe_histogram_value(&mut self.hq_mismatches_by_read, mismatch_bases);
             }
             if record.is_reverse() {
                 self.reverse_aligned_reads += 1;
@@ -9987,10 +10001,13 @@ impl AlignmentSummary {
             self.pf_reads_aligned += 1;
             self.pf_aligned_bases += aligned_length;
             self.pf_read_aligned_bases += cigar.read_aligned_length;
+            self.mismatch_bases += cigar.mismatch_bases;
             if mapq >= 20 {
                 self.pf_hq_aligned_reads += 1;
                 self.pf_hq_aligned_bases += aligned_length;
                 self.pf_hq_aligned_q20_bases += cigar.q20_match_bases;
+                self.hq_mismatch_bases += cigar.mismatch_bases;
+                observe_histogram_value(&mut self.hq_mismatches_by_read, cigar.mismatch_bases);
             }
             if flags & 0x10 != 0 {
                 self.reverse_aligned_reads += 1;
@@ -10096,9 +10113,10 @@ impl AlignmentSummary {
         } else {
             self.pf_reads_aligned
         };
+        let hq_median_mismatches = median_from_histogram(&self.hq_mismatches_by_read);
 
         format!(
-            "{category}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t0\t0\t0\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
+            "{category}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
             self.total_reads,
             self.pf_reads,
             format_float(ratio(self.pf_reads, self.total_reads)),
@@ -10109,6 +10127,9 @@ impl AlignmentSummary {
             self.pf_hq_aligned_reads,
             self.pf_hq_aligned_bases,
             self.pf_hq_aligned_q20_bases,
+            hq_median_mismatches,
+            format_float(ratio(self.mismatch_bases, self.pf_aligned_bases)),
+            format_float(ratio(self.hq_mismatch_bases, self.pf_hq_aligned_bases)),
             format_float(ratio(self.indel_bases, self.pf_aligned_bases)),
             format_float(mean_read_length),
             sd_read_length,
@@ -10190,7 +10211,10 @@ impl AlignmentSummary {
 struct CigarSummary {
     aligned_length: u64,
     read_aligned_length: u64,
+    insertion_bases: u64,
+    deletion_bases: u64,
     indel_events: u64,
+    mismatch_bases: u64,
     soft_clip_bases: u64,
     hard_clip_bases: u64,
     three_prime_soft_clip_bases: u64,
@@ -10214,11 +10238,12 @@ fn alignment_cigar_summary<'a>(
             }
             Cigar::Ins(len) => {
                 summary.read_aligned_length += u64::from(*len);
+                summary.insertion_bases += u64::from(*len);
                 summary.indel_events += 1;
                 last_soft_clip = 0;
             }
             Cigar::Del(len) => {
-                let _ = len;
+                summary.deletion_bases += u64::from(*len);
                 summary.indel_events += 1;
                 last_soft_clip = 0;
             }
@@ -10269,6 +10294,13 @@ fn q20_match_bases<'a>(cigars: impl Iterator<Item = &'a Cigar>, qualities: &[u8]
         }
     }
     q20
+}
+
+fn record_mismatch_bases(record: &bam::Record, cigar: CigarSummary) -> u64 {
+    let Some(nm) = record.aux(b"NM").ok().and_then(aux_i32) else {
+        return 0;
+    };
+    mismatch_bases_from_nm(nm, cigar)
 }
 
 fn q20_match_bases_from_sam(cigar: &[u8], qualities: &[u8]) -> Result<u64, String> {
@@ -10540,14 +10572,21 @@ fn observe_alignment_sam_line(
     cigar_summary.q20_match_bases = q20_match_bases_from_sam(cigar, qualities)?;
     let mut read_group = None;
     let mut has_sa = false;
+    let mut nm = None::<i32>;
     for tag in fields {
         if !has_sa && tag.starts_with(b"SA:") {
             has_sa = true;
+        }
+        if nm.is_none()
+            && let Some(value) = tag.strip_prefix(b"NM:i:")
+        {
+            nm = Some(parse_i32_bytes(value)?);
         }
         if read_group.is_none() {
             read_group = insert_size_read_group_for_sam_tags(std::iter::once(tag), read_groups);
         }
     }
+    cigar_summary.mismatch_bases = sam_mismatch_bases(nm, cigar_summary);
     let chimeric = is_chimeric_sam_record(
         flags,
         reference_name,
@@ -10573,6 +10612,27 @@ fn ensure_histogram_len(histogram: &mut Vec<u64>, index: usize) {
     if histogram.len() <= index {
         histogram.resize(index + 1, 0);
     }
+}
+
+fn observe_histogram_value(histogram: &mut Vec<u64>, value: u64) {
+    let Ok(index) = usize::try_from(value) else {
+        return;
+    };
+    ensure_histogram_len(histogram, index);
+    histogram[index] += 1;
+}
+
+fn sam_mismatch_bases(nm: Option<i32>, cigar: CigarSummary) -> u64 {
+    let Some(nm) = nm else {
+        return 0;
+    };
+    mismatch_bases_from_nm(nm, cigar)
+}
+
+fn mismatch_bases_from_nm(nm: i32, cigar: CigarSummary) -> u64 {
+    let indel_bases = cigar.insertion_bases.saturating_add(cigar.deletion_bases);
+    let indel_bases = i32::try_from(indel_bases).unwrap_or(i32::MAX);
+    nm.max(0).saturating_sub(indel_bases) as u64
 }
 
 fn ratio(numerator: u64, denominator: u64) -> f64 {
@@ -11051,6 +11111,10 @@ fn parse_i64_bytes(value: &[u8]) -> Result<i64, String> {
     }
 }
 
+fn parse_i32_bytes(value: &[u8]) -> Result<i32, String> {
+    i32::try_from(parse_i64_bytes(value)?).map_err(|_| "malformed integer".to_string())
+}
+
 fn parse_u8_bytes(value: &[u8]) -> Result<u8, String> {
     let parsed = parse_u16_bytes(value)?;
     u8::try_from(parsed).map_err(|_| "malformed integer".to_string())
@@ -11103,6 +11167,10 @@ fn cigar_summary_from_sam(cigar: &[u8], is_reverse: bool) -> Result<CigarSummary
                     .read_aligned_length
                     .checked_add(len)
                     .ok_or_else(|| "malformed CollectAlignmentSummaryMetrics CIGAR".to_string())?;
+                summary.insertion_bases = summary
+                    .insertion_bases
+                    .checked_add(len)
+                    .ok_or_else(|| "malformed CollectAlignmentSummaryMetrics CIGAR".to_string())?;
                 summary.indel_events = summary
                     .indel_events
                     .checked_add(1)
@@ -11110,6 +11178,10 @@ fn cigar_summary_from_sam(cigar: &[u8], is_reverse: bool) -> Result<CigarSummary
                 last_soft_clip = 0;
             }
             b'D' => {
+                summary.deletion_bases = summary
+                    .deletion_bases
+                    .checked_add(len)
+                    .ok_or_else(|| "malformed CollectAlignmentSummaryMetrics CIGAR".to_string())?;
                 summary.indel_events = summary
                     .indel_events
                     .checked_add(1)
@@ -12508,8 +12580,10 @@ struct GcBiasMetricsSummary {
     active_sequence: Vec<u8>,
     total_clusters: u64,
     aligned_reads: u64,
+    summary_aligned_reads: u64,
     unique_total_clusters: u64,
     unique_aligned_reads: u64,
+    unique_summary_aligned_reads: u64,
     emit_unique: bool,
 }
 
@@ -12528,8 +12602,10 @@ impl GcBiasMetricsSummary {
             active_sequence: Vec::new(),
             total_clusters: 0,
             aligned_reads: 0,
+            summary_aligned_reads: 0,
             unique_total_clusters: 0,
             unique_aligned_reads: 0,
+            unique_summary_aligned_reads: 0,
             emit_unique,
         })
     }
@@ -12549,15 +12625,18 @@ impl GcBiasMetricsSummary {
         target_names: &[String],
         window_size: usize,
     ) -> Result<(), String> {
-        if record.is_secondary() || record.is_supplementary() {
-            return Ok(());
-        }
-        self.total_clusters += 1;
-        if self.emit_unique && !record.is_duplicate() {
-            self.unique_total_clusters += 1;
+        if !record.is_paired() || record.is_first_in_template() {
+            self.total_clusters += 1;
+            if self.emit_unique && !record.is_duplicate() {
+                self.unique_total_clusters += 1;
+            }
         }
         if record.is_unmapped() || record.tid() < 0 {
             return Ok(());
+        }
+        self.summary_aligned_reads += 1;
+        if self.emit_unique && !record.is_duplicate() {
+            self.unique_summary_aligned_reads += 1;
         }
         self.aligned_reads += 1;
         if self.emit_unique && !record.is_duplicate() {
@@ -12571,8 +12650,21 @@ impl GcBiasMetricsSummary {
         if reference.len() < window_size {
             return Ok(());
         }
-        let start = (record.pos().max(0) as usize).min(reference.len() - window_size);
-        let gc = gc_percent(&reference[start..start + window_size], window_size);
+        let start = if record.is_reverse() {
+            record.cigar().end_pos() - window_size as i64
+        } else {
+            record.pos() + 1
+        };
+        if start <= 0 {
+            return Ok(());
+        }
+        let start = start as usize;
+        if start + window_size > reference.len() {
+            return Ok(());
+        }
+        let Some(gc) = gc_percent(&reference[start..start + window_size], window_size) else {
+            return Ok(());
+        };
         self.read_starts[gc] += 1;
         let quality_sum = record
             .qual()
@@ -12600,7 +12692,6 @@ impl GcBiasMetricsSummary {
             &self.read_starts,
             &self.base_quality_sums,
             &self.base_quality_counts,
-            self.aligned_reads,
             minimum_genome_fraction,
         );
         if self.emit_unique {
@@ -12610,7 +12701,6 @@ impl GcBiasMetricsSummary {
                 &self.unique_read_starts,
                 &self.unique_base_quality_sums,
                 &self.unique_base_quality_counts,
-                self.unique_aligned_reads,
                 minimum_genome_fraction,
             );
         }
@@ -12624,14 +12714,14 @@ impl GcBiasMetricsSummary {
         read_starts_by_gc: &[u64; 101],
         base_quality_sums_by_gc: &[u64; 101],
         base_quality_counts_by_gc: &[u64; 101],
-        aligned_reads: u64,
         minimum_genome_fraction: f64,
     ) {
         let total_windows = self.total_windows();
+        let total_read_starts = read_starts_by_gc.iter().sum::<u64>();
         let mean_reads_per_window = if total_windows == 0 {
             0.0
         } else {
-            aligned_reads as f64 / total_windows as f64
+            total_read_starts as f64 / total_windows as f64
         };
         for (gc, read_starts) in read_starts_by_gc.iter().copied().enumerate() {
             let windows = self.windows[gc];
@@ -12676,7 +12766,7 @@ impl GcBiasMetricsSummary {
             "ALL",
             window_size,
             self.total_clusters,
-            self.aligned_reads,
+            self.summary_aligned_reads,
             &self.read_starts,
             minimum_genome_fraction,
         );
@@ -12686,7 +12776,7 @@ impl GcBiasMetricsSummary {
                 "UNIQUE",
                 window_size,
                 self.unique_total_clusters,
-                self.unique_aligned_reads,
+                self.unique_summary_aligned_reads,
                 &self.unique_read_starts,
                 minimum_genome_fraction,
             );
@@ -12704,55 +12794,38 @@ impl GcBiasMetricsSummary {
         read_starts_by_gc: &[u64; 101],
         minimum_genome_fraction: f64,
     ) {
-        let at_dropout = self.gc_dropout_slice(
-            read_starts_by_gc,
-            aligned_reads,
-            0,
-            49,
-            minimum_genome_fraction,
-        );
-        let gc_dropout = self.gc_dropout_slice(
-            read_starts_by_gc,
-            aligned_reads,
-            50,
-            100,
-            minimum_genome_fraction,
-        );
+        let at_dropout = self.gc_dropout_slice(read_starts_by_gc, 0, 50, minimum_genome_fraction);
+        let gc_dropout = self.gc_dropout_slice(read_starts_by_gc, 51, 100, minimum_genome_fraction);
         output.push_str(&format!(
             "All Reads\t{reads_used}\t{window_size}\t{total_clusters}\t{aligned_reads}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t\t\t\n",
             format_float(at_dropout),
             format_float(gc_dropout),
             format_float(self.gc_nc_slice(
                 read_starts_by_gc,
-                aligned_reads,
                 0,
                 19,
                 minimum_genome_fraction
             )),
             format_float(self.gc_nc_slice(
                 read_starts_by_gc,
-                aligned_reads,
                 20,
                 39,
                 minimum_genome_fraction
             )),
             format_float(self.gc_nc_slice(
                 read_starts_by_gc,
-                aligned_reads,
                 40,
                 59,
                 minimum_genome_fraction
             )),
             format_float(self.gc_nc_slice(
                 read_starts_by_gc,
-                aligned_reads,
                 60,
                 79,
                 minimum_genome_fraction
             )),
             format_float(self.gc_nc_slice(
                 read_starts_by_gc,
-                aligned_reads,
                 80,
                 100,
                 minimum_genome_fraction
@@ -12767,13 +12840,13 @@ impl GcBiasMetricsSummary {
     fn gc_nc_slice(
         &self,
         read_starts_by_gc: &[u64; 101],
-        aligned_reads: u64,
         low: usize,
         high: usize,
         minimum_genome_fraction: f64,
     ) -> f64 {
         let total_windows = self.total_windows();
-        if total_windows == 0 || aligned_reads == 0 {
+        let total_read_starts = read_starts_by_gc.iter().sum::<u64>();
+        if total_windows == 0 || total_read_starts == 0 {
             return 0.0;
         }
         let mut windows = 0_u64;
@@ -12793,23 +12866,23 @@ impl GcBiasMetricsSummary {
         if windows == 0 {
             0.0
         } else {
-            (read_starts as f64 / windows as f64) / (aligned_reads as f64 / total_windows as f64)
+            (read_starts as f64 / windows as f64)
+                / (total_read_starts as f64 / total_windows as f64)
         }
     }
 
     fn gc_dropout_slice(
         &self,
         read_starts_by_gc: &[u64; 101],
-        aligned_reads: u64,
         low: usize,
         high: usize,
         minimum_genome_fraction: f64,
     ) -> f64 {
         let total_windows = self.total_windows();
-        if total_windows == 0 || aligned_reads == 0 {
+        let total_read_starts = read_starts_by_gc.iter().sum::<u64>();
+        if total_windows == 0 || total_read_starts == 0 {
             return 0.0;
         }
-        let mean_reads_per_window = aligned_reads as f64 / total_windows as f64;
         let mut dropout = 0.0;
         for (gc, read_starts_for_gc) in read_starts_by_gc
             .iter()
@@ -12825,22 +12898,31 @@ impl GcBiasMetricsSummary {
             if genome_fraction < minimum_genome_fraction {
                 continue;
             }
-            let normalized_coverage =
-                (*read_starts_for_gc as f64 / windows as f64) / mean_reads_per_window;
-            if normalized_coverage < 1.0 {
-                dropout += genome_fraction * (1.0 - normalized_coverage);
+            let read_fraction = *read_starts_for_gc as f64 / total_read_starts as f64;
+            let dropout_for_gc = genome_fraction - read_fraction;
+            if dropout_for_gc > 0.0 {
+                dropout += dropout_for_gc;
             }
         }
         dropout * 100.0
     }
 }
 
-fn gc_percent(window: &[u8], window_size: usize) -> usize {
-    let gc = window
-        .iter()
-        .filter(|base| matches!(base.to_ascii_uppercase(), b'G' | b'C'))
-        .count();
-    ((gc * 100) + (window_size / 2)) / window_size
+fn gc_percent(window: &[u8], window_size: usize) -> Option<usize> {
+    let mut gc = 0_usize;
+    let mut no_calls = 0_usize;
+    for base in window {
+        match base.to_ascii_uppercase() {
+            b'G' | b'C' => gc += 1,
+            b'N' => no_calls += 1,
+            _ => {}
+        }
+    }
+    if no_calls > 4 {
+        None
+    } else {
+        Some((gc * 100) / window_size)
+    }
 }
 
 fn collect_mean_quality_by_cycle_sam_text(
@@ -13050,14 +13132,6 @@ impl MeanQualityByCycleSummary {
             output.push_str("CYCLE\tMEAN_QUALITY\n");
             write_mean_quality_cycles(&mut output, 0, &self.first);
             write_mean_quality_cycles(&mut output, self.first.len(), &self.second);
-        } else if self.original_records == self.records {
-            output.push_str("CYCLE\tMEAN_ORIGINAL_QUALITY\n");
-            write_mean_quality_cycles(&mut output, 0, &self.original_first);
-            write_mean_quality_cycles(
-                &mut output,
-                self.original_first.len(),
-                &self.original_second,
-            );
         } else {
             output.push_str("CYCLE\tMEAN_QUALITY\tMEAN_ORIGINAL_QUALITY\n");
             write_mean_quality_combined_cycles(&mut output, 0, &self.first, &self.original_first);
@@ -16355,6 +16429,27 @@ fn open_bam_reader_with_reference(
     hts_io::open_reader(path, reference)
 }
 
+fn open_bam_reader_for_validate_sam_file(
+    path: impl AsRef<Path>,
+    reference: Option<&str>,
+) -> Result<bam::Reader, String> {
+    let path = path.as_ref();
+    let mut reader = open_bam_reader_with_reference(path, reference)?;
+    if path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("cram"))
+    {
+        reader
+            .set_cram_options(
+                hts_sys::hts_fmt_option_CRAM_OPT_DECODE_MD,
+                0 as hts_sys::sam_fields,
+            )
+            .map_err(|error| error.to_string())?;
+    }
+    Ok(reader)
+}
+
 fn open_bam_reader_for_args(
     path: impl AsRef<Path>,
     args: &BTreeMap<String, Vec<String>>,
@@ -17145,6 +17240,29 @@ fn header_sort_order(header: &bam::HeaderView) -> Option<String> {
                 .find_map(|field| field.strip_prefix("SO:"))
         })
         .map(ToString::to_string)
+}
+
+fn read_group_ids_from_header(header: &bam::HeaderView) -> BTreeSet<String> {
+    let header_text = String::from_utf8_lossy(header.as_bytes());
+    header_text
+        .lines()
+        .filter(|line| line.starts_with("@RG\t"))
+        .filter_map(read_group_id)
+        .collect()
+}
+
+fn remove_stale_read_group(
+    record: &mut bam::Record,
+    replacement_read_groups: &BTreeSet<String>,
+) -> Result<(), String> {
+    let should_remove = match record.aux(b"RG") {
+        Ok(Aux::String(read_group)) => !replacement_read_groups.contains(read_group),
+        _ => false,
+    };
+    if should_remove {
+        remove_aux_if_present(record, b"RG")?;
+    }
+    Ok(())
 }
 
 fn sorted_header(source: &bam::HeaderView, sort_order: SortOrder) -> bam::Header {
@@ -18042,8 +18160,10 @@ mod tests {
             active_sequence: Vec::new(),
             total_clusters: 1,
             aligned_reads: 1,
+            summary_aligned_reads: 1,
             unique_total_clusters: 0,
             unique_aligned_reads: 0,
+            unique_summary_aligned_reads: 0,
             emit_unique: false,
         };
 

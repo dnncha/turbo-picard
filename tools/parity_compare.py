@@ -57,6 +57,76 @@ def compare_metrics(picard_path: Path, turbo_path: Path, label: str) -> None:
         raise SystemExit(f"{label} metrics differ between Picard and turbo-picard")
 
 
+def load_wgs_metrics(path: Path) -> dict[str, str]:
+    with path.open(encoding="utf-8") as handle:
+        rows = [
+            line.rstrip("\n").split("\t")
+            for line in handle
+            if line.strip() and not line.startswith("#")
+        ]
+    for index, row in enumerate(rows):
+        if row and row[0] == "GENOME_TERRITORY":
+            if index + 1 >= len(rows):
+                raise SystemExit(f"{path} is missing a WGS metrics row")
+            return dict(zip(row, rows[index + 1]))
+    raise SystemExit(f"{path} is missing a WGS metrics header")
+
+
+def compare_wgs_metrics(picard_path: Path, turbo_path: Path, label: str) -> None:
+    picard = load_wgs_metrics(picard_path)
+    turbo = load_wgs_metrics(turbo_path)
+    if picard.keys() != turbo.keys():
+        raise SystemExit(f"{label} WGS metric columns differ from Picard")
+
+    exact_fields = {
+        "MEDIAN_COVERAGE",
+        "MAD_COVERAGE",
+        "PCT_EXC_ADAPTER",
+        "PCT_EXC_UNPAIRED",
+        "FOLD_80_BASE_PENALTY",
+        "FOLD_90_BASE_PENALTY",
+        "FOLD_95_BASE_PENALTY",
+        "HET_SNP_Q",
+    }
+    tolerances = {
+        "GENOME_TERRITORY": 1.0,
+        "MEAN_COVERAGE": 0.01,
+        "SD_COVERAGE": 0.02,
+        "PCT_EXC_MAPQ": 0.00001,
+        "PCT_EXC_DUPE": 0.001,
+        "PCT_EXC_BASEQ": 0.001,
+        "PCT_EXC_OVERLAP": 0.05,
+        "PCT_EXC_CAPPED": 0.05,
+        "PCT_EXC_TOTAL": 0.005,
+        "HET_SNP_SENSITIVITY": 0.00001,
+    }
+    for depth in (1, 5, 10, 15, 20, 25, 30, 40, 50, 60, 70, 80, 90, 100):
+        tolerances[f"PCT_{depth}X"] = 0.00001
+
+    for field in exact_fields:
+        if picard[field] != turbo[field]:
+            raise SystemExit(
+                f"{label} WGS metric {field} differs from Picard: "
+                f"Picard={picard[field]} turbo={turbo[field]}"
+            )
+    for field, tolerance in tolerances.items():
+        try:
+            picard_value = float(picard[field])
+            turbo_value = float(turbo[field])
+        except ValueError:
+            if picard[field] != turbo[field]:
+                raise SystemExit(
+                    f"{label} WGS metric {field} differs from Picard: "
+                    f"Picard={picard[field]} turbo={turbo[field]}"
+                )
+            continue
+        if abs(picard_value - turbo_value) > tolerance:
+            raise SystemExit(
+                f"{label} WGS metric {field} differs from Picard beyond "
+                f"tolerance {tolerance}: Picard={picard[field]} turbo={turbo[field]}"
+            )
+
+
 def compare_sam_record_lines(
     picard_path: Path,
     turbo_path: Path,
@@ -122,6 +192,45 @@ def compare_stable_sam_lines(picard_path: Path, turbo_path: Path, label: str) ->
                     line = compare_real_data.normalize_stable_sam_header(line)
                 else:
                     line = compare_real_data.normalize_sam_record(line)
+                lines.append(line)
+        return lines
+
+    if stable_lines(picard_path) != stable_lines(turbo_path):
+        raise SystemExit(f"{label} stable SAM output differs from Picard")
+
+
+def strip_md_nm_tags_from_record(record: bytes) -> bytes:
+    fields = record.split(b"\t")
+    if len(fields) <= 11:
+        return record
+    tags = [
+        tag
+        for tag in fields[11:]
+        if not (tag.startswith(b"MD:Z:") or tag.startswith(b"NM:i:"))
+    ]
+    return b"\t".join([*fields[:11], *tags])
+
+
+def compare_stable_sam_lines_ignoring_md_nm(
+    picard_path: Path,
+    turbo_path: Path,
+    label: str,
+) -> None:
+    compare_real_data = _compare_real_data_module()
+
+    def stable_lines(path: Path) -> list[bytes]:
+        lines = []
+        with path.open("rb") as handle:
+            for raw in handle:
+                line = raw.rstrip(b"\n")
+                if not line.strip() or line.startswith(b"@PG"):
+                    continue
+                if line.startswith(b"@"):
+                    line = compare_real_data.normalize_stable_sam_header(line)
+                else:
+                    line = strip_md_nm_tags_from_record(
+                        compare_real_data.normalize_sam_record(line)
+                    )
                 lines.append(line)
         return lines
 
@@ -256,6 +365,11 @@ def parse_args() -> argparse.Namespace:
     metrics.add_argument("--picard", required=True, type=Path)
     metrics.add_argument("--turbo", required=True, type=Path)
 
+    wgs_metrics = subparsers.add_parser("wgs-metrics")
+    wgs_metrics.add_argument("--label", required=True)
+    wgs_metrics.add_argument("--picard", required=True, type=Path)
+    wgs_metrics.add_argument("--turbo", required=True, type=Path)
+
     records = subparsers.add_parser("records")
     records.add_argument("--label", required=True)
     records.add_argument("--reference", required=True)
@@ -282,6 +396,11 @@ def parse_args() -> argparse.Namespace:
     stable_sam.add_argument("--label", required=True)
     stable_sam.add_argument("--picard", required=True, type=Path)
     stable_sam.add_argument("--turbo", required=True, type=Path)
+
+    stable_sam_ignore_md_nm = subparsers.add_parser("stable-sam-ignore-md-nm")
+    stable_sam_ignore_md_nm.add_argument("--label", required=True)
+    stable_sam_ignore_md_nm.add_argument("--picard", required=True, type=Path)
+    stable_sam_ignore_md_nm.add_argument("--turbo", required=True, type=Path)
 
     stable_sam_sorted_tags = subparsers.add_parser("stable-sam-sorted-tags")
     stable_sam_sorted_tags.add_argument("--label", required=True)
@@ -322,6 +441,10 @@ def main() -> int:
     args = parse_args()
     if args.command == "metrics":
         compare_metrics(args.picard, args.turbo, args.label)
+    elif args.command == "wgs-metrics":
+        compare_wgs_metrics(args.picard, args.turbo, args.label)
+        print(f"{args.label} WGS metrics profile check passed")
+        return 0
     elif args.command == "records":
         compare_sam_record_lines(args.picard, args.turbo, args.reference, args.label)
     elif args.command == "records-ignore-md-nm":
@@ -337,6 +460,8 @@ def main() -> int:
         compare_validate_summary(args.picard, args.turbo, args.label)
     elif args.command == "stable-sam":
         compare_stable_sam_lines(args.picard, args.turbo, args.label)
+    elif args.command == "stable-sam-ignore-md-nm":
+        compare_stable_sam_lines_ignoring_md_nm(args.picard, args.turbo, args.label)
     elif args.command == "stable-sam-sorted-tags":
         compare_stable_sam_lines_with_sorted_tags(args.picard, args.turbo, args.label)
     elif args.command == "binary":

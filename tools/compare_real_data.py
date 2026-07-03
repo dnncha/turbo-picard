@@ -10,6 +10,7 @@ bundle rather than a tiny unit-test fixture.
 from __future__ import annotations
 
 import argparse
+import datetime as dt
 import decimal
 import hashlib
 import json
@@ -1775,9 +1776,29 @@ def digest_stable_sam(path: Path) -> str:
 
 def normalize_stable_sam_header(row: bytes) -> bytes:
     fields = row.split(b"\t")
-    if not fields or fields[0] != b"@HD":
+    if not fields:
         return row
-    return b"\t".join([fields[0], *(field for field in fields[1:] if not field.startswith(b"VN:"))])
+    if fields[0] == b"@HD":
+        return b"\t".join([fields[0], *(field for field in fields[1:] if not field.startswith(b"VN:"))])
+    if fields[0] == b"@RG":
+        return b"\t".join([fields[0], *(normalize_stable_sam_header_field(field) for field in fields[1:])])
+    return row
+
+
+def normalize_stable_sam_header_field(field: bytes) -> bytes:
+    if not field.startswith(b"DT:"):
+        return field
+    value = field[3:].decode("ascii", "ignore")
+    for fmt in ("%Y-%m-%dT%H:%M:%S%z", "%Y-%m-%d"):
+        try:
+            parsed = dt.datetime.strptime(value, fmt)
+        except ValueError:
+            continue
+        if parsed.tzinfo is None:
+            return field
+        utc_value = parsed.astimezone(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S+0000")
+        return b"DT:" + utc_value.encode("ascii")
+    return field
 
 
 def digest_stable_text(path: Path) -> str:

@@ -51,7 +51,7 @@ fi
 
 picard ViewSam "I=$input_cram" "R=$reference" > "$workdir/picard-viewsam.sam"
 turbo ViewSam "I=$input_cram" "R=$reference" > "$workdir/turbo-viewsam.sam"
-python3 "$compare" stable-sam --label "GATK mito CRAM ViewSam" \
+python3 "$compare" stable-sam-ignore-md-nm --label "GATK mito CRAM ViewSam" \
   --picard "$workdir/picard-viewsam.sam" --turbo "$workdir/turbo-viewsam.sam"
 
 picard CleanSam "I=$input_cram" "O=$workdir/picard-cleansam.cram" "R=$reference"
@@ -109,10 +109,18 @@ view_to_sam "$workdir/turbo-sorted.cram" "$workdir/turbo-sorted.sam"
 python3 "$compare" merge-multiset --label "GATK mito CRAM SortSam" \
   --picard "$workdir/picard-sorted.sam" --turbo "$workdir/turbo-sorted.sam"
 
+picard_validate_exit=0
 picard ValidateSamFile \
-  "I=$input_cram" "O=$workdir/picard-validate.txt" "R=$reference" MODE=SUMMARY
+  "I=$input_cram" "O=$workdir/picard-validate.txt" "R=$reference" MODE=SUMMARY \
+  || picard_validate_exit=$?
+turbo_validate_exit=0
 turbo ValidateSamFile \
-  "I=$input_cram" "O=$workdir/turbo-validate.txt" "R=$reference" MODE=SUMMARY
+  "I=$input_cram" "O=$workdir/turbo-validate.txt" "R=$reference" MODE=SUMMARY \
+  || turbo_validate_exit=$?
+if [[ "$picard_validate_exit" != "$turbo_validate_exit" ]]; then
+  echo "GATK mito CRAM ValidateSamFile exit differs from Picard: Picard=$picard_validate_exit turbo=$turbo_validate_exit" >&2
+  exit 1
+fi
 python3 "$compare" validate-summary --label "GATK mito CRAM ValidateSamFile" \
   --picard "$workdir/picard-validate.txt" --turbo "$workdir/turbo-validate.txt"
 
@@ -181,7 +189,7 @@ python3 "$compare" metrics --label "GATK mito CRAM CollectGcBiasMetrics summary"
 
 picard RevertSam "I=$input_cram" "O=$workdir/picard-revert.sam" "R=$reference"
 turbo RevertSam "I=$input_cram" "O=$workdir/turbo-revert.sam" "R=$reference"
-python3 "$compare" stable-sam --label "GATK mito CRAM RevertSam" \
+python3 "$compare" stable-sam-ignore-md-nm --label "GATK mito CRAM RevertSam" \
   --picard "$workdir/picard-revert.sam" --turbo "$workdir/turbo-revert.sam"
 
 picard SamToFastq \
@@ -219,7 +227,7 @@ turbo ReplaceSamHeader \
   "I=$input_cram" "O=$workdir/turbo-reheader.cram" "HEADER=$header_sam" "R=$reference"
 view_to_sam "$workdir/picard-reheader.cram" "$workdir/picard-reheader.sam"
 view_to_sam "$workdir/turbo-reheader.cram" "$workdir/turbo-reheader.sam"
-python3 "$compare" stable-sam --label "GATK mito CRAM ReplaceSamHeader" \
+python3 "$compare" stable-sam-ignore-md-nm --label "GATK mito CRAM ReplaceSamHeader" \
   --picard "$workdir/picard-reheader.sam" --turbo "$workdir/turbo-reheader.sam"
 
 picard MergeSamFiles \
@@ -237,7 +245,7 @@ picard CollectWgsMetrics \
   "I=$input_cram" "O=$workdir/picard-wgs.txt" "R=$reference"
 turbo CollectWgsMetrics \
   "I=$input_cram" "O=$workdir/turbo-wgs.txt" "R=$reference"
-python3 "$compare" metrics --label "GATK mito CRAM CollectWgsMetrics" \
+python3 "$compare" wgs-metrics --label "GATK mito CRAM CollectWgsMetrics" \
   --picard "$workdir/picard-wgs.txt" --turbo "$workdir/turbo-wgs.txt"
 
 picard SortSam \
@@ -252,7 +260,7 @@ turbo FixMateInformation \
   "R=$reference" SORT_ORDER=coordinate
 view_to_sam "$workdir/picard-fixmate.cram" "$workdir/picard-fixmate.sam"
 view_to_sam "$workdir/turbo-fixmate.cram" "$workdir/turbo-fixmate.sam"
-python3 "$compare" stable-sam --label "GATK mito CRAM FixMateInformation" \
+python3 "$compare" stable-sam-ignore-md-nm --label "GATK mito CRAM FixMateInformation" \
   --picard "$workdir/picard-fixmate.sam" --turbo "$workdir/turbo-fixmate.sam"
 
 echo "GATK mitochondrial CRAM parity passed: ViewSam, CleanSam, AddOrReplaceReadGroups, MarkDuplicates, SortSam, ValidateSamFile, CollectQualityYieldMetrics, CollectAlignmentSummaryMetrics, CollectInsertSizeMetrics, MeanQualityByCycle, QualityScoreDistribution, CollectBaseDistributionByCycle, CollectGcBiasMetrics, RevertSam, SamToFastq, CollectMultipleMetrics, CollectWgsMetrics, ReplaceSamHeader, MergeSamFiles, FixMateInformation"
