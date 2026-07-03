@@ -16820,7 +16820,7 @@ fn set_nm_md_uq_tags(
     references_by_tid: &[Option<&[u8]>],
     set_only_uq: bool,
 ) -> Result<(), String> {
-    if record.is_unmapped() || record.is_secondary() || record.is_supplementary() {
+    if record.is_unmapped() {
         return Ok(());
     }
     if record.tid() < 0 || record.pos() < 0 {

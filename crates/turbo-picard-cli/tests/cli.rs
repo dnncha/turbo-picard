@@ -5996,6 +5996,46 @@ fn setnmmdanduqtags_set_only_uq_preserves_existing_nm_md() {
 }
 
 #[test]
+fn setnmmdanduqtags_updates_secondary_and_supplementary_records() {
+    let tempdir = tempfile::tempdir().expect("tempdir exists");
+    let reference = tempdir.path().join("ref.fa");
+    let input = tempdir.path().join("input.sam");
+    let output = tempdir.path().join("tagged.sam");
+    fs::write(&reference, ">chr1\nACGTACGTACGT\n").expect("reference is written");
+    fs::write(
+        &input,
+        concat!(
+            "@HD\tVN:1.6\tSO:coordinate\n",
+            "@SQ\tSN:chr1\tLN:12\n",
+            "secondary\t256\tchr1\t1\t60\t4M\t*\t0\t0\tACGA\tFFFF\n",
+            "supplementary\t2048\tchr1\t5\t60\t2M1I2M\t*\t0\t0\tACGTA\tFFFFF\n",
+        ),
+    )
+    .expect("input fixture is written");
+
+    Command::cargo_bin("picard")
+        .expect("binary exists")
+        .args([
+            "SetNmMdAndUqTags",
+            &format!("I={}", input.display()),
+            &format!("O={}", output.display()),
+            &format!("R={}", reference.display()),
+            "VALIDATION_STRINGENCY=SILENT",
+            "QUIET=true",
+        ])
+        .assert()
+        .success();
+
+    let tagged = fs::read_to_string(output).expect("tagged SAM exists");
+    assert!(tagged.contains(
+        "secondary\t256\tchr1\t1\t60\t4M\t*\t0\t0\tACGA\tFFFF\tMD:Z:3T0\tNM:i:1\tUQ:i:37\n"
+    ));
+    assert!(tagged.contains(
+        "supplementary\t2048\tchr1\t5\t60\t2M1I2M\t*\t0\t0\tACGTA\tFFFFF\tMD:Z:2G0T0\tNM:i:3\tUQ:i:74\n"
+    ));
+}
+
+#[test]
 fn setnmmdanduqtags_writes_md5_sidecar_but_no_index_for_sam_output() {
     let tempdir = tempfile::tempdir().expect("tempdir exists");
     let reference = tempdir.path().join("ref.fa");
