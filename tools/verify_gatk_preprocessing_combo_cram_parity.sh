@@ -98,7 +98,7 @@ turbo SetNmMdAndUqTags \
   "R=$reference"
 view_to_sam "$workdir/picard-setnmmd.cram" "$workdir/picard-setnmmd.sam"
 view_to_sam "$workdir/turbo-setnmmd.cram" "$workdir/turbo-setnmmd.sam"
-python3 "$compare" stable-sam --label "GATK combo CRAM SetNmMdAndUqTags" \
+python3 "$compare" merge-multiset --label "GATK combo CRAM SetNmMdAndUqTags" \
   --picard "$workdir/picard-setnmmd.sam" --turbo "$workdir/turbo-setnmmd.sam"
 
 echo "GATK preprocessing CRAM combo parity passed: MarkDuplicates, raw-shard SortSam, post-markdup SortSam, FixMateInformation, SetNmMdAndUqTags"
