@@ -144,6 +144,9 @@ def validate_workflow_starters() -> list[str]:
 
     one_command_trial = _read(WORKFLOWS / "one-command-trial.md")
     for needle, description in [
+        ("python3 -m pip install turbo-picard", "PyPI install command in one-command-trial"),
+        ("turbo-picard doctor", "doctor smoke check in one-command-trial"),
+        ("--commands MarkDuplicates", "compare_real_data MarkDuplicates command in one-command-trial"),
         ("trial-samtofastq.nf", "Nextflow SamToFastq trial mention in one-command-trial"),
         ("trial-samtofastq.wdl", "SamToFastq trial mention in one-command-trial"),
         ("trial-fastqtosam.wdl", "WDL FastqToSam trial mention in one-command-trial"),
