@@ -37,7 +37,7 @@ Ground rules:
 
 Current facts to keep consistent:
 
-- Live package: `turbo-picard` 0.1.5
+- Live package: `turbo-picard` 0.1.6
 - Next repo release target: 0.1.7
 - Install: `python3 -m pip install turbo-picard`
 - Current PyPI files: macOS Apple Silicon wheel and source distribution

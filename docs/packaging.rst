@@ -38,7 +38,7 @@ as Python wheel scripts:
 
    python3 -m pip install turbo-picard
 
-The live PyPI release is ``0.1.5``. It publishes a macOS Apple Silicon wheel and
+The live PyPI release is ``0.1.6``. It publishes a macOS Apple Silicon wheel and
 a source distribution. Release ``0.1.7`` is prepared to add a Linux x86_64 wheel
 through the GitHub publishing workflow. Until that wheel is published, Linux
 ``pip`` installs may build from source, which means the machine needs a Rust
