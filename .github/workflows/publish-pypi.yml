@@ -32,6 +32,9 @@ jobs:
           manylinux: 2014
           before-script-linux: |
             yum install -y perl-core
+            LIBCLANG_SO="$(find /opt/clang -name 'libclang.so*' -print -quit)"
+            test -n "$LIBCLANG_SO"
+            export LIBCLANG_PATH="$(dirname "$LIBCLANG_SO")"
           args: --release --locked --compatibility pypi --out dist
 
       - name: Upload wheel
