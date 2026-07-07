@@ -801,11 +801,12 @@ fn print_explain_help(program_name: &str) {
     println!(
         "\
 Usage: {program_name} explain <PicardCommand> [KEY=VALUE ...]
+       {program_name} explain --json <PicardCommand> [KEY=VALUE ...]
 
 Explains the documented execution path for a Picard-shaped command. The report
 shows native/fallback status, documented native scope, documented fallback scope,
 resolved fallback command, and declared output arguments from the provided
-KEY=VALUE arguments."
+KEY=VALUE arguments. Use --json for workflow-manager and CI integrations."
     );
 }
 
@@ -846,52 +847,165 @@ fn run_doctor(program_name: &str) {
 }
 
 fn run_explain(args: &[String]) -> Result<(), String> {
+    let (format, args) = parse_explain_args(args)?;
     let command = args
         .first()
         .ok_or_else(|| "usage: turbo-picard explain <PicardCommand> [KEY=VALUE ...]".to_string())?;
     let Some(metadata) = command_matrix_entry(command) else {
         if is_picard_reference_command(command) {
-            println!("command={command}");
-            println!("status=fallback-only");
-            println!("native_scope=No native metadata is available for this Picard command.");
-            println!(
-                "fallback_scope=Transparent upstream Picard delegation when fallback is configured or auto-discovered."
-            );
-            print_explain_fallback();
-            print_declared_outputs(&args[1..]);
+            let report = ExplainReport {
+                command: command.clone(),
+                status: "fallback-only".to_string(),
+                native_scope: "No native metadata is available for this Picard command."
+                    .to_string(),
+                fallback_scope: "Transparent upstream Picard delegation when fallback is configured or auto-discovered."
+                    .to_string(),
+                execution_path: "fallback".to_string(),
+                fallback_command: explain_fallback_command(),
+                declared_outputs: declared_outputs(&args[1..]),
+            };
+            print_explain_report(&report, format);
             return Ok(());
         }
         return Err(format!("unsupported Picard command: {command}"));
     };
 
-    println!("command={}", metadata.name);
-    println!("status={}", metadata.status);
-    println!("native_scope={}", metadata.native_scope);
-    println!("fallback_scope={}", metadata.fallback_scope);
-    println!(
-        "execution_path={}",
-        match metadata.status.as_str() {
+    let report = ExplainReport {
+        command: metadata.name,
+        execution_path: match metadata.status.as_str() {
             "native" => "native",
             "partial-native" => "native-when-inside-documented-scope-otherwise-fallback",
             "fallback-only" => "fallback",
             _ => "see-command-matrix",
         }
-    );
-    print_explain_fallback();
-    print_declared_outputs(&args[1..]);
+        .to_string(),
+        fallback_command: explain_fallback_command(),
+        declared_outputs: declared_outputs(&args[1..]),
+        status: metadata.status,
+        native_scope: metadata.native_scope,
+        fallback_scope: metadata.fallback_scope,
+    };
+    print_explain_report(&report, format);
     Ok(())
 }
 
-fn print_explain_fallback() {
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ExplainFormat {
+    Text,
+    Json,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct ExplainReport {
+    command: String,
+    status: String,
+    native_scope: String,
+    fallback_scope: String,
+    execution_path: String,
+    fallback_command: String,
+    declared_outputs: Vec<String>,
+}
+
+fn parse_explain_args(args: &[String]) -> Result<(ExplainFormat, Vec<String>), String> {
+    let mut format = ExplainFormat::Text;
+    let mut command_args = Vec::new();
+
+    for arg in args {
+        match arg.as_str() {
+            "--json" => format = ExplainFormat::Json,
+            "--format=json" | "FORMAT=json" | "FORMAT=JSON" => format = ExplainFormat::Json,
+            "--format=text" | "FORMAT=text" | "FORMAT=TEXT" => format = ExplainFormat::Text,
+            value if value.starts_with("--format=") => {
+                return Err(format!("unsupported explain format option: {value}"));
+            }
+            _ => command_args.push(arg.clone()),
+        }
+    }
+
+    Ok((format, command_args))
+}
+
+fn explain_fallback_command() -> String {
     match resolve_fallback_command() {
-        Some(command) => println!("fallback_command={command}"),
-        None => println!("fallback_command=not-found"),
+        Some(command) => command,
+        None => "not-found".to_string(),
     }
 }
 
-fn print_declared_outputs(args: &[String]) {
-    let outputs = args
-        .iter()
+fn print_explain_report(report: &ExplainReport, format: ExplainFormat) {
+    match format {
+        ExplainFormat::Text => print_explain_text(report),
+        ExplainFormat::Json => print_explain_json(report),
+    }
+}
+
+fn print_explain_text(report: &ExplainReport) {
+    println!("command={}", report.command);
+    println!("status={}", report.status);
+    println!("native_scope={}", report.native_scope);
+    println!("fallback_scope={}", report.fallback_scope);
+    println!("execution_path={}", report.execution_path);
+    println!("fallback_command={}", report.fallback_command);
+    if report.declared_outputs.is_empty() {
+        println!("declared_outputs=none");
+    } else {
+        println!("declared_outputs={}", report.declared_outputs.join(","));
+    }
+}
+
+fn print_explain_json(report: &ExplainReport) {
+    println!("{{");
+    println!("  \"command\": {},", json_string(&report.command));
+    println!("  \"status\": {},", json_string(&report.status));
+    println!("  \"native_scope\": {},", json_string(&report.native_scope));
+    println!(
+        "  \"fallback_scope\": {},",
+        json_string(&report.fallback_scope)
+    );
+    println!(
+        "  \"execution_path\": {},",
+        json_string(&report.execution_path)
+    );
+    println!(
+        "  \"fallback_command\": {},",
+        json_string(&report.fallback_command)
+    );
+    println!("  \"declared_outputs\": [");
+    for (index, output) in report.declared_outputs.iter().enumerate() {
+        let comma = if index + 1 == report.declared_outputs.len() {
+            ""
+        } else {
+            ","
+        };
+        println!("    {}{}", json_string(output), comma);
+    }
+    println!("  ]");
+    println!("}}");
+}
+
+fn json_string(value: &str) -> String {
+    let mut escaped = String::with_capacity(value.len() + 2);
+    escaped.push('"');
+    for character in value.chars() {
+        match character {
+            '"' => escaped.push_str("\\\""),
+            '\\' => escaped.push_str("\\\\"),
+            '\n' => escaped.push_str("\\n"),
+            '\r' => escaped.push_str("\\r"),
+            '\t' => escaped.push_str("\\t"),
+            value if value.is_control() => {
+                use std::fmt::Write as _;
+                let _ = write!(escaped, "\\u{:04x}", value as u32);
+            }
+            value => escaped.push(value),
+        }
+    }
+    escaped.push('"');
+    escaped
+}
+
+fn declared_outputs(args: &[String]) -> Vec<String> {
+    args.iter()
         .filter_map(|arg| arg.split_once('='))
         .filter(|(key, value)| {
             !value.is_empty()
@@ -911,12 +1025,7 @@ fn print_declared_outputs(args: &[String]) {
                 )
         })
         .map(|(key, value)| format!("{key}={value}"))
-        .collect::<Vec<_>>();
-    if outputs.is_empty() {
-        println!("declared_outputs=none");
-    } else {
-        println!("declared_outputs={}", outputs.join(","));
-    }
+        .collect::<Vec<_>>()
 }
 
 #[derive(Debug, PartialEq, Eq)]

@@ -112,6 +112,20 @@ Current release builds report ``gpu_acceleration=not-enabled``. That is
 intentional: a production pipeline should know whether GPU acceleration is
 really available instead of silently running on the threaded CPU path.
 
+Workflow preflight
+------------------
+
+Use ``explain`` before switching a task. The text form is useful while
+debugging; the JSON form is intended for workflow wrappers and CI checks:
+
+.. code-block:: bash
+
+   turbo-picard explain MarkDuplicates I=input.bam O=marked.bam M=metrics.txt
+   turbo-picard explain --json MarkDuplicates I=input.bam O=marked.bam M=metrics.txt
+
+The JSON report includes the command status, execution path, resolved fallback
+command, and the output arguments declared on the command line.
+
 Good first commands
 -------------------
 

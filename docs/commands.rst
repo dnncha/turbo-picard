@@ -40,6 +40,12 @@ machine-readable matrix below for the exact accelerated versus delegated split.
    turbo-picard AccelerationStatus
    turbo-picard doctor
    turbo-picard explain MarkDuplicates I=input.bam O=marked.bam M=metrics.txt
+   turbo-picard explain --json MarkDuplicates I=input.bam O=marked.bam M=metrics.txt
+
+Use the text ``explain`` output for interactive checks. Use ``--json`` when a
+workflow wrapper, CI check, or platform module needs to read the command status,
+execution path, fallback command, and declared output arguments without parsing
+human text.
 
 Metrics and repair examples
 ---------------------------

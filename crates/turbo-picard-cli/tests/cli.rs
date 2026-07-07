@@ -132,6 +132,48 @@ fn explain_reports_fallback_only_reference_commands() {
 }
 
 #[test]
+fn explain_json_reports_workflow_integration_contract() {
+    let tempdir = tempfile::tempdir().expect("tempdir exists");
+    let fallback = fallback_script(tempdir.path(), 0);
+
+    let mut cmd = Command::cargo_bin("turbo-picard").expect("binary exists");
+    cmd.args([
+        "explain",
+        "--json",
+        "MarkDuplicates",
+        "I=input.bam",
+        "O=marked.bam",
+        "M=metrics.txt",
+    ])
+    .env(
+        "TURBO_PICARD_FALLBACK_COMMAND",
+        fallback.display().to_string(),
+    )
+    .assert()
+    .success()
+    .stdout(predicate::str::contains("\"command\": \"MarkDuplicates\""))
+    .stdout(predicate::str::contains("\"status\": \"partial-native\""))
+    .stdout(predicate::str::contains(
+        "\"execution_path\": \"native-when-inside-documented-scope-otherwise-fallback\"",
+    ))
+    .stdout(predicate::str::contains("\"fallback_command\": "))
+    .stdout(predicate::str::contains("\"O=marked.bam\""))
+    .stdout(predicate::str::contains("\"M=metrics.txt\""))
+    .stdout(predicate::str::contains("command=MarkDuplicates").not());
+}
+
+#[test]
+fn explain_rejects_unknown_format() {
+    let mut cmd = Command::cargo_bin("turbo-picard").expect("binary exists");
+    cmd.args(["explain", "--format=yaml", "MarkDuplicates"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "unsupported explain format option: --format=yaml",
+        ));
+}
+
+#[test]
 fn markduplicates_requires_metrics_file() {
     let mut cmd = Command::cargo_bin("turbo-picard").expect("binary exists");
     cmd.args(["MarkDuplicates", "I=in.bam", "O=out.bam"])
