@@ -13669,10 +13669,10 @@ struct GcBiasMetricsSummary {
     windows: [u64; 101],
     read_starts: [u64; 101],
     unique_read_starts: [u64; 101],
-    base_quality_sums: [u64; 101],
-    base_quality_counts: [u64; 101],
-    unique_base_quality_sums: [u64; 101],
-    unique_base_quality_counts: [u64; 101],
+    bases_by_gc: [u64; 101],
+    errors_by_gc: [u64; 101],
+    unique_bases_by_gc: [u64; 101],
+    unique_errors_by_gc: [u64; 101],
     reference_path: String,
     active_contig: Option<String>,
     active_sequence: Vec<u8>,
@@ -13691,10 +13691,10 @@ impl GcBiasMetricsSummary {
             windows: count_gc_bias_windows(reference_path, window_size)?,
             read_starts: [0; 101],
             unique_read_starts: [0; 101],
-            base_quality_sums: [0; 101],
-            base_quality_counts: [0; 101],
-            unique_base_quality_sums: [0; 101],
-            unique_base_quality_counts: [0; 101],
+            bases_by_gc: [0; 101],
+            errors_by_gc: [0; 101],
+            unique_bases_by_gc: [0; 101],
+            unique_errors_by_gc: [0; 101],
             reference_path: reference_path.to_string(),
             active_contig: None,
             active_sequence: Vec::new(),
@@ -13756,16 +13756,18 @@ impl GcBiasMetricsSummary {
         if start <= 0 {
             return Ok(());
         }
-        let start = start as usize;
-        if start + window_size > reference.len() {
-            return Ok(());
-        }
-        let Some(gc) = gc_percent(&reference[start..start + window_size], window_size) else {
+        let Some(gc) = picard_gc_percent_for_start(reference, start as usize, window_size) else {
             return Ok(());
         };
+        let bases = record.seq_len() as u64;
+        let errors = gc_bias_error_count(record, reference)?;
         self.read_starts[gc] += 1;
+        self.bases_by_gc[gc] += bases;
+        self.errors_by_gc[gc] += errors;
         if self.emit_unique && !record.is_duplicate() {
             self.unique_read_starts[gc] += 1;
+            self.unique_bases_by_gc[gc] += bases;
+            self.unique_errors_by_gc[gc] += errors;
         }
         Ok(())
     }
@@ -13832,11 +13834,7 @@ impl GcBiasMetricsSummary {
         if start <= 0 {
             return Ok(());
         }
-        let start = start as usize;
-        if start + window_size > reference.len() {
-            return Ok(());
-        }
-        let Some(gc) = gc_percent(&reference[start..start + window_size], window_size) else {
+        let Some(gc) = picard_gc_percent_for_start(reference, start as usize, window_size) else {
             return Ok(());
         };
         self.read_starts[gc] += 1;
@@ -13854,8 +13852,8 @@ impl GcBiasMetricsSummary {
             &mut output,
             "ALL",
             &self.read_starts,
-            &self.base_quality_sums,
-            &self.base_quality_counts,
+            &self.bases_by_gc,
+            &self.errors_by_gc,
             minimum_genome_fraction,
         );
         if self.emit_unique {
@@ -13863,8 +13861,8 @@ impl GcBiasMetricsSummary {
                 &mut output,
                 "UNIQUE",
                 &self.unique_read_starts,
-                &self.unique_base_quality_sums,
-                &self.unique_base_quality_counts,
+                &self.unique_bases_by_gc,
+                &self.unique_errors_by_gc,
                 minimum_genome_fraction,
             );
         }
@@ -13876,8 +13874,8 @@ impl GcBiasMetricsSummary {
         output: &mut String,
         reads_used: &str,
         read_starts_by_gc: &[u64; 101],
-        _base_quality_sums_by_gc: &[u64; 101],
-        _base_quality_counts_by_gc: &[u64; 101],
+        bases_by_gc: &[u64; 101],
+        errors_by_gc: &[u64; 101],
         minimum_genome_fraction: f64,
     ) {
         let total_windows = self.total_windows();
@@ -13907,8 +13905,8 @@ impl GcBiasMetricsSummary {
             } else {
                 normalized_coverage / (read_starts as f64).sqrt()
             };
-            // Picard 3.4 leaves this detail column at zero even when reads carry qualities.
-            let mean_base_quality = 0.0;
+            let mean_base_quality =
+                phred_score_from_observed_errors(bases_by_gc[gc] as f64, errors_by_gc[gc] as f64);
             output.push_str(&format!(
                 "All Reads\t{reads_used}\t{gc}\t{windows}\t{read_starts}\t{}\t{}\t{}\t\t\t\n",
                 format_float(mean_base_quality),
@@ -14084,6 +14082,84 @@ fn gc_percent(window: &[u8], window_size: usize) -> Option<usize> {
     } else {
         Some((gc * 100) / window_size)
     }
+}
+
+fn picard_gc_percent_for_start(
+    reference: &[u8],
+    start: usize,
+    window_size: usize,
+) -> Option<usize> {
+    if start > reference.len() {
+        return None;
+    }
+    let last_calculated_start = reference.len().saturating_sub(window_size);
+    if start >= last_calculated_start {
+        return Some(0);
+    }
+    gc_percent(reference.get(start..start + window_size)?, window_size)
+}
+
+fn phred_score_from_observed_errors(bases: f64, errors: f64) -> f64 {
+    if bases <= 0.0 || errors <= 0.0 {
+        0.0
+    } else {
+        (-10.0 * (errors / bases).log10()).round()
+    }
+}
+
+fn gc_bias_error_count(record: &bam::Record, reference: &[u8]) -> Result<u64, String> {
+    let read_bases = record.seq();
+    let mut read_offset = 0usize;
+    let mut ref_offset = record.pos().max(0) as usize;
+    let mut errors = 0u64;
+
+    for cigar in &record.cigar() {
+        match *cigar {
+            Cigar::Match(length) => {
+                for _ in 0..length {
+                    if read_offset >= read_bases.len() {
+                        return Err(
+                            "CollectGcBiasMetrics read sequence shorter than CIGAR".to_string()
+                        );
+                    }
+                    let Some(ref_base) = reference.get(ref_offset).copied() else {
+                        return Ok(errors);
+                    };
+                    if !dna_bases_equal(read_bases[read_offset], ref_base) {
+                        errors += 1;
+                    }
+                    read_offset += 1;
+                    ref_offset += 1;
+                }
+            }
+            Cigar::Equal(length) => {
+                read_offset = read_offset.saturating_add(length as usize);
+                ref_offset = ref_offset.saturating_add(length as usize);
+            }
+            Cigar::Diff(length) => {
+                read_offset = read_offset.saturating_add(length as usize);
+                ref_offset = ref_offset.saturating_add(length as usize);
+                errors += u64::from(length);
+            }
+            Cigar::Ins(length) => {
+                read_offset = read_offset.saturating_add(length as usize);
+                errors += u64::from(length);
+            }
+            Cigar::Del(length) => {
+                ref_offset = ref_offset.saturating_add(length as usize);
+                errors += u64::from(length);
+            }
+            Cigar::SoftClip(length) => {
+                read_offset = read_offset.saturating_add(length as usize);
+            }
+            Cigar::RefSkip(length) => {
+                ref_offset = ref_offset.saturating_add(length as usize);
+            }
+            Cigar::HardClip(_) | Cigar::Pad(_) => {}
+        }
+    }
+
+    Ok(errors)
 }
 
 fn cigar_reference_len_sam_text(cigar: &[u8]) -> Result<i64, String> {
@@ -19408,7 +19484,7 @@ mod tests {
     }
 
     #[test]
-    fn gc_bias_detail_matches_picard_zero_mean_base_quality() {
+    fn gc_bias_detail_reports_mean_base_quality() {
         let summary = GcBiasMetricsSummary {
             windows: {
                 let mut windows = [0_u64; 101];
@@ -19421,18 +19497,18 @@ mod tests {
                 read_starts
             },
             unique_read_starts: [0; 101],
-            base_quality_sums: {
-                let mut base_quality_sums = [0_u64; 101];
-                base_quality_sums[50] = 148;
-                base_quality_sums
+            bases_by_gc: {
+                let mut bases_by_gc = [0_u64; 101];
+                bases_by_gc[50] = 100;
+                bases_by_gc
             },
-            base_quality_counts: {
-                let mut base_quality_counts = [0_u64; 101];
-                base_quality_counts[50] = 4;
-                base_quality_counts
+            errors_by_gc: {
+                let mut errors_by_gc = [0_u64; 101];
+                errors_by_gc[50] = 1;
+                errors_by_gc
             },
-            unique_base_quality_sums: [0; 101],
-            unique_base_quality_counts: [0; 101],
+            unique_bases_by_gc: [0; 101],
+            unique_errors_by_gc: [0; 101],
             reference_path: String::new(),
             active_contig: None,
             active_sequence: Vec::new(),
@@ -19446,7 +19522,50 @@ mod tests {
         };
 
         let text = summary.detail_text(100, 0.0);
-        assert!(text.contains("All Reads\tALL\t50\t2\t1\t0\t1\t1"));
+        assert!(text.contains("All Reads\tALL\t50\t2\t1\t20\t1\t1"));
+    }
+
+    #[test]
+    fn gc_bias_counts_late_bam_read_start_as_gc_zero() {
+        let dir = tempfile::tempdir().expect("tempdir exists");
+        let reference = dir.path().join("ref.fa");
+        fs::write(&reference, ">chr1\nAAAACCCCGGGG\n").expect("reference is written");
+
+        let mut summary =
+            GcBiasMetricsSummary::new(reference.to_str().unwrap(), 4, false).expect("summary");
+        let mut record = bam::Record::new();
+        record.set(
+            b"late",
+            Some(&CigarString(vec![Cigar::Match(4)])),
+            b"GGGG",
+            b"FFFF",
+        );
+        record.set_tid(0);
+        record.set_pos(8);
+        record.set_flags(0);
+
+        summary
+            .observe(&record, &["chr1".to_string()], 4)
+            .expect("record is observed");
+
+        assert_eq!(summary.read_starts[0], 1);
+        assert_eq!(summary.read_starts.iter().sum::<u64>(), 1);
+    }
+
+    #[test]
+    fn gc_bias_counts_late_sam_read_start_as_gc_zero() {
+        let dir = tempfile::tempdir().expect("tempdir exists");
+        let reference = dir.path().join("ref.fa");
+        fs::write(&reference, ">chr1\nAAAACCCCGGGG\n").expect("reference is written");
+
+        let mut summary =
+            GcBiasMetricsSummary::new(reference.to_str().unwrap(), 4, false).expect("summary");
+        summary
+            .observe_sam_line(b"late\t0\tchr1\t9\t60\t4M\t*\t0\t0\tGGGG\tFFFF\n", 4)
+            .expect("record is observed");
+
+        assert_eq!(summary.read_starts[0], 1);
+        assert_eq!(summary.read_starts.iter().sum::<u64>(), 1);
     }
 
     #[test]
