@@ -5,6 +5,7 @@ turbo-picard --version
 turbo-picard AccelerationStatus
 turbo-picard doctor --help
 turbo-picard explain --help
+turbo-picard trial --help
 turbo-picard MarkDuplicates --help
 turbo-picard SortSam --help
 turbo-picard CleanSam --help

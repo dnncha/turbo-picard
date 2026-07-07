@@ -500,6 +500,11 @@ commands:
     status: fallback-only
     native_scope: "Delegated to upstream Picard 3.4.0. turbo-picard runs the native accelerated implementation when one exists; otherwise it transparently forwards to upstream Picard when fallback is configured or auto-discovered."
     fallback_scope: Transparent upstream Picard 3.4.0 delegation. No native fast path yet.
+  - name: trial
+    status: native
+    parity_script: tools/verify_basic_trial_parity.sh
+    native_scope: "turbo-picard utility command that reports a read-only side-by-side trial contract for a Picard-shaped command, including trial fit, copyable Picard and turbo-picard commands, comparison guidance, evidence targets, fallback command, declared output arguments, and schema-versioned JSON output for workflow-manager or CI integrations."
+    fallback_scope: This is not an upstream Picard command and does not delegate to fallback.
   - name: UmiAwareMarkDuplicatesWithMateCigar
     status: fallback-only
     native_scope: "Delegated to upstream Picard 3.4.0. turbo-picard runs the native accelerated implementation when one exists; otherwise it transparently forwards to upstream Picard when fallback is configured or auto-discovered."

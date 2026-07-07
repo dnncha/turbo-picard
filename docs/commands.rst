@@ -42,11 +42,18 @@ machine-readable matrix below for the exact accelerated versus delegated split.
    turbo-picard explain MarkDuplicates I=input.bam O=marked.bam M=metrics.txt
    turbo-picard explain --json MarkDuplicates I=input.bam O=marked.bam M=metrics.txt
    turbo-picard explain --format json MarkDuplicates I=input.bam O=marked.bam M=metrics.txt
+   turbo-picard trial MarkDuplicates I=input.bam O=marked.bam M=metrics.txt
+   turbo-picard trial --json SortSam I=input.bam O=coordinate.bam SORT_ORDER=coordinate
 
 Use the text ``explain`` output for interactive checks. Use ``--json`` when a
 workflow wrapper, CI check, or platform module needs to read ``schema_version``,
 command status, execution path, fallback command, and declared output arguments
 without parsing human text.
+
+Use ``trial`` when checking whether an installed workflow is a good first
+candidate for side-by-side evaluation. Text output gives copyable Picard and
+``turbo-picard`` commands plus comparison and evidence targets. JSON output
+keeps the same contract for workflow-manager or CI checks.
 
 Metrics and repair examples
 ---------------------------
@@ -85,11 +92,11 @@ Machine-readable coverage
 The canonical command matrix lives in ``docs/command-matrix.yml``. It records
 the current status, parity script, native scope, and fallback scope for each
 Picard 3.4.0 command plus turbo-only utilities such as
-``AccelerationStatus``, ``doctor``, and ``explain``.
+``AccelerationStatus``, ``doctor``, ``explain``, and ``trial``.
 
 Current matrix status summary:
 
-* ``35 accelerated`` commands with native or partial-native Rust implementations
+* ``36 accelerated`` commands with native or partial-native Rust implementations
 * ``89 delegated`` Picard 3.4.0 commands forwarded to upstream Picard
 
 Accelerated command status:
@@ -110,6 +117,7 @@ Accelerated command status:
   the command line does not set ``USE_FAST_ALGORITHM``.
 * ``doctor``: ``native``
 * ``explain``: ``native``
+* ``trial``: ``native``
 * ``CreateSequenceDictionary``: ``native``
 * ``FastqToSam``: ``partial-native``
 * ``GatherVcfs``: ``partial-native``
