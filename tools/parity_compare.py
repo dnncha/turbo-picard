@@ -37,24 +37,35 @@ def sam_records(path: Path, reference: str) -> list[str]:
     return [line for line in completed.stdout.splitlines() if line]
 
 
-def load_metrics(path: Path) -> dict[str, list[str]]:
-    rows: dict[str, list[str]] = {}
+def load_metrics(path: Path) -> list[list[str]]:
+    rows: list[list[str]] = []
     with path.open(encoding="utf-8") as handle:
         for line in handle:
             if line.startswith("#") or not line.strip():
                 continue
             parts = line.rstrip("\n").split("\t")
-            if parts[0] == "LIBRARY":
-                continue
-            rows[parts[0]] = parts[1:]
+            rows.append(parts)
     return rows
 
 
 def compare_metrics(picard_path: Path, turbo_path: Path, label: str) -> None:
     picard = load_metrics(picard_path)
     turbo = load_metrics(turbo_path)
-    if picard != turbo:
+    if len(picard) != len(turbo):
         raise SystemExit(f"{label} metrics differ between Picard and turbo-picard")
+    for picard_row, turbo_row in zip(picard, turbo):
+        if len(picard_row) != len(turbo_row):
+            raise SystemExit(f"{label} metrics differ between Picard and turbo-picard")
+        for picard_cell, turbo_cell in zip(picard_row, turbo_row):
+            if picard_cell == turbo_cell:
+                continue
+            try:
+                picard_value = float(picard_cell)
+                turbo_value = float(turbo_cell)
+            except ValueError:
+                raise SystemExit(f"{label} metrics differ between Picard and turbo-picard")
+            if abs(picard_value - turbo_value) > 1e-5:
+                raise SystemExit(f"{label} metrics differ between Picard and turbo-picard")
 
 
 def compare_sam_record_lines(

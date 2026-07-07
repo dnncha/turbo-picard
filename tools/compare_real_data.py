@@ -21,6 +21,7 @@ import sys
 import tempfile
 import time
 from dataclasses import asdict, dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable
 from urllib.parse import urlparse
@@ -1775,9 +1776,28 @@ def digest_stable_sam(path: Path) -> str:
 
 def normalize_stable_sam_header(row: bytes) -> bytes:
     fields = row.split(b"\t")
-    if not fields or fields[0] != b"@HD":
+    if not fields:
         return row
-    return b"\t".join([fields[0], *(field for field in fields[1:] if not field.startswith(b"VN:"))])
+    normalized_fields = [
+        normalize_sam_header_field(field)
+        for field in fields[1:]
+        if not (fields[0] == b"@HD" and field.startswith(b"VN:"))
+    ]
+    return b"\t".join([fields[0], *normalized_fields])
+
+
+def normalize_sam_header_field(field: bytes) -> bytes:
+    if not field.startswith(b"DT:"):
+        return field
+    try:
+        value = field[3:].decode("ascii")
+    except UnicodeDecodeError:
+        return field
+    try:
+        timestamp = datetime.strptime(value, "%Y-%m-%dT%H:%M:%S%z")
+    except ValueError:
+        return field
+    return f"DT:{timestamp.astimezone(timezone.utc):%Y-%m-%dT%H:%M:%S+0000}".encode("ascii")
 
 
 def digest_stable_text(path: Path) -> str:

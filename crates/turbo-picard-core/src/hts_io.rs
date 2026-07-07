@@ -1,7 +1,10 @@
 //! SAM/BAM/CRAM path helpers shared by native commands.
 
 use crate::bgzf_threads::{HtsThreadRole, bgzf_threads_for};
-use rust_htslib::bam::{self, Format, Read};
+use rust_htslib::{
+    bam::{self, Format, Read},
+    htslib,
+};
 use std::path::Path;
 
 pub fn path_extension_lower(path: &str) -> Option<String> {
@@ -65,6 +68,14 @@ pub fn resolve_reference_sequence(
 }
 
 pub fn open_reader(path: impl AsRef<Path>, reference: Option<&str>) -> Result<bam::Reader, String> {
+    open_reader_with_cram_decode_md(path, reference, false)
+}
+
+pub fn open_reader_with_cram_decode_md(
+    path: impl AsRef<Path>,
+    reference: Option<&str>,
+    decode_md: bool,
+) -> Result<bam::Reader, String> {
     let path = path.as_ref();
     let path_text = path.to_string_lossy();
     let reference = resolve_reference_sequence(&path_text, reference)?;
@@ -74,6 +85,7 @@ pub fn open_reader(path: impl AsRef<Path>, reference: Option<&str>) -> Result<ba
             .set_reference(reference)
             .map_err(|error| error.to_string())?;
     }
+    configure_cram_decode(&mut reader, &path_text, decode_md)?;
     configure_reader_threads(&mut reader)?;
     Ok(reader)
 }
@@ -95,6 +107,7 @@ pub fn open_reader_pipelined(
             .set_reference(reference)
             .map_err(|error| error.to_string())?;
     }
+    configure_cram_decode(&mut reader, &path_text, false)?;
     if let Some(threads) = bgzf_threads_for(HtsThreadRole::PipelineReader) {
         reader
             .set_threads(threads)
@@ -127,6 +140,20 @@ pub fn open_writer(
             .map_err(|error| error.to_string())?;
     }
     Ok(writer)
+}
+
+fn configure_cram_decode(
+    reader: &mut bam::Reader,
+    path: &str,
+    decode_md: bool,
+) -> Result<(), String> {
+    if path_format(path) == Some(Format::Cram) {
+        let decode_md = if decode_md { 1 } else { 0 };
+        reader
+            .set_cram_options(htslib::hts_fmt_option_CRAM_OPT_DECODE_MD, decode_md)
+            .map_err(|error| error.to_string())?;
+    }
+    Ok(())
 }
 
 pub fn configure_reader_threads(reader: &mut bam::Reader) -> Result<(), String> {

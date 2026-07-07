@@ -109,10 +109,18 @@ view_to_sam "$workdir/turbo-sorted.cram" "$workdir/turbo-sorted.sam"
 python3 "$compare" merge-multiset --label "GATK mito CRAM SortSam" \
   --picard "$workdir/picard-sorted.sam" --turbo "$workdir/turbo-sorted.sam"
 
+picard_validate_exit=0
 picard ValidateSamFile \
-  "I=$input_cram" "O=$workdir/picard-validate.txt" "R=$reference" MODE=SUMMARY
+  "I=$input_cram" "O=$workdir/picard-validate.txt" "R=$reference" MODE=SUMMARY \
+  || picard_validate_exit=$?
+turbo_validate_exit=0
 turbo ValidateSamFile \
-  "I=$input_cram" "O=$workdir/turbo-validate.txt" "R=$reference" MODE=SUMMARY
+  "I=$input_cram" "O=$workdir/turbo-validate.txt" "R=$reference" MODE=SUMMARY \
+  || turbo_validate_exit=$?
+if [[ "$picard_validate_exit" != "$turbo_validate_exit" ]]; then
+  echo "GATK mito CRAM ValidateSamFile exit differs from Picard: Picard=$picard_validate_exit turbo=$turbo_validate_exit" >&2
+  exit 1
+fi
 python3 "$compare" validate-summary --label "GATK mito CRAM ValidateSamFile" \
   --picard "$workdir/picard-validate.txt" --turbo "$workdir/turbo-validate.txt"
 

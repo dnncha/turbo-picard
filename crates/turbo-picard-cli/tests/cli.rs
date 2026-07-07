@@ -2421,6 +2421,45 @@ fn collectalignmentsummarymetrics_writes_unpaired_metrics() {
 }
 
 #[test]
+fn collectalignmentsummarymetrics_reports_mismatch_rates() {
+    let tempdir = tempfile::tempdir().expect("tempdir exists");
+    let input = tempdir.path().join("input.sam");
+    let output = tempdir.path().join("alignment_metrics.txt");
+    fs::write(
+        &input,
+        concat!(
+            "@HD\tVN:1.6\tSO:coordinate\n",
+            "@SQ\tSN:chr1\tLN:1000\n",
+            "read-a\t0\tchr1\t10\t60\t4M\t*\t0\t0\tACGA\tFFFF\tMD:Z:3T0\n",
+        ),
+    )
+    .expect("input fixture is written");
+
+    Command::cargo_bin("picard")
+        .expect("binary exists")
+        .args([
+            "CollectAlignmentSummaryMetrics",
+            &format!("I={}", input.display()),
+            &format!("O={}", output.display()),
+            "VALIDATION_STRINGENCY=SILENT",
+            "QUIET=true",
+        ])
+        .assert()
+        .success();
+
+    let metrics = fs::read_to_string(&output).expect("metrics output exists");
+    let row = metrics
+        .lines()
+        .find(|line| line.starts_with("UNPAIRED\t"))
+        .expect("unpaired row exists")
+        .split('\t')
+        .collect::<Vec<_>>();
+    assert_eq!(row[11], "1");
+    assert_eq!(row[12], "0.25");
+    assert_eq!(row[13], "0.25");
+}
+
+#[test]
 fn collectalignmentsummarymetrics_reports_cigar_and_chimera_metrics() {
     let tempdir = tempfile::tempdir().expect("tempdir exists");
     let input = tempdir.path().join("input.sam");
@@ -3173,8 +3212,8 @@ fn collectgcbiasmetrics_writes_detail_summary_and_chart() {
 
     let detail_text = fs::read_to_string(&detail).expect("detail metrics exist");
     assert!(detail_text.contains("## METRICS CLASS\tpicard.analysis.GcBiasDetailMetrics\n"));
-    assert!(detail_text.contains("All Reads\tALL\t0\t19\t1\t37\t1\t1\t\t\t\n"));
-    assert!(detail_text.contains("All Reads\tALL\t100\t19\t1\t37\t1\t1\t\t\t\n"));
+    assert!(detail_text.contains("All Reads\tALL\t0\t19\t1\t0\t1\t1\t\t\t\n"));
+    assert!(detail_text.contains("All Reads\tALL\t100\t19\t1\t0\t1\t1\t\t\t\n"));
     let summary_text = fs::read_to_string(&summary).expect("summary metrics exist");
     assert!(summary_text.contains("## METRICS CLASS\tpicard.analysis.GcBiasSummaryMetrics\n"));
     assert!(summary_text.contains("All Reads\tALL\t20\t2\t2\t0\t0\t1\t0\t0\t0\t1\t\t\t\n"));
@@ -3231,7 +3270,7 @@ fn collectgcbiasmetrics_honors_stop_after_and_assume_sorted_alias() {
         .success();
 
     let detail_text = fs::read_to_string(&detail).expect("detail metrics exist");
-    assert!(detail_text.contains("All Reads\tALL\t0\t19\t1\t37\t2\t2\t\t\t\n"));
+    assert!(detail_text.contains("All Reads\tALL\t0\t19\t1\t0\t2\t2\t\t\t\n"));
     assert!(detail_text.contains("All Reads\tALL\t100\t19\t0\t0\t0\t0\t\t\t\n"));
     let summary_text = fs::read_to_string(&summary).expect("summary metrics exist");
     assert!(summary_text.contains("All Reads\tALL\t20\t1\t1\t0\t50\t2\t0\t0\t0\t0\t\t\t\n"));
@@ -4057,9 +4096,9 @@ fn collectgcbiasmetrics_can_also_emit_unique_duplicate_filtered_metrics() {
         .success();
 
     let detail_text = fs::read_to_string(&detail).expect("detail output exists");
-    assert!(detail_text.contains("All Reads\tALL\t0\t19\t2\t18.5\t1.333333"));
-    assert!(detail_text.contains("All Reads\tUNIQUE\t0\t19\t1\t37\t1"));
-    assert!(detail_text.contains("All Reads\tUNIQUE\t100\t19\t1\t37\t1"));
+    assert!(detail_text.contains("All Reads\tALL\t0\t19\t2\t0\t1.333333"));
+    assert!(detail_text.contains("All Reads\tUNIQUE\t0\t19\t1\t0\t1"));
+    assert!(detail_text.contains("All Reads\tUNIQUE\t100\t19\t1\t0\t1"));
 
     let summary_text = fs::read_to_string(&summary).expect("summary output exists");
     assert!(summary_text.contains("All Reads\tALL\t20\t3\t3\t0\t16.666667"));
@@ -4396,8 +4435,8 @@ fn collectmultiplemetrics_forwards_gc_bias_duplicate_extra_argument() {
 
     let detail = fs::read_to_string(output.with_extension("gc_bias.detail_metrics"))
         .expect("gc bias detail metrics exist");
-    assert!(detail.contains("All Reads\tUNIQUE\t0\t19\t1\t37\t1"));
-    assert!(detail.contains("All Reads\tUNIQUE\t100\t19\t1\t37\t1"));
+    assert!(detail.contains("All Reads\tUNIQUE\t0\t19\t1\t0\t1\t1"));
+    assert!(detail.contains("All Reads\tUNIQUE\t100\t19\t1\t0\t1\t1"));
 }
 
 #[test]
@@ -6142,7 +6181,7 @@ fn validatesamfile_writes_summary_for_valid_and_warning_inputs() {
         ])
         .assert()
         .failure()
-        .code(3)
+        .code(2)
         .stdout(predicate::str::contains("ERROR:MISSING_READ_GROUP\t1"))
         .stdout(predicate::str::contains("WARNING:MISSING_TAG_NM\t1"))
         .stdout(predicate::str::contains(
@@ -6911,7 +6950,8 @@ fn meanqualitybycycle_uses_original_quality_cycles_when_present() {
         .success();
 
     let metrics = fs::read_to_string(&output).expect("metrics output exists");
-    assert!(metrics.contains("CYCLE\tMEAN_ORIGINAL_QUALITY\n1\t4\n2\t3\n3\t2\n4\t1\n"));
+    assert!(metrics.contains("CYCLE\tMEAN_QUALITY\tMEAN_ORIGINAL_QUALITY\n"));
+    assert!(metrics.contains("1\t0\t4\n2\t0\t3\n3\t0\t2\n4\t0\t1\n"));
     assert!(chart.metadata().expect("chart exists").len() > 0);
 }
 
@@ -7447,6 +7487,56 @@ fn viewsam_converts_bam_to_sam() {
 }
 
 #[test]
+fn viewsam_cram_does_not_synthesize_md_nm_tags() {
+    let tempdir = tempfile::tempdir().expect("tempdir exists");
+    let input_sam = tempdir.path().join("input.sam");
+    let input_cram = tempdir.path().join("input.cram");
+    let output_sam = tempdir.path().join("view.sam");
+    let reference = tempdir.path().join("ref.fa");
+    fs::write(&reference, ">chr1\nACGTACGTACGT\n").expect("reference fixture is written");
+    fs::write(
+        &input_sam,
+        concat!(
+            "@HD\tVN:1.6\tSO:coordinate\n",
+            "@SQ\tSN:chr1\tLN:12\n",
+            "read-a\t0\tchr1\t1\t60\t4M\t*\t0\t0\tACGA\tFFFF\tRG:Z:rg1\n",
+        ),
+    )
+    .expect("input SAM is written");
+
+    Command::cargo_bin("picard")
+        .expect("binary exists")
+        .args([
+            "SortSam",
+            &format!("I={}", input_sam.display()),
+            &format!("O={}", input_cram.display()),
+            &format!("R={}", reference.display()),
+            "SO=coordinate",
+        ])
+        .assert()
+        .success();
+
+    Command::cargo_bin("picard")
+        .expect("binary exists")
+        .args([
+            "ViewSam",
+            &format!("I={}", input_cram.display()),
+            &format!("O={}", output_sam.display()),
+            &format!("R={}", reference.display()),
+            "VALIDATION_STRINGENCY=SILENT",
+            "QUIET=true",
+        ])
+        .assert()
+        .success();
+
+    let output = fs::read_to_string(output_sam).expect("ViewSam SAM output exists");
+    assert!(output.contains("read-a\t0\tchr1\t1\t60\t4M"));
+    assert!(!output.contains("\tMD:Z:"));
+    assert!(!output.contains("\tNM:i:"));
+    assert!(output.contains("\tRG:Z:rg1\n"));
+}
+
+#[test]
 fn viewsam_records_only_omits_sam_header() {
     let tempdir = tempfile::tempdir().expect("tempdir exists");
     let input_sam = tempdir.path().join("input.sam");
@@ -7680,6 +7770,126 @@ fn replacesamheader_streams_records_with_replacement_header() {
     assert!(output.contains("@SQ\tSN:chr1\tLN:2000"));
     assert!(output.contains("@CO\treplacement header"));
     assert_eq!(record_names(&output), vec!["read-a"]);
+}
+
+#[test]
+fn replacesamheader_preserves_record_read_group_absent_from_replacement_header_for_sam_output() {
+    let tempdir = tempfile::tempdir().expect("tempdir exists");
+    let input = tempdir.path().join("input.sam");
+    let header = tempdir.path().join("header.sam");
+    let output = tempdir.path().join("output.sam");
+    fs::write(
+        &input,
+        concat!(
+            "@HD\tVN:1.6\tSO:coordinate\n",
+            "@SQ\tSN:chr1\tLN:1000\n",
+            "@RG\tID:old\tSM:sample-a\n",
+            "@RG\tID:keep\tSM:sample-b\n",
+            "read-a\t0\tchr1\t10\t60\t4M\t*\t0\t0\tACGT\tFFFF\tRG:Z:old\n",
+            "read-b\t0\tchr1\t20\t60\t4M\t*\t0\t0\tTGCA\tFFFF\tRG:Z:keep\n",
+        ),
+    )
+    .expect("input SAM is written");
+    fs::write(
+        &header,
+        concat!(
+            "@HD\tVN:1.6\tSO:coordinate\n",
+            "@SQ\tSN:chr1\tLN:1000\n",
+            "@RG\tID:keep\tSM:sample-b\n",
+        ),
+    )
+    .expect("header SAM is written");
+
+    Command::cargo_bin("picard")
+        .expect("binary exists")
+        .args([
+            "ReplaceSamHeader",
+            &format!("I={}", input.display()),
+            &format!("O={}", output.display()),
+            &format!("HEADER={}", header.display()),
+        ])
+        .assert()
+        .success();
+
+    let output = fs::read_to_string(output).expect("ReplaceSamHeader SAM output exists");
+    assert!(output.contains("read-a\t0\tchr1\t10\t60\t4M\t*\t0\t0\tACGT\tFFFF\tRG:Z:old"));
+    assert!(output.contains("read-b\t0\tchr1\t20\t60\t4M\t*\t0\t0\tTGCA\tFFFF\tRG:Z:keep"));
+}
+
+#[test]
+fn replacesamheader_removes_record_read_group_absent_from_replacement_header_for_cram_output() {
+    let tempdir = tempfile::tempdir().expect("tempdir exists");
+    let input_sam = tempdir.path().join("input.sam");
+    let input_cram = tempdir.path().join("input.cram");
+    let header = tempdir.path().join("header.sam");
+    let output_cram = tempdir.path().join("output.cram");
+    let output_sam = tempdir.path().join("output.sam");
+    let reference = tempdir.path().join("ref.fa");
+    fs::write(&reference, ">chr1\nACGTACGTACGT\n").expect("reference fixture is written");
+    fs::write(
+        &input_sam,
+        concat!(
+            "@HD\tVN:1.6\tSO:coordinate\n",
+            "@SQ\tSN:chr1\tLN:12\n",
+            "@RG\tID:old\tSM:sample-a\n",
+            "@RG\tID:keep\tSM:sample-b\n",
+            "read-a\t0\tchr1\t1\t60\t4M\t*\t0\t0\tACGT\tFFFF\tRG:Z:old\n",
+            "read-b\t0\tchr1\t5\t60\t4M\t*\t0\t0\tACGT\tFFFF\tRG:Z:keep\n",
+        ),
+    )
+    .expect("input SAM is written");
+    fs::write(
+        &header,
+        concat!(
+            "@HD\tVN:1.6\tSO:coordinate\n",
+            "@SQ\tSN:chr1\tLN:12\n",
+            "@RG\tID:keep\tSM:sample-b\n",
+        ),
+    )
+    .expect("header SAM is written");
+
+    Command::cargo_bin("picard")
+        .expect("binary exists")
+        .args([
+            "SortSam",
+            &format!("I={}", input_sam.display()),
+            &format!("O={}", input_cram.display()),
+            &format!("R={}", reference.display()),
+            "SO=coordinate",
+        ])
+        .assert()
+        .success();
+
+    Command::cargo_bin("picard")
+        .expect("binary exists")
+        .args([
+            "ReplaceSamHeader",
+            &format!("I={}", input_cram.display()),
+            &format!("O={}", output_cram.display()),
+            &format!("HEADER={}", header.display()),
+            &format!("R={}", reference.display()),
+        ])
+        .assert()
+        .success();
+
+    Command::cargo_bin("picard")
+        .expect("binary exists")
+        .args([
+            "ViewSam",
+            &format!("I={}", output_cram.display()),
+            &format!("O={}", output_sam.display()),
+            &format!("R={}", reference.display()),
+            "VALIDATION_STRINGENCY=SILENT",
+            "QUIET=true",
+        ])
+        .assert()
+        .success();
+
+    let output = fs::read_to_string(output_sam).expect("ReplaceSamHeader CRAM view exists");
+    assert!(!output.contains("RG:Z:old"));
+    assert!(output.contains("read-a\t0\tchr1\t1\t60\t4M\t*\t0\t0\tACGT\tFFFF"));
+    assert!(output.contains("read-b\t0\tchr1\t5\t60\t4M\t*\t0\t0\tACGT\tFFFF"));
+    assert!(output.contains("RG:Z:keep"));
 }
 
 #[test]

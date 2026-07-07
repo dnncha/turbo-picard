@@ -1131,6 +1131,27 @@ class CompareRealDataTests(unittest.TestCase):
                 compare_real_data.digest_stable_sam(second),
             )
 
+    def test_digest_stable_sam_normalizes_equivalent_header_dates(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            first = Path(tmp) / "first.sam"
+            second = Path(tmp) / "second.sam"
+            first.write_text(
+                "@HD\tVN:1.6\tSO:coordinate\n"
+                "@RG\tID:rg1\tDT:2016-02-04T05:00:00+0000\n"
+                "read-a\t0\tchr1\t1\t60\t4M\t*\t0\t0\tACGT\tFFFF\n",
+                encoding="utf-8",
+            )
+            second.write_text(
+                "@HD\tVN:1.5\tSO:coordinate\n"
+                "@RG\tID:rg1\tDT:2016-02-04T00:00:00-0500\n"
+                "read-a\t0\tchr1\t1\t60\t4M\t*\t0\t0\tACGT\tFFFF\n",
+                encoding="utf-8",
+            )
+            self.assertEqual(
+                compare_real_data.digest_stable_sam(first),
+                compare_real_data.digest_stable_sam(second),
+            )
+
     def test_digest_replace_sam_header_tracks_header_and_record_order(self):
         with tempfile.TemporaryDirectory() as tmp:
             first = Path(tmp) / "first.sam"
