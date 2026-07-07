@@ -98,7 +98,7 @@ Broader command coverage
    ``turbo-picard`` accelerates preprocessing and utility commands riker does not
    attempt: ``MarkDuplicates``, ``SortSam``, ``SamToFastq``, ``FastqToSam``,
    ``FixMateInformation``, VCF utilities, and more. Riker explicitly stays QC-only
-   and points users elsewhere for dedup/sort work.
+   and leaves dedup/sort work to other tools.
 
 Saved speedups on overlapping metrics
    The current saved benchmark suite reports much higher speedups than riker's

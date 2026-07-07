@@ -52,8 +52,8 @@ In practice, repeated wall-clock time can accumulate in format conversion,
 duplicate marking, coordinate sorting, metrics collection, and VCF housekeeping.
 Faster implementations are useful only if they reduce queue time and compute
 cost without changing the analysis record. `turbo-picard` addresses this by
-targeting Picard-compatible commands rather than asking users to adopt a new
-interface. Its release evidence ties every public speed claim to parity checks:
+targeting Picard-compatible commands rather than requiring a new interface. Its
+release evidence ties every public speed claim to parity checks:
 the saved benchmark suite reports 32/32 benchmarked commands passing parity,
 with a geometric mean speedup of 26.74x and a slowest saved speedup of 8.55x in
 the 2026-06-04 benchmark log.
@@ -71,7 +71,7 @@ across larger analyses [@snakemake; @nextflow].
 `turbo-picard` fits beside these tools. It does not replace htslib, redefine the
 file formats, or try to cover every Picard command at once. It uses Rust [@rust]
 and Rust bindings to htslib where appropriate, and focuses on commands where a
-native implementation can be tested and maintained. This gives users a
+native implementation can be tested and maintained. This preserves a
 conservative migration path: call `turbo-picard` explicitly for commands that
 have been checked, and keep upstream Picard available for unsupported behavior.
 

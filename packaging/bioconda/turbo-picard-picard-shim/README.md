@@ -4,7 +4,7 @@ This optional Bioconda recipe installs a `picard` command that forwards
 supported Picard-style calls to `turbo-picard`.
 
 The main `turbo-picard` package does not install this binary. Keep the shim as a
-separate package so users choose when they want the `picard` command name to
+separate package so teams choose when they want the `picard` command name to
 resolve to turbo-picard instead of upstream Picard.
 
 The shim depends on the matching `turbo-picard =={{ version }}` package and

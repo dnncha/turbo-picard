@@ -13,6 +13,7 @@ ROOT = Path(__file__).resolve().parents[1]
 RELEASE_TEXT_PATHS = [
     Path("README.md"),
     Path("docs/index.rst"),
+    Path("docs/is-this-for-you.rst"),
     Path("docs/quickstart.rst"),
     Path("docs/adoption.rst"),
     Path("docs/benchmarks.rst"),
@@ -20,10 +21,13 @@ RELEASE_TEXT_PATHS = [
     Path("docs/packaging.rst"),
     Path("docs/parity.rst"),
     Path("docs/troubleshooting.rst"),
+    Path("docs/turbo-picard-vs-riker.rst"),
     Path("docs/site/index.html"),
+    Path("paper/paper.md"),
     Path("packaging/bioconda/BIOCONDA_PR.md"),
     Path("packaging/bioconda/turbo-picard/README.md"),
     Path("packaging/bioconda/turbo-picard-picard-shim/README.md"),
+    Path("packaging/outreach/seqera-community-show-and-tell.md"),
 ]
 
 BANNED_PHRASES = [
@@ -47,6 +51,7 @@ BANNED_PHRASES = [
     "seamless",
     "state-of-the-art",
     "unlock",
+    "users",
     "utilize",
 ]
 
@@ -112,6 +117,12 @@ def normalize(text: str) -> str:
 
 def validate_release_text(root: Path = ROOT) -> list[str]:
     errors: list[str] = []
+    internal_docs = root / "docs/superpowers"
+    if internal_docs.exists() and any(path.is_file() for path in internal_docs.rglob("*")):
+        errors.append(
+            "docs/superpowers contains internal planning notes; keep release-facing docs public"
+        )
+
     for rel_path in RELEASE_TEXT_PATHS:
         path = root / rel_path
         if not path.is_file():

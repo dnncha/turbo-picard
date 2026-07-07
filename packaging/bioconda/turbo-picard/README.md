@@ -5,7 +5,7 @@ This recipe builds the main `turbo-picard` package. It installs only the
 package.
 
 The separate `turbo-picard-picard-shim` recipe installs the optional `picard`
-command name. Keep that split: users should opt into the shim because it owns a
+command name. Keep that split: teams should opt into the shim because it owns a
 command name that the upstream Picard package also provides.
 
 ## Local recipe state

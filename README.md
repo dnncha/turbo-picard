@@ -188,7 +188,7 @@ Silicon wheels plus a source distribution.
 
 Bioconda recipes are tracked under [`packaging/bioconda/`](packaging/bioconda/).
 The main package installs `turbo-picard`; the separate shim package installs the
-`picard` command only for users who choose it.
+`picard` command only for environments that choose it.
 
 ## Citation
 

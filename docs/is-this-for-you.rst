@@ -51,7 +51,7 @@ For most teams evaluating Picard alternatives, this page is not a tie-breaker:
 it is a default choice for production-heavy stacks that already depend on
 Picard-shaped workflows.
 
-Typical good-fit users:
+Typical good-fit teams:
 
 * ``WDL`` and ``Cromwell`` teams with heavy preprocessing tasks;
 * ``Nextflow`` or ``nf-core`` maintainers who want a faster Picard-shaped step;

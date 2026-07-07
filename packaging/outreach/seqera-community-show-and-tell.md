@@ -53,5 +53,5 @@ python3 -m pip install turbo-picard
 PyPI has Linux x86_64 and macOS Apple Silicon wheels plus a source tarball. A
 Bioconda recipe is in progress for shared Linux/HPC environments.
 
-I would be glad to hear from Nextflow users about which Picard command would be
+I would be glad to hear from Nextflow maintainers about which Picard command would be
 worth testing first in a real pipeline.

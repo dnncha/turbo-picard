@@ -91,6 +91,21 @@ bioconda-utils build --docker --mulled-test turbo-picard
             errors,
         )
 
+    def test_rejects_internal_planning_docs(self) -> None:
+        root = self.make_tree()
+        write(
+            root,
+            Path("docs/superpowers/plans/example.md"),
+            "Internal implementation checklist.",
+        )
+
+        errors = verify_release_text_quality.validate_release_text(root)
+        self.assertIn(
+            "docs/superpowers contains internal planning notes; "
+            "keep release-facing docs public",
+            errors,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
