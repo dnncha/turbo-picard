@@ -183,7 +183,7 @@ dataset IDs are `gatk-na12878-mito`, `picard-snvq`, and
 
 ## Packaging Status
 
-The live PyPI release is `0.1.6`. It publishes a macOS Apple Silicon wheel and a
+The live PyPI release is `0.1.5`. It publishes a macOS Apple Silicon wheel and a
 source distribution. The next release workflow is configured to build Linux
 x86_64 wheels as well.
 
