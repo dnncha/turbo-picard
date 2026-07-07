@@ -475,17 +475,20 @@ pub fn run_cli(program_name: &str, raw_args: impl IntoIterator<Item = String>) -
                 print_validatesamfile_help();
                 return 0;
             }
-            if let Err(error) = run_validatesamfile(&command_args) {
-                if let Some(exit_code) = try_run_fallback_for_native_error(&error, &raw_args) {
-                    return exit_code;
+            match run_validatesamfile(&command_args) {
+                Ok(ValidateSamFileStatus::Valid) => 0,
+                Ok(ValidateSamFileStatus::Invalid { exit_code }) => {
+                    eprintln!("{VALIDATE_SAM_FILE_VALIDATION_ISSUES}");
+                    exit_code
                 }
-                eprintln!("{error}");
-                if error == VALIDATE_SAM_FILE_VALIDATION_ISSUES {
-                    return validatesamfile_validation_issue_exit_code();
+                Err(error) => {
+                    if let Some(exit_code) = try_run_fallback_for_native_error(&error, &raw_args) {
+                        return exit_code;
+                    }
+                    eprintln!("{error}");
+                    2
                 }
-                return 2;
             }
-            0
         }
         Some("LiftoverVcf") => {
             let command_args = args.cloned().collect::<Vec<_>>();
@@ -5823,11 +5826,23 @@ fn run_setnmmdanduqtags(args: &[String]) -> Result<(), String> {
 
 const VALIDATE_SAM_FILE_VALIDATION_ISSUES: &str = "ValidateSamFile found validation issues";
 
-fn validatesamfile_validation_issue_exit_code() -> i32 {
-    if cfg!(target_os = "linux") { 3 } else { 2 }
+enum ValidateSamFileStatus {
+    Valid,
+    Invalid { exit_code: i32 },
 }
 
-fn run_validatesamfile(args: &[String]) -> Result<(), String> {
+fn validatesamfile_validation_issue_exit_code(counts: &BTreeMap<String, u64>) -> i32 {
+    if counts
+        .keys()
+        .any(|key| key.starts_with("ERROR:") && key != "ERROR:INVALID_TAG_NM")
+    {
+        2
+    } else {
+        3
+    }
+}
+
+fn run_validatesamfile(args: &[String]) -> Result<ValidateSamFileStatus, String> {
     let args = normalize_picard_args_for_command("ValidateSamFile", args)
         .map_err(|error| error.to_string())?;
     reject_unsupported_validatesamfile_args(&args)?;
@@ -5872,9 +5887,10 @@ fn run_validatesamfile(args: &[String]) -> Result<(), String> {
     }
 
     if report.counts.is_empty() {
-        Ok(())
+        Ok(ValidateSamFileStatus::Valid)
     } else {
-        Err(VALIDATE_SAM_FILE_VALIDATION_ISSUES.to_string())
+        let exit_code = validatesamfile_validation_issue_exit_code(&report.counts);
+        Ok(ValidateSamFileStatus::Invalid { exit_code })
     }
 }
 
@@ -10538,6 +10554,7 @@ struct CigarSummary {
     aligned_length: u64,
     read_aligned_length: u64,
     indel_events: u64,
+    indel_bases: u64,
     mismatch_bases: u64,
     soft_clip_bases: u64,
     hard_clip_bases: u64,
@@ -10569,11 +10586,12 @@ fn alignment_cigar_summary<'a>(
             Cigar::Ins(len) => {
                 summary.read_aligned_length += u64::from(*len);
                 summary.indel_events += 1;
+                summary.indel_bases += u64::from(*len);
                 last_soft_clip = 0;
             }
             Cigar::Del(len) => {
-                let _ = len;
                 summary.indel_events += 1;
+                summary.indel_bases += u64::from(*len);
                 last_soft_clip = 0;
             }
             Cigar::SoftClip(len) => {
@@ -10602,6 +10620,11 @@ fn alignment_cigar_summary<'a>(
 }
 
 fn mismatch_bases_from_bam_record(record: &bam::Record, cigar: CigarSummary) -> u64 {
+    if let Ok(aux) = record.aux(b"NM") {
+        if let Some(mismatches) = aux_i32(aux).and_then(|value| u64::try_from(value).ok()) {
+            return mismatches.saturating_sub(cigar.indel_bases);
+        }
+    }
     match record.aux(b"MD") {
         Ok(Aux::String(md)) => mismatch_bases_from_md(md.as_bytes()),
         _ => cigar.mismatch_bases,
@@ -10916,10 +10939,17 @@ fn observe_alignment_sam_line(
     cigar_summary.q20_match_bases = q20_match_bases_from_sam(cigar, qualities)?;
     let mut read_group = None;
     let mut has_sa = false;
+    let mut nm_mismatches = None;
     let mut md_mismatches = None;
     for tag in fields {
         if !has_sa && tag.starts_with(b"SA:") {
             has_sa = true;
+        }
+        if nm_mismatches.is_none()
+            && let Some(nm) = tag.strip_prefix(b"NM:i:")
+        {
+            let value = parse_u64_bytes(nm)?;
+            nm_mismatches = Some(value.saturating_sub(cigar_summary.indel_bases));
         }
         if md_mismatches.is_none()
             && let Some(md) = tag.strip_prefix(b"MD:Z:")
@@ -10930,7 +10960,7 @@ fn observe_alignment_sam_line(
             read_group = insert_size_read_group_for_sam_tags(std::iter::once(tag), read_groups);
         }
     }
-    if let Some(mismatches) = md_mismatches {
+    if let Some(mismatches) = nm_mismatches.or(md_mismatches) {
         cigar_summary.mismatch_bases = mismatches;
     }
     let chimeric = is_chimeric_sam_record(
@@ -11409,6 +11439,23 @@ fn parse_u16_bytes(value: &[u8]) -> Result<u16, String> {
     Ok(parsed)
 }
 
+fn parse_u64_bytes(value: &[u8]) -> Result<u64, String> {
+    let mut parsed = 0_u64;
+    if value.is_empty() {
+        return Err("malformed integer".to_string());
+    }
+    for byte in value {
+        if !byte.is_ascii_digit() {
+            return Err("malformed integer".to_string());
+        }
+        parsed = parsed
+            .checked_mul(10)
+            .and_then(|number| number.checked_add(u64::from(byte - b'0')))
+            .ok_or_else(|| "malformed integer".to_string())?;
+    }
+    Ok(parsed)
+}
+
 fn parse_i64_bytes(value: &[u8]) -> Result<i64, String> {
     if value.is_empty() {
         return Err("malformed integer".to_string());
@@ -11511,12 +11558,20 @@ fn cigar_summary_from_sam(cigar: &[u8], is_reverse: bool) -> Result<CigarSummary
                     .indel_events
                     .checked_add(1)
                     .ok_or_else(|| "malformed CollectAlignmentSummaryMetrics CIGAR".to_string())?;
+                summary.indel_bases = summary
+                    .indel_bases
+                    .checked_add(len)
+                    .ok_or_else(|| "malformed CollectAlignmentSummaryMetrics CIGAR".to_string())?;
                 last_soft_clip = 0;
             }
             b'D' => {
                 summary.indel_events = summary
                     .indel_events
                     .checked_add(1)
+                    .ok_or_else(|| "malformed CollectAlignmentSummaryMetrics CIGAR".to_string())?;
+                summary.indel_bases = summary
+                    .indel_bases
+                    .checked_add(len)
                     .ok_or_else(|| "malformed CollectAlignmentSummaryMetrics CIGAR".to_string())?;
                 last_soft_clip = 0;
             }

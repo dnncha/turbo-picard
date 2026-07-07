@@ -5,11 +5,6 @@ use std::fs;
 use std::io::{Read, Write};
 use std::os::unix::fs::PermissionsExt;
 
-#[cfg(target_os = "linux")]
-const VALIDATE_SAMFILE_ISSUE_EXIT_CODE: i32 = 3;
-#[cfg(not(target_os = "linux"))]
-const VALIDATE_SAMFILE_ISSUE_EXIT_CODE: i32 = 2;
-
 #[test]
 fn collecthsmetrics_help_exposes_scaffold_surface() {
     let mut cmd = Command::cargo_bin("turbo-picard").expect("binary exists");
@@ -6136,6 +6131,7 @@ fn validatesamfile_writes_summary_for_valid_and_warning_inputs() {
     let tempdir = tempfile::tempdir().expect("tempdir exists");
     let valid = tempdir.path().join("valid.sam");
     let warning = tempdir.path().join("warning.sam");
+    let warning_only = tempdir.path().join("warning-only.sam");
     let output = tempdir.path().join("summary.txt");
     fs::write(
         &valid,
@@ -6156,6 +6152,16 @@ fn validatesamfile_writes_summary_for_valid_and_warning_inputs() {
         ),
     )
     .expect("warning fixture is written");
+    fs::write(
+        &warning_only,
+        concat!(
+            "@HD\tVN:1.6\tSO:coordinate\n",
+            "@SQ\tSN:chr1\tLN:100\n",
+            "@RG\tID:rg1\tSM:sample\tPL:ILLUMINA\n",
+            "read1\t0\tchr1\t1\t60\t4M\t*\t0\t0\tACGT\tFFFF\tRG:Z:rg1\n",
+        ),
+    )
+    .expect("warning-only fixture is written");
 
     Command::cargo_bin("picard")
         .expect("binary exists")
@@ -6186,12 +6192,29 @@ fn validatesamfile_writes_summary_for_valid_and_warning_inputs() {
         ])
         .assert()
         .failure()
-        .code(VALIDATE_SAMFILE_ISSUE_EXIT_CODE)
+        .code(2)
         .stdout(predicate::str::contains("ERROR:MISSING_READ_GROUP\t1"))
         .stdout(predicate::str::contains("WARNING:MISSING_TAG_NM\t1"))
         .stdout(predicate::str::contains(
             "WARNING:RECORD_MISSING_READ_GROUP\t1",
         ))
+        .stderr(predicate::str::contains(
+            "ValidateSamFile found validation issues",
+        ));
+
+    Command::cargo_bin("picard")
+        .expect("binary exists")
+        .args([
+            "ValidateSamFile",
+            &format!("I={}", warning_only.display()),
+            "MODE=SUMMARY",
+            "VALIDATION_STRINGENCY=SILENT",
+            "QUIET=true",
+        ])
+        .assert()
+        .failure()
+        .code(3)
+        .stdout(predicate::str::contains("WARNING:MISSING_TAG_NM\t1"))
         .stderr(predicate::str::contains(
             "ValidateSamFile found validation issues",
         ));
@@ -6375,6 +6398,7 @@ fn validatesamfile_reports_missing_mate_and_honors_skip_mate_validation() {
         ])
         .assert()
         .failure()
+        .code(2)
         .stdout(predicate::str::contains("ERROR:MATE_NOT_FOUND\t1"))
         .stderr(predicate::str::contains(
             "ValidateSamFile found validation issues",
