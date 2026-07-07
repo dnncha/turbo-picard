@@ -460,7 +460,7 @@ The submission checklist is in [`docs/joss-submission.md`](docs/joss-submission.
 
 ## Bioconda status
 
-Release `v0.1.5` is prepared for Bioconda submission as two recipes:
+Release `v0.1.6` is prepared for Bioconda submission as two recipes:
 
 - `turbo-picard` — installs `turbo-picard`.
 - `turbo-picard-picard-shim` — installs the optional `picard` command name.
@@ -470,7 +470,7 @@ Release checks:
 ```bash
 python3 tools/bioconda_release_preflight.py
 python3 tools/prepare_bioconda_release.py \
-  --archive ~/Downloads/turbo-picard-0.1.5.tar.gz
+  --archive ~/Downloads/turbo-picard-0.1.6.tar.gz
 python3 tools/verify_bioconda_recipes.py --release-ready
 ```
 
