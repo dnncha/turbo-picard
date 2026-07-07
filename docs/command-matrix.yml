@@ -265,7 +265,7 @@ commands:
   - name: explain
     status: native
     parity_script: tools/verify_basic_explain_parity.sh
-    native_scope: "turbo-picard utility command that explains the documented execution path for a Picard-shaped command, including native or fallback status, scope notes, resolved fallback command, and declared output arguments."
+    native_scope: "turbo-picard utility command that explains the documented execution path for a Picard-shaped command, including native or fallback status, scope notes, resolved fallback command, declared output arguments, and JSON output for workflow-manager or CI integrations."
     fallback_scope: This is not an upstream Picard command and does not delegate to fallback.
   - name: ExtractFingerprint
     status: fallback-only

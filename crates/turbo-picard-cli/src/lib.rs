@@ -19,7 +19,7 @@ use rust_htslib::bam::header::HeaderRecord;
 use rust_htslib::bam::index;
 use rust_htslib::bam::record::{Aux, Cigar, CigarString};
 use rust_htslib::bam::{self, Read};
-use rustc_hash::{FxBuildHasher, FxHashMap};
+use rustc_hash::{FxBuildHasher, FxHashSet};
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet, BinaryHeap, HashMap, HashSet};
 use std::env;
@@ -475,17 +475,20 @@ pub fn run_cli(program_name: &str, raw_args: impl IntoIterator<Item = String>) -
                 print_validatesamfile_help();
                 return 0;
             }
-            if let Err(error) = run_validatesamfile(&command_args) {
-                if let Some(exit_code) = try_run_fallback_for_native_error(&error, &raw_args) {
-                    return exit_code;
+            match run_validatesamfile(&command_args) {
+                Ok(ValidateSamFileStatus::Valid) => 0,
+                Ok(ValidateSamFileStatus::Invalid { exit_code }) => {
+                    eprintln!("{VALIDATE_SAM_FILE_VALIDATION_ISSUES}");
+                    exit_code
                 }
-                eprintln!("{error}");
-                if error == "ValidateSamFile found validation issues" {
-                    return 3;
+                Err(error) => {
+                    if let Some(exit_code) = try_run_fallback_for_native_error(&error, &raw_args) {
+                        return exit_code;
+                    }
+                    eprintln!("{error}");
+                    2
                 }
-                return 2;
             }
-            0
         }
         Some("LiftoverVcf") => {
             let command_args = args.cloned().collect::<Vec<_>>();
@@ -801,11 +804,12 @@ fn print_explain_help(program_name: &str) {
     println!(
         "\
 Usage: {program_name} explain <PicardCommand> [KEY=VALUE ...]
+       {program_name} explain --json <PicardCommand> [KEY=VALUE ...]
 
 Explains the documented execution path for a Picard-shaped command. The report
 shows native/fallback status, documented native scope, documented fallback scope,
 resolved fallback command, and declared output arguments from the provided
-KEY=VALUE arguments."
+KEY=VALUE arguments. Use --json for workflow-manager and CI integrations."
     );
 }
 
@@ -846,52 +850,165 @@ fn run_doctor(program_name: &str) {
 }
 
 fn run_explain(args: &[String]) -> Result<(), String> {
+    let (format, args) = parse_explain_args(args)?;
     let command = args
         .first()
         .ok_or_else(|| "usage: turbo-picard explain <PicardCommand> [KEY=VALUE ...]".to_string())?;
     let Some(metadata) = command_matrix_entry(command) else {
         if is_picard_reference_command(command) {
-            println!("command={command}");
-            println!("status=fallback-only");
-            println!("native_scope=No native metadata is available for this Picard command.");
-            println!(
-                "fallback_scope=Transparent upstream Picard delegation when fallback is configured or auto-discovered."
-            );
-            print_explain_fallback();
-            print_declared_outputs(&args[1..]);
+            let report = ExplainReport {
+                command: command.clone(),
+                status: "fallback-only".to_string(),
+                native_scope: "No native metadata is available for this Picard command."
+                    .to_string(),
+                fallback_scope: "Transparent upstream Picard delegation when fallback is configured or auto-discovered."
+                    .to_string(),
+                execution_path: "fallback".to_string(),
+                fallback_command: explain_fallback_command(),
+                declared_outputs: declared_outputs(&args[1..]),
+            };
+            print_explain_report(&report, format);
             return Ok(());
         }
         return Err(format!("unsupported Picard command: {command}"));
     };
 
-    println!("command={}", metadata.name);
-    println!("status={}", metadata.status);
-    println!("native_scope={}", metadata.native_scope);
-    println!("fallback_scope={}", metadata.fallback_scope);
-    println!(
-        "execution_path={}",
-        match metadata.status.as_str() {
+    let report = ExplainReport {
+        command: metadata.name,
+        execution_path: match metadata.status.as_str() {
             "native" => "native",
             "partial-native" => "native-when-inside-documented-scope-otherwise-fallback",
             "fallback-only" => "fallback",
             _ => "see-command-matrix",
         }
-    );
-    print_explain_fallback();
-    print_declared_outputs(&args[1..]);
+        .to_string(),
+        fallback_command: explain_fallback_command(),
+        declared_outputs: declared_outputs(&args[1..]),
+        status: metadata.status,
+        native_scope: metadata.native_scope,
+        fallback_scope: metadata.fallback_scope,
+    };
+    print_explain_report(&report, format);
     Ok(())
 }
 
-fn print_explain_fallback() {
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ExplainFormat {
+    Text,
+    Json,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct ExplainReport {
+    command: String,
+    status: String,
+    native_scope: String,
+    fallback_scope: String,
+    execution_path: String,
+    fallback_command: String,
+    declared_outputs: Vec<String>,
+}
+
+fn parse_explain_args(args: &[String]) -> Result<(ExplainFormat, Vec<String>), String> {
+    let mut format = ExplainFormat::Text;
+    let mut command_args = Vec::new();
+
+    for arg in args {
+        match arg.as_str() {
+            "--json" => format = ExplainFormat::Json,
+            "--format=json" | "FORMAT=json" | "FORMAT=JSON" => format = ExplainFormat::Json,
+            "--format=text" | "FORMAT=text" | "FORMAT=TEXT" => format = ExplainFormat::Text,
+            value if value.starts_with("--format=") => {
+                return Err(format!("unsupported explain format option: {value}"));
+            }
+            _ => command_args.push(arg.clone()),
+        }
+    }
+
+    Ok((format, command_args))
+}
+
+fn explain_fallback_command() -> String {
     match resolve_fallback_command() {
-        Some(command) => println!("fallback_command={command}"),
-        None => println!("fallback_command=not-found"),
+        Some(command) => command,
+        None => "not-found".to_string(),
     }
 }
 
-fn print_declared_outputs(args: &[String]) {
-    let outputs = args
-        .iter()
+fn print_explain_report(report: &ExplainReport, format: ExplainFormat) {
+    match format {
+        ExplainFormat::Text => print_explain_text(report),
+        ExplainFormat::Json => print_explain_json(report),
+    }
+}
+
+fn print_explain_text(report: &ExplainReport) {
+    println!("command={}", report.command);
+    println!("status={}", report.status);
+    println!("native_scope={}", report.native_scope);
+    println!("fallback_scope={}", report.fallback_scope);
+    println!("execution_path={}", report.execution_path);
+    println!("fallback_command={}", report.fallback_command);
+    if report.declared_outputs.is_empty() {
+        println!("declared_outputs=none");
+    } else {
+        println!("declared_outputs={}", report.declared_outputs.join(","));
+    }
+}
+
+fn print_explain_json(report: &ExplainReport) {
+    println!("{{");
+    println!("  \"command\": {},", json_string(&report.command));
+    println!("  \"status\": {},", json_string(&report.status));
+    println!("  \"native_scope\": {},", json_string(&report.native_scope));
+    println!(
+        "  \"fallback_scope\": {},",
+        json_string(&report.fallback_scope)
+    );
+    println!(
+        "  \"execution_path\": {},",
+        json_string(&report.execution_path)
+    );
+    println!(
+        "  \"fallback_command\": {},",
+        json_string(&report.fallback_command)
+    );
+    println!("  \"declared_outputs\": [");
+    for (index, output) in report.declared_outputs.iter().enumerate() {
+        let comma = if index + 1 == report.declared_outputs.len() {
+            ""
+        } else {
+            ","
+        };
+        println!("    {}{}", json_string(output), comma);
+    }
+    println!("  ]");
+    println!("}}");
+}
+
+fn json_string(value: &str) -> String {
+    let mut escaped = String::with_capacity(value.len() + 2);
+    escaped.push('"');
+    for character in value.chars() {
+        match character {
+            '"' => escaped.push_str("\\\""),
+            '\\' => escaped.push_str("\\\\"),
+            '\n' => escaped.push_str("\\n"),
+            '\r' => escaped.push_str("\\r"),
+            '\t' => escaped.push_str("\\t"),
+            value if value.is_control() => {
+                use std::fmt::Write as _;
+                let _ = write!(escaped, "\\u{:04x}", value as u32);
+            }
+            value => escaped.push(value),
+        }
+    }
+    escaped.push('"');
+    escaped
+}
+
+fn declared_outputs(args: &[String]) -> Vec<String> {
+    args.iter()
         .filter_map(|arg| arg.split_once('='))
         .filter(|(key, value)| {
             !value.is_empty()
@@ -911,12 +1028,7 @@ fn print_declared_outputs(args: &[String]) {
                 )
         })
         .map(|(key, value)| format!("{key}={value}"))
-        .collect::<Vec<_>>();
-    if outputs.is_empty() {
-        println!("declared_outputs=none");
-    } else {
-        println!("declared_outputs={}", outputs.join(","));
-    }
+        .collect::<Vec<_>>()
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -2979,7 +3091,10 @@ fn run_collectalignmentsummarymetrics(args: &[String]) -> Result<(), String> {
         return fs::write(output, metrics.to_picard_text()).map_err(|error| error.to_string());
     }
 
-    let mut reader = open_bam_reader_for_args(&input, &args).map_err(|error| error.to_string())?;
+    let reference = picard_reference(&args)?;
+    let mut reader =
+        open_bam_reader_with_reference_and_cram_decode_md(&input, reference.as_deref(), true)
+            .map_err(|error| error.to_string())?;
     let read_groups =
         insert_size_read_groups_from_header(&String::from_utf8_lossy(reader.header().as_bytes()));
     let mut metrics = AlignmentSummaryCollection::new(accumulation);
@@ -3485,6 +3600,8 @@ fn run_collectmultiplemetrics_single_pass(
             "CollectWgsMetrics" => {
                 let reference = reference.as_ref().expect("reference checked above");
                 let reference_contigs = read_reference_contigs_for_wgs(reference)?;
+                let reference_masks = collectwgs_reference_masks(reference, &reference_contigs)?;
+                let included_masks = merge_wgs_inclusion_masks(reference_masks, None);
                 let coverage_cap = optional_u32(args, "COVERAGE_CAP")?.unwrap_or(250);
                 let use_fast_algorithm =
                     if let Some(use_fast_algorithm) = optional_bool(args, "USE_FAST_ALGORITHM")? {
@@ -3496,7 +3613,8 @@ fn run_collectmultiplemetrics_single_pass(
                     .unwrap_or(if use_fast_algorithm { 0 } else { 10_000 });
                 let include_bq_histogram =
                     optional_bool(args, "INCLUDE_BQ_HISTOGRAM")?.unwrap_or(false);
-                let mut summary = WgsMetricsSummary::new(&reference_contigs, None, coverage_cap);
+                let mut summary =
+                    WgsMetricsSummary::new(&reference_contigs, included_masks, coverage_cap);
                 if let Some(limit) = optional_i64(args, "STOP_AFTER")?
                     && limit >= 0
                 {
@@ -3518,8 +3636,13 @@ fn run_collectmultiplemetrics_single_pass(
         }
     }
 
-    let mut reader = open_bam_reader_with_reference(input, reference.as_deref())
-        .map_err(|error| error.to_string())?;
+    let decode_cram_md = alignment.is_some();
+    let mut reader = open_bam_reader_with_reference_and_cram_decode_md(
+        input,
+        reference.as_deref(),
+        decode_cram_md,
+    )
+    .map_err(|error| error.to_string())?;
     let header_text = String::from_utf8_lossy(reader.header().as_bytes());
     let read_groups = insert_size_read_groups_from_header(&header_text);
     let target_names = reader
@@ -4466,8 +4589,10 @@ fn run_collectwgsmetrics(args: &[String]) -> Result<(), String> {
     let include_bq_histogram = optional_bool(&args, "INCLUDE_BQ_HISTOGRAM")?.unwrap_or(false);
 
     let reference_contigs = read_reference_contigs_for_wgs(&reference)?;
+    let reference_masks = collectwgs_reference_masks(&reference, &reference_contigs)?;
     let interval_masks = collectwgs_interval_masks(args.get("INTERVALS"), &reference_contigs)?;
-    let mut summary = WgsMetricsSummary::new(&reference_contigs, interval_masks, coverage_cap);
+    let included_masks = merge_wgs_inclusion_masks(reference_masks, interval_masks);
+    let mut summary = WgsMetricsSummary::new(&reference_contigs, included_masks, coverage_cap);
     if stop_after >= 0 {
         summary.limit_included_loci(stop_after as usize);
     }
@@ -5699,7 +5824,25 @@ fn run_setnmmdanduqtags(args: &[String]) -> Result<(), String> {
     )
 }
 
-fn run_validatesamfile(args: &[String]) -> Result<(), String> {
+const VALIDATE_SAM_FILE_VALIDATION_ISSUES: &str = "ValidateSamFile found validation issues";
+
+enum ValidateSamFileStatus {
+    Valid,
+    Invalid { exit_code: i32 },
+}
+
+fn validatesamfile_validation_issue_exit_code(counts: &BTreeMap<String, u64>) -> i32 {
+    if counts
+        .keys()
+        .any(|key| key.starts_with("ERROR:") && key != "ERROR:INVALID_TAG_NM")
+    {
+        2
+    } else {
+        3
+    }
+}
+
+fn run_validatesamfile(args: &[String]) -> Result<ValidateSamFileStatus, String> {
     let args = normalize_picard_args_for_command("ValidateSamFile", args)
         .map_err(|error| error.to_string())?;
     reject_unsupported_validatesamfile_args(&args)?;
@@ -5744,9 +5887,10 @@ fn run_validatesamfile(args: &[String]) -> Result<(), String> {
     }
 
     if report.counts.is_empty() {
-        Ok(())
+        Ok(ValidateSamFileStatus::Valid)
     } else {
-        Err("ValidateSamFile found validation issues".to_string())
+        let exit_code = validatesamfile_validation_issue_exit_code(&report.counts);
+        Ok(ValidateSamFileStatus::Invalid { exit_code })
     }
 }
 
@@ -5925,12 +6069,21 @@ fn run_replacesamheader(args: &[String]) -> Result<(), String> {
 
     let header_reader = open_bam_reader_with_reference(&header_input, reference.as_deref())
         .map_err(|error| error.to_string())?;
+    let replacement_read_group_ids =
+        read_group_ids_from_header(&String::from_utf8_lossy(header_reader.header().as_bytes()));
     let header = bam::Header::from_template(header_reader.header());
     let replacement_sort_order = header_sort_order(header_reader.header());
     drop(header_reader);
 
-    let mut reader = open_bam_reader_with_reference(&input, reference.as_deref())
-        .map_err(|error| error.to_string())?;
+    let format = output_format_for(&output, "ReplaceSamHeader")?;
+    let decode_cram_md = format == bam::Format::Cram && reference.is_some();
+    let remove_read_groups_missing_from_header = format == bam::Format::Cram;
+    let mut reader = open_bam_reader_with_reference_and_cram_decode_md(
+        &input,
+        reference.as_deref(),
+        decode_cram_md,
+    )
+    .map_err(|error| error.to_string())?;
     let input_sort_order = header_sort_order(reader.header());
     if input_sort_order != replacement_sort_order {
         return Err(format!(
@@ -5939,7 +6092,6 @@ fn run_replacesamheader(args: &[String]) -> Result<(), String> {
             replacement_sort_order.unwrap_or_else(|| "unknown".to_string())
         ));
     }
-    let format = output_format_for(&output, "ReplaceSamHeader")?;
     let mut writer = bam_writer_for_path_with_reference(
         &output,
         &header,
@@ -5948,7 +6100,10 @@ fn run_replacesamheader(args: &[String]) -> Result<(), String> {
         compression_level,
     )?;
     for record in reader.records() {
-        let record = record.map_err(|error| error.to_string())?;
+        let mut record = record.map_err(|error| error.to_string())?;
+        if remove_read_groups_missing_from_header {
+            remove_missing_replacement_read_group(&mut record, &replacement_read_group_ids)?;
+        }
         writer.write(&record).map_err(|error| error.to_string())?;
     }
     drop(writer);
@@ -7688,10 +7843,12 @@ fn count_gc_bias_windows(reference_path: &str, window_size: usize) -> Result<[u6
             continue;
         }
         let sequence = load_fasta_contig_sequence(reference_path, &name)?;
-        let window_count = sequence.len().saturating_sub(window_size + 1);
-        for start in 0..window_count {
+        let last_window_start = sequence.len().saturating_sub(window_size);
+        for start in 1..last_window_start {
             if let Some(window) = sequence.get(start..start + window_size) {
-                windows[gc_percent(window, window_size)] += 1;
+                if let Some(gc) = picard_gc_percent(window, window_size) {
+                    windows[gc] += 1;
+                }
             }
         }
     }
@@ -8373,6 +8530,14 @@ fn read_group_platforms(header_text: &str) -> BTreeMap<String, bool> {
     read_groups
 }
 
+fn read_group_ids_from_header(header_text: &str) -> BTreeSet<String> {
+    header_text
+        .lines()
+        .filter(|line| line.starts_with("@RG\t"))
+        .filter_map(read_group_id)
+        .collect()
+}
+
 fn insert_size_read_groups_from_header(header_text: &str) -> BTreeMap<String, InsertSizeReadGroup> {
     let mut read_groups = BTreeMap::new();
     for line in header_text.lines().filter(|line| line.starts_with("@RG\t")) {
@@ -8797,6 +8962,59 @@ fn collectwgs_interval_masks(
         }
     }
     Ok(Some(masks))
+}
+
+fn collectwgs_reference_masks(
+    reference_path: &str,
+    reference_contigs: &[(String, usize)],
+) -> Result<Option<BTreeMap<String, Vec<bool>>>, String> {
+    let mut masks = BTreeMap::new();
+    for (name, length) in reference_contigs {
+        let sequence = load_fasta_contig_sequence(reference_path, name)?;
+        if sequence.len() != *length {
+            return Err(format!(
+                "CollectWgsMetrics reference contig {name} length differs from index: expected {length}, read {}",
+                sequence.len()
+            ));
+        }
+        if !sequence
+            .iter()
+            .any(|base| matches!(base.to_ascii_uppercase(), b'N'))
+        {
+            continue;
+        }
+        let mask = sequence
+            .iter()
+            .map(|base| !matches!(base.to_ascii_uppercase(), b'N'))
+            .collect::<Vec<_>>();
+        masks.insert(name.clone(), mask);
+    }
+    Ok((!masks.is_empty()).then_some(masks))
+}
+
+fn merge_wgs_inclusion_masks(
+    reference_masks: Option<BTreeMap<String, Vec<bool>>>,
+    interval_masks: Option<BTreeMap<String, Vec<bool>>>,
+) -> Option<BTreeMap<String, Vec<bool>>> {
+    match (reference_masks, interval_masks) {
+        (None, None) => None,
+        (Some(reference_masks), None) => Some(reference_masks),
+        (None, Some(interval_masks)) => Some(interval_masks),
+        (Some(reference_masks), Some(mut interval_masks)) => {
+            for (name, reference_mask) in reference_masks {
+                if let Some(interval_mask) = interval_masks.get_mut(&name) {
+                    for (included, reference_included) in
+                        interval_mask.iter_mut().zip(reference_mask)
+                    {
+                        *included &= reference_included;
+                    }
+                } else {
+                    interval_masks.insert(name, reference_mask);
+                }
+            }
+            Some(interval_masks)
+        }
+    }
 }
 
 fn sort_intervals(intervals: &mut [BedInterval]) {
@@ -9990,6 +10208,8 @@ struct AlignmentSummary {
     pf_hq_aligned_reads: u64,
     pf_hq_aligned_bases: u64,
     pf_hq_aligned_q20_bases: u64,
+    pf_mismatch_bases: u64,
+    pf_hq_mismatch_bases: u64,
     reads_aligned_in_pairs: u64,
     pf_reads_improper_pairs: u64,
     forward_aligned_reads: u64,
@@ -10005,6 +10225,7 @@ struct AlignmentSummary {
     cycle_no_calls: Vec<u64>,
     total_read_lengths: Vec<u64>,
     aligned_read_lengths: Vec<u64>,
+    hq_mismatches_by_read: Vec<u64>,
 }
 
 impl AlignmentSummary {
@@ -10047,14 +10268,18 @@ impl AlignmentSummary {
 
         let is_aligned = !record.is_unmapped();
         if is_aligned {
+            let mismatches = mismatch_bases_from_bam_record(record, cigar);
             self.pf_reads_aligned += 1;
             self.pf_aligned_bases += aligned_length;
             self.pf_read_aligned_bases += aligned_read_length;
+            self.pf_mismatch_bases += mismatches;
             if is_hq_aligned(record) {
                 self.pf_hq_aligned_reads += 1;
                 self.pf_hq_aligned_bases += aligned_length;
                 self.pf_hq_aligned_q20_bases +=
                     q20_match_bases(record.cigar().iter(), record.qual());
+                self.pf_hq_mismatch_bases += mismatches;
+                self.observe_hq_mismatches(mismatches);
             }
             if record.is_reverse() {
                 self.reverse_aligned_reads += 1;
@@ -10114,10 +10339,13 @@ impl AlignmentSummary {
             self.pf_reads_aligned += 1;
             self.pf_aligned_bases += aligned_length;
             self.pf_read_aligned_bases += cigar.read_aligned_length;
+            self.pf_mismatch_bases += cigar.mismatch_bases;
             if mapq >= 20 {
                 self.pf_hq_aligned_reads += 1;
                 self.pf_hq_aligned_bases += aligned_length;
                 self.pf_hq_aligned_q20_bases += cigar.q20_match_bases;
+                self.pf_hq_mismatch_bases += cigar.mismatch_bases;
+                self.observe_hq_mismatches(cigar.mismatch_bases);
             }
             if flags & 0x10 != 0 {
                 self.reverse_aligned_reads += 1;
@@ -10158,6 +10386,11 @@ impl AlignmentSummary {
             self.three_prime_soft_clip_bases += cigar.three_prime_soft_clip_bases;
             self.three_prime_soft_clip_reads += 1;
         }
+    }
+
+    fn observe_hq_mismatches(&mut self, mismatches: u64) {
+        ensure_histogram_len(&mut self.hq_mismatches_by_read, mismatches as usize);
+        self.hq_mismatches_by_read[mismatches as usize] += 1;
     }
 
     fn observe_bad_cycle_bases(&mut self, bases: &[u8]) {
@@ -10225,7 +10458,7 @@ impl AlignmentSummary {
         };
 
         format!(
-            "{category}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t0\t0\t0\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
+            "{category}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
             self.total_reads,
             self.pf_reads,
             format_float(ratio(self.pf_reads, self.total_reads)),
@@ -10236,6 +10469,9 @@ impl AlignmentSummary {
             self.pf_hq_aligned_reads,
             self.pf_hq_aligned_bases,
             self.pf_hq_aligned_q20_bases,
+            median_from_histogram(&self.hq_mismatches_by_read),
+            format_float(ratio(self.pf_mismatch_bases, self.pf_aligned_bases)),
+            format_float(ratio(self.pf_hq_mismatch_bases, self.pf_hq_aligned_bases)),
             format_float(ratio(self.indel_bases, self.pf_aligned_bases)),
             format_float(mean_read_length),
             sd_read_length,
@@ -10318,6 +10554,8 @@ struct CigarSummary {
     aligned_length: u64,
     read_aligned_length: u64,
     indel_events: u64,
+    indel_bases: u64,
+    mismatch_bases: u64,
     soft_clip_bases: u64,
     hard_clip_bases: u64,
     three_prime_soft_clip_bases: u64,
@@ -10334,19 +10572,26 @@ fn alignment_cigar_summary<'a>(
     let mut seen_operator = false;
     for cigar in cigars {
         match cigar {
-            Cigar::Match(len) | Cigar::Equal(len) | Cigar::Diff(len) => {
+            Cigar::Match(len) | Cigar::Equal(len) => {
                 summary.aligned_length += u64::from(*len);
                 summary.read_aligned_length += u64::from(*len);
+                last_soft_clip = 0;
+            }
+            Cigar::Diff(len) => {
+                summary.aligned_length += u64::from(*len);
+                summary.read_aligned_length += u64::from(*len);
+                summary.mismatch_bases += u64::from(*len);
                 last_soft_clip = 0;
             }
             Cigar::Ins(len) => {
                 summary.read_aligned_length += u64::from(*len);
                 summary.indel_events += 1;
+                summary.indel_bases += u64::from(*len);
                 last_soft_clip = 0;
             }
             Cigar::Del(len) => {
-                let _ = len;
                 summary.indel_events += 1;
+                summary.indel_bases += u64::from(*len);
                 last_soft_clip = 0;
             }
             Cigar::SoftClip(len) => {
@@ -10372,6 +10617,33 @@ fn alignment_cigar_summary<'a>(
         last_soft_clip
     };
     summary
+}
+
+fn mismatch_bases_from_bam_record(record: &bam::Record, cigar: CigarSummary) -> u64 {
+    if let Ok(aux) = record.aux(b"NM") {
+        if let Some(mismatches) = aux_i32(aux).and_then(|value| u64::try_from(value).ok()) {
+            return mismatches.saturating_sub(cigar.indel_bases);
+        }
+    }
+    match record.aux(b"MD") {
+        Ok(Aux::String(md)) => mismatch_bases_from_md(md.as_bytes()),
+        _ => cigar.mismatch_bases,
+    }
+}
+
+fn mismatch_bases_from_md(md: &[u8]) -> u64 {
+    let mut mismatches = 0;
+    let mut in_deletion = false;
+    for byte in md {
+        if byte.is_ascii_digit() {
+            in_deletion = false;
+        } else if *byte == b'^' {
+            in_deletion = true;
+        } else if !in_deletion && byte.is_ascii_alphabetic() {
+            mismatches += 1;
+        }
+    }
+    mismatches
 }
 
 fn q20_match_bases<'a>(cigars: impl Iterator<Item = &'a Cigar>, qualities: &[u8]) -> u64 {
@@ -10667,13 +10939,29 @@ fn observe_alignment_sam_line(
     cigar_summary.q20_match_bases = q20_match_bases_from_sam(cigar, qualities)?;
     let mut read_group = None;
     let mut has_sa = false;
+    let mut nm_mismatches = None;
+    let mut md_mismatches = None;
     for tag in fields {
         if !has_sa && tag.starts_with(b"SA:") {
             has_sa = true;
         }
+        if nm_mismatches.is_none()
+            && let Some(nm) = tag.strip_prefix(b"NM:i:")
+        {
+            let value = parse_u64_bytes(nm)?;
+            nm_mismatches = Some(value.saturating_sub(cigar_summary.indel_bases));
+        }
+        if md_mismatches.is_none()
+            && let Some(md) = tag.strip_prefix(b"MD:Z:")
+        {
+            md_mismatches = Some(mismatch_bases_from_md(md));
+        }
         if read_group.is_none() {
             read_group = insert_size_read_group_for_sam_tags(std::iter::once(tag), read_groups);
         }
+    }
+    if let Some(mismatches) = nm_mismatches.or(md_mismatches) {
+        cigar_summary.mismatch_bases = mismatches;
     }
     let chimeric = is_chimeric_sam_record(
         flags,
@@ -11151,6 +11439,23 @@ fn parse_u16_bytes(value: &[u8]) -> Result<u16, String> {
     Ok(parsed)
 }
 
+fn parse_u64_bytes(value: &[u8]) -> Result<u64, String> {
+    let mut parsed = 0_u64;
+    if value.is_empty() {
+        return Err("malformed integer".to_string());
+    }
+    for byte in value {
+        if !byte.is_ascii_digit() {
+            return Err("malformed integer".to_string());
+        }
+        parsed = parsed
+            .checked_mul(10)
+            .and_then(|number| number.checked_add(u64::from(byte - b'0')))
+            .ok_or_else(|| "malformed integer".to_string())?;
+    }
+    Ok(parsed)
+}
+
 fn parse_i64_bytes(value: &[u8]) -> Result<i64, String> {
     if value.is_empty() {
         return Err("malformed integer".to_string());
@@ -11218,13 +11523,28 @@ fn cigar_summary_from_sam(cigar: &[u8], is_reverse: bool) -> Result<CigarSummary
             return Err("malformed CollectAlignmentSummaryMetrics CIGAR".to_string());
         }
         match *byte {
-            b'M' | b'=' | b'X' => {
+            b'M' | b'=' => {
                 summary.aligned_length = summary
                     .aligned_length
                     .checked_add(len)
                     .ok_or_else(|| "malformed CollectAlignmentSummaryMetrics CIGAR".to_string())?;
                 summary.read_aligned_length = summary
                     .read_aligned_length
+                    .checked_add(len)
+                    .ok_or_else(|| "malformed CollectAlignmentSummaryMetrics CIGAR".to_string())?;
+                last_soft_clip = 0;
+            }
+            b'X' => {
+                summary.aligned_length = summary
+                    .aligned_length
+                    .checked_add(len)
+                    .ok_or_else(|| "malformed CollectAlignmentSummaryMetrics CIGAR".to_string())?;
+                summary.read_aligned_length = summary
+                    .read_aligned_length
+                    .checked_add(len)
+                    .ok_or_else(|| "malformed CollectAlignmentSummaryMetrics CIGAR".to_string())?;
+                summary.mismatch_bases = summary
+                    .mismatch_bases
                     .checked_add(len)
                     .ok_or_else(|| "malformed CollectAlignmentSummaryMetrics CIGAR".to_string())?;
                 last_soft_clip = 0;
@@ -11238,12 +11558,20 @@ fn cigar_summary_from_sam(cigar: &[u8], is_reverse: bool) -> Result<CigarSummary
                     .indel_events
                     .checked_add(1)
                     .ok_or_else(|| "malformed CollectAlignmentSummaryMetrics CIGAR".to_string())?;
+                summary.indel_bases = summary
+                    .indel_bases
+                    .checked_add(len)
+                    .ok_or_else(|| "malformed CollectAlignmentSummaryMetrics CIGAR".to_string())?;
                 last_soft_clip = 0;
             }
             b'D' => {
                 summary.indel_events = summary
                     .indel_events
                     .checked_add(1)
+                    .ok_or_else(|| "malformed CollectAlignmentSummaryMetrics CIGAR".to_string())?;
+                summary.indel_bases = summary
+                    .indel_bases
+                    .checked_add(len)
                     .ok_or_else(|| "malformed CollectAlignmentSummaryMetrics CIGAR".to_string())?;
                 last_soft_clip = 0;
             }
@@ -11312,159 +11640,6 @@ fn is_chimeric_sam_record(
         )
 }
 
-fn bam_cigar_reference_len(record: &bam::Record) -> usize {
-    record
-        .cigar()
-        .iter()
-        .map(|cigar| match cigar {
-            Cigar::Match(len)
-            | Cigar::Equal(len)
-            | Cigar::Diff(len)
-            | Cigar::Del(len)
-            | Cigar::RefSkip(len) => *len as usize,
-            _ => 0,
-        })
-        .sum()
-}
-
-#[derive(Debug, Default)]
-struct WgsOverlapBitmap {
-    words: Vec<u64>,
-}
-
-impl WgsOverlapBitmap {
-    fn with_bit_len(bits: usize) -> Self {
-        Self {
-            words: vec![0; bits.div_ceil(64)],
-        }
-    }
-
-    fn set(&mut self, index: usize) {
-        if let Some(word) = self.words.get_mut(index / 64) {
-            *word |= 1_u64 << (index % 64);
-        }
-    }
-
-    fn get(&self, index: usize) -> bool {
-        self.words
-            .get(index / 64)
-            .copied()
-            .is_some_and(|word| word & (1_u64 << (index % 64)) != 0)
-    }
-}
-
-#[derive(Debug)]
-struct WgsCachedMate {
-    overlap_start: u32,
-    bitmap: WgsOverlapBitmap,
-}
-
-impl WgsCachedMate {
-    fn covered_at(&self, reference_index: usize) -> bool {
-        if reference_index < self.overlap_start as usize {
-            return false;
-        }
-        let index = reference_index - self.overlap_start as usize;
-        self.bitmap.get(index)
-    }
-}
-
-#[derive(Debug)]
-struct WgsMateBuffer {
-    pending: FxHashMap<Vec<u8>, WgsCachedMate>,
-}
-
-enum WgsMatePeek {
-    Alone,
-    WouldBuffer {
-        overlap_start: u32,
-        overlap_len: u32,
-    },
-    PairWith(WgsCachedMate),
-}
-
-impl WgsMateBuffer {
-    const INITIAL_CAPACITY: usize = 4096;
-
-    fn clear(&mut self) {
-        self.pending.clear();
-    }
-
-    fn probe(&mut self, record: &bam::Record) -> WgsMatePeek {
-        if !record.is_paired() || record.is_unmapped() || record.is_mate_unmapped() {
-            return WgsMatePeek::Alone;
-        }
-        let tid = record.tid();
-        let mtid = record.mtid();
-        if tid < 0 || mtid < 0 || tid != mtid {
-            return WgsMatePeek::Alone;
-        }
-        let qname = record.qname();
-        if qname.is_empty() {
-            return WgsMatePeek::Alone;
-        }
-        if let Some(cached) = self.pending.remove(qname) {
-            return WgsMatePeek::PairWith(cached);
-        }
-        let read_start = record.pos().max(0) as u32;
-        let mate_start = record.mpos().max(0) as u32;
-        let read_end = read_start.saturating_add(bam_cigar_reference_len(record) as u32);
-        if mate_start >= read_start && mate_start < read_end {
-            let overlap_len = read_end - mate_start;
-            return WgsMatePeek::WouldBuffer {
-                overlap_start: mate_start,
-                overlap_len,
-            };
-        }
-        WgsMatePeek::Alone
-    }
-
-    fn insert(&mut self, qname: &[u8], cached: WgsCachedMate) {
-        self.pending.insert(qname.to_vec(), cached);
-    }
-}
-
-impl Default for WgsMateBuffer {
-    fn default() -> Self {
-        Self {
-            pending: FxHashMap::with_capacity_and_hasher(Self::INITIAL_CAPACITY, FxBuildHasher),
-        }
-    }
-}
-
-enum WgsOverlapMode<'a> {
-    Buffer {
-        overlap_start: u32,
-        bitmap: &'a mut WgsOverlapBitmap,
-    },
-    Pair(&'a WgsCachedMate),
-}
-
-impl WgsOverlapMode<'_> {
-    #[inline]
-    fn is_mate_covered(&self, reference_index: usize) -> bool {
-        match self {
-            Self::Buffer { .. } => false,
-            Self::Pair(cached) => cached.covered_at(reference_index),
-        }
-    }
-
-    #[inline]
-    fn on_depth_counted(&mut self, reference_index: usize) {
-        if let Self::Buffer {
-            overlap_start,
-            bitmap,
-        } = self
-        {
-            if reference_index < *overlap_start as usize {
-                return;
-            }
-            let index = reference_index - *overlap_start as usize;
-            bitmap.set(index);
-        }
-    }
-}
-
 fn wgs_locus_included(contig: &WgsContigMetadata, index: usize) -> bool {
     wgs_locus_included_at(contig.included.as_deref(), index, contig.length)
 }
@@ -11496,11 +11671,12 @@ struct WgsMetricsSummary {
     base_quality_histogram: Vec<u64>,
     sensitivity_base_quality_histogram: Vec<u64>,
     coverage_histogram: Vec<u64>,
+    active_unfiltered_depths: Vec<u16>,
+    locus_read_names: BTreeMap<usize, FxHashSet<Vec<u8>>>,
     active_contig: Option<String>,
     active_included: Option<Arc<[bool]>>,
     active_depths: Vec<u16>,
     processed_contigs: HashSet<String>,
-    mate_buffer: WgsMateBuffer,
 }
 
 #[derive(Debug)]
@@ -11553,11 +11729,12 @@ impl WgsMetricsSummary {
             base_quality_histogram: vec![0; 256.max(coverage_cap as usize + 1)],
             sensitivity_base_quality_histogram: vec![0; 256.max(coverage_cap as usize + 1)],
             coverage_histogram,
+            active_unfiltered_depths: Vec::new(),
+            locus_read_names: BTreeMap::new(),
             active_contig: None,
             active_included: None,
             active_depths: Vec::new(),
             processed_contigs: HashSet::new(),
-            mate_buffer: WgsMateBuffer::default(),
         }
     }
 
@@ -11566,7 +11743,8 @@ impl WgsMetricsSummary {
             self.processed_contigs.insert(contig);
         }
         self.active_included = None;
-        self.mate_buffer.clear();
+        self.locus_read_names.clear();
+        self.active_unfiltered_depths.clear();
         self.active_depths.clear();
     }
 
@@ -11582,8 +11760,9 @@ impl WgsMetricsSummary {
         if let Some(previous) = self.active_contig.take() {
             self.processed_contigs.insert(previous);
             self.active_depths.clear();
+            self.active_unfiltered_depths.clear();
             self.active_included = None;
-            self.mate_buffer.clear();
+            self.locus_read_names.clear();
         }
         let Some(metadata) = self.contigs.get(contig) else {
             return Err(format!(
@@ -11591,6 +11770,7 @@ impl WgsMetricsSummary {
             ));
         };
         self.active_depths.resize(metadata.length, 0);
+        self.active_unfiltered_depths.resize(metadata.length, 0);
         self.active_contig = Some(contig.to_string());
         self.active_included = metadata.included.clone();
         Ok(())
@@ -11624,6 +11804,18 @@ impl WgsMetricsSummary {
         );
     }
 
+    fn purge_locus_read_names_before(&mut self, reference_index: usize) {
+        self.locus_read_names = self.locus_read_names.split_off(&reference_index);
+    }
+
+    fn has_seen_read_name_at_locus(&mut self, reference_index: usize, qname: &[u8]) -> bool {
+        let read_names = self
+            .locus_read_names
+            .entry(reference_index)
+            .or_insert_with(|| FxHashSet::with_hasher(FxBuildHasher));
+        !read_names.insert(qname.to_vec())
+    }
+
     fn exclude_locus_from_histograms(&mut self, depth: u32) {
         let depth_index = depth.min(self.coverage_cap) as usize;
         self.coverage_histogram[depth_index] =
@@ -11640,7 +11832,7 @@ impl WgsMetricsSummary {
         locus_accumulation_cap: u32,
         count_unpaired: bool,
     ) -> Result<(), String> {
-        if record.is_unmapped() || record.is_secondary() || record.is_supplementary() {
+        if record.is_unmapped() || record.is_secondary() {
             return Ok(());
         }
         let tid = record.tid();
@@ -11651,76 +11843,33 @@ impl WgsMetricsSummary {
             return Err("CollectWgsMetrics record references unknown target".to_string());
         };
         self.ensure_contig(contig)?;
-        match self.mate_buffer.probe(record) {
-            WgsMatePeek::Alone => self.observe_cigar_ops(
-                contig,
-                record.pos().max(0) as usize,
-                record.qual(),
-                record.is_duplicate(),
-                record.mapq(),
-                record.is_paired(),
-                &record.cigar(),
-                minimum_mapping_quality,
-                minimum_base_quality,
-                coverage_cap,
-                locus_accumulation_cap,
-                count_unpaired,
-                None,
-            ),
-            WgsMatePeek::WouldBuffer {
-                overlap_start,
-                overlap_len,
-            } => {
-                let mut bitmap = WgsOverlapBitmap::with_bit_len(overlap_len as usize);
-                self.observe_cigar_ops(
-                    contig,
-                    record.pos().max(0) as usize,
-                    record.qual(),
-                    record.is_duplicate(),
-                    record.mapq(),
-                    record.is_paired(),
-                    &record.cigar(),
-                    minimum_mapping_quality,
-                    minimum_base_quality,
-                    coverage_cap,
-                    locus_accumulation_cap,
-                    count_unpaired,
-                    Some(WgsOverlapMode::Buffer {
-                        overlap_start,
-                        bitmap: &mut bitmap,
-                    }),
-                )?;
-                self.mate_buffer.insert(
-                    record.qname(),
-                    WgsCachedMate {
-                        overlap_start,
-                        bitmap,
-                    },
-                );
-                Ok(())
-            }
-            WgsMatePeek::PairWith(cached) => self.observe_cigar_ops(
-                contig,
-                record.pos().max(0) as usize,
-                record.qual(),
-                record.is_duplicate(),
-                record.mapq(),
-                record.is_paired(),
-                &record.cigar(),
-                minimum_mapping_quality,
-                minimum_base_quality,
-                coverage_cap,
-                locus_accumulation_cap,
-                count_unpaired,
-                Some(WgsOverlapMode::Pair(&cached)),
-            ),
-        }
+        let record_start = record.pos().max(0) as usize;
+        let read_bases = record.seq().as_bytes();
+        self.purge_locus_read_names_before(record_start);
+        self.observe_cigar_ops(
+            contig,
+            record_start,
+            record.qname(),
+            &read_bases,
+            record.qual(),
+            record.is_duplicate(),
+            record.mapq(),
+            record.is_paired(),
+            &record.cigar(),
+            minimum_mapping_quality,
+            minimum_base_quality,
+            coverage_cap,
+            locus_accumulation_cap,
+            count_unpaired,
+        )
     }
 
     fn observe_cigar_ops(
         &mut self,
         contig: &str,
         reference_offset_start: usize,
+        qname: &[u8],
+        read_bases: &[u8],
         qualities: &[u8],
         is_duplicate: bool,
         mapq: u8,
@@ -11731,11 +11880,12 @@ impl WgsMetricsSummary {
         coverage_cap: u32,
         locus_accumulation_cap: u32,
         count_unpaired: bool,
-        overlap_mode: Option<WgsOverlapMode<'_>>,
     ) -> Result<(), String> {
         self.observe_cigar_ops_iter(
             contig,
             reference_offset_start,
+            qname,
+            read_bases,
             qualities,
             is_duplicate,
             mapq,
@@ -11746,7 +11896,6 @@ impl WgsMetricsSummary {
             coverage_cap,
             locus_accumulation_cap,
             count_unpaired,
-            overlap_mode,
         )
     }
 
@@ -11754,6 +11903,8 @@ impl WgsMetricsSummary {
         &mut self,
         contig: &str,
         reference_offset_start: usize,
+        qname: &[u8],
+        read_bases: &[u8],
         qualities: &[u8],
         is_duplicate: bool,
         mapq: u8,
@@ -11764,7 +11915,6 @@ impl WgsMetricsSummary {
         coverage_cap: u32,
         locus_accumulation_cap: u32,
         count_unpaired: bool,
-        mut overlap_mode: Option<WgsOverlapMode<'_>>,
     ) -> Result<(), String>
     where
         I: Iterator<Item = Cigar>,
@@ -11799,45 +11949,51 @@ impl WgsMetricsSummary {
                             continue;
                         }
                         self.total_aligned_bases += 1;
-                        if is_duplicate {
-                            self.excluded_duplicate += 1;
-                        } else if low_mapq {
+                        if low_mapq {
                             self.excluded_mapq += 1;
+                        } else if is_duplicate {
+                            self.excluded_duplicate += 1;
                         } else if exclude_unpaired {
                             self.excluded_unpaired += 1;
-                        } else if qualities
-                            .get(read_index)
-                            .is_none_or(|quality| *quality < minimum_base_quality)
-                        {
-                            self.excluded_baseq += 1;
-                        } else if overlap_mode
-                            .as_ref()
-                            .is_some_and(|mode| mode.is_mate_covered(reference_index))
-                        {
-                            self.excluded_overlap += 1;
-                        } else if self.active_depths[reference_index] >= coverage_cap as u16
-                            || self.active_depths[reference_index] >= locus_accumulation_cap
-                        {
-                            if let Some(quality) = qualities.get(read_index) {
-                                let index = *quality as usize;
-                                self.base_quality_histogram[index] += 1;
-                                if *quality >= 30 {
-                                    self.sensitivity_base_quality_histogram[index] += 1;
-                                }
-                            }
-                            self.excluded_capped += 1;
                         } else {
-                            if let Some(quality) = qualities.get(read_index) {
-                                let index = *quality as usize;
+                            let Some(quality) = qualities.get(read_index).copied() else {
+                                self.excluded_baseq += 1;
+                                continue;
+                            };
+                            if quality <= 2 {
+                                self.excluded_baseq += 1;
+                                continue;
+                            }
+                            if self.active_unfiltered_depths[reference_index] < coverage_cap as u16
+                            {
+                                let index = quality as usize;
                                 self.base_quality_histogram[index] += 1;
-                                if *quality >= 30 {
+                                if quality >= 30 {
                                     self.sensitivity_base_quality_histogram[index] += 1;
                                 }
+                                self.active_unfiltered_depths[reference_index] = self
+                                    .active_unfiltered_depths[reference_index]
+                                    .saturating_add(1);
+                            }
+                            if quality < minimum_base_quality
+                                || read_bases
+                                    .get(read_index)
+                                    .is_none_or(|base| matches!(base.to_ascii_uppercase(), b'N'))
+                            {
+                                self.excluded_baseq += 1;
+                                continue;
+                            }
+                            if self.has_seen_read_name_at_locus(reference_index, qname) {
+                                self.excluded_overlap += 1;
+                                continue;
+                            }
+                            if self.active_depths[reference_index] >= coverage_cap as u16
+                                || self.active_depths[reference_index] >= locus_accumulation_cap
+                            {
+                                self.excluded_capped += 1;
+                                continue;
                             }
                             self.increment_filtered_depth(reference_index);
-                            if let Some(mode) = overlap_mode.as_mut() {
-                                mode.on_depth_counted(reference_index);
-                            }
                         }
                     }
                     read_offset += len;
@@ -12633,11 +12789,11 @@ fn percent(numerator: u64, denominator: u64) -> f64 {
 struct GcBiasMetricsSummary {
     windows: [u64; 101],
     read_starts: [u64; 101],
-    quality_sums: [u64; 101],
-    quality_counts: [u64; 101],
+    bases_by_gc: [u64; 101],
+    errors_by_gc: [u64; 101],
     unique_read_starts: [u64; 101],
-    unique_quality_sums: [u64; 101],
-    unique_quality_counts: [u64; 101],
+    unique_bases_by_gc: [u64; 101],
+    unique_errors_by_gc: [u64; 101],
     reference_path: String,
     active_contig: Option<String>,
     active_sequence: Vec<u8>,
@@ -12653,11 +12809,11 @@ impl GcBiasMetricsSummary {
         Ok(Self {
             windows: count_gc_bias_windows(reference_path, window_size)?,
             read_starts: [0; 101],
-            quality_sums: [0; 101],
-            quality_counts: [0; 101],
+            bases_by_gc: [0; 101],
+            errors_by_gc: [0; 101],
             unique_read_starts: [0; 101],
-            unique_quality_sums: [0; 101],
-            unique_quality_counts: [0; 101],
+            unique_bases_by_gc: [0; 101],
+            unique_errors_by_gc: [0; 101],
             reference_path: reference_path.to_string(),
             active_contig: None,
             active_sequence: Vec::new(),
@@ -12684,11 +12840,11 @@ impl GcBiasMetricsSummary {
         target_names: &[String],
         window_size: usize,
     ) -> Result<(), String> {
-        if record.is_secondary() || record.is_supplementary() {
-            return Ok(());
+        let counts_cluster = !record.is_paired() || record.is_first_in_template();
+        if counts_cluster {
+            self.total_clusters += 1;
         }
-        self.total_clusters += 1;
-        if self.emit_unique && !record.is_duplicate() {
+        if self.emit_unique && !record.is_duplicate() && counts_cluster {
             self.unique_total_clusters += 1;
         }
         if record.is_unmapped() || record.tid() < 0 {
@@ -12706,26 +12862,31 @@ impl GcBiasMetricsSummary {
         if reference.len() < window_size {
             return Ok(());
         }
-        let start = (record.pos().max(0) as usize).min(reference.len() - window_size);
-        let gc = gc_percent(&reference[start..start + window_size], window_size);
-        let quality_sum = record
-            .qual()
-            .iter()
-            .map(|quality| *quality as u64)
-            .sum::<u64>();
-        let quality_count = record.qual().len() as u64;
+        let start = if record.is_reverse() {
+            record.cigar().end_pos() - window_size as i64
+        } else {
+            record.pos() + 1
+        };
+        if start <= 0 {
+            return Ok(());
+        }
+        let Some(gc) = picard_gc_percent_for_start(reference, start as usize, window_size) else {
+            return Ok(());
+        };
+        let bases = record.seq_len() as u64;
+        let errors = gc_bias_error_count(record, reference)?;
         self.read_starts[gc] += 1;
-        self.quality_sums[gc] += quality_sum;
-        self.quality_counts[gc] += quality_count;
+        self.bases_by_gc[gc] += bases;
+        self.errors_by_gc[gc] += errors;
         if self.emit_unique && !record.is_duplicate() {
             self.unique_read_starts[gc] += 1;
-            self.unique_quality_sums[gc] += quality_sum;
-            self.unique_quality_counts[gc] += quality_count;
+            self.unique_bases_by_gc[gc] += bases;
+            self.unique_errors_by_gc[gc] += errors;
         }
         Ok(())
     }
 
-    fn detail_text(&self, _window_size: usize, minimum_genome_fraction: f64) -> String {
+    fn detail_text(&self, _window_size: usize, _minimum_genome_fraction: f64) -> String {
         let mut output = String::new();
         output.push_str("## METRICS CLASS\tpicard.analysis.GcBiasDetailMetrics\n");
         output.push_str("ACCUMULATION_LEVEL\tREADS_USED\tGC\tWINDOWS\tREAD_STARTS\tMEAN_BASE_QUALITY\tNORMALIZED_COVERAGE\tERROR_BAR_WIDTH\tSAMPLE\tLIBRARY\tREAD_GROUP\n");
@@ -12733,20 +12894,16 @@ impl GcBiasMetricsSummary {
             &mut output,
             "ALL",
             &self.read_starts,
-            &self.quality_sums,
-            &self.quality_counts,
-            self.aligned_reads,
-            minimum_genome_fraction,
+            &self.bases_by_gc,
+            &self.errors_by_gc,
         );
         if self.emit_unique {
             self.push_detail_rows(
                 &mut output,
                 "UNIQUE",
                 &self.unique_read_starts,
-                &self.unique_quality_sums,
-                &self.unique_quality_counts,
-                self.unique_aligned_reads,
-                minimum_genome_fraction,
+                &self.unique_bases_by_gc,
+                &self.unique_errors_by_gc,
             );
         }
         output
@@ -12757,29 +12914,20 @@ impl GcBiasMetricsSummary {
         output: &mut String,
         reads_used: &str,
         read_starts_by_gc: &[u64; 101],
-        quality_sums_by_gc: &[u64; 101],
-        quality_counts_by_gc: &[u64; 101],
-        aligned_reads: u64,
-        minimum_genome_fraction: f64,
+        bases_by_gc: &[u64; 101],
+        errors_by_gc: &[u64; 101],
     ) {
         let total_windows = self.total_windows();
+        let total_read_starts = read_starts_by_gc.iter().sum::<u64>();
         let mean_reads_per_window = if total_windows == 0 {
             0.0
         } else {
-            aligned_reads as f64 / total_windows as f64
+            total_read_starts as f64 / total_windows as f64
         };
         for gc in 0..=100 {
             let windows = self.windows[gc];
-            let genome_fraction = if total_windows == 0 {
-                0.0
-            } else {
-                windows as f64 / total_windows as f64
-            };
             let read_starts = read_starts_by_gc[gc];
-            let normalized_coverage = if windows == 0
-                || mean_reads_per_window == 0.0
-                || genome_fraction < minimum_genome_fraction
-            {
+            let normalized_coverage = if windows == 0 || mean_reads_per_window == 0.0 {
                 0.0
             } else {
                 (read_starts as f64 / windows as f64) / mean_reads_per_window
@@ -12789,7 +12937,8 @@ impl GcBiasMetricsSummary {
             } else {
                 normalized_coverage / (read_starts as f64).sqrt()
             };
-            let mean_base_quality = ratio(quality_sums_by_gc[gc], quality_counts_by_gc[gc]);
+            let mean_base_quality =
+                phred_score_from_observed_errors(bases_by_gc[gc] as f64, errors_by_gc[gc] as f64);
             output.push_str(&format!(
                 "All Reads\t{reads_used}\t{gc}\t{windows}\t{read_starts}\t{}\t{}\t{}\t\t\t\n",
                 format_float(mean_base_quality),
@@ -12799,7 +12948,7 @@ impl GcBiasMetricsSummary {
         }
     }
 
-    fn summary_text(&self, window_size: usize, minimum_genome_fraction: f64) -> String {
+    fn summary_text(&self, window_size: usize, _minimum_genome_fraction: f64) -> String {
         let mut output = String::new();
         output.push_str("## METRICS CLASS\tpicard.analysis.GcBiasSummaryMetrics\n");
         output.push_str("ACCUMULATION_LEVEL\tREADS_USED\tWINDOW_SIZE\tTOTAL_CLUSTERS\tALIGNED_READS\tAT_DROPOUT\tGC_DROPOUT\tGC_NC_0_19\tGC_NC_20_39\tGC_NC_40_59\tGC_NC_60_79\tGC_NC_80_100\tSAMPLE\tLIBRARY\tREAD_GROUP\n");
@@ -12810,7 +12959,6 @@ impl GcBiasMetricsSummary {
             self.total_clusters,
             self.aligned_reads,
             &self.read_starts,
-            minimum_genome_fraction,
         );
         if self.emit_unique {
             self.push_summary_row(
@@ -12820,7 +12968,6 @@ impl GcBiasMetricsSummary {
                 self.unique_total_clusters,
                 self.unique_aligned_reads,
                 &self.unique_read_starts,
-                minimum_genome_fraction,
             );
         }
         output
@@ -12834,60 +12981,36 @@ impl GcBiasMetricsSummary {
         total_clusters: u64,
         aligned_reads: u64,
         read_starts_by_gc: &[u64; 101],
-        minimum_genome_fraction: f64,
     ) {
-        let at_dropout = self.gc_dropout_slice(
-            read_starts_by_gc,
-            aligned_reads,
-            0,
-            49,
-            minimum_genome_fraction,
-        );
-        let gc_dropout = self.gc_dropout_slice(
-            read_starts_by_gc,
-            aligned_reads,
-            50,
-            100,
-            minimum_genome_fraction,
-        );
+        let (at_dropout, gc_dropout) = self.gc_dropout(read_starts_by_gc);
         output.push_str(&format!(
             "All Reads\t{reads_used}\t{window_size}\t{total_clusters}\t{aligned_reads}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t\t\t\n",
             format_float(at_dropout),
             format_float(gc_dropout),
             format_float(self.gc_nc_slice(
                 read_starts_by_gc,
-                aligned_reads,
                 0,
                 19,
-                minimum_genome_fraction
             )),
             format_float(self.gc_nc_slice(
                 read_starts_by_gc,
-                aligned_reads,
                 20,
                 39,
-                minimum_genome_fraction
             )),
             format_float(self.gc_nc_slice(
                 read_starts_by_gc,
-                aligned_reads,
                 40,
                 59,
-                minimum_genome_fraction
             )),
             format_float(self.gc_nc_slice(
                 read_starts_by_gc,
-                aligned_reads,
                 60,
                 79,
-                minimum_genome_fraction
             )),
             format_float(self.gc_nc_slice(
                 read_starts_by_gc,
-                aligned_reads,
                 80,
                 100,
-                minimum_genome_fraction
             )),
         ));
     }
@@ -12896,23 +13019,16 @@ impl GcBiasMetricsSummary {
         self.windows.iter().sum()
     }
 
-    fn gc_nc_slice(
-        &self,
-        read_starts_by_gc: &[u64; 101],
-        aligned_reads: u64,
-        low: usize,
-        high: usize,
-        minimum_genome_fraction: f64,
-    ) -> f64 {
+    fn gc_nc_slice(&self, read_starts_by_gc: &[u64; 101], low: usize, high: usize) -> f64 {
         let total_windows = self.total_windows();
-        if total_windows == 0 || aligned_reads == 0 {
+        let total_read_starts = read_starts_by_gc.iter().sum::<u64>();
+        if total_windows == 0 || total_read_starts == 0 {
             return 0.0;
         }
         let mut windows = 0_u64;
         let mut read_starts = 0_u64;
         for gc in low..=high {
-            let genome_fraction = self.windows[gc] as f64 / total_windows as f64;
-            if genome_fraction >= minimum_genome_fraction {
+            if self.windows[gc] != 0 {
                 windows += self.windows[gc];
                 read_starts += read_starts_by_gc[gc];
             }
@@ -12920,49 +13036,132 @@ impl GcBiasMetricsSummary {
         if windows == 0 {
             0.0
         } else {
-            (read_starts as f64 / windows as f64) / (aligned_reads as f64 / total_windows as f64)
+            (read_starts as f64 / windows as f64)
+                / (total_read_starts as f64 / total_windows as f64)
         }
     }
 
-    fn gc_dropout_slice(
-        &self,
-        read_starts_by_gc: &[u64; 101],
-        aligned_reads: u64,
-        low: usize,
-        high: usize,
-        minimum_genome_fraction: f64,
-    ) -> f64 {
+    fn gc_dropout(&self, read_starts_by_gc: &[u64; 101]) -> (f64, f64) {
         let total_windows = self.total_windows();
-        if total_windows == 0 || aligned_reads == 0 {
-            return 0.0;
+        let total_read_starts = read_starts_by_gc.iter().sum::<u64>();
+        if total_windows == 0 || total_read_starts == 0 {
+            return (0.0, 0.0);
         }
-        let mean_reads_per_window = aligned_reads as f64 / total_windows as f64;
-        let mut dropout = 0.0;
-        for gc in low..=high {
+        let mut at_dropout = 0.0;
+        let mut gc_dropout = 0.0;
+        for gc in 0..=100 {
             let windows = self.windows[gc];
-            if windows == 0 {
+            if windows == 0 && read_starts_by_gc[gc] == 0 {
                 continue;
             }
-            let genome_fraction = windows as f64 / total_windows as f64;
-            if genome_fraction < minimum_genome_fraction {
-                continue;
-            }
-            let normalized_coverage =
-                (read_starts_by_gc[gc] as f64 / windows as f64) / mean_reads_per_window;
-            if normalized_coverage < 1.0 {
-                dropout += genome_fraction * (1.0 - normalized_coverage);
+            let read_fraction = read_starts_by_gc[gc] as f64 / total_read_starts as f64;
+            let window_fraction = windows as f64 / total_windows as f64;
+            let dropout = (window_fraction - read_fraction) * 100.0;
+            if dropout > 0.0 {
+                if gc <= 50 {
+                    at_dropout += dropout;
+                } else {
+                    gc_dropout += dropout;
+                }
             }
         }
-        dropout * 100.0
+        (at_dropout, gc_dropout)
     }
 }
 
-fn gc_percent(window: &[u8], window_size: usize) -> usize {
-    let gc = window
-        .iter()
-        .filter(|base| matches!(base.to_ascii_uppercase(), b'G' | b'C'))
-        .count();
-    ((gc * 100) + (window_size / 2)) / window_size
+fn picard_gc_percent_for_start(
+    reference: &[u8],
+    start: usize,
+    window_size: usize,
+) -> Option<usize> {
+    if start > reference.len() {
+        return None;
+    }
+    let last_calculated_start = reference.len().saturating_sub(window_size);
+    if start >= last_calculated_start {
+        return Some(0);
+    }
+    picard_gc_percent(reference.get(start..start + window_size)?, window_size)
+}
+
+fn picard_gc_percent(window: &[u8], window_size: usize) -> Option<usize> {
+    let mut gc = 0usize;
+    let mut n = 0usize;
+    for base in window {
+        match base.to_ascii_uppercase() {
+            b'G' | b'C' => gc += 1,
+            b'N' => n += 1,
+            _ => {}
+        }
+    }
+    if n > 4 {
+        None
+    } else {
+        Some(gc * 100 / window_size)
+    }
+}
+
+fn phred_score_from_observed_errors(bases: f64, errors: f64) -> f64 {
+    if bases <= 0.0 || errors <= 0.0 {
+        0.0
+    } else {
+        (-10.0 * (errors / bases).log10()).round()
+    }
+}
+
+fn gc_bias_error_count(record: &bam::Record, reference: &[u8]) -> Result<u64, String> {
+    let read_bases = record.seq();
+    let mut read_offset = 0usize;
+    let mut ref_offset = record.pos().max(0) as usize;
+    let mut errors = 0u64;
+
+    for cigar in &record.cigar() {
+        match *cigar {
+            Cigar::Match(length) => {
+                for _ in 0..length {
+                    if read_offset >= read_bases.len() {
+                        return Err(
+                            "CollectGcBiasMetrics read sequence shorter than CIGAR".to_string()
+                        );
+                    }
+                    let Some(ref_base) = reference.get(ref_offset).copied() else {
+                        return Ok(errors);
+                    };
+                    if !dna_bases_equal(read_bases[read_offset], ref_base) {
+                        errors += 1;
+                    }
+                    read_offset += 1;
+                    ref_offset += 1;
+                }
+            }
+            Cigar::Equal(length) => {
+                read_offset = read_offset.saturating_add(length as usize);
+                ref_offset = ref_offset.saturating_add(length as usize);
+            }
+            Cigar::Diff(length) => {
+                read_offset = read_offset.saturating_add(length as usize);
+                ref_offset = ref_offset.saturating_add(length as usize);
+                errors += u64::from(length);
+            }
+            Cigar::Ins(length) => {
+                read_offset = read_offset.saturating_add(length as usize);
+                errors += u64::from(length);
+            }
+            Cigar::Del(length) => {
+                ref_offset = ref_offset.saturating_add(length as usize);
+                errors += u64::from(length);
+            }
+            Cigar::SoftClip(length) => {
+                read_offset = read_offset.saturating_add(length as usize);
+            }
+            Cigar::RefSkip(length) => {
+                ref_offset = ref_offset.saturating_add(length as usize);
+            }
+            Cigar::HardClip(_) | Cigar::Pad(_) => {}
+        }
+    }
+
+    Ok(errors)
 }
 
 fn collect_mean_quality_by_cycle_sam_text(
@@ -13172,14 +13371,6 @@ impl MeanQualityByCycleSummary {
             output.push_str("CYCLE\tMEAN_QUALITY\n");
             write_mean_quality_cycles(&mut output, 0, &self.first);
             write_mean_quality_cycles(&mut output, self.first.len(), &self.second);
-        } else if self.original_records == self.records {
-            output.push_str("CYCLE\tMEAN_ORIGINAL_QUALITY\n");
-            write_mean_quality_cycles(&mut output, 0, &self.original_first);
-            write_mean_quality_cycles(
-                &mut output,
-                self.original_first.len(),
-                &self.original_second,
-            );
         } else {
             output.push_str("CYCLE\tMEAN_QUALITY\tMEAN_ORIGINAL_QUALITY\n");
             write_mean_quality_combined_cycles(&mut output, 0, &self.first, &self.original_first);
@@ -16494,6 +16685,14 @@ fn open_bam_reader_with_reference(
     hts_io::open_reader(path, reference)
 }
 
+fn open_bam_reader_with_reference_and_cram_decode_md(
+    path: impl AsRef<Path>,
+    reference: Option<&str>,
+    decode_md: bool,
+) -> Result<bam::Reader, String> {
+    hts_io::open_reader_with_cram_decode_md(path, reference, decode_md)
+}
+
 fn open_bam_reader_for_args(
     path: impl AsRef<Path>,
     args: &BTreeMap<String, Vec<String>>,
@@ -16954,12 +17153,31 @@ fn remove_aux_if_present(record: &mut bam::Record, tag: &[u8]) -> Result<(), Str
     Ok(())
 }
 
+fn remove_missing_replacement_read_group(
+    record: &mut bam::Record,
+    replacement_read_group_ids: &BTreeSet<String>,
+) -> Result<(), String> {
+    let Ok(aux) = record.aux(b"RG") else {
+        return Ok(());
+    };
+    let remove_read_group = match aux {
+        Aux::String(read_group_id) => !replacement_read_group_ids.contains(read_group_id),
+        _ => true,
+    };
+    if remove_read_group {
+        record
+            .remove_aux(b"RG")
+            .map_err(|error| error.to_string())?;
+    }
+    Ok(())
+}
+
 fn set_nm_md_uq_tags(
     record: &mut bam::Record,
     references_by_tid: &[Option<&[u8]>],
     set_only_uq: bool,
 ) -> Result<(), String> {
-    if record.is_unmapped() || record.is_secondary() || record.is_supplementary() {
+    if record.is_unmapped() {
         return Ok(());
     }
     if record.tid() < 0 || record.pos() < 0 {
@@ -18048,6 +18266,8 @@ mod tests {
             .observe_cigar_ops_iter(
                 "chr1",
                 0,
+                b"read1",
+                b"ACGTACGTACGT",
                 &qualities,
                 false,
                 30,
@@ -18058,7 +18278,6 @@ mod tests {
                 250,
                 100_000,
                 false,
-                None,
             )
             .expect("fixture alignment is valid");
 
@@ -18073,19 +18292,6 @@ mod tests {
         assert_eq!(summary.coverage_histogram, scanned);
         assert_eq!(summary.coverage_histogram[1], 12);
         assert_eq!(summary.coverage_histogram[0], 0);
-    }
-
-    #[test]
-    fn wgs_overlap_bitmap_get_checks_exact_bit() {
-        let mut bitmap = WgsOverlapBitmap::with_bit_len(130);
-        bitmap.set(0);
-        bitmap.set(65);
-
-        assert!(bitmap.get(0));
-        assert!(!bitmap.get(1));
-        assert!(!bitmap.get(64));
-        assert!(bitmap.get(65));
-        assert!(!bitmap.get(66));
     }
 
     #[test]
@@ -18164,19 +18370,19 @@ mod tests {
                 read_starts[50] = 1;
                 read_starts
             },
-            quality_sums: {
-                let mut quality_sums = [0_u64; 101];
-                quality_sums[50] = 120;
-                quality_sums
+            bases_by_gc: {
+                let mut bases_by_gc = [0_u64; 101];
+                bases_by_gc[50] = 100;
+                bases_by_gc
             },
-            quality_counts: {
-                let mut quality_counts = [0_u64; 101];
-                quality_counts[50] = 4;
-                quality_counts
+            errors_by_gc: {
+                let mut errors_by_gc = [0_u64; 101];
+                errors_by_gc[50] = 1;
+                errors_by_gc
             },
             unique_read_starts: [0; 101],
-            unique_quality_sums: [0; 101],
-            unique_quality_counts: [0; 101],
+            unique_bases_by_gc: [0; 101],
+            unique_errors_by_gc: [0; 101],
             reference_path: String::new(),
             active_contig: None,
             active_sequence: Vec::new(),
@@ -18188,7 +18394,7 @@ mod tests {
         };
 
         let text = summary.detail_text(100, 0.0);
-        assert!(text.contains("All Reads\tALL\t50\t2\t1\t30\t1\t1"));
+        assert!(text.contains("All Reads\tALL\t50\t2\t1\t20\t1\t1"));
     }
 
     #[test]

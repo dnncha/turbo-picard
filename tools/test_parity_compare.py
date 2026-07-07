@@ -32,7 +32,10 @@ class ParityCompareTests(unittest.TestCase):
             )
             self.assertEqual(
                 parity_compare.load_metrics(path),
-                {"Unknown Library": ["0", "1"]},
+                [
+                    ["LIBRARY", "UNPAIRED_READS_EXAMINED", "READ_PAIRS_EXAMINED"],
+                    ["Unknown Library", "0", "1"],
+                ],
             )
 
     def test_compare_metrics_detects_difference(self) -> None:
@@ -43,6 +46,33 @@ class ParityCompareTests(unittest.TestCase):
             turbo.write_text("LIBRARY\tX\nlib\t2\n", encoding="utf-8")
             with self.assertRaises(SystemExit):
                 parity_compare.compare_metrics(picard, turbo, "test")
+
+    def test_compare_metrics_detects_repeated_first_column_difference(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            picard = Path(tempdir) / "picard.txt"
+            turbo = Path(tempdir) / "turbo.txt"
+            picard.write_text(
+                "ACCUMULATION_LEVEL\tREADS_USED\tGC\tREAD_STARTS\n"
+                "All Reads\tALL\t28\t44\n"
+                "All Reads\tALL\t29\t92\n",
+                encoding="utf-8",
+            )
+            turbo.write_text(
+                "ACCUMULATION_LEVEL\tREADS_USED\tGC\tREAD_STARTS\n"
+                "All Reads\tALL\t28\t40\n"
+                "All Reads\tALL\t29\t92\n",
+                encoding="utf-8",
+            )
+            with self.assertRaises(SystemExit):
+                parity_compare.compare_metrics(picard, turbo, "CollectGcBiasMetrics detail")
+
+    def test_compare_metrics_allows_last_decimal_float_drift(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            picard = Path(tempdir) / "picard.txt"
+            turbo = Path(tempdir) / "turbo.txt"
+            picard.write_text("METRIC\tVALUE\nHET_SNP_SENSITIVITY\t0.069409\n", encoding="utf-8")
+            turbo.write_text("METRIC\tVALUE\nHET_SNP_SENSITIVITY\t0.06941\n", encoding="utf-8")
+            parity_compare.compare_metrics(picard, turbo, "CollectWgsMetrics")
 
     def test_compare_clean_sam_fields(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:
@@ -91,11 +121,15 @@ class ParityCompareTests(unittest.TestCase):
             picard = Path(tempdir) / "picard.sam"
             turbo = Path(tempdir) / "turbo.sam"
             picard.write_text(
-                "@HD\tVN:1.6\nread1\t0\tchr1\t1\t0\t4M\t*\t0\t0\tACGT\tFFFF\tMD:Z:4\tNM:i:0\tUQ:i:0\n",
+                "@HD\tVN:1.6\n"
+                "@PG\tID:picard\n"
+                "read1\t0\tchr1\t1\t0\t4M\t*\t0\t0\tACGT\tFFFF\tMD:Z:4\tNM:i:0\tPG:Z:picard\tUQ:i:0\n",
                 encoding="utf-8",
             )
             turbo.write_text(
-                "@HD\tVN:1.6\nread1\t0\tchr1\t1\t0\t4M\t*\t0\t0\tACGT\tFFFF\tUQ:i:0\tMD:Z:4\tNM:i:0\n",
+                "@HD\tVN:1.5\n"
+                "@PG\tID:turbo\n"
+                "read1\t0\tchr1\t1\t0\t4M\t*\t0\t0\tACGT\tFFFF\tUQ:i:0\tMD:Z:4\tNM:i:0\tPG:Z:turbo\n",
                 encoding="utf-8",
             )
             parity_compare.compare_stable_sam_lines_with_sorted_tags(

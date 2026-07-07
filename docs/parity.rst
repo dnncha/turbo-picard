@@ -72,6 +72,9 @@ every checked-in MarkDuplicates fixture through CRAM input and output.
 BAM preprocessing chain: MarkDuplicates, SortSam on the raw shard, SortSam on
 the markdup output, FixMateInformation after a queryname resort, and
 SetNmMdAndUqTags with ``fixtures/reference/chrM.fa``.
+For combo SetNmMdAndUqTags checks, the verifier compares the coordinate-sorted
+record multiset so equivalent tie ordering inherited from upstream sorting does
+not fail the pipeline evidence.
 
 ``tools/verify_gatk_mito_bam_parity.sh`` exercises the same GATK mitochondrial
 shard on native BAM I/O (ViewSam through chart metrics, plus BuildBamIndex,

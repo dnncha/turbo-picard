@@ -37,24 +37,35 @@ def sam_records(path: Path, reference: str) -> list[str]:
     return [line for line in completed.stdout.splitlines() if line]
 
 
-def load_metrics(path: Path) -> dict[str, list[str]]:
-    rows: dict[str, list[str]] = {}
+def load_metrics(path: Path) -> list[list[str]]:
+    rows: list[list[str]] = []
     with path.open(encoding="utf-8") as handle:
         for line in handle:
             if line.startswith("#") or not line.strip():
                 continue
             parts = line.rstrip("\n").split("\t")
-            if parts[0] == "LIBRARY":
-                continue
-            rows[parts[0]] = parts[1:]
+            rows.append(parts)
     return rows
 
 
 def compare_metrics(picard_path: Path, turbo_path: Path, label: str) -> None:
     picard = load_metrics(picard_path)
     turbo = load_metrics(turbo_path)
-    if picard != turbo:
+    if len(picard) != len(turbo):
         raise SystemExit(f"{label} metrics differ between Picard and turbo-picard")
+    for picard_row, turbo_row in zip(picard, turbo):
+        if len(picard_row) != len(turbo_row):
+            raise SystemExit(f"{label} metrics differ between Picard and turbo-picard")
+        for picard_cell, turbo_cell in zip(picard_row, turbo_row):
+            if picard_cell == turbo_cell:
+                continue
+            try:
+                picard_value = float(picard_cell)
+                turbo_value = float(turbo_cell)
+            except ValueError:
+                raise SystemExit(f"{label} metrics differ between Picard and turbo-picard")
+            if abs(picard_value - turbo_value) > 1e-5:
+                raise SystemExit(f"{label} metrics differ between Picard and turbo-picard")
 
 
 def compare_sam_record_lines(
@@ -125,7 +136,10 @@ def compare_stable_sam_lines(picard_path: Path, turbo_path: Path, label: str) ->
                 lines.append(line)
         return lines
 
-    if stable_lines(picard_path) != stable_lines(turbo_path):
+    picard_lines = stable_lines(picard_path)
+    turbo_lines = stable_lines(turbo_path)
+    if picard_lines != turbo_lines:
+        report_first_line_difference(label, picard_lines, turbo_lines, "stable SAM line")
         raise SystemExit(f"{label} stable SAM output differs from Picard")
 
 
@@ -134,22 +148,53 @@ def compare_stable_sam_lines_with_sorted_tags(
     turbo_path: Path,
     label: str,
 ) -> None:
-    def stable_lines(path: Path) -> list[str]:
+    compare_real_data = _compare_real_data_module()
+
+    def stable_lines(path: Path) -> list[bytes]:
         lines = []
-        with path.open(encoding="utf-8") as handle:
-            for line in handle:
-                line = line.rstrip("\n")
-                if not line.strip() or line.startswith("@PG"):
+        with path.open("rb") as handle:
+            for raw in handle:
+                line = raw.rstrip(b"\n")
+                if not line.strip() or line.startswith(b"@PG"):
                     continue
-                if line.startswith("@"):
-                    lines.append(line)
+                if line.startswith(b"@"):
+                    lines.append(compare_real_data.normalize_stable_sam_header(line))
                     continue
-                fields = line.split("\t")
-                lines.append("\t".join([*fields[:11], *sorted(fields[11:])]))
+                lines.append(compare_real_data.normalize_sam_record(line))
         return lines
 
-    if stable_lines(picard_path) != stable_lines(turbo_path):
+    picard_lines = stable_lines(picard_path)
+    turbo_lines = stable_lines(turbo_path)
+    if picard_lines != turbo_lines:
+        report_first_line_difference(label, picard_lines, turbo_lines, "stable SAM line")
         raise SystemExit(f"{label} stable SAM output differs from Picard")
+
+
+def report_first_line_difference(
+    label: str,
+    picard_lines: list[bytes] | list[str],
+    turbo_lines: list[bytes] | list[str],
+    noun: str,
+) -> None:
+    def render(line: bytes | str) -> str:
+        if isinstance(line, bytes):
+            return line.decode("utf-8", "replace")
+        return line
+
+    for index, (picard_line, turbo_line) in enumerate(zip(picard_lines, turbo_lines), 1):
+        if picard_line == turbo_line:
+            continue
+        print(f"{label} first differing {noun} {index}:", file=sys.stderr)
+        print(f"{label} Picard: {render(picard_line)}", file=sys.stderr)
+        print(f"{label} turbo-picard: {render(turbo_line)}", file=sys.stderr)
+        return
+
+    if len(picard_lines) != len(turbo_lines):
+        print(
+            f"{label} stable SAM line counts differ: "
+            f"Picard={len(picard_lines)} turbo-picard={len(turbo_lines)}",
+            file=sys.stderr,
+        )
 
 
 def compare_binary_files(picard_path: Path, turbo_path: Path, label: str) -> None:

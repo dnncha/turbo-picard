@@ -108,6 +108,7 @@ def validate_workflow_starters() -> list[str]:
         ("trial-samtofastq.wdl", "SamToFastq trial listing"),
         ("trial-fastqtosam.wdl", "WDL FastqToSam trial listing"),
         ("trial-fixmateinformation.nf", "Nextflow FixMateInformation trial listing"),
+        ("turbo-picard explain --json", "machine-readable explain preflight"),
     ]:
         if needle not in workflow_readme:
             errors.append(f"packaging/workflows/README.md missing {description}")
@@ -123,6 +124,7 @@ def validate_workflow_starters() -> list[str]:
         ("SamToFastq", "SamToFastq workflow mention in Snakemake use-cases"),
         ("FastqToSam", "FastqToSam workflow mention in Snakemake use-cases"),
         ("FixMateInformation", "FixMateInformation workflow mention in Snakemake use-cases"),
+        ("turbo-picard explain --json", "machine-readable explain preflight in use-cases"),
     ]:
         if needle not in use_cases:
             errors.append(f"docs/use-cases.rst missing {description}")
