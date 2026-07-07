@@ -37,6 +37,7 @@ Check the install:
 turbo-picard --version
 turbo-picard MarkDuplicates --help
 turbo-picard doctor
+turbo-picard trial MarkDuplicates I=input.bam O=marked.bam M=metrics.txt
 ```
 
 Run one familiar command:
@@ -63,6 +64,8 @@ cargo install --locked --path crates/turbo-picard-cli --bin turbo-picard --bin p
 Good first trials are usually `MarkDuplicates`, `SortSam`, `SamToFastq`,
 `FastqToSam`, `FixMateInformation`, `BuildBamIndex`, and repeated metrics
 commands.
+Use `turbo-picard trial <PicardCommand> ...` to print a side-by-side Picard and
+turbo-picard evaluation contract before changing a workflow.
 
 ## When To Stay With Picard
 

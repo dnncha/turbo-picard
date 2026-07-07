@@ -10,7 +10,7 @@ Suggested order:
    question
 3. Biostars, using the tool/announcement framing
 4. r/bioinformatics, after checking the pinned "before you post" thread
-5. Rust Users Forum announcements
+5. Rust community forum announcements
 6. Hacker News Show HN, only on a day when you can answer comments
 7. Personal LinkedIn, Mastodon, or Bluesky posts
 
@@ -41,7 +41,8 @@ Current facts to keep consistent:
 - Current repo release: 0.1.8
 - Install: `python3 -m pip install turbo-picard`
 - Current PyPI files: Linux x86_64 wheel, macOS Apple Silicon wheel, and source distribution
-- Conda packaging is in progress through the open Bioconda recipe PR
+- Bioconda recipe PR: open, all technical checks passing, reviewer approval pending
+- Trial helper: `turbo-picard trial <PicardCommand> ...`
 - Benchmark evidence in the repo reports 32/32 parity-checked commands, 24.94x
   geometric mean speedup, and 94.36x top speedup versus Picard 3.4.0
 - Recommended first commands: `MarkDuplicates`, `SortSam`, `SamToFastq`,

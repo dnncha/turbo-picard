@@ -197,6 +197,98 @@ fn explain_rejects_missing_format_value() {
 }
 
 #[test]
+fn trial_reports_copyable_side_by_side_contract() {
+    let tempdir = tempfile::tempdir().expect("tempdir exists");
+    let fallback = fallback_script(tempdir.path(), 0);
+
+    let mut cmd = Command::cargo_bin("turbo-picard").expect("binary exists");
+    cmd.args([
+        "trial",
+        "MarkDuplicates",
+        "I=input.bam",
+        "O=marked.bam",
+        "M=metrics.txt",
+    ])
+    .env(
+        "TURBO_PICARD_FALLBACK_COMMAND",
+        fallback.display().to_string(),
+    )
+    .assert()
+    .success()
+    .stdout(predicate::str::contains("command=MarkDuplicates"))
+    .stdout(predicate::str::contains("status=partial-native"))
+    .stdout(predicate::str::contains(
+        "trial_fit=recommended-first-trial",
+    ))
+    .stdout(predicate::str::contains(
+        "picard_command=picard MarkDuplicates I=input.bam O=marked.bam M=metrics.txt",
+    ))
+    .stdout(predicate::str::contains(
+        "turbo_command=turbo-picard MarkDuplicates I=input.bam O=marked.bam M=metrics.txt",
+    ))
+    .stdout(predicate::str::contains(
+        "declared_outputs=O=marked.bam,M=metrics.txt",
+    ))
+    .stdout(predicate::str::contains(format!(
+        "fallback_command={}",
+        fallback.display()
+    )));
+}
+
+#[test]
+fn trial_json_reports_workflow_integration_contract() {
+    let mut cmd = Command::cargo_bin("turbo-picard").expect("binary exists");
+    cmd.args([
+        "trial",
+        "--json",
+        "SortSam",
+        "I=input.bam",
+        "O=sorted.bam",
+        "SORT_ORDER=coordinate",
+    ])
+    .assert()
+    .success()
+    .stdout(predicate::str::contains("\"schema_version\": 1"))
+    .stdout(predicate::str::contains("\"command\": \"SortSam\""))
+    .stdout(predicate::str::contains("\"trial_fit\": \"good-first-trial\""))
+    .stdout(predicate::str::contains(
+        "\"picard_command\": \"picard SortSam I=input.bam O=sorted.bam SORT_ORDER=coordinate\"",
+    ))
+    .stdout(predicate::str::contains(
+        "\"turbo_command\": \"turbo-picard SortSam I=input.bam O=sorted.bam SORT_ORDER=coordinate\"",
+    ))
+    .stdout(predicate::str::contains("\"O=sorted.bam\""))
+    .stdout(predicate::str::contains("command=SortSam").not());
+}
+
+#[test]
+fn trial_marks_fallback_only_commands_as_not_speed_trials() {
+    let mut cmd = Command::cargo_bin("turbo-picard").expect("binary exists");
+    cmd.args(["trial", "EstimateLibraryComplexity", "O=metrics.txt"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "command=EstimateLibraryComplexity",
+        ))
+        .stdout(predicate::str::contains("status=fallback-only"))
+        .stdout(predicate::str::contains("trial_fit=fallback-only"))
+        .stdout(predicate::str::contains(
+            "No native implementation is documented",
+        ));
+}
+
+#[test]
+fn trial_rejects_unknown_format() {
+    let mut cmd = Command::cargo_bin("turbo-picard").expect("binary exists");
+    cmd.args(["trial", "--format=yaml", "MarkDuplicates"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "unsupported trial format option: --format=yaml",
+        ));
+}
+
+#[test]
 fn markduplicates_requires_metrics_file() {
     let mut cmd = Command::cargo_bin("turbo-picard").expect("binary exists");
     cmd.args(["MarkDuplicates", "I=in.bam", "O=out.bam"])

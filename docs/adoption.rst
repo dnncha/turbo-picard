@@ -106,6 +106,12 @@ Start with the explicit binary:
 
    turbo-picard MarkDuplicates I=input.bam O=turbo.bam M=turbo.metrics.txt
 
+Generate the side-by-side trial contract before wiring it into a workflow:
+
+.. code-block:: bash
+
+   turbo-picard trial MarkDuplicates I=input.bam O=turbo.bam M=turbo.metrics.txt
+
 Keep upstream Picard as the production path while you compare:
 
 * BAM, SAM, FASTQ, VCF, interval-list, and metrics outputs.
@@ -164,6 +170,13 @@ for the commands you depend on:
 
 This keeps upgrades boring: coverage changes are visible, and performance
 claims stay tied to measured output.
+
+For workflow-manager checks, use the JSON trial report and store it beside the
+targeted comparison output:
+
+.. code-block:: bash
+
+   turbo-picard trial --json MarkDuplicates I=input.bam O=turbo.bam M=turbo.metrics.txt
 
 Check a representative file
 ---------------------------

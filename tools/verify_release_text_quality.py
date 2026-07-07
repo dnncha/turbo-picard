@@ -27,6 +27,12 @@ RELEASE_TEXT_PATHS = [
     Path("packaging/bioconda/BIOCONDA_PR.md"),
     Path("packaging/bioconda/turbo-picard/README.md"),
     Path("packaging/bioconda/turbo-picard-picard-shim/README.md"),
+    Path("packaging/outreach/README.md"),
+    Path("packaging/outreach/biostars.md"),
+    Path("packaging/outreach/hacker-news-show-hn.md"),
+    Path("packaging/outreach/nf-core-slack.md"),
+    Path("packaging/outreach/reddit-bioinformatics.md"),
+    Path("packaging/outreach/rust-users-forum.md"),
     Path("packaging/outreach/seqera-community-show-and-tell.md"),
 ]
 

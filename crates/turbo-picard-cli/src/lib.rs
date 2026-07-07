@@ -95,6 +95,21 @@ pub fn run_cli(program_name: &str, raw_args: impl IntoIterator<Item = String>) -
             }
             0
         }
+        Some("trial") => {
+            let command_args = args.cloned().collect::<Vec<_>>();
+            if command_args
+                .iter()
+                .any(|arg| arg == "--help" || arg == "-h")
+            {
+                print_trial_help(program_name);
+                return 0;
+            }
+            if let Err(error) = run_trial(program_name, &command_args) {
+                eprintln!("{error}");
+                return 2;
+            }
+            0
+        }
         Some("AccelerationStatus") => {
             let command_args = args.cloned().collect::<Vec<_>>();
             if command_args
@@ -746,6 +761,7 @@ Usage: {program_name} <PicardCommand> [KEY=VALUE ...]
 Available commands:
   doctor            Reports install, PATH, acceleration, reference, and fallback state
   explain COMMAND   Explains whether a command is native, partial-native, or fallback-only
+  trial COMMAND     Prints a side-by-side Picard/turbo-picard trial contract
   AddOrReplaceReadGroups
                     Adds or replaces a single read group in SAM/BAM/CRAM files
   AccelerationStatus
@@ -820,6 +836,21 @@ shows native/fallback status, documented native scope, documented fallback scope
 resolved fallback command, and declared output arguments from the provided
 KEY=VALUE arguments. Use --json or --format json for workflow-manager and CI
 integrations."
+    );
+}
+
+fn print_trial_help(program_name: &str) {
+    println!(
+        "\
+Usage: {program_name} trial <PicardCommand> [KEY=VALUE ...]
+       {program_name} trial --json <PicardCommand> [KEY=VALUE ...]
+       {program_name} trial --format json <PicardCommand> [KEY=VALUE ...]
+
+Prints a read-only trial contract for evaluating one Picard-shaped command
+beside upstream Picard. The report includes copyable Picard and turbo-picard
+commands, declared output arguments, fallback state, and the comparison evidence
+to keep with a workflow review. Use --json or --format json for workflow-manager
+and CI integrations."
     );
 }
 
@@ -902,6 +933,49 @@ fn run_explain(args: &[String]) -> Result<(), String> {
     Ok(())
 }
 
+fn run_trial(program_name: &str, args: &[String]) -> Result<(), String> {
+    let (format, args) = parse_trial_args(args)?;
+    let command = args
+        .first()
+        .ok_or_else(|| "usage: turbo-picard trial <PicardCommand> [KEY=VALUE ...]".to_string())?;
+    let Some(metadata) = command_matrix_entry(command) else {
+        if is_picard_reference_command(command) {
+            let report = TrialReport {
+                command: command.clone(),
+                status: "fallback-only".to_string(),
+                trial_fit: "fallback-only".to_string(),
+                why: "No native implementation is documented; choose a native or partial-native command for a speed trial."
+                    .to_string(),
+                picard_command: format_command("picard", &args),
+                turbo_command: format_command(program_name, &args),
+                compare: comparison_contract(&declared_outputs(&args[1..])),
+                evidence: evidence_contract(),
+                fallback_command: explain_fallback_command(),
+                declared_outputs: declared_outputs(&args[1..]),
+            };
+            print_trial_report(&report, format);
+            return Ok(());
+        }
+        return Err(format!("unsupported Picard command: {command}"));
+    };
+
+    let declared_outputs = declared_outputs(&args[1..]);
+    let report = TrialReport {
+        trial_fit: trial_fit_for(&metadata.name, &metadata.status).to_string(),
+        why: trial_why_for(&metadata.name, &metadata.status).to_string(),
+        picard_command: format_command("picard", &args),
+        turbo_command: format_command(program_name, &args),
+        compare: comparison_contract(&declared_outputs),
+        evidence: evidence_contract(),
+        fallback_command: explain_fallback_command(),
+        declared_outputs,
+        command: metadata.name,
+        status: metadata.status,
+    };
+    print_trial_report(&report, format);
+    Ok(())
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ExplainFormat {
     Text,
@@ -909,6 +983,7 @@ enum ExplainFormat {
 }
 
 const EXPLAIN_JSON_SCHEMA_VERSION: u8 = 1;
+const TRIAL_JSON_SCHEMA_VERSION: u8 = 1;
 
 #[derive(Debug, PartialEq, Eq)]
 struct ExplainReport {
@@ -921,7 +996,32 @@ struct ExplainReport {
     declared_outputs: Vec<String>,
 }
 
+#[derive(Debug, PartialEq, Eq)]
+struct TrialReport {
+    command: String,
+    status: String,
+    trial_fit: String,
+    why: String,
+    picard_command: String,
+    turbo_command: String,
+    compare: String,
+    evidence: String,
+    fallback_command: String,
+    declared_outputs: Vec<String>,
+}
+
 fn parse_explain_args(args: &[String]) -> Result<(ExplainFormat, Vec<String>), String> {
+    parse_report_args("explain", args)
+}
+
+fn parse_trial_args(args: &[String]) -> Result<(ExplainFormat, Vec<String>), String> {
+    parse_report_args("trial", args)
+}
+
+fn parse_report_args(
+    report_name: &str,
+    args: &[String],
+) -> Result<(ExplainFormat, Vec<String>), String> {
     let mut format = ExplainFormat::Text;
     let mut command_args = Vec::new();
     let mut index = 0usize;
@@ -931,15 +1031,15 @@ fn parse_explain_args(args: &[String]) -> Result<(ExplainFormat, Vec<String>), S
             "--json" => format = ExplainFormat::Json,
             "--format" => {
                 let Some(value) = args.get(index + 1) else {
-                    return Err("missing explain format after --format".to_string());
+                    return Err(format!("missing {report_name} format after --format"));
                 };
-                format = parse_explain_format(value)?;
+                format = parse_report_format(report_name, value)?;
                 index += 1;
             }
             "--format=json" | "FORMAT=json" | "FORMAT=JSON" => format = ExplainFormat::Json,
             "--format=text" | "FORMAT=text" | "FORMAT=TEXT" => format = ExplainFormat::Text,
             value if value.starts_with("--format=") => {
-                return Err(format!("unsupported explain format option: {value}"));
+                return Err(format!("unsupported {report_name} format option: {value}"));
             }
             _ => command_args.push(arg.clone()),
         }
@@ -949,12 +1049,12 @@ fn parse_explain_args(args: &[String]) -> Result<(ExplainFormat, Vec<String>), S
     Ok((format, command_args))
 }
 
-fn parse_explain_format(value: &str) -> Result<ExplainFormat, String> {
+fn parse_report_format(report_name: &str, value: &str) -> Result<ExplainFormat, String> {
     match value {
         "json" | "JSON" => Ok(ExplainFormat::Json),
         "text" | "TEXT" => Ok(ExplainFormat::Text),
         _ => Err(format!(
-            "unsupported explain format option: --format {value}"
+            "unsupported {report_name} format option: --format {value}"
         )),
     }
 }
@@ -1016,6 +1116,148 @@ fn print_explain_json(report: &ExplainReport) {
     }
     println!("  ]");
     println!("}}");
+}
+
+fn print_trial_report(report: &TrialReport, format: ExplainFormat) {
+    match format {
+        ExplainFormat::Text => print_trial_text(report),
+        ExplainFormat::Json => print_trial_json(report),
+    }
+}
+
+fn print_trial_text(report: &TrialReport) {
+    println!("command={}", report.command);
+    println!("status={}", report.status);
+    println!("trial_fit={}", report.trial_fit);
+    println!("why={}", report.why);
+    println!("picard_command={}", report.picard_command);
+    println!("turbo_command={}", report.turbo_command);
+    println!("compare={}", report.compare);
+    println!("evidence={}", report.evidence);
+    println!("fallback_command={}", report.fallback_command);
+    if report.declared_outputs.is_empty() {
+        println!("declared_outputs=none");
+    } else {
+        println!("declared_outputs={}", report.declared_outputs.join(","));
+    }
+}
+
+fn print_trial_json(report: &TrialReport) {
+    println!("{{");
+    println!("  \"schema_version\": {TRIAL_JSON_SCHEMA_VERSION},");
+    println!("  \"command\": {},", json_string(&report.command));
+    println!("  \"status\": {},", json_string(&report.status));
+    println!("  \"trial_fit\": {},", json_string(&report.trial_fit));
+    println!("  \"why\": {},", json_string(&report.why));
+    println!(
+        "  \"picard_command\": {},",
+        json_string(&report.picard_command)
+    );
+    println!(
+        "  \"turbo_command\": {},",
+        json_string(&report.turbo_command)
+    );
+    println!("  \"compare\": {},", json_string(&report.compare));
+    println!("  \"evidence\": {},", json_string(&report.evidence));
+    println!(
+        "  \"fallback_command\": {},",
+        json_string(&report.fallback_command)
+    );
+    println!("  \"declared_outputs\": [");
+    for (index, output) in report.declared_outputs.iter().enumerate() {
+        let comma = if index + 1 == report.declared_outputs.len() {
+            ""
+        } else {
+            ","
+        };
+        println!("    {}{}", json_string(output), comma);
+    }
+    println!("  ]");
+    println!("}}");
+}
+
+fn format_command(executable: &str, args: &[String]) -> String {
+    let mut command = executable.to_string();
+    for arg in args {
+        command.push(' ');
+        command.push_str(&shell_token(arg));
+    }
+    command
+}
+
+fn shell_token(value: &str) -> String {
+    if value
+        .chars()
+        .all(|character| character.is_ascii_alphanumeric() || "-_./:=+".contains(character))
+    {
+        return value.to_string();
+    }
+    let escaped = value.replace('\'', "'\\''");
+    format!("'{escaped}'")
+}
+
+fn trial_fit_for(command: &str, status: &str) -> &'static str {
+    if status == "fallback-only" {
+        return "fallback-only";
+    }
+    match command {
+        "MarkDuplicates" => "recommended-first-trial",
+        "SortSam" | "SamToFastq" | "FastqToSam" | "FixMateInformation" | "BuildBamIndex" => {
+            "good-first-trial"
+        }
+        "CollectAlignmentSummaryMetrics"
+        | "CollectBaseDistributionByCycle"
+        | "CollectGcBiasMetrics"
+        | "CollectInsertSizeMetrics"
+        | "CollectMultipleMetrics"
+        | "CollectQualityYieldMetrics"
+        | "CollectWgsMetrics" => "good-first-trial",
+        _ => "supported-trial",
+    }
+}
+
+fn trial_why_for(command: &str, status: &str) -> &'static str {
+    if status == "fallback-only" {
+        return "No native implementation is documented; use upstream Picard or choose a native command for a speed trial.";
+    }
+    match command {
+        "MarkDuplicates" => {
+            "Duplicate marking is a common runtime and heap-pressure point; this keeps Picard-style arguments and writes BAM plus metrics outputs."
+        }
+        "SortSam" => {
+            "Sorting is a frequent file-reshaping bottleneck; this keeps the Picard command boundary while testing native execution."
+        }
+        "SamToFastq" | "FastqToSam" => {
+            "FASTQ conversion is easy to compare at the workflow boundary and often repeats across many samples."
+        }
+        "FixMateInformation" => {
+            "Mate-field repair is a focused preprocessing step with clear SAM/BAM output comparison."
+        }
+        "BuildBamIndex" => {
+            "Index generation is a small low-risk substitution before changing heavier Picard steps."
+        }
+        command if command.starts_with("Collect") => {
+            "Metrics commands are good trials when repeated quality-control steps add noticeable wait time."
+        }
+        _ => {
+            "The command has documented native coverage; run it beside upstream Picard on representative input before switching a workflow."
+        }
+    }
+}
+
+fn comparison_contract(declared_outputs: &[String]) -> String {
+    if declared_outputs.is_empty() {
+        return "compare command exit code, stdout/stderr, runtime, peak RSS, and any files produced by the workflow wrapper".to_string();
+    }
+    format!(
+        "compare {}; also record sidecars, exit code, runtime, and peak RSS",
+        declared_outputs.join(",")
+    )
+}
+
+fn evidence_contract() -> String {
+    "run both commands on the same representative input; keep input SHA-256, command versions, trial command lines, and output comparison notes"
+        .to_string()
 }
 
 fn json_string(value: &str) -> String {

@@ -1,4 +1,4 @@
-# Rust Users Forum
+# Rust community forum
 
 Category:
 

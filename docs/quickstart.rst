@@ -126,6 +126,18 @@ debugging; the JSON form is intended for workflow wrappers and CI checks:
 The JSON report includes ``schema_version``, command status, execution path,
 resolved fallback command, and the output arguments declared on the command line.
 
+Use ``trial`` when you want a copyable side-by-side command pair plus the
+comparison evidence to keep with a workflow review:
+
+.. code-block:: bash
+
+   turbo-picard trial MarkDuplicates I=input.bam O=marked.bam M=metrics.txt
+   turbo-picard trial --json MarkDuplicates I=input.bam O=marked.bam M=metrics.txt
+
+The report names the upstream Picard command, the ``turbo-picard`` command,
+declared outputs, fallback state, and the comparison notes to preserve with the
+representative input.
+
 Good first commands
 -------------------
 

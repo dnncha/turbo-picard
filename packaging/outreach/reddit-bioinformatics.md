@@ -42,8 +42,8 @@ Install:
 python3 -m pip install turbo-picard
 ```
 
-PyPI has Linux x86_64 and macOS Apple Silicon wheels plus a source tarball. A
-Bioconda recipe is in progress.
+PyPI has Linux x86_64 and macOS Apple Silicon wheels plus a source tarball. The
+Bioconda recipe PR is open, with technical checks passing and review pending.
 
 Docs:
 

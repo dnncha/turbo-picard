@@ -10,6 +10,16 @@ The best first trial is usually:
 * common enough that the workflow owner will care;
 * narrow enough that output comparison stays boring.
 
+Ask the installed tool for a concrete trial contract once you have a candidate:
+
+.. code-block:: bash
+
+   turbo-picard trial MarkDuplicates I=input.bam O=marked.bam M=metrics.txt
+
+The report gives the matching upstream Picard command, the ``turbo-picard``
+command, declared outputs, fallback state, and evidence to keep with the
+workflow review.
+
 Start with ``MarkDuplicates``
 -----------------------------
 
