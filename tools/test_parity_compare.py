@@ -121,11 +121,15 @@ class ParityCompareTests(unittest.TestCase):
             picard = Path(tempdir) / "picard.sam"
             turbo = Path(tempdir) / "turbo.sam"
             picard.write_text(
-                "@HD\tVN:1.6\nread1\t0\tchr1\t1\t0\t4M\t*\t0\t0\tACGT\tFFFF\tMD:Z:4\tNM:i:0\tUQ:i:0\n",
+                "@HD\tVN:1.6\n"
+                "@PG\tID:picard\n"
+                "read1\t0\tchr1\t1\t0\t4M\t*\t0\t0\tACGT\tFFFF\tMD:Z:4\tNM:i:0\tPG:Z:picard\tUQ:i:0\n",
                 encoding="utf-8",
             )
             turbo.write_text(
-                "@HD\tVN:1.6\nread1\t0\tchr1\t1\t0\t4M\t*\t0\t0\tACGT\tFFFF\tUQ:i:0\tMD:Z:4\tNM:i:0\n",
+                "@HD\tVN:1.5\n"
+                "@PG\tID:turbo\n"
+                "read1\t0\tchr1\t1\t0\t4M\t*\t0\t0\tACGT\tFFFF\tUQ:i:0\tMD:Z:4\tNM:i:0\tPG:Z:turbo\n",
                 encoding="utf-8",
             )
             parity_compare.compare_stable_sam_lines_with_sorted_tags(
