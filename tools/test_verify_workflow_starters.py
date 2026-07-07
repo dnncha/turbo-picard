@@ -87,7 +87,18 @@ class WorkflowStarterVerifierTests(unittest.TestCase):
                 encoding="utf-8",
             )
             (workflows / "one-command-trial.md").write_text(
-                "trial-samtofastq.nf\ntrial-samtofastq.wdl\ntrial-fastqtosam.wdl\ntrial-fixmateinformation.nf\n",
+                "\n".join(
+                    [
+                        "python3 -m pip install turbo-picard",
+                        "turbo-picard doctor",
+                        "--commands MarkDuplicates",
+                        "trial-samtofastq.nf",
+                        "trial-samtofastq.wdl",
+                        "trial-fastqtosam.wdl",
+                        "trial-fixmateinformation.nf",
+                    ]
+                )
+                + "\n",
                 encoding="utf-8",
             )
             (workflows / "trial-config.yaml").write_text(
@@ -251,6 +262,10 @@ class WorkflowStarterVerifierTests(unittest.TestCase):
             )
             self.assertIn(
                 "packaging/workflows/one-command-trial.md missing SamToFastq trial mention in one-command-trial",
+                errors,
+            )
+            self.assertIn(
+                "packaging/workflows/one-command-trial.md missing PyPI install command in one-command-trial",
                 errors,
             )
             self.assertIn(
