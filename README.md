@@ -130,8 +130,8 @@ Saved benchmark run:
 - Date: `2026-06-13`
 - Command: `python3 tools/bench_suite.py --repeats 3 --skip-build`
 - Raw log: `docs/site/assets/bench-suite-output.txt`
-- benchmark exceptions: `AccelerationStatus` and `explain` are utility
-  commands, not Picard workload comparisons.
+- benchmark exceptions: `AccelerationStatus`, `doctor`, `explain`, and `trial`
+  are utility commands, not Picard workload comparisons.
 
 | Command | Speedup | Parity |
 | --- | ---: | :--- |

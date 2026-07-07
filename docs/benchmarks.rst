@@ -63,8 +63,9 @@ different parts of the system.
 
 The public benchmark suite currently reports 32 command speedups, covering the
 native or partly native data-processing commands in the matrix.
-``AccelerationStatus``, ``doctor``, and ``explain`` are exempt because they are
-status/preflight commands with no Picard data-processing runtime to benchmark.
+``AccelerationStatus``, ``doctor``, ``explain``, and ``trial`` are exempt
+because they are status/preflight commands with no Picard data-processing
+runtime to benchmark.
 Two benchmark scopes are deliberately narrow: ``CollectMultipleMetrics`` is benchmarked with
 ``PROGRAM=CollectQualityYieldMetrics``, and chart-producing child programs still
 use the chart-output disclosure below.
@@ -72,6 +73,7 @@ use the chart-output disclosure below.
 Benchmark exemption: ``AccelerationStatus`` — status/preflight command with no Picard data-processing runtime to benchmark.
 Benchmark exemption: ``doctor`` — status/preflight command with no Picard data-processing runtime to benchmark.
 Benchmark exemption: ``explain`` — status/preflight command with no Picard data-processing runtime to benchmark.
+Benchmark exemption: ``trial`` — status/preflight command with no Picard data-processing runtime to benchmark.
 
 Genome-scale evidence
 ---------------------

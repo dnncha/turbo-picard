@@ -59,6 +59,7 @@ benchmark exceptions
 AccelerationStatus
 doctor
 explain
+trial
 IntervalListTools
 LiftoverVcf
 https://turbo-picard.readthedocs.io/en/latest/adoption.html

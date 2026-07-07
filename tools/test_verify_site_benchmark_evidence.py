@@ -55,6 +55,7 @@ benchmark exceptions
 AccelerationStatus
 doctor
 explain
+trial
 IntervalListTools
 LiftoverVcf
 <a href="#adopt">Adoption</a>
