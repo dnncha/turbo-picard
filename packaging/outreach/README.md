@@ -37,12 +37,11 @@ Ground rules:
 
 Current facts to keep consistent:
 
-- Live package: `turbo-picard` 0.1.6
-- Next repo release target: 0.1.7
+- Live package: `turbo-picard` 0.1.8
+- Current repo release: 0.1.8
 - Install: `python3 -m pip install turbo-picard`
-- Current PyPI files: macOS Apple Silicon wheel and source distribution
-- Next PyPI workflow: Linux x86_64 wheel, macOS Apple Silicon wheel, and source distribution
-- Conda packaging is in progress
+- Current PyPI files: Linux x86_64 wheel, macOS Apple Silicon wheel, and source distribution
+- Conda packaging is in progress through the open Bioconda recipe PR
 - Benchmark evidence in the repo reports 32/32 parity-checked commands, 24.94x
   geometric mean speedup, and 94.36x top speedup versus Picard 3.4.0
 - Recommended first commands: `MarkDuplicates`, `SortSam`, `SamToFastq`,

@@ -1,15 +1,13 @@
 {% set name = "turbo-picard" %}
-{% set version = "0.1.7" %}
+{% set version = "0.1.8" %}
 
 package:
   name: {{ name|lower }}
   version: {{ version }}
 
 source:
-  url: https://github.com/dnncha/turbo-picard/archive/refs/tags/v0.1.7.tar.gz
-  sha256: <github-v0.1.7-source-archive-sha256>
-  patches:
-    - rust-htslib-static.patch
+  url: https://github.com/dnncha/turbo-picard/archive/refs/tags/v0.1.8.tar.gz
+  sha256: <github-v0.1.8-source-archive-sha256>
 build:
   number: 0
   skip: true  # [win]

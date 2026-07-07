@@ -183,9 +183,8 @@ dataset IDs are `gatk-na12878-mito`, `picard-snvq`, and
 
 ## Packaging Status
 
-The live PyPI release is `0.1.6`. It publishes a macOS Apple Silicon wheel and a
-source distribution. The next release workflow is configured to build Linux
-x86_64 wheels as well.
+The live PyPI release is `0.1.8`. It publishes Linux x86_64 and macOS Apple
+Silicon wheels plus a source distribution.
 
 Bioconda recipes are tracked under [`packaging/bioconda/`](packaging/bioconda/).
 The main package installs `turbo-picard`; the separate shim package installs the

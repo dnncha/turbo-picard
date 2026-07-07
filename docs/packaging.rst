@@ -38,11 +38,8 @@ as Python wheel scripts:
 
    python3 -m pip install turbo-picard
 
-The live PyPI release is ``0.1.6``. It publishes a macOS Apple Silicon wheel and
-a source distribution. Release ``0.1.7`` is prepared to add a Linux x86_64 wheel
-through the GitHub publishing workflow. Until that wheel is published, Linux
-``pip`` installs may build from source, which means the machine needs a Rust
-toolchain and native build dependencies. For Linux clusters and shared
+The live PyPI release is ``0.1.8``. It publishes Linux x86_64 and macOS Apple
+Silicon wheels plus a source distribution. For Linux clusters and shared
 environments, Bioconda is the cleaner target once the recipe is accepted.
 
 The current wheel exposes both commands from the CLI crate:
@@ -130,7 +127,7 @@ the immutable tagged archive:
 
    python3 tools/bioconda_release_preflight.py
    python3 tools/prepare_bioconda_release.py \
-     --archive ~/Downloads/turbo-picard-0.1.7.tar.gz
+     --archive ~/Downloads/turbo-picard-0.1.8.tar.gz
 
 The preflight command summarizes the checks that are already green and calls out
 the expected wait state while the recipes still use ``source.path`` or a source
@@ -144,8 +141,8 @@ version, contains the expected release files, and carries the citation,
 benchmark, and real-data metadata used by the PR body. If the digest was
 computed elsewhere, pass it with ``--sha256`` only when it came from the
 downloaded GitHub source archive. That fallback skips archive filename and
-content validation. For ``0.1.7``, use ``turbo-picard-0.1.7.tar.gz`` or
-GitHub's ``v0.1.7.tar.gz``.
+content validation. For ``0.1.8``, use ``turbo-picard-0.1.8.tar.gz`` or
+GitHub's ``v0.1.8.tar.gz``.
 
 Then run the release checks:
 

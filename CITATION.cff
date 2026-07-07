@@ -2,7 +2,7 @@ cff-version: 1.2.0
 message: "If turbo-picard helps your work, please cite the archived release you used and include the parity evidence relevant to your workflow."
 type: software
 title: "turbo-picard"
-version: "0.1.7"
+version: "0.1.8"
 abstract: "A Picard-compatible Rust toolkit with faster implementations of selected SAM/BAM, metrics, FASTA, VCF, and interval commands, explicit fallback for unsupported behavior, and saved parity and benchmark evidence."
 authors:
   - family-names: "O'Toole"

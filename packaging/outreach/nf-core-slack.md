@@ -25,6 +25,5 @@ Evaluation notes and workflow examples:
 I am trying to work out which nf-core pipeline/module would make the best first
 real-world test case. Any suggestions?
 
-Packaging note: PyPI has a macOS Apple Silicon wheel and source tarball. The
-next release workflow is configured to add a Linux x86_64 wheel, and a Bioconda
-recipe is in progress for Linux/HPC use.
+Packaging note: PyPI has Linux x86_64 and macOS Apple Silicon wheels plus a
+source tarball. A Bioconda recipe is in progress for Linux/HPC use.

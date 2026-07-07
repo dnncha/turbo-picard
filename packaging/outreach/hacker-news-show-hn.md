@@ -39,9 +39,8 @@ Install:
 python3 -m pip install turbo-picard
 ```
 
-PyPI currently has a macOS Apple Silicon wheel and a source tarball. The next
-release workflow is configured to add a Linux x86_64 wheel, and a Bioconda
-recipe is in progress for Linux/HPC use.
+PyPI has Linux x86_64 and macOS Apple Silicon wheels plus a source tarball. A
+Bioconda recipe is in progress for Linux/HPC use.
 
 I would be interested in feedback on the parity checks, HPC packaging, and the
 fallback model for unsupported Picard commands.

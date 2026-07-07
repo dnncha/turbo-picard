@@ -10,7 +10,7 @@ homepage.workspace = true
 description = "Native accelerated MarkDuplicates engine for turbo-picard."
 
 [dependencies]
-turbo-picard-core = { path = "../turbo-picard-core", version = "0.1.7" }
+turbo-picard-core = { path = "../turbo-picard-core", version = "0.1.8" }
 md5.workspace = true
 rust-htslib.workspace = true
 rustc-hash.workspace = true
