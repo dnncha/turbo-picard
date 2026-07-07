@@ -115,6 +115,17 @@ pub fn run(config: &MarkDuplicatesConfig) -> Result<MarkDuplicatesSummary, MarkD
             continue;
         }
 
+        if try_append_fast_sam_markduplicate_line(
+            line,
+            line_number,
+            &mut seen,
+            &mut summary,
+            &mut output,
+            config,
+        )? {
+            continue;
+        }
+
         let mut fields = line.split('\t').map(str::to_string).collect::<Vec<_>>();
         if fields.len() < 11 {
             return Err(MarkDuplicatesError::MalformedSam {
@@ -184,6 +195,181 @@ pub fn run(config: &MarkDuplicatesConfig) -> Result<MarkDuplicatesSummary, MarkD
     fs::write(&config.output, output)?;
     fs::write(&config.metrics_file, metrics_text(&summary))?;
     Ok(summary)
+}
+
+fn try_append_fast_sam_markduplicate_line(
+    line: &str,
+    line_number: usize,
+    seen: &mut HashMap<DuplicateKey, usize>,
+    summary: &mut MarkDuplicatesSummary,
+    output: &mut String,
+    config: &MarkDuplicatesConfig,
+) -> Result<bool, MarkDuplicatesError> {
+    if config.barcode_tag.is_some()
+        || config.read_one_barcode_tag.is_some()
+        || config.read_two_barcode_tag.is_some()
+    {
+        return Ok(false);
+    }
+    let Some(fields) = split_exact_11_sam_fields(line) else {
+        return Ok(false);
+    };
+    let flag = fields[1]
+        .parse::<u16>()
+        .map_err(|_| MarkDuplicatesError::MalformedSam {
+            line_number,
+            reason: format!("invalid FLAG value: {}", fields[1]),
+        })?;
+    if flag & UNMAPPED_FLAG != 0 {
+        summary.unmapped_records += 1;
+        output.push_str(line);
+        output.push('\n');
+        return Ok(true);
+    }
+    if flag & SECONDARY_OR_SUPPLEMENTARY_FLAGS != 0 {
+        summary.secondary_or_supplementary_records += 1;
+        output.push_str(line);
+        output.push('\n');
+        return Ok(true);
+    }
+    let Some(position) = simple_sam_unclipped_position(fields[3], fields[5], flag, line_number)?
+    else {
+        return Ok(false);
+    };
+
+    let mate_position = parse_sam_integer(fields[7], "MATE_POS", line_number)?;
+    let template_length = parse_sam_integer(fields[8], "TLEN", line_number)?;
+    if duplicate_candidate_is_pair(flag) {
+        summary.paired_records_examined += 1;
+        if flag & FIRST_IN_PAIR_FLAG != 0 {
+            summary.read_pairs_examined += 1;
+        }
+    } else {
+        summary.unpaired_reads_examined += 1;
+    }
+
+    let key = DuplicateKey {
+        reference_name: fields[2].to_string(),
+        position,
+        mate_reference_name: fields[6].to_string(),
+        mate_position,
+        template_length,
+        reverse_strand: flag & 0x10 != 0,
+        barcode: None,
+    };
+    let seen_count = seen.entry(key).or_insert(0);
+    let duplicate = *seen_count > 0;
+    *seen_count += 1;
+
+    let mut output_flag = flag;
+    if duplicate {
+        if duplicate_candidate_is_pair(flag) {
+            summary.duplicate_pair_records += 1;
+        } else {
+            summary.unpaired_duplicate_records += 1;
+        }
+        output_flag |= DUPLICATE_FLAG;
+    }
+
+    if duplicate && config.remove_duplicates {
+        return Ok(true);
+    }
+
+    let append_duplicate_type =
+        config.tagging_policy.as_deref() == Some("All") && output_flag & DUPLICATE_FLAG != 0;
+    append_sam_line_with_replaced_flag(
+        output,
+        line,
+        output_flag,
+        append_duplicate_type,
+        config.add_pg_tag_to_reads,
+    );
+    Ok(true)
+}
+
+fn split_exact_11_sam_fields(line: &str) -> Option<[&str; 11]> {
+    let mut fields = [""; 11];
+    let mut parts = line.split('\t');
+    for field in &mut fields {
+        *field = parts.next()?;
+    }
+    if parts.next().is_some() {
+        return None;
+    }
+    Some(fields)
+}
+
+fn simple_sam_unclipped_position(
+    position: &str,
+    cigar: &str,
+    flag: u16,
+    line_number: usize,
+) -> Result<Option<i64>, MarkDuplicatesError> {
+    let position = parse_sam_integer(position, "POS", line_number)? - 1;
+    let mut bytes = cigar.bytes();
+    let Some(first) = bytes.next() else {
+        return Ok(None);
+    };
+    if !first.is_ascii_digit() {
+        return Ok(None);
+    }
+    let mut length = i64::from(first - b'0');
+    for byte in bytes.by_ref() {
+        if byte.is_ascii_digit() {
+            length = length
+                .checked_mul(10)
+                .and_then(|value| value.checked_add(i64::from(byte - b'0')))
+                .filter(|value| *value >= 0)
+                .ok_or_else(|| MarkDuplicatesError::MalformedSam {
+                    line_number,
+                    reason: format!("invalid CIGAR value: {cigar}"),
+                })?;
+            continue;
+        }
+        if length == 0 || !matches!(byte as char, 'M' | 'D' | 'N' | '=' | 'X') {
+            return Ok(None);
+        }
+        if bytes.next().is_some() {
+            return Ok(None);
+        }
+        return if flag & 0x10 != 0 {
+            Ok(Some(position + length - 1))
+        } else {
+            Ok(Some(position))
+        };
+    }
+    Ok(None)
+}
+
+fn append_sam_line_with_replaced_flag(
+    output: &mut String,
+    line: &str,
+    flag: u16,
+    append_duplicate_type: bool,
+    append_program_group: bool,
+) {
+    let Some(first_tab) = line.find('\t') else {
+        output.push_str(line);
+        output.push('\n');
+        return;
+    };
+    let flag_start = first_tab + 1;
+    let Some(flag_width) = line[flag_start..].find('\t') else {
+        output.push_str(line);
+        output.push('\n');
+        return;
+    };
+    let flag_end = flag_start + flag_width;
+    output.push_str(&line[..flag_start]);
+    output.push_str(&flag.to_string());
+    output.push_str(&line[flag_end..]);
+    if append_duplicate_type {
+        output.push_str("\tDT:Z:LB");
+    }
+    if append_program_group {
+        output.push_str("\tPG:Z:MarkDuplicates");
+    }
+    output.push('\n');
 }
 
 fn ensure_sam_input(input: &str) -> Result<(), MarkDuplicatesError> {

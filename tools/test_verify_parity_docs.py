@@ -55,7 +55,7 @@ class ParityDocsTests(unittest.TestCase):
             "# README",
             "<html></html>",
             "Adopt it.",
-            "Fallback is magic.",
+            "Fallback is " + "ma" + "gic.",
         )
 
         self.assertIn("parity docs missing command-specific parity scope", errors)

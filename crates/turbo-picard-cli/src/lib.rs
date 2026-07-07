@@ -26,8 +26,9 @@ use rust_htslib::bam::record::{Aux, Cigar, CigarString};
 use rust_htslib::bam::{self, Read};
 use rustc_hash::{FxBuildHasher, FxHashMap};
 use std::cmp::Ordering;
-use std::collections::{BTreeMap, BTreeSet, BinaryHeap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, BinaryHeap, HashSet};
 use std::env;
+use std::fmt::Write as FmtWrite;
 use std::fs;
 use std::io::{BufRead, BufReader, BufWriter, Read as IoRead, Seek, SeekFrom, Write};
 use std::path::Path;
@@ -808,11 +809,14 @@ fn print_explain_help(program_name: &str) {
     println!(
         "\
 Usage: {program_name} explain <PicardCommand> [KEY=VALUE ...]
+       {program_name} explain --json <PicardCommand> [KEY=VALUE ...]
+       {program_name} explain --format json <PicardCommand> [KEY=VALUE ...]
 
 Explains the documented execution path for a Picard-shaped command. The report
 shows native/fallback status, documented native scope, documented fallback scope,
 resolved fallback command, and declared output arguments from the provided
-KEY=VALUE arguments."
+KEY=VALUE arguments. Use --json or --format json for workflow-manager and CI
+integrations."
     );
 }
 
@@ -853,52 +857,187 @@ fn run_doctor(program_name: &str) {
 }
 
 fn run_explain(args: &[String]) -> Result<(), String> {
+    let (format, args) = parse_explain_args(args)?;
     let command = args
         .first()
         .ok_or_else(|| "usage: turbo-picard explain <PicardCommand> [KEY=VALUE ...]".to_string())?;
     let Some(metadata) = command_matrix_entry(command) else {
         if is_picard_reference_command(command) {
-            println!("command={command}");
-            println!("status=fallback-only");
-            println!("native_scope=No native metadata is available for this Picard command.");
-            println!(
-                "fallback_scope=Transparent upstream Picard delegation when fallback is configured or auto-discovered."
-            );
-            print_explain_fallback();
-            print_declared_outputs(&args[1..]);
+            let report = ExplainReport {
+                command: command.clone(),
+                status: "fallback-only".to_string(),
+                native_scope: "No native metadata is available for this Picard command."
+                    .to_string(),
+                fallback_scope: "Transparent upstream Picard delegation when fallback is configured or auto-discovered."
+                    .to_string(),
+                execution_path: "fallback".to_string(),
+                fallback_command: explain_fallback_command(),
+                declared_outputs: declared_outputs(&args[1..]),
+            };
+            print_explain_report(&report, format);
             return Ok(());
         }
         return Err(format!("unsupported Picard command: {command}"));
     };
 
-    println!("command={}", metadata.name);
-    println!("status={}", metadata.status);
-    println!("native_scope={}", metadata.native_scope);
-    println!("fallback_scope={}", metadata.fallback_scope);
-    println!(
-        "execution_path={}",
-        match metadata.status.as_str() {
+    let report = ExplainReport {
+        command: metadata.name,
+        execution_path: match metadata.status.as_str() {
             "native" => "native",
             "partial-native" => "native-when-inside-documented-scope-otherwise-fallback",
             "fallback-only" => "fallback",
             _ => "see-command-matrix",
         }
-    );
-    print_explain_fallback();
-    print_declared_outputs(&args[1..]);
+        .to_string(),
+        fallback_command: explain_fallback_command(),
+        declared_outputs: declared_outputs(&args[1..]),
+        status: metadata.status,
+        native_scope: metadata.native_scope,
+        fallback_scope: metadata.fallback_scope,
+    };
+    print_explain_report(&report, format);
     Ok(())
 }
 
-fn print_explain_fallback() {
-    match resolve_fallback_command() {
-        Some(command) => println!("fallback_command={command}"),
-        None => println!("fallback_command=not-found"),
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ExplainFormat {
+    Text,
+    Json,
+}
+
+const EXPLAIN_JSON_SCHEMA_VERSION: u8 = 1;
+
+#[derive(Debug, PartialEq, Eq)]
+struct ExplainReport {
+    command: String,
+    status: String,
+    native_scope: String,
+    fallback_scope: String,
+    execution_path: String,
+    fallback_command: String,
+    declared_outputs: Vec<String>,
+}
+
+fn parse_explain_args(args: &[String]) -> Result<(ExplainFormat, Vec<String>), String> {
+    let mut format = ExplainFormat::Text;
+    let mut command_args = Vec::new();
+    let mut index = 0usize;
+
+    while let Some(arg) = args.get(index) {
+        match arg.as_str() {
+            "--json" => format = ExplainFormat::Json,
+            "--format" => {
+                let Some(value) = args.get(index + 1) else {
+                    return Err("missing explain format after --format".to_string());
+                };
+                format = parse_explain_format(value)?;
+                index += 1;
+            }
+            "--format=json" | "FORMAT=json" | "FORMAT=JSON" => format = ExplainFormat::Json,
+            "--format=text" | "FORMAT=text" | "FORMAT=TEXT" => format = ExplainFormat::Text,
+            value if value.starts_with("--format=") => {
+                return Err(format!("unsupported explain format option: {value}"));
+            }
+            _ => command_args.push(arg.clone()),
+        }
+        index += 1;
+    }
+
+    Ok((format, command_args))
+}
+
+fn parse_explain_format(value: &str) -> Result<ExplainFormat, String> {
+    match value {
+        "json" | "JSON" => Ok(ExplainFormat::Json),
+        "text" | "TEXT" => Ok(ExplainFormat::Text),
+        _ => Err(format!(
+            "unsupported explain format option: --format {value}"
+        )),
     }
 }
 
-fn print_declared_outputs(args: &[String]) {
-    let outputs = args
-        .iter()
+fn explain_fallback_command() -> String {
+    match resolve_fallback_command() {
+        Some(command) => command,
+        None => "not-found".to_string(),
+    }
+}
+
+fn print_explain_report(report: &ExplainReport, format: ExplainFormat) {
+    match format {
+        ExplainFormat::Text => print_explain_text(report),
+        ExplainFormat::Json => print_explain_json(report),
+    }
+}
+
+fn print_explain_text(report: &ExplainReport) {
+    println!("command={}", report.command);
+    println!("status={}", report.status);
+    println!("native_scope={}", report.native_scope);
+    println!("fallback_scope={}", report.fallback_scope);
+    println!("execution_path={}", report.execution_path);
+    println!("fallback_command={}", report.fallback_command);
+    if report.declared_outputs.is_empty() {
+        println!("declared_outputs=none");
+    } else {
+        println!("declared_outputs={}", report.declared_outputs.join(","));
+    }
+}
+
+fn print_explain_json(report: &ExplainReport) {
+    println!("{{");
+    println!("  \"schema_version\": {EXPLAIN_JSON_SCHEMA_VERSION},");
+    println!("  \"command\": {},", json_string(&report.command));
+    println!("  \"status\": {},", json_string(&report.status));
+    println!("  \"native_scope\": {},", json_string(&report.native_scope));
+    println!(
+        "  \"fallback_scope\": {},",
+        json_string(&report.fallback_scope)
+    );
+    println!(
+        "  \"execution_path\": {},",
+        json_string(&report.execution_path)
+    );
+    println!(
+        "  \"fallback_command\": {},",
+        json_string(&report.fallback_command)
+    );
+    println!("  \"declared_outputs\": [");
+    for (index, output) in report.declared_outputs.iter().enumerate() {
+        let comma = if index + 1 == report.declared_outputs.len() {
+            ""
+        } else {
+            ","
+        };
+        println!("    {}{}", json_string(output), comma);
+    }
+    println!("  ]");
+    println!("}}");
+}
+
+fn json_string(value: &str) -> String {
+    let mut escaped = String::with_capacity(value.len() + 2);
+    escaped.push('"');
+    for character in value.chars() {
+        match character {
+            '"' => escaped.push_str("\\\""),
+            '\\' => escaped.push_str("\\\\"),
+            '\n' => escaped.push_str("\\n"),
+            '\r' => escaped.push_str("\\r"),
+            '\t' => escaped.push_str("\\t"),
+            value if value.is_control() => {
+                use std::fmt::Write as _;
+                let _ = write!(escaped, "\\u{:04x}", value as u32);
+            }
+            value => escaped.push(value),
+        }
+    }
+    escaped.push('"');
+    escaped
+}
+
+fn declared_outputs(args: &[String]) -> Vec<String> {
+    args.iter()
         .filter_map(|arg| arg.split_once('='))
         .filter(|(key, value)| {
             !value.is_empty()
@@ -918,12 +1057,7 @@ fn print_declared_outputs(args: &[String]) {
                 )
         })
         .map(|(key, value)| format!("{key}={value}"))
-        .collect::<Vec<_>>();
-    if outputs.is_empty() {
-        println!("declared_outputs=none");
-    } else {
-        println!("declared_outputs={}", outputs.join(","));
-    }
+        .collect::<Vec<_>>()
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -1954,10 +2088,11 @@ fn append_cleaned_sam_text_record(
     line: &str,
     target_lengths: &BTreeMap<String, u64>,
 ) -> Result<(), String> {
-    let fields = line
-        .trim_end_matches(['\r', '\n'])
-        .split('\t')
-        .collect::<Vec<_>>();
+    let line = line.trim_end_matches(['\r', '\n']);
+    if append_cleaned_simple_sam_text_record(output, line, target_lengths)? {
+        return Ok(());
+    }
+    let fields = line.split('\t').collect::<Vec<_>>();
     if fields.len() < 11 {
         return Err("malformed CleanSam SAM record".to_string());
     }
@@ -1995,6 +2130,101 @@ fn append_cleaned_sam_text_record(
     }
     output.extend_from_slice(b"\n");
     Ok(())
+}
+
+fn append_cleaned_simple_sam_text_record(
+    output: &mut Vec<u8>,
+    line: &str,
+    target_lengths: &BTreeMap<String, u64>,
+) -> Result<bool, String> {
+    let Some(fields) = split_exact_11_tab_fields(line) else {
+        return Ok(false);
+    };
+    let flags = fields[1]
+        .parse::<u16>()
+        .map_err(|_| "malformed CleanSam SAM flag".to_string())?;
+    if flags & 0x4 != 0 {
+        if fields[4] == "0" {
+            output.extend_from_slice(line.as_bytes());
+            output.extend_from_slice(b"\n");
+        } else {
+            append_sam_11_fields_with_replacements(output, &fields, Some("0"), None);
+        }
+        return Ok(true);
+    }
+    if fields[2] == "*" {
+        output.extend_from_slice(line.as_bytes());
+        output.extend_from_slice(b"\n");
+        return Ok(true);
+    }
+    let Some(cigar_len) = simple_match_cigar_len_u64(fields[5]) else {
+        return Ok(false);
+    };
+    let Some(target_len) = target_lengths.get(fields[2]).copied() else {
+        output.extend_from_slice(line.as_bytes());
+        output.extend_from_slice(b"\n");
+        return Ok(true);
+    };
+    let pos = fields[3]
+        .parse::<u64>()
+        .map_err(|_| "malformed CleanSam SAM position".to_string())?;
+    let start = pos.saturating_sub(1);
+    if start >= target_len {
+        return Err("unsupported CleanSam alignment starting beyond reference end".to_string());
+    }
+    let reference_end = start.saturating_add(cigar_len);
+    if reference_end <= target_len {
+        output.extend_from_slice(line.as_bytes());
+        output.extend_from_slice(b"\n");
+        return Ok(true);
+    }
+    let overhang = reference_end - target_len;
+    let cigar = if overhang >= cigar_len {
+        format!("{overhang}S")
+    } else {
+        format!("{}M{}S", cigar_len - overhang, overhang)
+    };
+    append_sam_11_fields_with_replacements(output, &fields, None, Some(&cigar));
+    Ok(true)
+}
+
+fn split_exact_11_tab_fields(line: &str) -> Option<[&str; 11]> {
+    let mut fields = [""; 11];
+    let mut parts = line.split('\t');
+    for field in &mut fields {
+        *field = parts.next()?;
+    }
+    if parts.next().is_some() {
+        return None;
+    }
+    Some(fields)
+}
+
+fn simple_match_cigar_len_u64(cigar: &str) -> Option<u64> {
+    let length = cigar.strip_suffix('M')?;
+    if length.is_empty() || !length.as_bytes().iter().all(u8::is_ascii_digit) {
+        return None;
+    }
+    length.parse::<u64>().ok().filter(|value| *value > 0)
+}
+
+fn append_sam_11_fields_with_replacements(
+    output: &mut Vec<u8>,
+    fields: &[&str; 11],
+    mapq: Option<&str>,
+    cigar: Option<&str>,
+) {
+    for (index, field) in fields.iter().enumerate() {
+        if index > 0 {
+            output.extend_from_slice(b"\t");
+        }
+        match index {
+            4 => output.extend_from_slice(mapq.unwrap_or(field).as_bytes()),
+            5 => output.extend_from_slice(cigar.unwrap_or(field).as_bytes()),
+            _ => output.extend_from_slice(field.as_bytes()),
+        }
+    }
+    output.extend_from_slice(b"\n");
 }
 
 fn clean_cigar_text(cigar: &str, start: u64, target_len: u64) -> Result<Option<String>, String> {
@@ -2504,7 +2734,7 @@ fn run_samtofastq(args: &[String]) -> Result<(), String> {
         )?),
         None => None,
     };
-    let mut first_seen_mates: HashMap<Vec<u8>, bam::Record> = HashMap::new();
+    let mut first_seen_mates: FxHashMap<Vec<u8>, bam::Record> = FxHashMap::default();
 
     for record in reader.records() {
         let record = record.map_err(|error| error.to_string())?;
@@ -2956,6 +3186,15 @@ fn append_read_group_replaced_sam_line(output: &mut Vec<u8>, line: &[u8], read_g
     while line.ends_with(b"\n") || line.ends_with(b"\r") {
         line = &line[..line.len() - 1];
     }
+    if let Some(tab_index) = line.iter().rposition(|byte| *byte == b'\t')
+        && line[tab_index + 1..].starts_with(b"RG:Z:")
+    {
+        output.extend_from_slice(&line[..tab_index]);
+        output.extend_from_slice(b"\tRG:Z:");
+        output.extend_from_slice(read_group_id);
+        output.extend_from_slice(b"\n");
+        return;
+    }
     let mut wrote_any = false;
     for field in line.split(|byte| *byte == b'\t') {
         if field.starts_with(b"RG:Z:") {
@@ -3120,6 +3359,23 @@ fn run_collectgcbiasmetrics(args: &[String]) -> Result<(), String> {
         optional_f64(&args, "MINIMUM_GENOME_FRACTION")?.unwrap_or(0.00001);
     let also_ignore_duplicates = optional_bool(&args, "ALSO_IGNORE_DUPLICATES")?.unwrap_or(false);
     let stop_after = optional_u32(&args, "STOP_AFTER")?.unwrap_or(0);
+
+    if has_sam_extension(&input) {
+        let mut metrics =
+            GcBiasMetricsSummary::new(&reference, window_size, also_ignore_duplicates)?;
+        collect_gc_bias_sam_text(&input, &mut metrics, window_size, stop_after)?;
+        fs::write(
+            output,
+            metrics.detail_text(window_size, minimum_genome_fraction),
+        )
+        .map_err(|error| error.to_string())?;
+        fs::write(
+            summary_output,
+            metrics.summary_text(window_size, minimum_genome_fraction),
+        )
+        .map_err(|error| error.to_string())?;
+        return write_summary_chart_pdf(&chart, "CollectGcBiasMetrics");
+    }
 
     let mut reader = open_bam_reader_for_args(&input, &args).map_err(|error| error.to_string())?;
     let target_names = reader
@@ -4478,6 +4734,27 @@ fn run_collectwgsmetrics(args: &[String]) -> Result<(), String> {
     if stop_after >= 0 {
         summary.limit_included_loci(stop_after as usize);
     }
+    let stop_after_u32 = if stop_after < 0 { 0 } else { stop_after as u32 };
+    if has_sam_extension(&input)
+        && collectwgs_sam_text_records_are_unpaired(&input, stop_after_u32)?
+    {
+        collect_wgs_unpaired_sam_text(
+            &input,
+            &mut summary,
+            minimum_mapping_quality as u8,
+            minimum_base_quality as u8,
+            coverage_cap,
+            locus_accumulation_cap,
+            count_unpaired,
+            stop_after_u32,
+        )?;
+        summary.finish();
+        return write_text_or_gzip(
+            &output,
+            &summary.to_picard_text(sample_size, include_bq_histogram),
+        );
+    }
+
     let mut reader = open_bam_reader_for_args(&input, &args).map_err(|error| error.to_string())?;
     let target_names = reader
         .header()
@@ -4485,7 +4762,6 @@ fn run_collectwgsmetrics(args: &[String]) -> Result<(), String> {
         .iter()
         .map(|name| String::from_utf8_lossy(name).to_string())
         .collect::<Vec<_>>();
-    let stop_after_u32 = if stop_after < 0 { 0 } else { stop_after as u32 };
     if hts_io::is_hts_container_input(&input) {
         cmm_pipeline::pipeline_bam_records(reader, stop_after_u32, 8192, |record| {
             summary.observe(
@@ -4905,10 +5181,11 @@ fn run_bedtointervallist(args: &[String]) -> Result<(), String> {
 
     let mut text = bed_interval_list_header(&dictionary_text, sort);
     for interval in intervals {
-        text.push_str(&format!(
-            "{}\t{}\t{}\t{}\t{}\n",
+        let _ = writeln!(
+            &mut text,
+            "{}\t{}\t{}\t{}\t{}",
             interval.contig, interval.start, interval.end, interval.strand, interval.name
-        ));
+        );
     }
     fs::write(output, text).map_err(|error| error.to_string())
 }
@@ -4984,10 +5261,11 @@ fn run_intervallisttools(args: &[String]) -> Result<(), String> {
 
     let mut text = interval_list_output_header(&header_text, inputs.len() > 1);
     for interval in intervals {
-        text.push_str(&format!(
-            "{}\t{}\t{}\t{}\t{}\n",
+        let _ = writeln!(
+            &mut text,
+            "{}\t{}\t{}\t{}\t{}",
             interval.contig, interval.start, interval.end, interval.strand, interval.name
-        ));
+        );
     }
     fs::write(output, text).map_err(|error| error.to_string())
 }
@@ -5016,6 +5294,14 @@ fn revertsam_can_use_sam_text_fast_path(
 struct RevertsamTextRecord {
     line: String,
     qname: String,
+    flags: u16,
+    serial: usize,
+}
+
+#[derive(Debug)]
+struct RevertsamBamRecord {
+    record: bam::Record,
+    qname: Vec<u8>,
     flags: u16,
     serial: usize,
 }
@@ -5076,6 +5362,86 @@ fn collect_revertsam_sam_text_records(
             left.qname
                 .as_bytes()
                 .cmp(right.qname.as_bytes())
+                .then_with(|| left.flags.cmp(&right.flags))
+                .then_with(|| left.serial.cmp(&right.serial))
+        });
+    }
+
+    Ok((header_lines, records))
+}
+
+fn collect_revertsam_sam_text_bam_records(
+    input: &str,
+    remove_duplicate_information: bool,
+    restore_hardclips: bool,
+    sort_order: SortOrder,
+) -> Result<(Vec<String>, Vec<RevertsamBamRecord>), String> {
+    let file = fs::File::open(input).map_err(|error| error.to_string())?;
+    let mut reader = BufReader::with_capacity(1024 * 1024, file);
+    let mut header_lines = Vec::<String>::new();
+    let mut records = Vec::<RevertsamBamRecord>::new();
+    let mut line = String::with_capacity(512);
+    let mut serial = 0usize;
+    let mut queryname_ordered = true;
+    let mut last_qname = Vec::<u8>::new();
+    let mut last_flags = 0u16;
+    let mut saw_record = false;
+
+    loop {
+        line.clear();
+        if reader
+            .read_line(&mut line)
+            .map_err(|error| error.to_string())?
+            == 0
+        {
+            break;
+        }
+        if line.starts_with('@') {
+            header_lines.push(line.clone());
+            continue;
+        }
+        if line.trim().is_empty() {
+            continue;
+        }
+        let flags = line
+            .split('\t')
+            .nth(1)
+            .and_then(|value| value.parse::<u16>().ok())
+            .unwrap_or(0);
+        if flags & 0x100 != 0 || flags & 0x800 != 0 {
+            continue;
+        }
+        let (record, qname, flags) = revert_sam_text_record_to_bam(
+            line.trim_end_matches(['\r', '\n']),
+            remove_duplicate_information,
+            restore_hardclips,
+        )?;
+        if sort_order == SortOrder::QueryName
+            && saw_record
+            && (last_qname.as_slice() > qname.as_slice()
+                || (last_qname.as_slice() == qname.as_slice() && last_flags > flags))
+        {
+            queryname_ordered = false;
+        }
+        if sort_order == SortOrder::QueryName {
+            last_qname.clear();
+            last_qname.extend_from_slice(&qname);
+            last_flags = flags;
+            saw_record = true;
+        }
+        records.push(RevertsamBamRecord {
+            record,
+            qname,
+            flags,
+            serial,
+        });
+        serial += 1;
+    }
+
+    if sort_order == SortOrder::QueryName && !queryname_ordered {
+        records.sort_unstable_by(|left, right| {
+            left.qname
+                .cmp(&right.qname)
                 .then_with(|| left.flags.cmp(&right.flags))
                 .then_with(|| left.serial.cmp(&right.serial))
         });
@@ -5176,7 +5542,7 @@ fn run_revertsam_sam_text_to_bam(
     create_md5_file: bool,
     create_index: bool,
 ) -> Result<(), String> {
-    let (header_lines, records) = collect_revertsam_sam_text_records(
+    let (header_lines, records) = collect_revertsam_sam_text_bam_records(
         input,
         remove_duplicate_information,
         restore_hardclips,
@@ -5192,7 +5558,7 @@ fn run_revertsam_sam_text_to_bam(
     )?;
     for record in records {
         writer
-            .write(&reverted_sam_line_to_bam_record(&record.line)?)
+            .write(&record.record)
             .map_err(|error| error.to_string())?;
     }
     drop(writer);
@@ -5267,37 +5633,74 @@ fn parse_sam_header_record_line(line: &str) -> Option<HeaderRecord<'_>> {
     Some(record)
 }
 
-fn reverted_sam_line_to_bam_record(line: &str) -> Result<bam::Record, String> {
-    let mut fields = line.split('\t');
-    let qname = fields
-        .next()
-        .ok_or_else(|| "malformed RevertSam SAM record".to_string())?;
-    let flags = fields
-        .next()
-        .ok_or_else(|| "malformed RevertSam SAM record".to_string())?
+fn revert_sam_text_record_to_bam(
+    line: &str,
+    remove_duplicate_information: bool,
+    restore_hardclips: bool,
+) -> Result<(bam::Record, Vec<u8>, u16), String> {
+    let fields = line.split('\t').collect::<Vec<_>>();
+    if fields.len() < 11 {
+        return Err("malformed RevertSam SAM record".to_string());
+    }
+    let qname = fields[0].as_bytes();
+    let mut flags = fields[1]
         .parse::<u16>()
         .map_err(|_| "malformed RevertSam SAM flag".to_string())?;
-    fields.next();
-    fields.next();
-    fields.next();
-    fields.next();
-    fields.next();
-    fields.next();
-    fields.next();
-    let sequence = fields
-        .next()
-        .ok_or_else(|| "malformed RevertSam SAM record".to_string())?;
-    let qualities = fields
-        .next()
-        .ok_or_else(|| "malformed RevertSam SAM record".to_string())?;
-    let sequence = sequence.as_bytes();
+    let mut sequence = fields[9].as_bytes().to_vec();
+    let mut qualities = fields[10].as_bytes().to_vec();
+    let mut kept_aux = Vec::<&str>::new();
+    let mut hardclip_bases = None::<Vec<u8>>;
+    let mut hardclip_qualities = None::<Vec<u8>>;
+
+    for tag_field in &fields[11..] {
+        if let Some(original_qualities) = tag_field.strip_prefix("OQ:Z:") {
+            qualities.clear();
+            qualities.extend_from_slice(original_qualities.as_bytes());
+            continue;
+        }
+        if restore_hardclips && let Some(bases) = tag_field.strip_prefix("XB:Z:") {
+            hardclip_bases = Some(bases.as_bytes().to_vec());
+            continue;
+        }
+        if restore_hardclips && let Some(qualities) = tag_field.strip_prefix("XQ:Z:") {
+            hardclip_qualities = Some(qualities.as_bytes().to_vec());
+            continue;
+        }
+        if revertsam_default_removed_alignment_tag_field(tag_field) {
+            continue;
+        }
+        kept_aux.push(*tag_field);
+    }
+
+    if flags & 0x10 != 0 {
+        reverse_complement(&mut sequence);
+        qualities.reverse();
+    }
+    if let (Some(bases), Some(quals)) = (hardclip_bases, hardclip_qualities) {
+        if bases.len() != quals.len() {
+            return Err("malformed RevertSam XB/XQ lengths differ".to_string());
+        }
+        sequence.extend(bases);
+        qualities.extend(quals);
+    }
+
+    flags |= 0x4;
+    if flags & 0x1 != 0 {
+        flags |= 0x8;
+    } else {
+        flags &= !0x8;
+    }
+    flags &= !(0x2 | 0x10 | 0x20 | 0x100 | 0x800);
+    if remove_duplicate_information {
+        flags &= !0x400;
+    }
+
     let qualities = qualities
-        .as_bytes()
         .iter()
         .map(|quality| quality.saturating_sub(33))
         .collect::<Vec<_>>();
     let mut record = bam::Record::new();
-    record.set(qname.as_bytes(), None, sequence, &qualities);
+    record.set(qname, None, &sequence, &qualities);
     record.set_flags(flags);
     record.set_tid(-1);
     record.set_pos(-1);
@@ -5305,10 +5708,11 @@ fn reverted_sam_line_to_bam_record(line: &str) -> Result<bam::Record, String> {
     record.set_mtid(-1);
     record.set_mpos(-1);
     record.set_insert_size(0);
-    for tag_field in fields {
+    kept_aux.sort_unstable();
+    for tag_field in kept_aux {
         push_sam_aux_tag(&mut record, tag_field)?;
     }
-    Ok(record)
+    Ok((record, qname.to_vec(), flags))
 }
 
 fn push_sam_aux_tag(record: &mut bam::Record, tag_field: &str) -> Result<(), String> {
@@ -5808,30 +6212,52 @@ fn run_viewsam(args: &[String]) -> Result<(), String> {
                 reference.as_deref(),
                 compression_level,
             )?;
-            for record in reader.records() {
-                let record = record.map_err(|error| error.to_string())?;
-                if viewsam_record_matches(
-                    &record,
-                    &alignment_status,
-                    &pf_status,
-                    interval_filter.as_ref(),
-                )? {
+            if viewsam_has_no_record_filters(
+                &alignment_status,
+                &pf_status,
+                interval_filter.as_ref(),
+            ) {
+                for record in reader.records() {
+                    let record = record.map_err(|error| error.to_string())?;
                     writer.write(&record).map_err(|error| error.to_string())?;
+                }
+            } else {
+                for record in reader.records() {
+                    let record = record.map_err(|error| error.to_string())?;
+                    if viewsam_record_matches(
+                        &record,
+                        &alignment_status,
+                        &pf_status,
+                        interval_filter.as_ref(),
+                    )? {
+                        writer.write(&record).map_err(|error| error.to_string())?;
+                    }
                 }
             }
         }
         None => {
             let mut writer = bam::Writer::from_stdout(&header, bam::Format::Sam)
                 .map_err(|error| error.to_string())?;
-            for record in reader.records() {
-                let record = record.map_err(|error| error.to_string())?;
-                if viewsam_record_matches(
-                    &record,
-                    &alignment_status,
-                    &pf_status,
-                    interval_filter.as_ref(),
-                )? {
+            if viewsam_has_no_record_filters(
+                &alignment_status,
+                &pf_status,
+                interval_filter.as_ref(),
+            ) {
+                for record in reader.records() {
+                    let record = record.map_err(|error| error.to_string())?;
                     writer.write(&record).map_err(|error| error.to_string())?;
+                }
+            } else {
+                for record in reader.records() {
+                    let record = record.map_err(|error| error.to_string())?;
+                    if viewsam_record_matches(
+                        &record,
+                        &alignment_status,
+                        &pf_status,
+                        interval_filter.as_ref(),
+                    )? {
+                        writer.write(&record).map_err(|error| error.to_string())?;
+                    }
                 }
             }
         }
@@ -5919,6 +6345,76 @@ fn copy_sam_records_without_header<R: BufRead, W: Write>(
     Ok(())
 }
 
+fn sam_text_sort_order(path: &str) -> Result<Option<String>, String> {
+    let file = fs::File::open(path).map_err(|error| error.to_string())?;
+    let mut reader = BufReader::with_capacity(1024 * 1024, file);
+    let mut line = String::new();
+    loop {
+        line.clear();
+        if reader
+            .read_line(&mut line)
+            .map_err(|error| error.to_string())?
+            == 0
+        {
+            return Ok(None);
+        }
+        if !line.starts_with('@') {
+            return Ok(None);
+        }
+        if line.starts_with("@HD\t") {
+            for field in line.trim_end_matches(['\r', '\n']).split('\t').skip(1) {
+                if let Some(sort_order) = field.strip_prefix("SO:") {
+                    return Ok(Some(sort_order.to_string()));
+                }
+            }
+        }
+    }
+}
+
+fn run_replacesamheader_sam_text(
+    input: &str,
+    header_input: &str,
+    output: &str,
+    create_md5_file: bool,
+) -> Result<(), String> {
+    let input_sort_order = sam_text_sort_order(input)?;
+    let replacement_sort_order = sam_text_sort_order(header_input)?;
+    if input_sort_order != replacement_sort_order {
+        return Err(format!(
+            "ReplaceSamHeader sort orders of INPUT ({}) and HEADER ({}) do not agree",
+            input_sort_order.unwrap_or_else(|| "unknown".to_string()),
+            replacement_sort_order.unwrap_or_else(|| "unknown".to_string())
+        ));
+    }
+
+    let header_file = fs::File::open(header_input).map_err(|error| error.to_string())?;
+    let mut header_reader = BufReader::with_capacity(1024 * 1024, header_file);
+    let input_file = fs::File::open(input).map_err(|error| error.to_string())?;
+    let mut input_reader = BufReader::with_capacity(1024 * 1024, input_file);
+    let output_file = fs::File::create(output).map_err(|error| error.to_string())?;
+    let mut writer = BufWriter::with_capacity(1024 * 1024, output_file);
+    let mut line = Vec::new();
+
+    loop {
+        line.clear();
+        if header_reader
+            .read_until(b'\n', &mut line)
+            .map_err(|error| error.to_string())?
+            == 0
+        {
+            break;
+        }
+        if !line.starts_with(b"@") {
+            break;
+        }
+        writer.write_all(&line).map_err(|error| error.to_string())?;
+    }
+
+    copy_sam_records_without_header(&mut input_reader, &mut writer)?;
+    writer.flush().map_err(|error| error.to_string())?;
+    write_requested_sidecars(output, create_md5_file, false)
+}
+
 fn run_replacesamheader(args: &[String]) -> Result<(), String> {
     let args = normalize_picard_args_for_command("ReplaceSamHeader", args)
         .map_err(|error| error.to_string())?;
@@ -5929,6 +6425,14 @@ fn run_replacesamheader(args: &[String]) -> Result<(), String> {
     let compression_level = optional_u32(&args, "COMPRESSION_LEVEL")?;
     let create_md5_file = optional_bool(&args, "CREATE_MD5_FILE")?.unwrap_or(false);
     let reference = picard_reference(&args)?;
+
+    if compression_level.is_none()
+        && has_sam_extension(&input)
+        && has_sam_extension(&header_input)
+        && has_sam_extension(&output)
+    {
+        return run_replacesamheader_sam_text(&input, &header_input, &output, create_md5_file);
+    }
 
     let header_reader = open_bam_reader_with_reference(&header_input, reference.as_deref())
         .map_err(|error| error.to_string())?;
@@ -6008,7 +6512,22 @@ fn run_liftovervcf(args: &[String]) -> Result<(), String> {
     let contig_order = dictionary_contig_order(&dictionary_text);
     let reference_line = format!("##reference=file:{}", reference);
 
-    let mut lifted = Vec::new();
+    if let Some((output_text, reject_text)) = liftover_identity_vcf_text(
+        &document,
+        &mappings,
+        &reference_sequences,
+        &contig_order,
+        &contig_lines,
+        &reference_line,
+    )? {
+        write_text_or_gzip(&output, &output_text)?;
+        if create_index && has_extension(&output, "vcf") {
+            write_vcf_idx_sidecar(&output, &output_text)?;
+        }
+        return write_text_or_gzip(&reject, &reject_text);
+    }
+
+    let mut lifted = Vec::with_capacity(document.records.len());
     let mut rejected = Vec::new();
     for record in document.records.iter().cloned() {
         match liftover_vcf_record(record, &mappings, &reference_sequences)? {
@@ -6049,35 +6568,95 @@ fn run_gathervcfs(args: &[String]) -> Result<(), String> {
     let output = required_scalar_for(&args, "OUTPUT", "GatherVcfs")?;
     let create_index = optional_bool(&args, "CREATE_INDEX")?.unwrap_or(false);
 
-    let mut documents = Vec::with_capacity(inputs.len());
-    for input in &inputs {
-        documents.push(read_vcf_document(input)?);
-    }
-    let first = documents
+    let first_input = inputs
         .first()
         .ok_or_else(|| "missing required GatherVcfs argument: INPUT".to_string())?;
-    for document in documents.iter().skip(1) {
-        if document.column_header != first.column_header {
+    let first_text = read_text_or_gzip(first_input)?;
+    let mut text = String::with_capacity(first_text.len());
+    let (first_column_header, first_contig_ids) =
+        append_gathervcfs_text(&first_text, first_input, true, &mut text)?;
+
+    for input in inputs.iter().skip(1) {
+        let input_text = read_text_or_gzip(input)?;
+        let (column_header, contig_ids) =
+            append_gathervcfs_text(&input_text, input, false, &mut text)?;
+        if column_header != first_column_header {
             return Err("unsupported GatherVcfs inputs with different sample columns".to_string());
         }
-        if document.contig_ids() != first.contig_ids() {
+        if contig_ids != first_contig_ids {
             return Err(
                 "unsupported GatherVcfs inputs with different sequence dictionaries".to_string(),
             );
-        }
-    }
-
-    let mut text = first.header_text();
-    for document in documents {
-        for record in document.records {
-            text.push_str(&record.line);
-            text.push('\n');
         }
     }
     write_text_or_gzip(&output, &text)?;
     if create_index && has_extension(&output, "vcf") {
         write_vcf_idx_sidecar(&output, &text)?;
     }
+    Ok(())
+}
+
+fn append_gathervcfs_text(
+    input_text: &str,
+    source: &str,
+    include_header: bool,
+    output: &mut String,
+) -> Result<(String, Vec<String>), String> {
+    let mut column_header = None::<String>;
+    let mut contig_ids = Vec::new();
+
+    for (line_index, line) in input_text.lines().enumerate() {
+        if line.starts_with("##") {
+            if column_header.is_some() {
+                return Err(format!("malformed VCF header in {source}"));
+            }
+            if let Some(contig_id) = parse_vcf_contig_id(line) {
+                contig_ids.push(contig_id);
+            }
+            if include_header {
+                output.push_str(line);
+                output.push('\n');
+            }
+        } else if line.starts_with("#CHROM") {
+            column_header = Some(line.to_string());
+            if include_header {
+                output.push_str(line);
+                output.push('\n');
+            }
+        } else if line.starts_with('#') {
+            return Err(format!(
+                "unsupported VCF header line {} in {source}",
+                line_index + 1
+            ));
+        } else if !line.trim().is_empty() {
+            if column_header.is_none() {
+                return Err(format!("VCF input {source} is missing #CHROM header"));
+            }
+            validate_gathervcfs_record_line(line, source, line_index + 1)?;
+            output.push_str(line);
+            output.push('\n');
+        }
+    }
+
+    let column_header =
+        column_header.ok_or_else(|| format!("VCF input {source} is missing #CHROM header"))?;
+    Ok((column_header, contig_ids))
+}
+
+fn validate_gathervcfs_record_line(
+    line: &str,
+    source: &str,
+    line_number: usize,
+) -> Result<(), String> {
+    let mut fields = line.split('\t');
+    fields
+        .next()
+        .ok_or_else(|| format!("malformed VCF record on line {line_number} in {source}"))?;
+    fields
+        .next()
+        .ok_or_else(|| format!("malformed VCF record on line {line_number} in {source}"))?
+        .parse::<u64>()
+        .map_err(|_| format!("malformed VCF POS on line {line_number} in {source}"))?;
     Ok(())
 }
 
@@ -6122,30 +6701,32 @@ fn run_sortvcf(args: &[String]) -> Result<(), String> {
     }
 
     let mut text = vcf_header_text_with_contigs(first, contig_lines.as_deref())?;
-    let mut records = Vec::new();
+    let record_count = documents
+        .iter()
+        .map(|document| document.records.len())
+        .sum::<usize>();
+    let mut records = Vec::<(usize, u64, usize, String)>::with_capacity(record_count);
     for document in documents {
         for mut record in document.records {
             record.serial = records.len();
-            records.push(record);
+            let Some(contig_index) = contig_order.get(&record.contig).copied() else {
+                return Err(format!(
+                    "VCF contig {} is not present in sequence dictionary",
+                    record.contig
+                ));
+            };
+            records.push((contig_index, record.position, record.serial, record.line));
         }
     }
-    for record in &records {
-        if !contig_order.contains_key(&record.contig) {
-            return Err(format!(
-                "VCF contig {} is not present in sequence dictionary",
-                record.contig
-            ));
-        }
-    }
-    records.sort_by(|left, right| {
-        contig_order[&left.contig]
-            .cmp(&contig_order[&right.contig])
-            .then_with(|| left.position.cmp(&right.position))
-            .then_with(|| left.serial.cmp(&right.serial))
+    records.sort_unstable_by(|left, right| {
+        left.0
+            .cmp(&right.0)
+            .then_with(|| left.1.cmp(&right.1))
+            .then_with(|| left.2.cmp(&right.2))
     });
 
-    for record in records {
-        text.push_str(&record.line);
+    for (_, _, _, line) in records {
+        text.push_str(&line);
         text.push('\n');
     }
     write_text_or_gzip(&output, &text)?;
@@ -6196,29 +6777,31 @@ fn run_mergevcfs(args: &[String]) -> Result<(), String> {
     }
 
     let mut text = vcf_header_text_with_contigs(first, contig_lines.as_deref())?;
-    let mut records = Vec::new();
+    let record_count = documents
+        .iter()
+        .map(|document| document.records.len())
+        .sum::<usize>();
+    let mut records = Vec::<(usize, u64, usize, String)>::with_capacity(record_count);
     for document in documents {
         for mut record in document.records {
             record.serial = records.len();
-            records.push(record);
+            let Some(contig_index) = contig_order.get(&record.contig).copied() else {
+                return Err(format!(
+                    "VCF contig {} is not present in sequence dictionary",
+                    record.contig
+                ));
+            };
+            records.push((contig_index, record.position, record.serial, record.line));
         }
     }
-    for record in &records {
-        if !contig_order.contains_key(&record.contig) {
-            return Err(format!(
-                "VCF contig {} is not present in sequence dictionary",
-                record.contig
-            ));
-        }
-    }
-    records.sort_by(|left, right| {
-        contig_order[&left.contig]
-            .cmp(&contig_order[&right.contig])
-            .then_with(|| left.position.cmp(&right.position))
-            .then_with(|| left.serial.cmp(&right.serial))
+    records.sort_unstable_by(|left, right| {
+        left.0
+            .cmp(&right.0)
+            .then_with(|| left.1.cmp(&right.1))
+            .then_with(|| left.2.cmp(&right.2))
     });
-    for record in records {
-        text.push_str(&record.line);
+    for (_, _, _, line) in records {
+        text.push_str(&line);
         text.push('\n');
     }
     write_text_or_gzip(&output, &text)?;
@@ -6293,6 +6876,14 @@ fn viewsam_record_matches(
         value => return Err(format!("unsupported ViewSam PF_STATUS={value}")),
     };
     Ok(alignment_matches && pf_matches && record_overlaps_intervals(record, interval_filter))
+}
+
+fn viewsam_has_no_record_filters(
+    alignment_status: &str,
+    pf_status: &str,
+    interval_filter: Option<&IntervalFilter>,
+) -> bool {
+    alignment_status == "All" && pf_status == "All" && interval_filter.is_none()
 }
 
 fn viewsam_interval_filter(
@@ -6772,6 +7363,103 @@ fn read_simple_chain_mappings(path: &str) -> Result<Vec<ChainMapping>, String> {
     Ok(mappings)
 }
 
+fn liftover_identity_vcf_text(
+    document: &VcfDocument,
+    mappings: &[ChainMapping],
+    reference: &BTreeMap<String, Vec<u8>>,
+    contig_order: &BTreeMap<String, usize>,
+    contig_lines: &[String],
+    reference_line: &str,
+) -> Result<Option<(String, String)>, String> {
+    let mut identity_mappings = BTreeMap::new();
+    for mapping in mappings {
+        if mapping.source_contig != mapping.target_contig
+            || mapping.source_start != mapping.target_start
+            || mapping.source_end != mapping.target_end
+        {
+            return Ok(None);
+        }
+        if identity_mappings
+            .insert(
+                mapping.source_contig.as_str(),
+                (mapping.source_start, mapping.source_end),
+            )
+            .is_some()
+        {
+            return Ok(None);
+        }
+    }
+
+    let mut last_order: Option<(usize, u64)> = None;
+    for record in &document.records {
+        let Some(contig_rank) = contig_order.get(&record.contig) else {
+            return Ok(None);
+        };
+        if let Some((last_contig_rank, last_position)) = last_order
+            && (*contig_rank < last_contig_rank
+                || (*contig_rank == last_contig_rank && record.position < last_position))
+        {
+            return Ok(None);
+        }
+        last_order = Some((*contig_rank, record.position));
+
+        let Some((mapping_start, mapping_end)) = identity_mappings.get(record.contig.as_str())
+        else {
+            return Ok(None);
+        };
+        let ref_allele = vcf_ref_field_for_liftover(&record.line)?;
+        if ref_allele == "."
+            || ref_allele
+                .chars()
+                .any(|base| matches!(base, '<' | '>' | '[' | ']'))
+        {
+            return Ok(None);
+        }
+        let Some(source_start) = record.position.checked_sub(1) else {
+            return Ok(None);
+        };
+        let source_end = source_start + ref_allele.len() as u64;
+        if source_start < *mapping_start || source_end > *mapping_end {
+            return Ok(None);
+        }
+        let Some(target_reference) = reference.get(&record.contig) else {
+            return Err(format!(
+                "LiftoverVcf reference missing contig {}",
+                record.contig
+            ));
+        };
+        let reference_slice = target_reference
+            .get(source_start as usize..source_end as usize)
+            .ok_or_else(|| "LiftoverVcf target interval extends beyond reference".to_string())?;
+        if !reference_slice.eq_ignore_ascii_case(ref_allele.as_bytes()) {
+            return Ok(None);
+        }
+    }
+
+    Ok(Some((
+        liftover_output_vcf_text(document, contig_lines, reference_line, &document.records),
+        liftover_reject_vcf_text(document, contig_lines, &[]),
+    )))
+}
+
+fn vcf_ref_field_for_liftover(line: &str) -> Result<&str, String> {
+    let mut fields = line.split('\t');
+    for _ in 0..3 {
+        fields
+            .next()
+            .ok_or_else(|| "malformed VCF record for LiftoverVcf".to_string())?;
+    }
+    let ref_allele = fields
+        .next()
+        .ok_or_else(|| "malformed VCF record for LiftoverVcf".to_string())?;
+    for _ in 4..8 {
+        fields
+            .next()
+            .ok_or_else(|| "malformed VCF record for LiftoverVcf".to_string())?;
+    }
+    Ok(ref_allele)
+}
+
 fn liftover_vcf_record(
     record: VcfRecord,
     mappings: &[ChainMapping],
@@ -6830,6 +7518,11 @@ fn liftover_vcf_record(
             "MismatchedRefAllele",
             &info,
         )));
+    }
+
+    if mapping.target_contig == record.contig && target_start + 1 == record.position {
+        drop(fields);
+        return Ok(LiftoverRecordResult::Lifted(record));
     }
 
     let mut lifted_fields = fields
@@ -7826,14 +8519,14 @@ fn validate_sam_summary_sam_text(
         }
 
         record_number += 1;
-        validate_sam_record_summary_sam_line(
+        let flags = validate_sam_record_summary_sam_line(
             &line,
             record_number,
             target_count,
             &read_groups,
             &mut report,
         )?;
-        if !skip_mate_validation {
+        if !skip_mate_validation && flags & 0x1 != 0 {
             validate_sam_mate_summary_sam_line(&line, &mut pending_mates, &mut report)?;
         }
     }
@@ -7879,7 +8572,7 @@ fn validate_sam_record_summary_sam_line(
     target_count: u32,
     read_groups: &BTreeMap<String, bool>,
     report: &mut ValidateSamReport,
-) -> Result<(), String> {
+) -> Result<u16, String> {
     let mut line = line;
     while line.ends_with(b"\n") || line.ends_with(b"\r") {
         line = &line[..line.len() - 1];
@@ -7966,8 +8659,7 @@ fn validate_sam_record_summary_sam_line(
             ),
         );
     }
-    let _ = flags;
-    Ok(())
+    Ok(flags)
 }
 
 fn validate_sam_mate_summary_sam_line(
@@ -8633,20 +9325,44 @@ fn read_interval_list_intervals(
         if line.starts_with('@') || line.trim().is_empty() {
             continue;
         }
-        let fields = line.split('\t').collect::<Vec<_>>();
-        if fields.len() < 5 {
+        let mut fields = line.split('\t');
+        let Some(contig) = fields.next() else {
             return Err(format!("malformed interval_list line {}", line_index + 1));
-        }
-        let contig = fields[0].to_string();
+        };
+        let Some(start) = fields.next() else {
+            return Err(format!("malformed interval_list line {}", line_index + 1));
+        };
+        let Some(end) = fields.next() else {
+            return Err(format!("malformed interval_list line {}", line_index + 1));
+        };
+        let Some(strand) = fields.next() else {
+            return Err(format!("malformed interval_list line {}", line_index + 1));
+        };
+        let Some(name) = fields.next() else {
+            return Err(format!("malformed interval_list line {}", line_index + 1));
+        };
+        let name = if let Some(extra) = fields.next() {
+            let mut name = String::from(name);
+            name.push('\t');
+            name.push_str(extra);
+            for field in fields {
+                name.push('\t');
+                name.push_str(field);
+            }
+            name
+        } else {
+            name.to_string()
+        };
+        let contig = contig.to_string();
         let Some(contig_index) = contig_order.get(&contig).copied() else {
             return Err(format!(
                 "interval_list contig {contig} is not present in sequence dictionary"
             ));
         };
-        let start = fields[1]
+        let start = start
             .parse::<u64>()
             .map_err(|_| format!("malformed interval start on line {}", line_index + 1))?;
-        let end = fields[2]
+        let end = end
             .parse::<u64>()
             .map_err(|_| format!("malformed interval end on line {}", line_index + 1))?;
         if end < start {
@@ -8660,8 +9376,8 @@ fn read_interval_list_intervals(
             contig_index,
             start,
             end,
-            strand: fields[3].to_string(),
-            name: fields[4..].join("\t"),
+            strand: strand.to_string(),
+            name,
         });
     }
     Ok(intervals)
@@ -10553,6 +11269,11 @@ fn observe_alignment_sam_line(
     let qualities = fields
         .next()
         .ok_or_else(|| "malformed CollectAlignmentSummaryMetrics SAM record".to_string())?;
+    let qualities = if qualities == b"*" {
+        &[][..]
+    } else {
+        qualities
+    };
     let read_length = if sequence == b"*" {
         0
     } else {
@@ -10563,11 +11284,6 @@ fn observe_alignment_sam_line(
         0
     } else {
         cigar_summary.aligned_length
-    };
-    let qualities = if qualities == b"*" {
-        &[][..]
-    } else {
-        qualities
     };
     cigar_summary.q20_match_bases = q20_match_bases_from_sam(cigar, qualities)?;
     let mut read_group = None;
@@ -10770,6 +11486,10 @@ impl QualityYieldSummary {
 
         let qualities = quality_values(record, use_original_qualities);
         let is_pf = !record.is_quality_check_failed();
+        self.observe_quality_values(&qualities, is_pf, 0);
+    }
+
+    fn observe_quality_values(&mut self, qualities: &[u8], is_pf: bool, offset: u8) {
         self.total_reads += 1;
         self.total_bases += qualities.len() as u64;
 
@@ -10778,8 +11498,32 @@ impl QualityYieldSummary {
             self.pf_bases += qualities.len() as u64;
         }
 
+        if let Some(first) = qualities.first().copied()
+            && qualities.iter().all(|quality| *quality == first)
+        {
+            let len = qualities.len() as u64;
+            let quality = first.saturating_sub(offset) as u64;
+            self.total_quality += quality * len;
+            if quality >= 20 {
+                self.q20_bases += len;
+            }
+            if quality >= 30 {
+                self.q30_bases += len;
+            }
+            if is_pf {
+                self.pf_quality += quality * len;
+                if quality >= 20 {
+                    self.pf_q20_bases += len;
+                }
+                if quality >= 30 {
+                    self.pf_q30_bases += len;
+                }
+            }
+            return;
+        }
+
         for quality in qualities {
-            let quality = quality as u64;
+            let quality = quality.saturating_sub(offset) as u64;
             self.total_quality += quality;
             if quality >= 20 {
                 self.q20_bases += 1;
@@ -10906,31 +11650,7 @@ fn observe_quality_yield_sam_line(
         sam_quality_bytes(quality_field)
     };
     let is_pf = flags & 0x200 == 0;
-    metrics.total_reads += 1;
-    metrics.total_bases += qualities.len() as u64;
-    if is_pf {
-        metrics.pf_reads += 1;
-        metrics.pf_bases += qualities.len() as u64;
-    }
-    for quality in qualities {
-        let quality = quality.saturating_sub(33) as u64;
-        metrics.total_quality += quality;
-        if quality >= 20 {
-            metrics.q20_bases += 1;
-        }
-        if quality >= 30 {
-            metrics.q30_bases += 1;
-        }
-        if is_pf {
-            metrics.pf_quality += quality;
-            if quality >= 20 {
-                metrics.pf_q20_bases += 1;
-            }
-            if quality >= 30 {
-                metrics.pf_q30_bases += 1;
-            }
-        }
-    }
+    metrics.observe_quality_values(qualities, is_pf, 33);
     Ok(())
 }
 
@@ -11422,6 +12142,259 @@ fn wgs_included_loci(contig: &WgsContigMetadata) -> usize {
     })
 }
 
+fn collectwgs_sam_text_records_are_unpaired(input: &str, stop_after: u32) -> Result<bool, String> {
+    let file = fs::File::open(input).map_err(|error| error.to_string())?;
+    let mut reader = BufReader::with_capacity(1024 * 1024, file);
+    let mut line = Vec::new();
+    let mut observed = 0_u32;
+
+    loop {
+        line.clear();
+        if reader
+            .read_until(b'\n', &mut line)
+            .map_err(|error| error.to_string())?
+            == 0
+        {
+            return Ok(true);
+        }
+        if line.starts_with(b"@") || line.iter().all(|byte| byte.is_ascii_whitespace()) {
+            continue;
+        }
+        let line = trim_ascii_line_end(&line);
+        let mut fields = line.split(|byte| *byte == b'\t');
+        fields
+            .next()
+            .ok_or_else(|| "malformed CollectWgsMetrics SAM record".to_string())?;
+        let flags = parse_u16_bytes(
+            fields
+                .next()
+                .ok_or_else(|| "malformed CollectWgsMetrics SAM record".to_string())?,
+        )?;
+        if flags & 0x1 != 0 {
+            return Ok(false);
+        }
+        observed = observed.saturating_add(1);
+        if stop_after > 0 && observed >= stop_after {
+            return Ok(true);
+        }
+    }
+}
+
+fn collect_wgs_unpaired_sam_text(
+    input: &str,
+    summary: &mut WgsMetricsSummary,
+    minimum_mapping_quality: u8,
+    minimum_base_quality: u8,
+    coverage_cap: u32,
+    locus_accumulation_cap: u32,
+    count_unpaired: bool,
+    stop_after: u32,
+) -> Result<(), String> {
+    let file = fs::File::open(input).map_err(|error| error.to_string())?;
+    let mut reader = BufReader::with_capacity(1024 * 1024, file);
+    let mut line = Vec::new();
+    let mut qualities = Vec::new();
+    let mut cigars = Vec::new();
+    let mut observed = 0_u32;
+
+    loop {
+        line.clear();
+        if reader
+            .read_until(b'\n', &mut line)
+            .map_err(|error| error.to_string())?
+            == 0
+        {
+            break;
+        }
+        if line.starts_with(b"@") || line.iter().all(|byte| byte.is_ascii_whitespace()) {
+            continue;
+        }
+        observe_wgs_unpaired_sam_line(
+            summary,
+            &line,
+            &mut qualities,
+            &mut cigars,
+            minimum_mapping_quality,
+            minimum_base_quality,
+            coverage_cap,
+            locus_accumulation_cap,
+            count_unpaired,
+        )?;
+        observed = observed.saturating_add(1);
+        if stop_after > 0 && observed >= stop_after {
+            break;
+        }
+    }
+    Ok(())
+}
+
+fn observe_wgs_unpaired_sam_line(
+    summary: &mut WgsMetricsSummary,
+    line: &[u8],
+    qualities: &mut Vec<u8>,
+    cigars: &mut Vec<Cigar>,
+    minimum_mapping_quality: u8,
+    minimum_base_quality: u8,
+    coverage_cap: u32,
+    locus_accumulation_cap: u32,
+    count_unpaired: bool,
+) -> Result<(), String> {
+    let line = trim_ascii_line_end(line);
+    let mut fields = line.split(|byte| *byte == b'\t');
+    fields
+        .next()
+        .ok_or_else(|| "malformed CollectWgsMetrics SAM record".to_string())?;
+    let flags = parse_u16_bytes(
+        fields
+            .next()
+            .ok_or_else(|| "malformed CollectWgsMetrics SAM record".to_string())?,
+    )?;
+    let rname = fields
+        .next()
+        .ok_or_else(|| "malformed CollectWgsMetrics SAM record".to_string())?;
+    let pos = parse_i64_bytes(
+        fields
+            .next()
+            .ok_or_else(|| "malformed CollectWgsMetrics SAM record".to_string())?,
+    )?;
+    let mapq = parse_u8_bytes(
+        fields
+            .next()
+            .ok_or_else(|| "malformed CollectWgsMetrics SAM record".to_string())?,
+    )?;
+    let cigar = fields
+        .next()
+        .ok_or_else(|| "malformed CollectWgsMetrics SAM record".to_string())?;
+    fields
+        .next()
+        .ok_or_else(|| "malformed CollectWgsMetrics SAM record".to_string())?;
+    fields
+        .next()
+        .ok_or_else(|| "malformed CollectWgsMetrics SAM record".to_string())?;
+    fields
+        .next()
+        .ok_or_else(|| "malformed CollectWgsMetrics SAM record".to_string())?;
+    let sequence = fields
+        .next()
+        .ok_or_else(|| "malformed CollectWgsMetrics SAM record".to_string())?;
+    let quality_text = fields
+        .next()
+        .ok_or_else(|| "malformed CollectWgsMetrics SAM record".to_string())?;
+
+    if flags & 0x4 != 0 || flags & 0x100 != 0 || flags & 0x800 != 0 || rname == b"*" {
+        return Ok(());
+    }
+    qualities.clear();
+    if quality_text != b"*" {
+        qualities.extend(
+            quality_text
+                .iter()
+                .map(|quality| quality.saturating_sub(33)),
+        );
+    }
+    let contig = std::str::from_utf8(rname)
+        .map_err(|_| "malformed CollectWgsMetrics SAM contig".to_string())?;
+    let reference_offset_start = pos.saturating_sub(1).max(0) as usize;
+    let is_duplicate = flags & 0x400 != 0;
+    let is_paired = flags & 0x1 != 0;
+    if let Some(len) = simple_match_cigar_len_bytes(cigar) {
+        let len =
+            u32::try_from(len).map_err(|_| "malformed CollectWgsMetrics CIGAR".to_string())?;
+        return summary.observe_cigar_ops_iter(
+            contig,
+            reference_offset_start,
+            qualities,
+            is_duplicate,
+            mapq,
+            is_paired,
+            std::iter::once(Cigar::Match(len)),
+            minimum_mapping_quality,
+            minimum_base_quality,
+            coverage_cap,
+            locus_accumulation_cap,
+            count_unpaired,
+            None,
+        );
+    }
+
+    parse_wgs_cigar_sam_text(cigar, cigars)?;
+    if sequence != b"*" && quality_text != b"*" && sequence.len() != qualities.len() {
+        return Err("malformed CollectWgsMetrics SAM sequence/quality length mismatch".to_string());
+    }
+    summary.observe_cigar_ops_iter(
+        contig,
+        reference_offset_start,
+        qualities,
+        is_duplicate,
+        mapq,
+        is_paired,
+        cigars.iter().copied(),
+        minimum_mapping_quality,
+        minimum_base_quality,
+        coverage_cap,
+        locus_accumulation_cap,
+        count_unpaired,
+        None,
+    )
+}
+
+fn simple_match_cigar_len_bytes(cigar: &[u8]) -> Option<u64> {
+    let length = cigar.strip_suffix(b"M")?;
+    if length.is_empty() || !length.iter().all(u8::is_ascii_digit) {
+        return None;
+    }
+    let mut parsed = 0_u64;
+    for byte in length {
+        parsed = parsed
+            .checked_mul(10)?
+            .checked_add(u64::from(byte - b'0'))?;
+    }
+    (parsed > 0).then_some(parsed)
+}
+
+fn parse_wgs_cigar_sam_text(cigar: &[u8], output: &mut Vec<Cigar>) -> Result<(), String> {
+    if cigar == b"*" {
+        output.clear();
+        return Ok(());
+    }
+    output.clear();
+    let mut len = 0_u64;
+    let mut saw_digit = false;
+    for byte in cigar {
+        if byte.is_ascii_digit() {
+            saw_digit = true;
+            len = len
+                .checked_mul(10)
+                .and_then(|value| value.checked_add(u64::from(byte - b'0')))
+                .ok_or_else(|| "malformed CollectWgsMetrics CIGAR".to_string())?;
+            continue;
+        }
+        if !saw_digit || len == 0 || len > u32::MAX as u64 {
+            return Err("malformed CollectWgsMetrics CIGAR".to_string());
+        }
+        let op_len = len as u32;
+        let cigar = match *byte {
+            b'M' => Cigar::Match(op_len),
+            b'=' => Cigar::Equal(op_len),
+            b'X' => Cigar::Diff(op_len),
+            b'I' => Cigar::Ins(op_len),
+            b'D' => Cigar::Del(op_len),
+            b'N' => Cigar::RefSkip(op_len),
+            b'S' => Cigar::SoftClip(op_len),
+            b'H' => Cigar::HardClip(op_len),
+            b'P' => Cigar::Pad(op_len),
+            _ => return Err("malformed CollectWgsMetrics CIGAR".to_string()),
+        };
+        output.push(cigar);
+        saw_digit = false;
+        len = 0;
+    }
+    if saw_digit {
+        return Err("malformed CollectWgsMetrics CIGAR".to_string());
+    }
+    Ok(())
+}
+
 #[derive(Debug)]
 struct WgsMetricsSummary {
     contigs: BTreeMap<String, WgsContigMetadata>,
@@ -11715,6 +12688,11 @@ impl WgsMetricsSummary {
         let locus_accumulation_cap = locus_accumulation_cap.min(u16::MAX as u32) as u16;
 
         let locus_mask = self.active_included.clone();
+        let fast_all_loci = locus_mask.is_none()
+            && !is_duplicate
+            && !low_mapq
+            && !exclude_unpaired
+            && overlap_mode.is_none();
         for cigar in cigars {
             let (len, op) = match bam_cigar_to_op(cigar) {
                 Some(op) => op,
@@ -11723,6 +12701,45 @@ impl WgsMetricsSummary {
             let len = len as usize;
             match op {
                 b'M' | b'=' | b'X' => {
+                    if fast_all_loci {
+                        let reference_end = reference_offset + len;
+                        if reference_end > depth_len {
+                            return Err(
+                                "CollectWgsMetrics alignment extends beyond reference".to_string()
+                            );
+                        }
+                        for index in 0..len {
+                            let read_index = read_offset + index;
+                            let reference_index = reference_offset + index;
+                            self.total_aligned_bases += 1;
+                            let Some(quality) = qualities.get(read_index) else {
+                                self.excluded_baseq += 1;
+                                continue;
+                            };
+                            if *quality < minimum_base_quality {
+                                self.excluded_baseq += 1;
+                            } else if self.active_depths[reference_index] >= coverage_cap as u16
+                                || self.active_depths[reference_index] >= locus_accumulation_cap
+                            {
+                                let index = *quality as usize;
+                                self.base_quality_histogram[index] += 1;
+                                if *quality >= 30 {
+                                    self.sensitivity_base_quality_histogram[index] += 1;
+                                }
+                                self.excluded_capped += 1;
+                            } else {
+                                let index = *quality as usize;
+                                self.base_quality_histogram[index] += 1;
+                                if *quality >= 30 {
+                                    self.sensitivity_base_quality_histogram[index] += 1;
+                                }
+                                self.increment_filtered_depth(reference_index);
+                            }
+                        }
+                        read_offset += len;
+                        reference_offset += len;
+                        continue;
+                    }
                     for index in 0..len {
                         let read_index = read_offset + index;
                         let reference_index = reference_offset + index;
@@ -12282,22 +13299,49 @@ fn observe_quality_score_distribution_sam_line(
     let original_qualities = fields
         .find(|field| field.starts_with(b"OQ:Z:"))
         .map(|field| sam_quality_bytes(&field[5..]));
+    observe_quality_score_distribution_values(
+        &mut metrics.counts,
+        qualities,
+        sequence,
+        include_no_calls,
+        33,
+    );
+    if let Some(original_qualities) = original_qualities {
+        metrics.has_original = true;
+        observe_quality_score_distribution_values(
+            &mut metrics.original_counts,
+            original_qualities,
+            sequence,
+            include_no_calls,
+            33,
+        );
+    }
+    Ok(())
+}
+
+fn observe_quality_score_distribution_values(
+    counts: &mut [u64; 256],
+    qualities: &[u8],
+    sequence: &[u8],
+    include_no_calls: bool,
+    offset: u8,
+) {
+    if qualities.is_empty() {
+        return;
+    }
+    if (include_no_calls || !sequence.contains(&b'N'))
+        && let Some(first) = qualities.first().copied()
+        && qualities.iter().all(|quality| *quality == first)
+    {
+        counts[first.saturating_sub(offset) as usize] += qualities.len() as u64;
+        return;
+    }
     for (index, quality) in qualities.iter().copied().enumerate() {
         if !include_no_calls && sequence.get(index).is_some_and(|base| *base == b'N') {
             continue;
         }
-        metrics.counts[quality.saturating_sub(33) as usize] += 1;
+        counts[quality.saturating_sub(offset) as usize] += 1;
     }
-    if let Some(original_qualities) = original_qualities {
-        metrics.has_original = true;
-        for (index, quality) in original_qualities.iter().copied().enumerate() {
-            if !include_no_calls && sequence.get(index).is_some_and(|base| *base == b'N') {
-                continue;
-            }
-            metrics.original_counts[quality.saturating_sub(33) as usize] += 1;
-        }
-    }
-    Ok(())
 }
 
 fn collect_base_distribution_by_cycle_sam_text(
@@ -12566,6 +13610,38 @@ fn percent(numerator: u64, denominator: u64) -> f64 {
     }
 }
 
+fn collect_gc_bias_sam_text(
+    input: &str,
+    metrics: &mut GcBiasMetricsSummary,
+    window_size: usize,
+    stop_after: u32,
+) -> Result<(), String> {
+    let file = fs::File::open(input).map_err(|error| error.to_string())?;
+    let mut reader = BufReader::with_capacity(1024 * 1024, file);
+    let mut line = Vec::new();
+    let mut observed = 0_u32;
+
+    loop {
+        line.clear();
+        if reader
+            .read_until(b'\n', &mut line)
+            .map_err(|error| error.to_string())?
+            == 0
+        {
+            break;
+        }
+        if line.starts_with(b"@") || line.iter().all(|byte| byte.is_ascii_whitespace()) {
+            continue;
+        }
+        metrics.observe_sam_line(&line, window_size)?;
+        observed = observed.saturating_add(1);
+        if stop_after > 0 && observed >= stop_after {
+            break;
+        }
+    }
+    Ok(())
+}
+
 #[derive(Debug)]
 struct GcBiasMetricsSummary {
     windows: [u64; 101],
@@ -12666,18 +13742,84 @@ impl GcBiasMetricsSummary {
             return Ok(());
         };
         self.read_starts[gc] += 1;
-        let quality_sum = record
-            .qual()
-            .iter()
-            .map(|quality| *quality as u64)
-            .sum::<u64>();
-        let quality_count = record.qual().len() as u64;
-        self.base_quality_sums[gc] += quality_sum;
-        self.base_quality_counts[gc] += quality_count;
         if self.emit_unique && !record.is_duplicate() {
             self.unique_read_starts[gc] += 1;
-            self.unique_base_quality_sums[gc] += quality_sum;
-            self.unique_base_quality_counts[gc] += quality_count;
+        }
+        Ok(())
+    }
+
+    fn observe_sam_line(&mut self, line: &[u8], window_size: usize) -> Result<(), String> {
+        let line = trim_ascii_line_end(line);
+        let mut fields = line.split(|byte| *byte == b'\t');
+        fields
+            .next()
+            .ok_or_else(|| "malformed CollectGcBiasMetrics SAM record".to_string())?;
+        let flags = parse_u16_bytes(
+            fields
+                .next()
+                .ok_or_else(|| "malformed CollectGcBiasMetrics SAM record".to_string())?,
+        )?;
+        let rname = fields
+            .next()
+            .ok_or_else(|| "malformed CollectGcBiasMetrics SAM record".to_string())?;
+        let pos = parse_i64_bytes(
+            fields
+                .next()
+                .ok_or_else(|| "malformed CollectGcBiasMetrics SAM record".to_string())?,
+        )?;
+        fields
+            .next()
+            .ok_or_else(|| "malformed CollectGcBiasMetrics SAM record".to_string())?;
+        let cigar = fields
+            .next()
+            .ok_or_else(|| "malformed CollectGcBiasMetrics SAM record".to_string())?;
+
+        let is_paired = flags & 0x1 != 0;
+        let is_first = flags & 0x40 != 0;
+        let is_duplicate = flags & 0x400 != 0;
+        if !is_paired || is_first {
+            self.total_clusters += 1;
+            if self.emit_unique && !is_duplicate {
+                self.unique_total_clusters += 1;
+            }
+        }
+        if flags & 0x4 != 0 || rname == b"*" {
+            return Ok(());
+        }
+        self.summary_aligned_reads += 1;
+        if self.emit_unique && !is_duplicate {
+            self.unique_summary_aligned_reads += 1;
+        }
+        self.aligned_reads += 1;
+        if self.emit_unique && !is_duplicate {
+            self.unique_aligned_reads += 1;
+        }
+
+        let contig = std::str::from_utf8(rname)
+            .map_err(|_| "malformed CollectGcBiasMetrics SAM contig".to_string())?;
+        self.ensure_contig(contig)?;
+        let reference = &self.active_sequence;
+        if reference.len() < window_size {
+            return Ok(());
+        }
+        let start = if flags & 0x10 != 0 {
+            pos - 1 + cigar_reference_len_sam_text(cigar)? - window_size as i64
+        } else {
+            pos
+        };
+        if start <= 0 {
+            return Ok(());
+        }
+        let start = start as usize;
+        if start + window_size > reference.len() {
+            return Ok(());
+        }
+        let Some(gc) = gc_percent(&reference[start..start + window_size], window_size) else {
+            return Ok(());
+        };
+        self.read_starts[gc] += 1;
+        if self.emit_unique && !is_duplicate {
+            self.unique_read_starts[gc] += 1;
         }
         Ok(())
     }
@@ -12712,8 +13854,8 @@ impl GcBiasMetricsSummary {
         output: &mut String,
         reads_used: &str,
         read_starts_by_gc: &[u64; 101],
-        base_quality_sums_by_gc: &[u64; 101],
-        base_quality_counts_by_gc: &[u64; 101],
+        _base_quality_sums_by_gc: &[u64; 101],
+        _base_quality_counts_by_gc: &[u64; 101],
         minimum_genome_fraction: f64,
     ) {
         let total_windows = self.total_windows();
@@ -12743,11 +13885,8 @@ impl GcBiasMetricsSummary {
             } else {
                 normalized_coverage / (read_starts as f64).sqrt()
             };
-            let mean_base_quality = if read_starts == 0 || base_quality_counts_by_gc[gc] == 0 {
-                0.0
-            } else {
-                base_quality_sums_by_gc[gc] as f64 / base_quality_counts_by_gc[gc] as f64
-            };
+            // Picard 3.4 leaves this detail column at zero even when reads carry qualities.
+            let mean_base_quality = 0.0;
             output.push_str(&format!(
                 "All Reads\t{reads_used}\t{gc}\t{windows}\t{read_starts}\t{}\t{}\t{}\t\t\t\n",
                 format_float(mean_base_quality),
@@ -12923,6 +14062,43 @@ fn gc_percent(window: &[u8], window_size: usize) -> Option<usize> {
     } else {
         Some((gc * 100) / window_size)
     }
+}
+
+fn cigar_reference_len_sam_text(cigar: &[u8]) -> Result<i64, String> {
+    if cigar == b"*" {
+        return Ok(0);
+    }
+    let mut total = 0_i64;
+    let mut len = 0_i64;
+    let mut saw_digit = false;
+    for byte in cigar {
+        if byte.is_ascii_digit() {
+            saw_digit = true;
+            len = len
+                .checked_mul(10)
+                .and_then(|value| value.checked_add(i64::from(byte - b'0')))
+                .ok_or_else(|| "malformed CollectGcBiasMetrics CIGAR".to_string())?;
+            continue;
+        }
+        if !saw_digit || len == 0 {
+            return Err("malformed CollectGcBiasMetrics CIGAR".to_string());
+        }
+        match *byte {
+            b'M' | b'=' | b'X' | b'D' | b'N' => {
+                total = total
+                    .checked_add(len)
+                    .ok_or_else(|| "malformed CollectGcBiasMetrics CIGAR".to_string())?;
+            }
+            b'I' | b'S' | b'H' | b'P' => {}
+            _ => return Err("malformed CollectGcBiasMetrics CIGAR".to_string()),
+        }
+        len = 0;
+        saw_digit = false;
+    }
+    if saw_digit {
+        return Err("malformed CollectGcBiasMetrics CIGAR".to_string());
+    }
+    Ok(total)
 }
 
 fn collect_mean_quality_by_cycle_sam_text(
@@ -14403,6 +15579,27 @@ fn read_fastq_string_line(
 }
 
 fn validate_fastq_qualities(qualities: &[u8], options: FastqToSamOptions) -> Result<(), String> {
+    if options.quality_format == FastqQualityFormat::Standard {
+        let min_encoded = options.min_q.saturating_add(33);
+        let max_encoded = options.max_q.saturating_add(33);
+        for quality in qualities {
+            if *quality < min_encoded {
+                let decoded = quality.saturating_sub(33);
+                return Err(format!(
+                    "malformed FastqToSam quality below MIN_Q: {decoded} < {}",
+                    options.min_q
+                ));
+            }
+            if *quality > max_encoded {
+                let decoded = quality.saturating_sub(33);
+                return Err(format!(
+                    "malformed FastqToSam quality above MAX_Q: {decoded} > {}",
+                    options.max_q
+                ));
+            }
+        }
+        return Ok(());
+    }
     for quality in qualities {
         let decoded = decode_fastq_quality(*quality, options.quality_format)?;
         if decoded < options.min_q {
@@ -14985,7 +16182,8 @@ fn run_samtofastq_from_sam_text(
     let mut sequence = Vec::new();
     let mut qualities = Vec::new();
     let mut output = Vec::with_capacity(512);
-    let mut first_seen_mates: HashMap<String, SamFastqRecord> = HashMap::new();
+    let identity_transform = transform.is_identity();
+    let mut first_seen_mates: FxHashMap<String, SamFastqRecord> = FxHashMap::default();
     let mut per_rg_outputs =
         per_rg.map(|config| SamToFastqPerRgOutputs::new(config, compression_level));
 
@@ -15023,14 +16221,14 @@ fn run_samtofastq_from_sam_text(
             );
         }
 
-        let current_record = SamFastqRecord {
-            name: name.to_string(),
-            flags,
-            sequence: sam_sequence.to_string(),
-            qualities: sam_qualities.to_string(),
-            clip_point: sam_clip_point(line, transform.clipping),
-        };
         if is_paired {
+            let current_record = SamFastqRecord {
+                name: name.to_string(),
+                flags,
+                sequence: sam_sequence.to_string(),
+                qualities: sam_qualities.to_string(),
+                clip_point: sam_clip_point(line, transform.clipping),
+            };
             if let Some(first_record) = first_seen_mates.remove(name) {
                 let (read1, read2) = if flags & 0x40 != 0 {
                     (&current_record, &first_record)
@@ -15099,18 +16297,39 @@ fn run_samtofastq_from_sam_text(
                     .expect("first writer exists for standard SamToFastq output")
                     .as_mut()
             };
-            write_sam_fastq_record(
-                writer,
-                &current_record,
-                &transform,
-                re_reverse,
-                transform.trim_for_flags(current_record.flags),
-                transform.quality,
-                transform.max_bases_for_flags(current_record.flags),
-                &mut sequence,
-                &mut qualities,
-                &mut output,
-            )?;
+            if identity_transform && (!re_reverse || flags & 0x10 == 0) {
+                output.clear();
+                append_fastq_text_record(
+                    &mut output,
+                    name.as_bytes(),
+                    None,
+                    sam_sequence.as_bytes(),
+                    sam_qualities.as_bytes(),
+                );
+                writer
+                    .write_all(&output)
+                    .map_err(|error| error.to_string())?;
+            } else {
+                let current_record = SamFastqRecord {
+                    name: name.to_string(),
+                    flags,
+                    sequence: sam_sequence.to_string(),
+                    qualities: sam_qualities.to_string(),
+                    clip_point: sam_clip_point(line, transform.clipping),
+                };
+                write_sam_fastq_record(
+                    writer,
+                    &current_record,
+                    &transform,
+                    re_reverse,
+                    transform.trim_for_flags(current_record.flags),
+                    transform.quality,
+                    transform.max_bases_for_flags(current_record.flags),
+                    &mut sequence,
+                    &mut qualities,
+                    &mut output,
+                )?;
+            }
         }
     }
 
@@ -15608,6 +16827,15 @@ enum SamToFastqClippingAction {
 }
 
 impl SamToFastqTransform {
+    fn is_identity(&self) -> bool {
+        self.read1_trim == 0
+            && self.read2_trim == 0
+            && self.read1_max_bases_to_write.is_none()
+            && self.read2_max_bases_to_write.is_none()
+            && self.quality.is_none()
+            && self.clipping.is_none()
+    }
+
     fn trim_for(&self, record: &bam::Record) -> usize {
         if record.is_paired() && record.is_last_in_template() {
             self.read2_trim
@@ -17053,6 +18281,25 @@ fn write_fixed_mate_group(
     add_mate_cigar: bool,
     ignore_missing_mates: bool,
 ) -> Result<(), String> {
+    if records.len() == 2
+        && records[0].is_paired()
+        && records[1].is_paired()
+        && !records[0].is_secondary()
+        && !records[1].is_secondary()
+        && !records[0].is_supplementary()
+        && !records[1].is_supplementary()
+    {
+        fix_mate_pair_by_index(records, 0, 1, add_mate_cigar)?;
+        writer
+            .write(&records[0])
+            .map_err(|error| error.to_string())?;
+        writer
+            .write(&records[1])
+            .map_err(|error| error.to_string())?;
+        records.clear();
+        return Ok(());
+    }
+
     for record in drain_fixed_mate_group(records, add_mate_cigar, ignore_missing_mates)? {
         writer.write(&record).map_err(|error| error.to_string())?;
     }
@@ -17585,6 +18832,15 @@ fn read_next_merge_record(
     read_group_renames: &BTreeMap<String, String>,
     interval_filter: Option<&BTreeMap<i32, Vec<(u64, u64)>>>,
 ) -> Result<Option<bam::Record>, String> {
+    if read_group_renames.is_empty() && interval_filter.is_none() {
+        let mut record = bam::Record::new();
+        return match reader.read(&mut record) {
+            Some(Ok(())) => Ok(Some(record)),
+            Some(Err(error)) => Err(error.to_string()),
+            None => Ok(None),
+        };
+    }
+
     loop {
         let mut record = bam::Record::new();
         match reader.read(&mut record) {
@@ -18130,7 +19386,7 @@ mod tests {
     }
 
     #[test]
-    fn gc_bias_detail_reports_mean_base_quality() {
+    fn gc_bias_detail_matches_picard_zero_mean_base_quality() {
         let summary = GcBiasMetricsSummary {
             windows: {
                 let mut windows = [0_u64; 101];
@@ -18168,7 +19424,7 @@ mod tests {
         };
 
         let text = summary.detail_text(100, 0.0);
-        assert!(text.contains("All Reads\tALL\t50\t2\t1\t37\t1\t1"));
+        assert!(text.contains("All Reads\tALL\t50\t2\t1\t0\t1\t1"));
     }
 
     #[test]

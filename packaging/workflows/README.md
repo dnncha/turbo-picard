@@ -69,6 +69,7 @@ What they are not for:
 Recommended rollout:
 
 1. Start with the explicit `turbo-picard` command instead of the `picard` shim.
-2. Run `tools/audit_real_data.py` or `tools/compare_real_data.py` on a representative shard.
-3. Keep upstream Picard available through `TURBO_PICARD_FALLBACK_COMMAND` while command coverage is mixed.
-4. Move the shim or workflow-wide switch only after the checked command is boring on your own data.
+2. Run `turbo-picard explain --json ...` in wrapper preflight if the workflow needs a schema-versioned native/fallback decision.
+3. Run `tools/audit_real_data.py` or `tools/compare_real_data.py` on a representative shard.
+4. Keep upstream Picard available through `TURBO_PICARD_FALLBACK_COMMAND` while command coverage is mixed.
+5. Move the shim or workflow-wide switch only after the checked command is boring on your own data.

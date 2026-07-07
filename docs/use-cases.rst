@@ -49,6 +49,8 @@ Why it works well:
 
 * a module can keep the same inputs, outputs, and parameter surface;
 * the toggle makes side-by-side review easier;
+* ``turbo-picard explain --json`` gives module code a schema-versioned
+  native/fallback decision before running a task;
 * maintainers can narrow the change to one hot step first.
 
 Best first move:

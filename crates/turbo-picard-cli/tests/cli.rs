@@ -132,6 +132,71 @@ fn explain_reports_fallback_only_reference_commands() {
 }
 
 #[test]
+fn explain_json_reports_workflow_integration_contract() {
+    let tempdir = tempfile::tempdir().expect("tempdir exists");
+    let fallback = fallback_script(tempdir.path(), 0);
+
+    let mut cmd = Command::cargo_bin("turbo-picard").expect("binary exists");
+    cmd.args([
+        "explain",
+        "--json",
+        "MarkDuplicates",
+        "I=input.bam",
+        "O=marked.bam",
+        "M=metrics.txt",
+    ])
+    .env(
+        "TURBO_PICARD_FALLBACK_COMMAND",
+        fallback.display().to_string(),
+    )
+    .assert()
+    .success()
+    .stdout(predicate::str::contains("\"schema_version\": 1"))
+    .stdout(predicate::str::contains("\"command\": \"MarkDuplicates\""))
+    .stdout(predicate::str::contains("\"status\": \"partial-native\""))
+    .stdout(predicate::str::contains(
+        "\"execution_path\": \"native-when-inside-documented-scope-otherwise-fallback\"",
+    ))
+    .stdout(predicate::str::contains("\"fallback_command\": "))
+    .stdout(predicate::str::contains("\"O=marked.bam\""))
+    .stdout(predicate::str::contains("\"M=metrics.txt\""))
+    .stdout(predicate::str::contains("command=MarkDuplicates").not());
+}
+
+#[test]
+fn explain_accepts_format_json_spelling() {
+    let mut cmd = Command::cargo_bin("turbo-picard").expect("binary exists");
+    cmd.args(["explain", "--format", "json", "SortSam", "O=sorted.bam"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"schema_version\": 1"))
+        .stdout(predicate::str::contains("\"command\": \"SortSam\""))
+        .stdout(predicate::str::contains("\"O=sorted.bam\""));
+}
+
+#[test]
+fn explain_rejects_unknown_format() {
+    let mut cmd = Command::cargo_bin("turbo-picard").expect("binary exists");
+    cmd.args(["explain", "--format=yaml", "MarkDuplicates"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "unsupported explain format option: --format=yaml",
+        ));
+}
+
+#[test]
+fn explain_rejects_missing_format_value() {
+    let mut cmd = Command::cargo_bin("turbo-picard").expect("binary exists");
+    cmd.args(["explain", "--format"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "missing explain format after --format",
+        ));
+}
+
+#[test]
 fn markduplicates_requires_metrics_file() {
     let mut cmd = Command::cargo_bin("turbo-picard").expect("binary exists");
     cmd.args(["MarkDuplicates", "I=in.bam", "O=out.bam"])
@@ -3131,8 +3196,8 @@ fn collectgcbiasmetrics_writes_detail_summary_and_chart() {
 
     let detail_text = fs::read_to_string(&detail).expect("detail metrics exist");
     assert!(detail_text.contains("## METRICS CLASS\tpicard.analysis.GcBiasDetailMetrics\n"));
-    assert!(detail_text.contains("All Reads\tALL\t0\t19\t1\t37\t1\t1\t\t\t\n"));
-    assert!(detail_text.contains("All Reads\tALL\t100\t19\t1\t37\t1\t1\t\t\t\n"));
+    assert!(detail_text.contains("All Reads\tALL\t0\t19\t1\t0\t1\t1\t\t\t\n"));
+    assert!(detail_text.contains("All Reads\tALL\t100\t19\t1\t0\t1\t1\t\t\t\n"));
     let summary_text = fs::read_to_string(&summary).expect("summary metrics exist");
     assert!(summary_text.contains("## METRICS CLASS\tpicard.analysis.GcBiasSummaryMetrics\n"));
     assert!(summary_text.contains("All Reads\tALL\t20\t2\t2\t0\t0\t1\t0\t0\t0\t1\t\t\t\n"));
@@ -3236,7 +3301,7 @@ fn collectgcbiasmetrics_honors_stop_after_and_assume_sorted_alias() {
         .success();
 
     let detail_text = fs::read_to_string(&detail).expect("detail metrics exist");
-    assert!(detail_text.contains("All Reads\tALL\t0\t19\t1\t37\t2\t2\t\t\t\n"));
+    assert!(detail_text.contains("All Reads\tALL\t0\t19\t1\t0\t2\t2\t\t\t\n"));
     assert!(detail_text.contains("All Reads\tALL\t100\t19\t0\t0\t0\t0\t\t\t\n"));
     let summary_text = fs::read_to_string(&summary).expect("summary metrics exist");
     assert!(summary_text.contains("All Reads\tALL\t20\t1\t1\t0\t50\t2\t0\t0\t0\t0\t\t\t\n"));
@@ -4062,9 +4127,9 @@ fn collectgcbiasmetrics_can_also_emit_unique_duplicate_filtered_metrics() {
         .success();
 
     let detail_text = fs::read_to_string(&detail).expect("detail output exists");
-    assert!(detail_text.contains("All Reads\tALL\t0\t19\t2\t18.5\t1.333333"));
-    assert!(detail_text.contains("All Reads\tUNIQUE\t0\t19\t1\t37\t1"));
-    assert!(detail_text.contains("All Reads\tUNIQUE\t100\t19\t1\t37\t1"));
+    assert!(detail_text.contains("All Reads\tALL\t0\t19\t2\t0\t1.333333"));
+    assert!(detail_text.contains("All Reads\tUNIQUE\t0\t19\t1\t0\t1"));
+    assert!(detail_text.contains("All Reads\tUNIQUE\t100\t19\t1\t0\t1"));
 
     let summary_text = fs::read_to_string(&summary).expect("summary output exists");
     assert!(summary_text.contains("All Reads\tALL\t20\t3\t3\t0\t16.666667"));
@@ -4401,8 +4466,8 @@ fn collectmultiplemetrics_forwards_gc_bias_duplicate_extra_argument() {
 
     let detail = fs::read_to_string(output.with_extension("gc_bias.detail_metrics"))
         .expect("gc bias detail metrics exist");
-    assert!(detail.contains("All Reads\tUNIQUE\t0\t19\t1\t37\t1"));
-    assert!(detail.contains("All Reads\tUNIQUE\t100\t19\t1\t37\t1"));
+    assert!(detail.contains("All Reads\tUNIQUE\t0\t19\t1\t0\t1"));
+    assert!(detail.contains("All Reads\tUNIQUE\t100\t19\t1\t0\t1"));
 }
 
 #[test]

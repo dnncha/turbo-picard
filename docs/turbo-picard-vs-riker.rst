@@ -32,7 +32,7 @@ rewriting task interfaces, the `riker` command model can be cleaner.
 
 For teams already running Picard, the practical default is usually simpler:
 
-* if you need the fastest path to a production-ready Picard replacement with
+* if you need the fastest path to a validated Picard-compatible replacement with
   low rollout risk, start with ``turbo-picard``;
 * if you are greenfielding a QC-only workflow and can absorb command-shape
   changes, ``riker`` is a reasonable parallel evaluate.
