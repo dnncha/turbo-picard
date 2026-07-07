@@ -29,7 +29,9 @@ jobs:
         uses: PyO3/maturin-action@v1
         with:
           target: x86_64
-          manylinux: auto
+          manylinux: 2014
+          before-script-linux: |
+            yum install -y perl-IPC-Cmd
           args: --release --locked --compatibility pypi --out dist
 
       - name: Upload wheel
