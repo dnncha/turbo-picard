@@ -93,7 +93,8 @@ REQUIRED_READER_CUES = {
         "This PR adds `turbo-picard`",
         "separate optional compatibility shim",
         "turbo-picard is not a full Picard replacement",
-        "Docker is not installed on this machine",
+        "Expected Bioconda checkout checks",
+        "bioconda-utils build --docker --mulled-test turbo-picard",
     ],
 }
 

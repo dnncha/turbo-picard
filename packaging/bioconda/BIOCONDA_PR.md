@@ -8,8 +8,8 @@ Upstream submission: https://github.com/bioconda/bioconda-recipes/pull/65922
 the existing Bioconda `picard` package.
 
 `turbo-picard-picard-shim` installs a `picard` command that forwards supported
-Picard-style invocations to turbo-picard. It is split into its own recipe so
-users only get that command name when they ask for it. The shim depends on the
+Picard-style invocations to turbo-picard. It is split into its own recipe so the
+`picard` command name is installed only when requested. The shim depends on the
 matching `turbo-picard` version and declares `picard ==0` as a run constraint
 because it owns the same command name as the existing Picard package.
 
@@ -72,7 +72,7 @@ SHA-256 hashes.
 
 ## Checks
 
-Run before copying the recipes:
+Repository checks used to keep the recipe release-ready:
 
 ```bash
 python3 tools/bioconda_release_preflight.py
@@ -92,13 +92,10 @@ python3 tools/verify_workflow_starters.py
 cargo test --workspace
 ```
 
-Run in this Bioconda checkout:
+Expected Bioconda checkout checks:
 
 ```bash
-mamba run -p /tmp/bioconda-utils-env bioconda-utils lint recipes config.yml --packages turbo-picard turbo-picard-picard-shim --full-report
+bioconda-utils lint recipes config.yml --packages turbo-picard turbo-picard-picard-shim --full-report
+bioconda-utils build --docker --mulled-test turbo-picard
+bioconda-utils build --docker --mulled-test turbo-picard-picard-shim
 ```
-
-Result: `All checks OK`.
-
-Docker is not installed on this machine, so the Docker/mulled build was left to
-Bioconda CI.

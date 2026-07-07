@@ -79,7 +79,8 @@ This is a seamless comprehensive solution.
             """
 separate optional compatibility shim
 turbo-picard is not a full Picard replacement
-Docker is not installed on this machine
+Expected Bioconda checkout checks
+bioconda-utils build --docker --mulled-test turbo-picard
 """,
         )
 
