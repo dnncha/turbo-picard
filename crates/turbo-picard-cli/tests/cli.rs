@@ -5,6 +5,11 @@ use std::fs;
 use std::io::{Read, Write};
 use std::os::unix::fs::PermissionsExt;
 
+#[cfg(target_os = "linux")]
+const VALIDATE_SAMFILE_ISSUE_EXIT_CODE: i32 = 3;
+#[cfg(not(target_os = "linux"))]
+const VALIDATE_SAMFILE_ISSUE_EXIT_CODE: i32 = 2;
+
 #[test]
 fn collecthsmetrics_help_exposes_scaffold_surface() {
     let mut cmd = Command::cargo_bin("turbo-picard").expect("binary exists");
@@ -6181,7 +6186,7 @@ fn validatesamfile_writes_summary_for_valid_and_warning_inputs() {
         ])
         .assert()
         .failure()
-        .code(2)
+        .code(VALIDATE_SAMFILE_ISSUE_EXIT_CODE)
         .stdout(predicate::str::contains("ERROR:MISSING_READ_GROUP\t1"))
         .stdout(predicate::str::contains("WARNING:MISSING_TAG_NM\t1"))
         .stdout(predicate::str::contains(

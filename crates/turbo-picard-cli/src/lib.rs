@@ -480,6 +480,9 @@ pub fn run_cli(program_name: &str, raw_args: impl IntoIterator<Item = String>) -
                     return exit_code;
                 }
                 eprintln!("{error}");
+                if error == VALIDATE_SAM_FILE_VALIDATION_ISSUES {
+                    return validatesamfile_validation_issue_exit_code();
+                }
                 return 2;
             }
             0
@@ -5818,6 +5821,12 @@ fn run_setnmmdanduqtags(args: &[String]) -> Result<(), String> {
     )
 }
 
+const VALIDATE_SAM_FILE_VALIDATION_ISSUES: &str = "ValidateSamFile found validation issues";
+
+fn validatesamfile_validation_issue_exit_code() -> i32 {
+    if cfg!(target_os = "linux") { 3 } else { 2 }
+}
+
 fn run_validatesamfile(args: &[String]) -> Result<(), String> {
     let args = normalize_picard_args_for_command("ValidateSamFile", args)
         .map_err(|error| error.to_string())?;
@@ -5865,7 +5874,7 @@ fn run_validatesamfile(args: &[String]) -> Result<(), String> {
     if report.counts.is_empty() {
         Ok(())
     } else {
-        Err("ValidateSamFile found validation issues".to_string())
+        Err(VALIDATE_SAM_FILE_VALIDATION_ISSUES.to_string())
     }
 }
 
