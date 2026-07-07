@@ -31,10 +31,10 @@ jobs:
           target: x86_64
           manylinux: 2014
           before-script-linux: |
-            yum install -y perl-core
-            LIBCLANG_SO="$(find /opt/clang -name 'libclang.so*' -print -quit)"
-            test -n "$LIBCLANG_SO"
-            export LIBCLANG_PATH="$(dirname "$LIBCLANG_SO")"
+            yum install -y perl-core llvm-toolset-7.0-clang-devel
+            source /opt/rh/llvm-toolset-7.0/enable
+            export LIBCLANG_PATH=/opt/rh/llvm-toolset-7.0/root/usr/lib64
+            test -f "$LIBCLANG_PATH/libclang.so"
           args: --release --locked --compatibility pypi --out dist
 
       - name: Upload wheel

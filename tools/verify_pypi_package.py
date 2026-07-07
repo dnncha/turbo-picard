@@ -237,6 +237,7 @@ def validate_publish_workflow(root: Path = ROOT) -> list[str]:
         ("wheels-linux-x86_64", "PyPI workflow must upload Linux wheel artifacts"),
         ("manylinux: 2014", "PyPI workflow must pin manylinux2014-compatible Linux wheels"),
         ("perl-core", "PyPI workflow must install Perl core in manylinux for vendored OpenSSL"),
+        ("llvm-toolset-7.0-clang-devel", "PyPI workflow must install libclang for bindgen in manylinux"),
         ("LIBCLANG_PATH", "PyPI workflow must expose libclang to bindgen in manylinux"),
         ("PyO3/maturin-action@v1", "PyPI workflow must build with maturin-action"),
         ("--compatibility pypi", "PyPI workflow must run maturin's PyPI compatibility check"),
