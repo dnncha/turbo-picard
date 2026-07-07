@@ -1778,11 +1778,12 @@ def normalize_stable_sam_header(row: bytes) -> bytes:
     fields = row.split(b"\t")
     if not fields:
         return row
-    if fields[0] == b"@HD":
-        return b"\t".join([fields[0], *(field for field in fields[1:] if not field.startswith(b"VN:"))])
-    if fields[0] == b"@RG":
-        return b"\t".join([fields[0], *(normalize_stable_sam_header_field(field) for field in fields[1:])])
-    return row
+    normalized_fields = [
+        normalize_stable_sam_header_field(field)
+        for field in fields[1:]
+        if not (fields[0] == b"@HD" and field.startswith(b"VN:"))
+    ]
+    return b"\t".join([fields[0], *normalized_fields])
 
 
 def normalize_stable_sam_header_field(field: bytes) -> bytes:

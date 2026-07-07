@@ -483,17 +483,20 @@ pub fn run_cli(program_name: &str, raw_args: impl IntoIterator<Item = String>) -
                 print_validatesamfile_help();
                 return 0;
             }
-            if let Err(error) = run_validatesamfile(&command_args) {
-                if let Some(exit_code) = try_run_fallback_for_native_error(&error, &raw_args) {
-                    return exit_code;
+            match run_validatesamfile(&command_args) {
+                Ok(ValidateSamFileStatus::Valid) => 0,
+                Ok(ValidateSamFileStatus::Invalid { exit_code }) => {
+                    eprintln!("{VALIDATE_SAM_FILE_VALIDATION_ISSUES}");
+                    exit_code
                 }
-                eprintln!("{error}");
-                if error == "ValidateSamFile found validation issues" {
-                    return 2;
+                Err(error) => {
+                    if let Some(exit_code) = try_run_fallback_for_native_error(&error, &raw_args) {
+                        return exit_code;
+                    }
+                    eprintln!("{error}");
+                    2
                 }
-                return 2;
             }
-            0
         }
         Some("LiftoverVcf") => {
             let command_args = args.cloned().collect::<Vec<_>>();
@@ -6110,7 +6113,25 @@ fn run_setnmmdanduqtags(args: &[String]) -> Result<(), String> {
     )
 }
 
-fn run_validatesamfile(args: &[String]) -> Result<(), String> {
+const VALIDATE_SAM_FILE_VALIDATION_ISSUES: &str = "ValidateSamFile found validation issues";
+
+enum ValidateSamFileStatus {
+    Valid,
+    Invalid { exit_code: i32 },
+}
+
+fn validatesamfile_validation_issue_exit_code(counts: &BTreeMap<String, u64>) -> i32 {
+    if counts
+        .keys()
+        .any(|key| key.starts_with("ERROR:") && key != "ERROR:INVALID_TAG_NM")
+    {
+        2
+    } else {
+        3
+    }
+}
+
+fn run_validatesamfile(args: &[String]) -> Result<ValidateSamFileStatus, String> {
     let args = normalize_picard_args_for_command("ValidateSamFile", args)
         .map_err(|error| error.to_string())?;
     reject_unsupported_validatesamfile_args(&args)?;
@@ -6155,9 +6176,10 @@ fn run_validatesamfile(args: &[String]) -> Result<(), String> {
     }
 
     if report.counts.is_empty() {
-        Ok(())
+        Ok(ValidateSamFileStatus::Valid)
     } else {
-        Err("ValidateSamFile found validation issues".to_string())
+        let exit_code = validatesamfile_validation_issue_exit_code(&report.counts);
+        Ok(ValidateSamFileStatus::Invalid { exit_code })
     }
 }
 

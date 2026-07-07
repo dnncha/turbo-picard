@@ -72,6 +72,58 @@ python3 tools/compare_real_data.py \
   --skip-build
 ```
 
+Copy/paste trial from PyPI:
+
+```bash
+python3 -m venv .venv-turbo-picard-trial
+. .venv-turbo-picard-trial/bin/activate
+python3 -m pip install --upgrade pip
+python3 -m pip install turbo-picard
+turbo-picard --version
+turbo-picard doctor
+```
+
+Then run the same Picard-shaped command twice on one representative shard. For a
+`MarkDuplicates` trial:
+
+```bash
+export INPUT_BAM=/path/to/representative.bam
+export PICARD_JAR=/path/to/picard.jar
+mkdir -p turbo-picard-trial/picard turbo-picard-trial/turbo
+
+/usr/bin/time -p java -jar "$PICARD_JAR" MarkDuplicates \
+  I="$INPUT_BAM" \
+  O=turbo-picard-trial/picard/marked.bam \
+  M=turbo-picard-trial/picard/metrics.txt
+
+/usr/bin/time -p turbo-picard MarkDuplicates \
+  I="$INPUT_BAM" \
+  O=turbo-picard-trial/turbo/marked.bam \
+  M=turbo-picard-trial/turbo/metrics.txt
+```
+
+Minimum checks before you show the result to anyone else:
+
+```bash
+samtools quickcheck -v \
+  turbo-picard-trial/picard/marked.bam \
+  turbo-picard-trial/turbo/marked.bam
+diff -u turbo-picard-trial/picard/metrics.txt turbo-picard-trial/turbo/metrics.txt
+```
+
+If you are in a `turbo-picard` checkout and want a reviewable bundle, use the
+repo comparison helper instead of hand-collecting outputs:
+
+```bash
+python3 tools/compare_real_data.py \
+  --input-bam "$INPUT_BAM" \
+  --output-dir turbo-picard-trial/evidence \
+  --commands MarkDuplicates \
+  --picard-command "java -jar $PICARD_JAR" \
+  --turbo-picard-command turbo-picard \
+  --skip-build
+```
+
 Files in this directory:
 
 - `trial.wdl`: tiny `WDL` workflow for a single `MarkDuplicates` trial

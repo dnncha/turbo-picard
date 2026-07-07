@@ -48,6 +48,7 @@ class WorkflowStarterVerifierTests(unittest.TestCase):
                         "SamToFastq",
                         "FastqToSam",
                         "FixMateInformation",
+                        "turbo-picard explain --json",
                     ]
                 ),
                 encoding="utf-8",
@@ -82,6 +83,7 @@ class WorkflowStarterVerifierTests(unittest.TestCase):
                         "trial-samtofastq.wdl",
                         "trial-fastqtosam.wdl",
                         "trial-fixmateinformation.nf",
+                        "turbo-picard explain --json",
                     ]
                 ),
                 encoding="utf-8",
