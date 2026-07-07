@@ -3222,6 +3222,7 @@ fn run_collectalignmentsummarymetrics(args: &[String]) -> Result<(), String> {
     let output = required_scalar_for(&args, "OUTPUT", "CollectAlignmentSummaryMetrics")?;
     let stop_after = optional_u32(&args, "STOP_AFTER")?.unwrap_or(0);
     let accumulation = alignment_accumulation_level(&args)?;
+    let reference = optional_scalar(&args, "REFERENCE_SEQUENCE")?;
 
     if has_sam_extension(&input) {
         let metrics = collect_alignment_sam_text(&input, stop_after, accumulation)?;
@@ -3231,11 +3232,20 @@ fn run_collectalignmentsummarymetrics(args: &[String]) -> Result<(), String> {
     let mut reader = open_bam_reader_for_args(&input, &args).map_err(|error| error.to_string())?;
     let read_groups =
         insert_size_read_groups_from_header(&String::from_utf8_lossy(reader.header().as_bytes()));
+    let target_names = reader
+        .header()
+        .target_names()
+        .iter()
+        .map(|name| String::from_utf8_lossy(name).to_string())
+        .collect::<Vec<_>>();
+    let mut reference_cache = reference.as_deref().map(AlignmentReferenceCache::new);
     let mut metrics = AlignmentSummaryCollection::new(accumulation);
     for record in limited_records(&mut reader, stop_after) {
         let record = record.map_err(|error| error.to_string())?;
         let read_group = insert_size_read_group_for_bam_record(&record, &read_groups);
-        metrics.observe(&record, read_group.as_ref());
+        let mismatch_bases =
+            alignment_reference_mismatch_bases(&record, &target_names, reference_cache.as_mut())?;
+        metrics.observe(&record, read_group.as_ref(), mismatch_bases);
     }
 
     fs::write(output, metrics.to_picard_text()).map_err(|error| error.to_string())
@@ -3794,6 +3804,10 @@ fn run_collectmultiplemetrics_single_pass(
         .iter()
         .map(|name| String::from_utf8_lossy(name).to_string())
         .collect::<Vec<_>>();
+    let mut alignment_reference_cache = reference
+        .as_deref()
+        .filter(|_| alignment.is_some())
+        .map(AlignmentReferenceCache::new);
 
     let active_collectors = [
         alignment.is_some(),
@@ -3818,7 +3832,12 @@ fn run_collectmultiplemetrics_single_pass(
         };
 
         if let Some((metrics, ..)) = alignment.as_mut() {
-            metrics.observe(record, read_group.as_ref());
+            let mismatch_bases = alignment_reference_mismatch_bases(
+                record,
+                &target_names,
+                alignment_reference_cache.as_mut(),
+            )?;
+            metrics.observe(record, read_group.as_ref(), mismatch_bases);
         }
         if let Some((metrics, _, _, include_duplicates, ..)) = insert_size.as_mut() {
             metrics.observe(record, *include_duplicates, read_group.as_ref());
@@ -3996,6 +4015,10 @@ fn run_collectmultiplemetrics_single_pass(
 
         let read_groups = Arc::new(read_groups);
         let target_names = Arc::new(target_names);
+        let alignment_reference_cache = reference
+            .as_deref()
+            .filter(|_| alignment_worker.is_some())
+            .map(|path| Arc::new(Mutex::new(AlignmentReferenceCache::new(path))));
         let mut handlers: Vec<cmm_pipeline::CmmBatchHandler> = Vec::new();
         let combine_alignment_and_insert_size =
             alignment_worker.is_some() && insert_size_worker.is_some();
@@ -4007,6 +4030,8 @@ fn run_collectmultiplemetrics_single_pass(
             let insert_size_worker =
                 Arc::clone(&insert_size_worker.as_ref().expect("insert-size worker").0);
             let read_groups = Arc::clone(&read_groups);
+            let target_names = Arc::clone(&target_names);
+            let alignment_reference_cache = alignment_reference_cache.as_ref().map(Arc::clone);
             handlers.push(Box::new(move |batch| {
                 let mut alignment_metrics =
                     alignment_worker.lock().expect("alignment collector lock");
@@ -4021,7 +4046,12 @@ fn run_collectmultiplemetrics_single_pass(
                     let read_group =
                         insert_size_read_group_for_bam_record(record, read_groups.as_ref());
                     if entry.gates.alignment {
-                        alignment_metrics.observe(record, read_group.as_ref());
+                        let mismatch_bases = alignment_reference_mismatch_bases_locked(
+                            record,
+                            target_names.as_slice(),
+                            alignment_reference_cache.as_deref(),
+                        )?;
+                        alignment_metrics.observe(record, read_group.as_ref(), mismatch_bases);
                     }
                     if entry.gates.insert_size {
                         insert_size_metrics.observe(
@@ -4038,6 +4068,8 @@ fn run_collectmultiplemetrics_single_pass(
         if !combine_alignment_and_insert_size && let Some((worker, _)) = &alignment_worker {
             let worker = Arc::clone(worker);
             let read_groups = Arc::clone(&read_groups);
+            let target_names = Arc::clone(&target_names);
+            let alignment_reference_cache = alignment_reference_cache.as_ref().map(Arc::clone);
             handlers.push(Box::new(move |batch| {
                 let mut metrics = worker.lock().expect("alignment collector lock");
                 for entry in batch {
@@ -4047,7 +4079,12 @@ fn run_collectmultiplemetrics_single_pass(
                     let record = &entry.record;
                     let read_group =
                         insert_size_read_group_for_bam_record(record, read_groups.as_ref());
-                    metrics.observe(record, read_group.as_ref());
+                    let mismatch_bases = alignment_reference_mismatch_bases_locked(
+                        record,
+                        target_names.as_slice(),
+                        alignment_reference_cache.as_deref(),
+                    )?;
+                    metrics.observe(record, read_group.as_ref(), mismatch_bases);
                 }
                 Ok(())
             }));
@@ -10308,14 +10345,19 @@ impl AlignmentSummaryCollection {
         }
     }
 
-    fn observe(&mut self, record: &bam::Record, read_group: Option<&InsertSizeReadGroup>) {
-        self.all_reads.observe(record);
+    fn observe(
+        &mut self,
+        record: &bam::Record,
+        read_group: Option<&InsertSizeReadGroup>,
+        mismatch_bases: Option<u64>,
+    ) {
+        self.all_reads.observe(record, mismatch_bases);
         if self.accumulation == AlignmentAccumulation::Sample {
             if let Some(read_group) = read_group {
                 self.samples
                     .entry(read_group.sample.clone())
                     .or_default()
-                    .observe(record);
+                    .observe(record, mismatch_bases);
             }
         } else if self.accumulation == AlignmentAccumulation::Library {
             if let Some(read_group) = read_group {
@@ -10326,7 +10368,7 @@ impl AlignmentSummaryCollection {
                         summary: AlignmentSummarySet::default(),
                     })
                     .summary
-                    .observe(record);
+                    .observe(record, mismatch_bases);
             }
         } else if self.accumulation == AlignmentAccumulation::ReadGroup
             && let Some(read_group) = read_group
@@ -10339,7 +10381,7 @@ impl AlignmentSummaryCollection {
                     summary: AlignmentSummarySet::default(),
                 })
                 .summary
-                .observe(record);
+                .observe(record, mismatch_bases);
         }
     }
 
@@ -10453,20 +10495,20 @@ impl AlignmentSummaryCollection {
 }
 
 impl AlignmentSummarySet {
-    fn observe(&mut self, record: &bam::Record) {
+    fn observe(&mut self, record: &bam::Record, mismatch_bases: Option<u64>) {
         if record.is_secondary() || record.is_supplementary() {
             return;
         }
         if record.is_paired() {
             self.saw_paired = true;
             if record.is_first_in_template() {
-                self.first.observe(record);
+                self.first.observe(record, mismatch_bases);
             } else if record.is_last_in_template() {
-                self.second.observe(record);
+                self.second.observe(record, mismatch_bases);
             }
-            self.pair.observe(record);
+            self.pair.observe(record, mismatch_bases);
         } else {
-            self.unpaired.observe(record);
+            self.unpaired.observe(record, mismatch_bases);
         }
     }
 
@@ -10629,7 +10671,7 @@ struct AlignmentSummary {
 }
 
 impl AlignmentSummary {
-    fn observe(&mut self, record: &bam::Record) {
+    fn observe(&mut self, record: &bam::Record, mismatch_bases: Option<u64>) {
         let read_length = record.seq_len() as u64;
         let cigar = alignment_cigar_summary(record.cigar().iter(), record.is_reverse());
         let aligned_length = if record.is_unmapped() {
@@ -10668,7 +10710,8 @@ impl AlignmentSummary {
 
         let is_aligned = !record.is_unmapped();
         if is_aligned {
-            let mismatch_bases = record_mismatch_bases(record, cigar);
+            let mismatch_bases =
+                mismatch_bases.unwrap_or_else(|| record_mismatch_bases(record, cigar));
             self.pf_reads_aligned += 1;
             self.pf_aligned_bases += aligned_length;
             self.pf_read_aligned_bases += aligned_read_length;
@@ -11034,11 +11077,166 @@ fn q20_match_bases<'a>(cigars: impl Iterator<Item = &'a Cigar>, qualities: &[u8]
     q20
 }
 
+#[derive(Debug)]
+struct AlignmentReferenceCache {
+    reference_path: String,
+    active_contig: Option<String>,
+    active_sequence: Vec<u8>,
+}
+
+impl AlignmentReferenceCache {
+    fn new(reference_path: &str) -> Self {
+        Self {
+            reference_path: reference_path.to_string(),
+            active_contig: None,
+            active_sequence: Vec::new(),
+        }
+    }
+
+    fn ensure_contig(&mut self, contig: &str) -> Result<(), String> {
+        if self.active_contig.as_deref() == Some(contig) {
+            return Ok(());
+        }
+        self.active_sequence = load_fasta_contig_sequence(&self.reference_path, contig)?;
+        self.active_contig = Some(contig.to_string());
+        Ok(())
+    }
+
+    fn mismatch_bases(
+        &mut self,
+        record: &bam::Record,
+        target_names: &[String],
+    ) -> Result<Option<u64>, String> {
+        if record.is_unmapped() || record.tid() < 0 {
+            return Ok(None);
+        }
+        let contig = target_names.get(record.tid() as usize).ok_or_else(|| {
+            "CollectAlignmentSummaryMetrics record references unknown target".to_string()
+        })?;
+        self.ensure_contig(contig)?;
+        record_reference_mismatch_bases(record, &self.active_sequence).map(Some)
+    }
+}
+
+fn alignment_reference_mismatch_bases(
+    record: &bam::Record,
+    target_names: &[String],
+    reference_cache: Option<&mut AlignmentReferenceCache>,
+) -> Result<Option<u64>, String> {
+    let Some(reference_cache) = reference_cache else {
+        return Ok(None);
+    };
+    reference_cache.mismatch_bases(record, target_names)
+}
+
+fn alignment_reference_mismatch_bases_locked(
+    record: &bam::Record,
+    target_names: &[String],
+    reference_cache: Option<&Mutex<AlignmentReferenceCache>>,
+) -> Result<Option<u64>, String> {
+    let Some(reference_cache) = reference_cache else {
+        return Ok(None);
+    };
+    let mut reference_cache = reference_cache
+        .lock()
+        .map_err(|_| "CollectAlignmentSummaryMetrics reference cache lock poisoned".to_string())?;
+    alignment_reference_mismatch_bases(record, target_names, Some(&mut reference_cache))
+}
+
 fn record_mismatch_bases(record: &bam::Record, cigar: CigarSummary) -> u64 {
     let Some(nm) = record.aux(b"NM").ok().and_then(aux_i32) else {
         return 0;
     };
     mismatch_bases_from_nm(nm, cigar)
+}
+
+fn record_reference_mismatch_bases(record: &bam::Record, reference: &[u8]) -> Result<u64, String> {
+    if record.pos() < 0 {
+        return Ok(0);
+    }
+    let mut read_offset = 0_usize;
+    let mut reference_offset = record.pos() as usize;
+    let read_bases = record.seq().as_bytes();
+    let mut mismatches = 0_u64;
+
+    for cigar in record.cigar().iter() {
+        match *cigar {
+            Cigar::Match(length) => {
+                let length = length as usize;
+                let read_end =
+                    collect_alignment_checked_read_end(read_offset, length, &read_bases)?;
+                let reference_end =
+                    collect_alignment_checked_reference_end(reference_offset, length, reference)?;
+                for (read_base, reference_base) in read_bases[read_offset..read_end]
+                    .iter()
+                    .zip(&reference[reference_offset..reference_end])
+                {
+                    if !dna_bases_equal(*read_base, *reference_base) {
+                        mismatches += 1;
+                    }
+                }
+                read_offset = read_end;
+                reference_offset = reference_end;
+            }
+            Cigar::Equal(length) => {
+                let length = length as usize;
+                read_offset = collect_alignment_checked_read_end(read_offset, length, &read_bases)?;
+                reference_offset =
+                    collect_alignment_checked_reference_end(reference_offset, length, reference)?;
+            }
+            Cigar::Diff(length) => {
+                let length = length as usize;
+                read_offset = collect_alignment_checked_read_end(read_offset, length, &read_bases)?;
+                reference_offset =
+                    collect_alignment_checked_reference_end(reference_offset, length, reference)?;
+                mismatches += length as u64;
+            }
+            Cigar::Ins(length) | Cigar::SoftClip(length) => {
+                read_offset =
+                    collect_alignment_checked_read_end(read_offset, length as usize, &read_bases)?;
+            }
+            Cigar::Del(length) | Cigar::RefSkip(length) => {
+                reference_offset = collect_alignment_checked_reference_end(
+                    reference_offset,
+                    length as usize,
+                    reference,
+                )?;
+            }
+            Cigar::HardClip(_) | Cigar::Pad(_) => {}
+        }
+    }
+
+    Ok(mismatches)
+}
+
+fn collect_alignment_checked_read_end(
+    offset: usize,
+    length: usize,
+    read_bases: &[u8],
+) -> Result<usize, String> {
+    let end = offset
+        .checked_add(length)
+        .ok_or_else(|| "malformed CollectAlignmentSummaryMetrics CIGAR".to_string())?;
+    if end > read_bases.len() {
+        return Err("malformed CollectAlignmentSummaryMetrics CIGAR".to_string());
+    }
+    Ok(end)
+}
+
+fn collect_alignment_checked_reference_end(
+    offset: usize,
+    length: usize,
+    reference: &[u8],
+) -> Result<usize, String> {
+    let end = offset.checked_add(length).ok_or_else(|| {
+        "CollectAlignmentSummaryMetrics alignment extends beyond reference".to_string()
+    })?;
+    if end > reference.len() {
+        return Err(
+            "CollectAlignmentSummaryMetrics alignment extends beyond reference".to_string(),
+        );
+    }
+    Ok(end)
 }
 
 fn q20_match_bases_from_sam(cigar: &[u8], qualities: &[u8]) -> Result<u64, String> {
@@ -19566,6 +19764,52 @@ mod tests {
 
         assert_eq!(summary.read_starts[0], 1);
         assert_eq!(summary.read_starts.iter().sum::<u64>(), 1);
+    }
+
+    #[test]
+    fn alignment_reference_mismatches_fill_missing_nm() {
+        let mut record = bam::Record::new();
+        record.set(
+            b"missing-nm",
+            Some(&CigarString(vec![Cigar::Match(5)])),
+            b"ACGTA",
+            b"FFFFF",
+        );
+        record.set_tid(0);
+        record.set_pos(2);
+        record.set_flags(0);
+
+        let cigar = alignment_cigar_summary(record.cigar().iter(), record.is_reverse());
+        assert_eq!(record_mismatch_bases(&record, cigar), 0);
+        assert_eq!(
+            record_reference_mismatch_bases(&record, b"TTACCTA").expect("reference matches"),
+            1
+        );
+    }
+
+    #[test]
+    fn alignment_reference_mismatches_exclude_indels() {
+        let mut record = bam::Record::new();
+        record.set(
+            b"indels",
+            Some(&CigarString(vec![
+                Cigar::Match(2),
+                Cigar::Ins(1),
+                Cigar::Match(2),
+                Cigar::Del(1),
+                Cigar::Diff(1),
+            ])),
+            b"AAGCTA",
+            b"FFFFFF",
+        );
+        record.set_tid(0);
+        record.set_pos(0);
+        record.set_flags(0);
+
+        assert_eq!(
+            record_reference_mismatch_bases(&record, b"AACCTA").expect("reference matches"),
+            2
+        );
     }
 
     #[test]
