@@ -6,16 +6,16 @@ on:
       - "benchmarks/production/**"
       - "tools/validate_production_manifest.py"
       - "tools/test_validate_production_manifest.py"
-      - "docs/production-readiness.md"
-      - "docs/compatibility-contract.md"
+      - "docs/production-readiness.rst"
+      - "docs/compatibility-contract.rst"
   push:
     branches: [main]
     paths:
       - "benchmarks/production/**"
       - "tools/validate_production_manifest.py"
       - "tools/test_validate_production_manifest.py"
-      - "docs/production-readiness.md"
-      - "docs/compatibility-contract.md"
+      - "docs/production-readiness.rst"
+      - "docs/compatibility-contract.rst"
 
 permissions:
   contents: read
