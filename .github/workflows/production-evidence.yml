@@ -1,0 +1,34 @@
+name: Production evidence validators
+
+on:
+  pull_request:
+    paths:
+      - "benchmarks/production/**"
+      - "tools/validate_production_manifest.py"
+      - "tools/test_validate_production_manifest.py"
+      - "docs/production-readiness.md"
+      - "docs/compatibility-contract.md"
+  push:
+    branches: [main]
+    paths:
+      - "benchmarks/production/**"
+      - "tools/validate_production_manifest.py"
+      - "tools/test_validate_production_manifest.py"
+      - "docs/production-readiness.md"
+      - "docs/compatibility-contract.md"
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Run manifest validator tests
+        run: python -m unittest discover tools -p 'test_validate_production_manifest.py'
+      - name: Validate example JSON syntax
+        run: python -m json.tool benchmarks/production/manifest-entry.example.json >/dev/null
