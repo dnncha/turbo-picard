@@ -1,0 +1,60 @@
+{
+  "schema_version": 1,
+  "dataset_id": "wgs_30x_example",
+  "tier": "production_scale",
+  "scope_caveat": "Replace this example with a pinned, permissioned dataset.",
+  "input": {
+    "format": "BAM",
+    "source_url": "https://example.org/immutable-accession-or-commit",
+    "source_revision": "accession-or-40-character-commit",
+    "sha256": "replace-with-64-character-sha256",
+    "bytes": 0,
+    "read_count": 0,
+    "reference_fasta_sha256": null
+  },
+  "software": {
+    "picard_version": "3.4.0",
+    "turbo_picard_version": "0.1.8",
+    "turbo_picard_commit": "replace-with-40-character-commit",
+    "container_digest": "sha256:replace-with-64-character-digest"
+  },
+  "host": {
+    "os": "Linux",
+    "architecture": "x86_64",
+    "cpu_model": "replace-with-model",
+    "logical_cpus": 0,
+    "memory_bytes": 0,
+    "storage": "replace-with-device-and-filesystem"
+  },
+  "commands": [
+    {
+      "name": "MarkDuplicates",
+      "arguments_sha256": "replace-with-64-character-sha256",
+      "compatibility_level": "B",
+      "comparator": "duplicate flags/tags plus stable metrics table",
+      "parity": "PASS",
+      "repeats": 5,
+      "wall_seconds": {
+        "picard_median": 0.0,
+        "turbo_picard_median": 0.0,
+        "turbo_picard_p95": 0.0
+      },
+      "peak_rss_bytes": {
+        "picard_max": 0,
+        "turbo_picard_max": 0
+      },
+      "temporary_disk_bytes": {
+        "picard_max": 0,
+        "turbo_picard_max": 0
+      },
+      "known_differences": []
+    }
+  ],
+  "independent_reproduction": {
+    "status": "not_run",
+    "reviewer": null,
+    "host_profile": null,
+    "evidence_url": null
+  }
+}
+
