@@ -184,6 +184,13 @@ sources, command scopes, and input SHA-256 hashes. Current release-candidate
 dataset IDs are `gatk-na12878-mito`, `picard-snvq`, and
 `gatk-na12878-mito-cram`.
 
+
+## Production adoption
+
+The project now publishes an explicit [production-readiness gate](docs/production-readiness.md), a [compatibility contract](docs/compatibility-contract.md), and a [production-scale benchmark evidence format](benchmarks/production/README.md). Use these before making a workflow-wide switch. The opt-in Nextflow process candidate is documented under [packaging/nf-core](packaging/nf-core/README.md).
+
+A command-level speedup is not a universal replacement claim. Keep upstream Picard available until representative BAM/CRAM evidence, output parity, failure behaviour, and independent review pass for the exact workflow.
+
 ## Packaging Status
 
 The live PyPI release is `0.1.8`. It publishes Linux x86_64 and macOS Apple
