@@ -108,6 +108,8 @@ Start here
    faq
    adoption
    parity
+   compatibility-contract
+   production-readiness
    fallback
    commands
    benchmarks
