@@ -1,9 +1,17 @@
+import importlib.util
 import json
 import tempfile
 import unittest
 from pathlib import Path
 
-from validate_production_manifest import ManifestError, validate
+
+MODULE_PATH = Path(__file__).with_name("validate_production_manifest.py")
+SPEC = importlib.util.spec_from_file_location("validate_production_manifest", MODULE_PATH)
+validate_production_manifest = importlib.util.module_from_spec(SPEC)
+assert SPEC.loader is not None
+SPEC.loader.exec_module(validate_production_manifest)
+ManifestError = validate_production_manifest.ManifestError
+validate = validate_production_manifest.validate
 
 
 def valid_manifest():
