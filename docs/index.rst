@@ -110,6 +110,7 @@ Start here
    parity
    compatibility-contract
    production-readiness
+   algorithmic-roadmap
    fallback
    commands
    benchmarks
