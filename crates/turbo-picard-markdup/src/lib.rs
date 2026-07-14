@@ -2245,6 +2245,28 @@ mod tests {
     }
 
     #[test]
+    fn optical_duplicate_indices_count_each_read_name_once() {
+        let records = [
+            record_with_name_and_flags(b"INST:RUN:FLOW:1:1:100:100", 0x1),
+            record_with_name_and_flags(b"INST:RUN:FLOW:1:1:110:110", 0x1),
+            record_with_name_and_flags(b"INST:RUN:FLOW:1:1:110:110", 0x1),
+            record_with_name_and_flags(b"INST:RUN:FLOW:1:1:1000:1000", 0x1),
+        ];
+        let mut config = sam_markdup_config();
+        config.optical_duplicate_pixel_distance = Some(100);
+
+        let optical = optical_duplicate_record_indices(
+            &[0, 1, 2, 3],
+            &records,
+            records[0].qname(),
+            &config,
+        );
+
+        assert_eq!(optical.read_names, 1);
+        assert_eq!(optical.record_indices, vec![1, 2]);
+    }
+
+    #[test]
     fn add_duplicate_set_member_tags_uses_unique_read_names_for_duplicate_set_size() {
         let mut records = [
             record_with_name_and_flags(b"dup-a", 0x1),
