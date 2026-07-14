@@ -128,10 +128,17 @@ def parse_key_values(text):
     return values
 
 
-def run_benchmark(label, script, reads, repeats):
+def run_benchmark(label, script, reads, repeats, extra_args=()):
     rows = []
     for _ in range(repeats):
-        command = ["python3", str(ROOT / "tools" / script), "--reads", str(reads), "--skip-build"]
+        command = [
+            "python3",
+            str(ROOT / "tools" / script),
+            "--reads",
+            str(reads),
+            "--skip-build",
+            *extra_args,
+        ]
         output, profile = run_profiled(command)
         row = parse_key_values(output)
         row["label"] = label
@@ -205,6 +212,12 @@ def main():
     parser.add_argument("--buildbamindex-reads", type=int, default=50_000)
     parser.add_argument("--insertsize-reads", type=int, default=100_000)
     parser.add_argument("--markduplicates-reads", type=int, default=50_000)
+    parser.add_argument(
+        "--markduplicates-family-size",
+        type=int,
+        default=4,
+        help="duplicate-family size for the MarkDuplicates BAM benchmark",
+    )
     parser.add_argument("--meanqualitybycycle-reads", type=int, default=100_000)
     parser.add_argument("--mergesamfiles-reads", type=int, default=50_000)
     parser.add_argument("--addorreplacereadgroups-reads", type=int, default=100_000)
@@ -250,6 +263,8 @@ def main():
 
     if args.repeats < 1:
         raise SystemExit("--repeats must be >= 1")
+    if args.markduplicates_family_size < 1:
+        raise SystemExit("--markduplicates-family-size must be >= 1")
     if not args.skip_build:
         run(["cargo", "build", "--release", "-p", "turbo-picard-cli", "--bin", "picard"])
 
@@ -270,7 +285,18 @@ def main():
         )
 
     results = [
-        run_benchmark(label, script, getattr(args, reads_attr), args.repeats)
+        run_benchmark(
+            label,
+            script,
+            getattr(args, reads_attr),
+            args.repeats,
+            (
+                "--duplicate-family-size",
+                str(args.markduplicates_family_size),
+            )
+            if label == "markduplicates"
+            else (),
+        )
         for label, script, reads_attr in BENCHMARK_SPECS
         if not selected_labels or label in selected_labels
     ]
