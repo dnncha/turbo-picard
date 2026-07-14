@@ -1086,7 +1086,10 @@ fn optical_duplicate_record_indices(
         };
     };
     let pixel_distance = i64::from(config.optical_duplicate_pixel_distance.unwrap_or(100));
-    let mut optical_names = Vec::<&[u8]>::new();
+    // Borrow qnames directly from the immutable record buffer. A hash set keeps
+    // membership O(1) for large duplicate families and avoids allocating one
+    // Vec<u8> per optical read name.
+    let mut optical_names = HashSet::<&[u8]>::default();
     let mut record_indices = Vec::<usize>::new();
 
     for index in group.iter().copied() {
@@ -1094,7 +1097,7 @@ fn optical_duplicate_record_indices(
         if name == representative_name {
             continue;
         }
-        if optical_names.contains(&name) {
+        if optical_names.contains(name) {
             record_indices.push(index);
             continue;
         }
@@ -1102,7 +1105,7 @@ fn optical_duplicate_record_indices(
             continue;
         };
         if representative_location.is_within(&location, pixel_distance) {
-            optical_names.push(name);
+            optical_names.insert(name);
             record_indices.push(index);
         }
     }
@@ -1160,9 +1163,9 @@ fn add_duplicate_set_member_tags(
         return Ok(());
     }
 
-    let mut member_names = HashSet::<Vec<u8>>::default();
+    let mut member_names = HashSet::<&[u8]>::default();
     for index in group.iter().copied() {
-        member_names.insert(records[index].qname().to_vec());
+        member_names.insert(records[index].qname());
     }
     if member_names.len() < 2 {
         return Ok(());
@@ -1702,19 +1705,22 @@ fn paired_duplicate_set_size(group: &[usize], records: &[bam::Record]) -> Option
     {
         return None;
     }
-    let mut names = HashSet::<Vec<u8>>::default();
+    let mut names = HashSet::<&[u8]>::default();
     for index in group.iter().copied() {
-        names.insert(records[index].qname().to_vec());
+        names.insert(records[index].qname());
     }
     u64::try_from(names.len()).ok().filter(|size| *size > 0)
 }
 
 fn best_duplicate_representative_index(group: &[usize], records: &[bam::Record]) -> usize {
-    let mut scores_by_name = HashMap::<Vec<u8>, (usize, u64)>::default();
+    // The records outlive this map, so use borrowed qname slices. This keeps
+    // representative selection allocation-free while preserving Picard's
+    // stable first-record tie break.
+    let mut scores_by_name = HashMap::<&[u8], (usize, u64)>::default();
 
     for index in group.iter().copied() {
         let score = quality_score(&records[index]);
-        let name = records[index].qname().to_vec();
+        let name = records[index].qname();
         let entry = scores_by_name.entry(name).or_insert((index, 0));
         entry.1 += score;
     }
