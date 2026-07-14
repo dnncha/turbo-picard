@@ -48,7 +48,7 @@ def write_sam(path, reads, duplicate_family_size):
             group = index // duplicate_family_size
             pos = 1 + group * 2
             member = index % duplicate_family_size
-            name = f"INST:RUN:FLOW:1:{group + 1}:{member % 10000}:{member // 10000}"
+            name = f"INST:RUN:FLOW:1:{group + 1}:{member % 101}:{member // 101}"
             handle.write(
                 f"{name}\t0\tchr1\t{pos}\t60\t100M\t*\t0\t0\t{sequence}\t{qualities}\n"
             )
