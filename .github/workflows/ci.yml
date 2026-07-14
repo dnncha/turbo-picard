@@ -38,6 +38,7 @@ jobs:
         run: |
           python3 -m pip install PyYAML==6.0.3
           python3 -m unittest tools/test_compare_markduplicates.py
+          python3 -m unittest tools/test_bench_markduplicates_synthetic.py
           python3 -m unittest tools/test_bioconda_release_preflight.py
           python3 -m unittest tools/test_audit_real_data.py
           python3 -m unittest tools/test_parity_compare.py
@@ -45,6 +46,7 @@ jobs:
           python3 -m unittest tools/test_prepare_bioconda_release.py
           python3 -m unittest tools/test_render_benchmark_assets.py
           python3 -m unittest tools/test_update_real_data_manifest.py
+          python3 -m unittest tools/test_validate_production_manifest.py
           python3 -m unittest tools/test_verify_benchmark_log_evidence.py
           python3 -m unittest tools/test_verify_benchmark_suite_coverage.py
           python3 -m unittest tools/test_verify_benchmark_thresholds.py
@@ -76,6 +78,7 @@ jobs:
             tools/bench_bedtointervallist.py \
             tools/bench_markduplicates.py \
             tools/bench_markduplicates_synthetic.py \
+            tools/validate_production_manifest.py \
             tools/bench_buildbamindex.py \
             tools/bench_cleansam.py \
             tools/bench_collectbasedistributionbycycle.py \
@@ -129,11 +132,13 @@ jobs:
             tools/verify_site_links.py \
             tools/verify_workflow_starters.py \
             tools/test_compare_markduplicates.py \
+            tools/test_bench_markduplicates_synthetic.py \
             tools/test_bioconda_release_preflight.py \
             tools/test_compare_real_data.py \
             tools/test_prepare_bioconda_release.py \
             tools/test_render_benchmark_assets.py \
             tools/test_update_real_data_manifest.py \
+            tools/test_validate_production_manifest.py \
             tools/test_verify_benchmark_log_evidence.py \
             tools/test_verify_benchmark_suite_coverage.py \
             tools/test_verify_benchmark_thresholds.py \
