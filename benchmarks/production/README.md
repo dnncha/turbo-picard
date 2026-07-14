@@ -39,3 +39,8 @@ bundle beside the manifest, then run:
 If Turbo-Picard loses a profile, publish the loss and the next bottleneck.
 Negative results are useful compatibility and product evidence.
 
+For production-scale MarkDuplicates comparisons against Picard, samtools and
+FastDup, use the auditable runner documented in
+`benchmarks/markduplicates-competitors/README.md`. It preserves failed and
+unavailable competitors, raw resource logs, executable hashes and streaming
+parity evidence instead of emitting an unsupported headline speedup.
