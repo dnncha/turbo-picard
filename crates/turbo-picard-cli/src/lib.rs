@@ -13050,8 +13050,7 @@ impl WgsMetricsSummary {
 
     #[inline]
     fn filtered_depth(&self, reference_index: usize) -> u16 {
-        self.active_depths
-            [self.active_depth_offset + reference_index - self.active_depth_base]
+        self.active_depths[self.active_depth_offset + reference_index - self.active_depth_base]
     }
 
     #[cfg(test)]
@@ -13306,8 +13305,7 @@ impl WgsMetricsSummary {
                             locus_mask.as_deref(),
                             reference_index,
                             contig_length,
-                        )
-                        {
+                        ) {
                             continue;
                         }
                         self.total_aligned_bases += 1;
