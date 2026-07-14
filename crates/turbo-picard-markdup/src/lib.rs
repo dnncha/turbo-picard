@@ -7,6 +7,7 @@ use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
 use std::fs;
+use std::num::NonZeroU32;
 use std::path::Path;
 use thiserror::Error;
 use turbo_picard_core::hts_io;
@@ -14,7 +15,9 @@ use turbo_picard_core::markdup_config::MarkDuplicatesConfig;
 
 const DUPLICATE_FLAG: u16 = 0x400;
 const UNMAPPED_FLAG: u16 = 0x4;
+const UNCOMPUTED_QUALITY_SCORE: u64 = u64::MAX;
 type LibraryId = u32;
+type BarcodeId = NonZeroU32;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MarkDuplicatesSummary {
@@ -73,6 +76,64 @@ struct BamDuplicateKey {
     template_length: i64,
     reverse_strand: bool,
     barcode: Option<Vec<u8>>,
+}
+
+/// The immutable subset of a BAM record needed by duplicate decisions.
+///
+/// Keeping this separate from `bam::Record` is the foundation for the bounded
+/// two-pass engine: the first pass can eventually retain these compact read
+/// ends while the second pass streams records through the resulting mark plan.
+/// It also ensures that CIGARs, qualities and barcode tags are decoded only
+/// once in the current in-memory implementation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ReadEndMetadata {
+    unclipped_position: i64,
+    quality_score: u64,
+    library_id: LibraryId,
+    barcode_id: Option<BarcodeId>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct ReadEndDuplicateKey {
+    position: i64,
+    mate_position: i64,
+    library_id: LibraryId,
+    reference_id: i32,
+    mate_reference_id: i32,
+    barcode_id: Option<BarcodeId>,
+    orientation: u8,
+    reverse_strand: bool,
+}
+
+#[derive(Debug, Default)]
+struct BarcodeRegistry {
+    by_value: HashMap<Vec<u8>, BarcodeId>,
+}
+
+impl BarcodeRegistry {
+    fn intern(
+        &mut self,
+        barcode: Option<Vec<u8>>,
+    ) -> Result<Option<BarcodeId>, MarkDuplicatesError> {
+        let Some(barcode) = barcode else {
+            return Ok(None);
+        };
+        if let Some(id) = self.by_value.get(barcode.as_slice()) {
+            return Ok(Some(*id));
+        }
+        let id = u32::try_from(self.by_value.len())
+            .ok()
+            .and_then(|value| value.checked_add(1))
+            .and_then(BarcodeId::new)
+            .ok_or_else(|| {
+                MarkDuplicatesError::Operation(
+                    "more than 4,294,967,294 distinct molecular barcodes are not supported"
+                        .to_string(),
+                )
+            })?;
+        self.by_value.insert(barcode, id);
+        Ok(Some(id))
+    }
 }
 
 pub fn run(config: &MarkDuplicatesConfig) -> Result<MarkDuplicatesSummary, MarkDuplicatesError> {
@@ -439,8 +500,9 @@ fn run_hts_container(
     }
     let mut writer = open_markdup_writer(config, &config.output, &header)?;
     let mut records = Vec::new();
-    let mut record_libraries = Vec::new();
+    let mut read_ends = Vec::new();
     let mut eligible_indices = Vec::new();
+    let mut barcode_registry = BarcodeRegistry::default();
     let mut summary = MarkDuplicatesSummary {
         library,
         unpaired_reads_examined: 0,
@@ -457,10 +519,12 @@ fn run_hts_container(
     read_bam_records(
         &mut reader,
         &mut records,
-        &mut record_libraries,
+        &mut read_ends,
         &mut eligible_indices,
         &first_library_lookup,
         &mut library_registry,
+        &mut barcode_registry,
+        config,
         &mut summary,
     )?;
     for input in config.inputs.iter().skip(1) {
@@ -469,15 +533,17 @@ fn run_hts_container(
         read_bam_records(
             &mut reader,
             &mut records,
-            &mut record_libraries,
+            &mut read_ends,
             &mut eligible_indices,
             &input_library_lookup,
             &mut library_registry,
+            &mut barcode_registry,
+            config,
             &mut summary,
         )?;
     }
 
-    let duplicate_groups = duplicate_groups(&records, &record_libraries, &eligible_indices, config);
+    let duplicate_groups = duplicate_groups(&records, &read_ends, &eligible_indices);
     let mut optical_duplicate_records = vec![false; records.len()];
 
     for group in duplicate_groups.values() {
@@ -490,7 +556,7 @@ fn run_hts_container(
                 add_duplicate_set(&mut summary, set_size, Some(set_size));
                 if let Some(index) = group.first() {
                     add_duplicate_set(
-                        library_registry.summary_mut(record_libraries[*index]),
+                        library_registry.summary_mut(read_ends[*index].library_id),
                         set_size,
                         Some(set_size),
                     );
@@ -499,7 +565,8 @@ fn run_hts_container(
             continue;
         }
 
-        let representative_index = best_duplicate_representative_index(group, &records);
+        let representative_index =
+            best_duplicate_representative_index(group, &records, &mut read_ends);
         let representative_name = records[representative_index].qname().to_vec();
         let optical_duplicates = optical_duplicate_record_indices(
             group,
@@ -512,14 +579,14 @@ fn run_hts_container(
             let non_optical_size = (optical_names < set_size).then_some(set_size - optical_names);
             add_duplicate_set(&mut summary, set_size, non_optical_size);
             if let Some(index) = group.first() {
-                let library_summary = library_registry.summary_mut(record_libraries[*index]);
+                let library_summary = library_registry.summary_mut(read_ends[*index].library_id);
                 add_duplicate_set(library_summary, set_size, non_optical_size);
             }
         }
         summary.read_pair_optical_duplicates += optical_duplicates.read_names as u64;
         if let Some(index) = group.first() {
             library_registry
-                .summary_mut(record_libraries[*index])
+                .summary_mut(read_ends[*index].library_id)
                 .read_pair_optical_duplicates += optical_duplicates.read_names as u64;
         }
         for index in optical_duplicates.record_indices {
@@ -537,12 +604,12 @@ fn run_hts_container(
             if duplicate_candidate_is_pair(flag) {
                 summary.duplicate_pair_records += 1;
                 library_registry
-                    .summary_mut(record_libraries[index])
+                    .summary_mut(read_ends[index].library_id)
                     .duplicate_pair_records += 1;
             } else {
                 summary.unpaired_duplicate_records += 1;
                 library_registry
-                    .summary_mut(record_libraries[index])
+                    .summary_mut(read_ends[index].library_id)
                     .unpaired_duplicate_records += 1;
             }
             records[index].set_flags(flag | DUPLICATE_FLAG);
@@ -550,9 +617,8 @@ fn run_hts_container(
     }
     mark_fragment_duplicate_groups(
         &mut records,
-        &record_libraries,
+        &mut read_ends,
         &eligible_indices,
-        config,
         &mut summary,
         &mut library_registry,
     );
@@ -923,10 +989,12 @@ fn fast_single_duplicate_key(record: &FastPairRecord) -> BamDuplicateKey {
 fn read_bam_records<R: bam::Read>(
     reader: &mut R,
     records: &mut Vec<bam::Record>,
-    record_libraries: &mut Vec<LibraryId>,
+    read_ends: &mut Vec<ReadEndMetadata>,
     eligible_indices: &mut Vec<usize>,
     library_lookup: &LibraryLookup,
     library_registry: &mut LibraryRegistry,
+    barcode_registry: &mut BarcodeRegistry,
+    config: &MarkDuplicatesConfig,
     summary: &mut MarkDuplicatesSummary,
 ) -> Result<(), MarkDuplicatesError> {
     for result in reader.records() {
@@ -941,7 +1009,12 @@ fn read_bam_records<R: bam::Read>(
         if flag & UNMAPPED_FLAG != 0 {
             summary.unmapped_records += 1;
             library_registry.summary_mut(library_id).unmapped_records += 1;
-            record_libraries.push(library_id);
+            read_ends.push(ReadEndMetadata {
+                library_id,
+                unclipped_position: 0,
+                quality_score: UNCOMPUTED_QUALITY_SCORE,
+                barcode_id: None,
+            });
             records.push(record);
             continue;
         }
@@ -950,7 +1023,12 @@ fn read_bam_records<R: bam::Read>(
             library_registry
                 .summary_mut(library_id)
                 .secondary_or_supplementary_records += 1;
-            record_libraries.push(library_id);
+            read_ends.push(ReadEndMetadata {
+                library_id,
+                unclipped_position: 0,
+                quality_score: UNCOMPUTED_QUALITY_SCORE,
+                barcode_id: None,
+            });
             records.push(record);
             continue;
         }
@@ -970,8 +1048,14 @@ fn read_bam_records<R: bam::Read>(
                 .summary_mut(library_id)
                 .unpaired_reads_examined += 1;
         }
+        let read_end = ReadEndMetadata {
+            library_id,
+            unclipped_position: unclipped_record_position(&record),
+            quality_score: UNCOMPUTED_QUALITY_SCORE,
+            barcode_id: barcode_registry.intern(bam_barcode(&record, config))?,
+        };
         eligible_indices.push(record_index);
-        record_libraries.push(library_id);
+        read_ends.push(read_end);
         records.push(record);
     }
 
@@ -1299,26 +1383,26 @@ fn parse_sam_integer(
 
 fn duplicate_groups(
     records: &[bam::Record],
-    record_libraries: &[LibraryId],
+    read_ends: &[ReadEndMetadata],
     eligible_indices: &[usize],
-    config: &MarkDuplicatesConfig,
-) -> HashMap<BamDuplicateKey, Vec<usize>> {
+) -> HashMap<ReadEndDuplicateKey, Vec<usize>> {
     // Qnames live in the immutable record buffer for the duration of grouping.
     // Borrow them instead of allocating a Vec<u8> for every pending mate.
     let mut paired_by_name = HashMap::<&[u8], usize>::default();
-    let mut duplicate_groups = HashMap::<BamDuplicateKey, Vec<usize>>::default();
+    let mut duplicate_groups = HashMap::<ReadEndDuplicateKey, Vec<usize>>::default();
 
     for index in eligible_indices.iter().copied() {
         let record = &records[index];
         if duplicate_candidate_is_pair(record.flags()) {
             if let Some(first_index) = paired_by_name.remove(record.qname()) {
                 let indices = [first_index, index];
-                let barcode = first_barcode(records, &indices, config);
-                let key = pair_duplicate_key_bam(
+                let barcode_id = indices.iter().find_map(|index| read_ends[*index].barcode_id);
+                let key = pair_duplicate_key(
                     &records[first_index],
                     record,
-                    record_libraries[first_index],
-                    barcode,
+                    &read_ends[first_index],
+                    &read_ends[index],
+                    barcode_id,
                 );
                 duplicate_groups.entry(key).or_default().extend(indices);
             } else {
@@ -1332,16 +1416,14 @@ fn duplicate_groups(
 
 fn mark_fragment_duplicate_groups(
     records: &mut [bam::Record],
-    record_libraries: &[LibraryId],
+    read_ends: &mut [ReadEndMetadata],
     eligible_indices: &[usize],
-    config: &MarkDuplicatesConfig,
     summary: &mut MarkDuplicatesSummary,
     library_registry: &mut LibraryRegistry,
 ) {
-    let mut fragment_groups = HashMap::<BamDuplicateKey, Vec<usize>>::default();
+    let mut fragment_groups = HashMap::<ReadEndDuplicateKey, Vec<usize>>::default();
     for index in eligible_indices.iter().copied() {
-        let barcode = bam_barcode(&records[index], config);
-        let key = fragment_duplicate_key_bam(&records[index], record_libraries[index], &barcode);
+        let key = fragment_duplicate_key(&records[index], &read_ends[index]);
         fragment_groups.entry(key).or_default().push(index);
     }
 
@@ -1361,7 +1443,7 @@ fn mark_fragment_duplicate_groups(
                 mark_unpaired_duplicate_record(
                     index,
                     records,
-                    record_libraries,
+                    read_ends,
                     summary,
                     library_registry,
                 );
@@ -1369,7 +1451,8 @@ fn mark_fragment_duplicate_groups(
             continue;
         }
 
-        let representative_index = best_duplicate_representative_index(group, records);
+        let representative_index =
+            best_duplicate_representative_index(group, records, read_ends);
         let representative_name = records[representative_index].qname().to_vec();
         for index in group.iter().copied() {
             if records[index].qname() == representative_name.as_slice() {
@@ -1378,7 +1461,7 @@ fn mark_fragment_duplicate_groups(
             mark_unpaired_duplicate_record(
                 index,
                 records,
-                record_libraries,
+                read_ends,
                 summary,
                 library_registry,
             );
@@ -1389,7 +1472,7 @@ fn mark_fragment_duplicate_groups(
 fn mark_unpaired_duplicate_record(
     index: usize,
     records: &mut [bam::Record],
-    record_libraries: &[LibraryId],
+    read_ends: &[ReadEndMetadata],
     summary: &mut MarkDuplicatesSummary,
     library_registry: &mut LibraryRegistry,
 ) {
@@ -1399,7 +1482,7 @@ fn mark_unpaired_duplicate_record(
     }
     summary.unpaired_duplicate_records += 1;
     library_registry
-        .summary_mut(record_libraries[index])
+        .summary_mut(read_ends[index].library_id)
         .unpaired_duplicate_records += 1;
     records[index].set_flags(flag | DUPLICATE_FLAG);
 }
@@ -1428,16 +1511,6 @@ fn sam_tag_value(fields: &[String], tag: &str) -> Option<Vec<u8>> {
             .strip_prefix(&prefix)
             .map(|value| value.as_bytes().to_vec())
     })
-}
-
-fn first_barcode(
-    records: &[bam::Record],
-    indices: &[usize],
-    config: &MarkDuplicatesConfig,
-) -> Option<Vec<u8>> {
-    indices
-        .iter()
-        .find_map(|index| bam_barcode(&records[*index], config))
 }
 
 fn bam_barcode(record: &bam::Record, config: &MarkDuplicatesConfig) -> Option<Vec<u8>> {
@@ -1504,53 +1577,53 @@ fn single_duplicate_key_bam(
     }
 }
 
-fn fragment_duplicate_key_bam(
+fn fragment_duplicate_key(
     record: &bam::Record,
-    library_id: LibraryId,
-    barcode: &Option<Vec<u8>>,
-) -> BamDuplicateKey {
+    read_end: &ReadEndMetadata,
+) -> ReadEndDuplicateKey {
     let reverse_strand = record.flags() & 0x10 != 0;
-    BamDuplicateKey {
-        library_id,
+    ReadEndDuplicateKey {
+        library_id: read_end.library_id,
         reference_id: record.tid(),
-        position: unclipped_record_position(record),
+        position: read_end.unclipped_position,
         mate_reference_id: -1,
         mate_position: -1,
-        template_length: 0,
+        orientation: 0,
         reverse_strand,
-        barcode: barcode.clone(),
+        barcode_id: read_end.barcode_id,
     }
 }
 
-fn pair_duplicate_key_bam(
+fn pair_duplicate_key(
     first: &bam::Record,
     second: &bam::Record,
-    library_id: LibraryId,
-    barcode: Option<Vec<u8>>,
-) -> BamDuplicateKey {
-    let first_position = unclipped_record_position(first);
-    let second_position = unclipped_record_position(second);
+    first_read_end: &ReadEndMetadata,
+    second_read_end: &ReadEndMetadata,
+    barcode_id: Option<BarcodeId>,
+) -> ReadEndDuplicateKey {
+    let first_position = first_read_end.unclipped_position;
+    let second_position = second_read_end.unclipped_position;
     let (left, right) = if (first.tid(), first_position) <= (second.tid(), second_position) {
-        (first, second)
+        ((first, first_read_end), (second, second_read_end))
     } else {
-        (second, first)
+        ((second, second_read_end), (first, first_read_end))
     };
 
-    BamDuplicateKey {
-        library_id,
-        reference_id: left.tid(),
-        position: unclipped_record_position(left),
-        mate_reference_id: right.tid(),
-        mate_position: unclipped_record_position(right),
-        template_length: pair_orientation_code(left, right),
+    ReadEndDuplicateKey {
+        library_id: first_read_end.library_id,
+        reference_id: left.0.tid(),
+        position: left.1.unclipped_position,
+        mate_reference_id: right.0.tid(),
+        mate_position: right.1.unclipped_position,
+        orientation: pair_orientation_code(left.0, right.0),
         reverse_strand: false,
-        barcode,
+        barcode_id,
     }
 }
 
-fn pair_orientation_code(left: &bam::Record, right: &bam::Record) -> i64 {
-    let left_reverse = i64::from(left.flags() & 0x10 != 0);
-    let right_reverse = i64::from(right.flags() & 0x10 != 0);
+fn pair_orientation_code(left: &bam::Record, right: &bam::Record) -> u8 {
+    let left_reverse = u8::from(left.flags() & 0x10 != 0);
+    let right_reverse = u8::from(right.flags() & 0x10 != 0);
     (left_reverse << 1) | right_reverse
 }
 
@@ -1714,14 +1787,24 @@ fn paired_duplicate_set_size(group: &[usize], records: &[bam::Record]) -> Option
     u64::try_from(names.len()).ok().filter(|size| *size > 0)
 }
 
-fn best_duplicate_representative_index(group: &[usize], records: &[bam::Record]) -> usize {
+fn best_duplicate_representative_index(
+    group: &[usize],
+    records: &[bam::Record],
+    read_ends: &mut [ReadEndMetadata],
+) -> usize {
     // The records outlive this map, so use borrowed qname slices. This keeps
     // representative selection allocation-free while preserving Picard's
     // stable first-record tie break.
     let mut scores_by_name = HashMap::<&[u8], (usize, u64)>::default();
 
     for index in group.iter().copied() {
-        let score = quality_score(&records[index]);
+        let score = if read_ends[index].quality_score == UNCOMPUTED_QUALITY_SCORE {
+            let score = quality_score(&records[index]);
+            read_ends[index].quality_score = score;
+            score
+        } else {
+            read_ends[index].quality_score
+        };
         let name = records[index].qname();
         let entry = scores_by_name.entry(name).or_insert((index, 0));
         entry.1 += score;
@@ -2184,6 +2267,18 @@ mod tests {
         record
     }
 
+    fn read_ends_for_records(records: &[bam::Record]) -> Vec<ReadEndMetadata> {
+        records
+            .iter()
+            .map(|record| ReadEndMetadata {
+                library_id: 0,
+                unclipped_position: unclipped_record_position(record),
+                quality_score: quality_score(record),
+                barcode_id: None,
+            })
+            .collect()
+    }
+
     #[test]
     fn best_duplicate_representative_index_aggregates_score_by_read_name() {
         let records = [
@@ -2193,7 +2288,9 @@ mod tests {
             record_with_name_and_qualities(b"dup-c", &[5], 0),
         ];
 
-        let representative_index = best_duplicate_representative_index(&[0, 1, 2, 3], &records);
+        let mut read_ends = read_ends_for_records(&records);
+        let representative_index =
+            best_duplicate_representative_index(&[0, 1, 2, 3], &records, &mut read_ends);
         assert_eq!(representative_index, 0);
     }
 
@@ -2205,8 +2302,53 @@ mod tests {
             record_with_name_and_qualities(b"dup-c", &[10], 0),
         ];
 
-        let representative_index = best_duplicate_representative_index(&[0, 1, 2], &records);
+        let mut read_ends = read_ends_for_records(&records);
+        let representative_index =
+            best_duplicate_representative_index(&[0, 1, 2], &records, &mut read_ends);
         assert_eq!(representative_index, 0);
+    }
+
+    #[test]
+    fn barcode_registry_interns_equal_values_without_collisions() {
+        let mut registry = BarcodeRegistry::default();
+        let first = registry
+            .intern(Some(b"ACGT".to_vec()))
+            .expect("first barcode");
+        let equal = registry
+            .intern(Some(b"ACGT".to_vec()))
+            .expect("equal barcode");
+        let distinct = registry
+            .intern(Some(b"TGCA".to_vec()))
+            .expect("distinct barcode");
+
+        assert_eq!(first, equal);
+        assert_ne!(first, distinct);
+        assert_eq!(registry.by_value.len(), 2);
+        assert_eq!(registry.intern(None).expect("missing barcode"), None);
+    }
+
+    #[test]
+    fn read_end_metadata_stays_compact() {
+        assert!(std::mem::size_of::<ReadEndMetadata>() <= 24);
+        assert!(std::mem::size_of::<ReadEndDuplicateKey>() <= 40);
+    }
+
+    #[test]
+    fn representative_selection_uses_cached_quality_score() {
+        let records = [
+            record_with_name_and_qualities(b"first", &[40], 0),
+            record_with_name_and_qualities(b"second", &[10], 0),
+        ];
+        let mut read_ends = read_ends_for_records(&records);
+        // The mark-plan consumes cached metadata; it must not rescan the BAM
+        // quality payload while grouping duplicate families.
+        read_ends[0].quality_score = 1;
+        read_ends[1].quality_score = 100;
+
+        assert_eq!(
+            best_duplicate_representative_index(&[0, 1], &records, &mut read_ends),
+            1
+        );
     }
 
     #[test]
