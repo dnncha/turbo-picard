@@ -1303,7 +1303,9 @@ fn duplicate_groups(
     eligible_indices: &[usize],
     config: &MarkDuplicatesConfig,
 ) -> HashMap<BamDuplicateKey, Vec<usize>> {
-    let mut paired_by_name = HashMap::<Vec<u8>, usize>::default();
+    // Qnames live in the immutable record buffer for the duration of grouping.
+    // Borrow them instead of allocating a Vec<u8> for every pending mate.
+    let mut paired_by_name = HashMap::<&[u8], usize>::default();
     let mut duplicate_groups = HashMap::<BamDuplicateKey, Vec<usize>>::default();
 
     for index in eligible_indices.iter().copied() {
@@ -1320,7 +1322,7 @@ fn duplicate_groups(
                 );
                 duplicate_groups.entry(key).or_default().extend(indices);
             } else {
-                paired_by_name.insert(record.qname().to_vec(), index);
+                paired_by_name.insert(record.qname(), index);
             }
         }
     }
