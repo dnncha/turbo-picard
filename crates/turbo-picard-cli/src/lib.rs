@@ -12873,7 +12873,15 @@ struct WgsMetricsSummary {
     coverage_histogram: Vec<u64>,
     active_contig: Option<String>,
     active_included: Option<Arc<[bool]>>,
+    /// Depths that can still be touched by a future coordinate-sorted record.
+    ///
+    /// Positions before `active_depth_base` are already final and are discarded.
+    /// This keeps memory proportional to the alignment window instead of the
+    /// longest reference contig (about 500 MiB for human chr1 with `u16`).
     active_depths: Vec<u16>,
+    active_depth_base: usize,
+    active_depth_offset: usize,
+    last_alignment_start: Option<usize>,
     processed_contigs: HashSet<String>,
     mate_buffer: WgsMateBuffer,
 }
@@ -12928,6 +12936,9 @@ impl WgsMetricsSummary {
             active_contig: None,
             active_included: None,
             active_depths: Vec::new(),
+            active_depth_base: 0,
+            active_depth_offset: 0,
+            last_alignment_start: None,
             processed_contigs: HashSet::new(),
             mate_buffer: WgsMateBuffer::default(),
         }
@@ -12940,6 +12951,9 @@ impl WgsMetricsSummary {
         self.active_included = None;
         self.mate_buffer.clear();
         self.active_depths.clear();
+        self.active_depth_base = 0;
+        self.active_depth_offset = 0;
+        self.last_alignment_start = None;
     }
 
     fn ensure_contig(&mut self, contig: &str) -> Result<(), String> {
@@ -12954,6 +12968,9 @@ impl WgsMetricsSummary {
         if let Some(previous) = self.active_contig.take() {
             self.processed_contigs.insert(previous);
             self.active_depths.clear();
+            self.active_depth_base = 0;
+            self.active_depth_offset = 0;
+            self.last_alignment_start = None;
             self.active_included = None;
             self.mate_buffer.clear();
         }
@@ -12962,10 +12979,86 @@ impl WgsMetricsSummary {
                 "CollectWgsMetrics reference missing contig {contig}"
             ));
         };
-        self.active_depths.resize(metadata.length, 0);
+        self.active_depths.clear();
+        self.active_depth_base = 0;
+        self.active_depth_offset = 0;
+        self.last_alignment_start = None;
         self.active_contig = Some(contig.to_string());
         self.active_included = metadata.included.clone();
         Ok(())
+    }
+
+    /// Advance the left edge of the live depth window to the next alignment
+    /// start. Coordinate sorting guarantees that discarded loci can never be
+    /// observed again.
+    fn advance_depth_window(&mut self, alignment_start: usize) -> Result<(), String> {
+        if let Some(previous) = self.last_alignment_start {
+            if alignment_start < previous {
+                return Err(format!(
+                    "CollectWgsMetrics alignment is not coordinate-sorted: position {alignment_start} follows {previous}"
+                ));
+            }
+        }
+        self.last_alignment_start = Some(alignment_start);
+        if alignment_start <= self.active_depth_base {
+            return Ok(());
+        }
+
+        let live_len = self
+            .active_depths
+            .len()
+            .saturating_sub(self.active_depth_offset);
+        let discard = (alignment_start - self.active_depth_base).min(live_len);
+        self.active_depth_offset += discard;
+        self.active_depth_base = alignment_start;
+
+        // Preserve direct Vec indexing in the per-base hot loop. Compact only
+        // after a sizeable prefix has become dead, making the copy amortized
+        // while bounding retained storage to the live window plus 64K loci.
+        const COMPACT_AFTER: usize = 64 * 1024;
+        if self.active_depth_offset == self.active_depths.len() {
+            self.active_depths.clear();
+            self.active_depth_offset = 0;
+        } else if self.active_depth_offset >= COMPACT_AFTER
+            && self.active_depth_offset >= self.active_depths.len() / 2
+        {
+            let live_len = self.active_depths.len() - self.active_depth_offset;
+            self.active_depths
+                .copy_within(self.active_depth_offset.., 0);
+            self.active_depths.truncate(live_len);
+            self.active_depth_offset = 0;
+        }
+        Ok(())
+    }
+
+    #[inline]
+    fn ensure_depth_through(
+        &mut self,
+        absolute_end: usize,
+        contig_length: usize,
+    ) -> Result<(), String> {
+        if absolute_end > contig_length {
+            return Err("CollectWgsMetrics alignment extends beyond reference".to_string());
+        }
+        let required =
+            self.active_depth_offset + absolute_end.saturating_sub(self.active_depth_base);
+        if required > self.active_depths.len() {
+            self.active_depths.resize(required, 0);
+        }
+        Ok(())
+    }
+
+    #[inline]
+    fn filtered_depth(&self, reference_index: usize) -> u16 {
+        self.active_depths
+            [self.active_depth_offset + reference_index - self.active_depth_base]
+    }
+
+    #[cfg(test)]
+    fn live_depth_len(&self) -> usize {
+        self.active_depths
+            .len()
+            .saturating_sub(self.active_depth_offset)
     }
 
     fn adjust_coverage_histogram(
@@ -12985,9 +13078,10 @@ impl WgsMetricsSummary {
 
     #[inline]
     fn increment_filtered_depth(&mut self, reference_index: usize) {
-        let old_depth = self.active_depths[reference_index] as u32;
+        let window_index = self.active_depth_offset + reference_index - self.active_depth_base;
+        let old_depth = self.active_depths[window_index] as u32;
         let new_depth = old_depth.saturating_add(1);
-        self.active_depths[reference_index] = new_depth.min(u16::MAX as u32) as u16;
+        self.active_depths[window_index] = new_depth.min(u16::MAX as u32) as u16;
         Self::adjust_coverage_histogram(
             &mut self.coverage_histogram,
             old_depth,
@@ -13023,6 +13117,7 @@ impl WgsMetricsSummary {
             return Err("CollectWgsMetrics record references unknown target".to_string());
         };
         self.ensure_contig(contig)?;
+        self.advance_depth_window(record.pos().max(0) as usize)?;
         match self.mate_buffer.probe(record) {
             WgsMatePeek::Alone => self.observe_cigar_ops(
                 contig,
@@ -13142,7 +13237,12 @@ impl WgsMetricsSummary {
         I: Iterator<Item = Cigar>,
     {
         self.ensure_contig(contig)?;
-        let depth_len = self.active_depths.len();
+        self.advance_depth_window(reference_offset_start)?;
+        let contig_length = self
+            .contigs
+            .get(contig)
+            .map(|metadata| metadata.length)
+            .ok_or_else(|| format!("CollectWgsMetrics reference missing contig {contig}"))?;
         let mut read_offset = 0usize;
         let mut reference_offset = reference_offset_start;
         let exclude_unpaired = !count_unpaired && !is_paired;
@@ -13165,11 +13265,7 @@ impl WgsMetricsSummary {
                 b'M' | b'=' | b'X' => {
                     if fast_all_loci {
                         let reference_end = reference_offset + len;
-                        if reference_end > depth_len {
-                            return Err(
-                                "CollectWgsMetrics alignment extends beyond reference".to_string()
-                            );
-                        }
+                        self.ensure_depth_through(reference_end, contig_length)?;
                         for index in 0..len {
                             let read_index = read_offset + index;
                             let reference_index = reference_offset + index;
@@ -13180,8 +13276,8 @@ impl WgsMetricsSummary {
                             };
                             if *quality < minimum_base_quality {
                                 self.excluded_baseq += 1;
-                            } else if self.active_depths[reference_index] >= coverage_cap as u16
-                                || self.active_depths[reference_index] >= locus_accumulation_cap
+                            } else if self.filtered_depth(reference_index) >= coverage_cap as u16
+                                || self.filtered_depth(reference_index) >= locus_accumulation_cap
                             {
                                 let index = *quality as usize;
                                 self.base_quality_histogram[index] += 1;
@@ -13202,15 +13298,15 @@ impl WgsMetricsSummary {
                         reference_offset += len;
                         continue;
                     }
+                    self.ensure_depth_through(reference_offset + len, contig_length)?;
                     for index in 0..len {
                         let read_index = read_offset + index;
                         let reference_index = reference_offset + index;
-                        if reference_index >= depth_len {
-                            return Err(
-                                "CollectWgsMetrics alignment extends beyond reference".to_string()
-                            );
-                        }
-                        if !wgs_locus_included_at(locus_mask.as_deref(), reference_index, depth_len)
+                        if !wgs_locus_included_at(
+                            locus_mask.as_deref(),
+                            reference_index,
+                            contig_length,
+                        )
                         {
                             continue;
                         }
@@ -13231,8 +13327,8 @@ impl WgsMetricsSummary {
                             .is_some_and(|mode| mode.is_mate_covered(reference_index))
                         {
                             self.excluded_overlap += 1;
-                        } else if self.active_depths[reference_index] >= coverage_cap as u16
-                            || self.active_depths[reference_index] >= locus_accumulation_cap
+                        } else if self.filtered_depth(reference_index) >= coverage_cap as u16
+                            || self.filtered_depth(reference_index) >= locus_accumulation_cap
                         {
                             if let Some(quality) = qualities.get(read_index) {
                                 let index = *quality as usize;
@@ -19845,6 +19941,132 @@ mod tests {
         assert_eq!(summary.coverage_histogram, scanned);
         assert_eq!(summary.coverage_histogram[1], 12);
         assert_eq!(summary.coverage_histogram[0], 0);
+    }
+
+    #[test]
+    fn wgs_depth_window_is_bounded_by_live_alignments_not_contig_length() {
+        let reference_contigs = vec![("chr1".to_string(), 250_000_000usize)];
+        let mut summary = WgsMetricsSummary::new(&reference_contigs, None, 250);
+        assert!(summary.active_depths.is_empty());
+
+        let qualities = vec![30_u8; 150];
+        summary
+            .observe_cigar_ops_iter(
+                "chr1",
+                100_000_000,
+                &qualities,
+                false,
+                30,
+                true,
+                std::iter::once(Cigar::Match(150)),
+                20,
+                20,
+                250,
+                100_000,
+                false,
+                None,
+            )
+            .expect("fixture alignment is valid");
+
+        assert_eq!(summary.active_depth_base, 100_000_000);
+        assert_eq!(summary.live_depth_len(), 150);
+
+        summary
+            .observe_cigar_ops_iter(
+                "chr1",
+                200_000_000,
+                &qualities,
+                false,
+                30,
+                true,
+                std::iter::once(Cigar::Match(150)),
+                20,
+                20,
+                250,
+                100_000,
+                false,
+                None,
+            )
+            .expect("fixture alignment is valid");
+
+        assert_eq!(summary.active_depth_base, 200_000_000);
+        assert_eq!(summary.live_depth_len(), 150);
+    }
+
+    #[test]
+    fn wgs_depth_window_preserves_overlap_across_advances() {
+        let reference_contigs = vec![("chr1".to_string(), 1_000usize)];
+        let mut summary = WgsMetricsSummary::new(&reference_contigs, None, 250);
+        let qualities = vec![30_u8; 10];
+
+        for start in [100, 105] {
+            summary
+                .observe_cigar_ops_iter(
+                    "chr1",
+                    start,
+                    &qualities,
+                    false,
+                    30,
+                    true,
+                    std::iter::once(Cigar::Match(10)),
+                    20,
+                    20,
+                    250,
+                    100_000,
+                    false,
+                    None,
+                )
+                .expect("fixture alignment is valid");
+        }
+
+        assert_eq!(summary.active_depth_base, 105);
+        assert_eq!(summary.live_depth_len(), 10);
+        assert_eq!(summary.coverage_histogram[2], 5);
+        assert_eq!(summary.coverage_histogram[1], 10);
+        assert_eq!(summary.coverage_histogram[0], 985);
+    }
+
+    #[test]
+    fn wgs_depth_window_rejects_decreasing_alignment_starts() {
+        let reference_contigs = vec![("chr1".to_string(), 1_000usize)];
+        let mut summary = WgsMetricsSummary::new(&reference_contigs, None, 250);
+        let qualities = vec![30_u8; 10];
+        summary
+            .observe_cigar_ops_iter(
+                "chr1",
+                100,
+                &qualities,
+                false,
+                30,
+                true,
+                std::iter::once(Cigar::Match(10)),
+                20,
+                20,
+                250,
+                100_000,
+                false,
+                None,
+            )
+            .expect("first alignment is valid");
+
+        let error = summary
+            .observe_cigar_ops_iter(
+                "chr1",
+                99,
+                &qualities,
+                false,
+                30,
+                true,
+                std::iter::once(Cigar::Match(10)),
+                20,
+                20,
+                250,
+                100_000,
+                false,
+                None,
+            )
+            .expect_err("decreasing coordinate must be rejected");
+        assert!(error.contains("not coordinate-sorted"));
     }
 
     #[test]
