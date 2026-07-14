@@ -1396,7 +1396,9 @@ fn duplicate_groups(
         if duplicate_candidate_is_pair(record.flags()) {
             if let Some(first_index) = paired_by_name.remove(record.qname()) {
                 let indices = [first_index, index];
-                let barcode_id = indices.iter().find_map(|index| read_ends[*index].barcode_id);
+                let barcode_id = indices
+                    .iter()
+                    .find_map(|index| read_ends[*index].barcode_id);
                 let key = pair_duplicate_key(
                     &records[first_index],
                     record,
@@ -1451,20 +1453,13 @@ fn mark_fragment_duplicate_groups(
             continue;
         }
 
-        let representative_index =
-            best_duplicate_representative_index(group, records, read_ends);
+        let representative_index = best_duplicate_representative_index(group, records, read_ends);
         let representative_name = records[representative_index].qname().to_vec();
         for index in group.iter().copied() {
             if records[index].qname() == representative_name.as_slice() {
                 continue;
             }
-            mark_unpaired_duplicate_record(
-                index,
-                records,
-                read_ends,
-                summary,
-                library_registry,
-            );
+            mark_unpaired_duplicate_record(index, records, read_ends, summary, library_registry);
         }
     }
 }
@@ -1577,10 +1572,7 @@ fn single_duplicate_key_bam(
     }
 }
 
-fn fragment_duplicate_key(
-    record: &bam::Record,
-    read_end: &ReadEndMetadata,
-) -> ReadEndDuplicateKey {
+fn fragment_duplicate_key(record: &bam::Record, read_end: &ReadEndMetadata) -> ReadEndDuplicateKey {
     let reverse_strand = record.flags() & 0x10 != 0;
     ReadEndDuplicateKey {
         library_id: read_end.library_id,
@@ -2397,12 +2389,8 @@ mod tests {
         let mut config = sam_markdup_config();
         config.optical_duplicate_pixel_distance = Some(100);
 
-        let optical = optical_duplicate_record_indices(
-            &[0, 1, 2, 3],
-            &records,
-            records[0].qname(),
-            &config,
-        );
+        let optical =
+            optical_duplicate_record_indices(&[0, 1, 2, 3], &records, records[0].qname(), &config);
 
         assert_eq!(optical.read_names, 1);
         assert_eq!(optical.record_indices, vec![1, 2]);
