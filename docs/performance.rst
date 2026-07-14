@@ -122,6 +122,21 @@ repeated or comma-separated. This is the preferred loop when auditing the saved
 suite floor, because it preserves Picard parity checks while avoiding unrelated
 benchmark setup and runtime.
 
+The MarkDuplicates synthetic benchmark now defaults to BAM so it exercises the
+native production path. Stress large duplicate families and optical-name
+tracking explicitly with:
+
+.. code-block:: bash
+
+   python3 tools/bench_suite.py --repeats 5 --skip-build \
+     --only markduplicates --markduplicates-reads 1000000 \
+     --markduplicates-family-size 4096 \
+     --profile-output benchmarks/runs/markduplicates-highdup-profile.json
+
+Record both the normal family-size profile and this adversarial profile; the
+large-family result is a scalability guardrail, not a replacement for WGS/WES
+evidence.
+
 ``CollectGcBiasMetrics`` loads one reference contig at a time via ``.fai`` seek
 for read-time GC windows and precomputes genome-window counts without keeping
 the full reference in memory.
