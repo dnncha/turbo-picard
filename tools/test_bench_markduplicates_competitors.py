@@ -45,6 +45,18 @@ class CompetitorBenchmarkTests(unittest.TestCase):
         self.assertEqual(parsed["peak_rss_bytes"], 1024 * 1024)
         self.assertEqual(parsed["exit_code"], 0)
 
+    def test_non_gnu_time_is_not_used_as_gnu_time(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            fake_time = Path(tmp) / "time"
+            fake_time.write_text("#!/bin/sh\nprintf 'BSD time\\n'\n", encoding="utf-8")
+            fake_time.chmod(fake_time.stat().st_mode | 0o111)
+            original = module.GNU_TIME
+            module.GNU_TIME = fake_time
+            try:
+                self.assertFalse(module.gnu_time_available())
+            finally:
+                module.GNU_TIME = original
+
     def test_streaming_sam_comparison_detects_winner_change(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

@@ -1,0 +1,93 @@
+nextflow_process {
+
+    name "Test Process TURBO_PICARD_MARKDUPLICATES"
+    script "../turbo_picard_markduplicates.nf"
+    process "TURBO_PICARD_MARKDUPLICATES"
+    config "./nextflow.config"
+
+    tag "modules"
+    tag "modules_nfcore"
+    tag "turbo_picard"
+    tag "turbo_picard/markduplicates"
+
+    test("basic BAM") {
+
+        when {
+            process {
+                """
+                input[0] = Channel.of([
+                    [ id:'basic', single_end:false ],
+                    file(params.test_bam, checkIfExists: true)
+                ])
+                input[1] = [ [:], [], [] ]
+                """
+            }
+        }
+
+        then {
+            assert process.success
+            assertAll(
+                { assert file(process.out.bam[0][1]).name == 'basic.md.bam' },
+                { assert file(process.out.bam[0][1]).size() > 0 },
+                { assert file(process.out.bai[0][1]).name == 'basic.md.bam.bai' },
+                { assert file(process.out.bai[0][1]).size() > 0 },
+                { assert path(process.out.metrics[0][1]).readLines().any { it.contains('picard.sam.DuplicationMetrics') } },
+                { assert process.out.findAll { key, value -> key.startsWith('versions') } }
+            )
+        }
+    }
+
+    test("reference-backed CRAM") {
+
+        when {
+            process {
+                """
+                input[0] = Channel.of([
+                    [ id:'cram', single_end:false ],
+                    file(params.test_cram, checkIfExists: true)
+                ])
+                input[1] = Channel.of([
+                    [ id:'chrM' ],
+                    file(params.test_fasta, checkIfExists: true),
+                    file(params.test_fai, checkIfExists: true)
+                ])
+                """
+            }
+        }
+
+        then {
+            assert process.success
+            assertAll(
+                { assert file(process.out.bam[0][1]).name == 'cram.md.bam' },
+                { assert file(process.out.bai[0][1]).size() > 0 },
+                { assert path(process.out.metrics[0][1]).readLines().any { it.contains('picard.sam.DuplicationMetrics') } },
+                { assert process.out.findAll { key, value -> key.startsWith('versions') } }
+            )
+        }
+    }
+
+    test("basic BAM - stub") {
+        options "-stub"
+
+        when {
+            process {
+                """
+                input[0] = Channel.of([
+                    [ id:'basic', single_end:false ],
+                    file(params.test_bam, checkIfExists: true)
+                ])
+                input[1] = [ [:], [], [] ]
+                """
+            }
+        }
+
+        then {
+            assert process.success
+            assertAll(
+                { assert file(process.out.bam[0][1]).name == 'basic.md.bam' },
+                { assert file(process.out.bai[0][1]).name == 'basic.md.bam.bai' },
+                { assert file(process.out.metrics[0][1]).name == 'basic.md.metrics.txt' }
+            )
+        }
+    }
+}

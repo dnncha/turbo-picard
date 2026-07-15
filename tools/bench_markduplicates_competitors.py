@@ -240,9 +240,32 @@ def parse_time_file(path: Path) -> dict[str, float | int]:
     }
 
 
+def gnu_time_available() -> bool:
+    """Return whether the configured ``time`` executable is GNU time.
+
+    macOS ships a BSD ``/usr/bin/time`` that accepts neither GNU's ``-f``
+    format nor ``-o`` output options. Treating that executable as GNU time
+    makes every measured run look failed before the fallback resource meter
+    can be used.
+    """
+    if not GNU_TIME.is_file():
+        return False
+    try:
+        result = subprocess.run(
+            [str(GNU_TIME), "--version"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            check=False,
+        )
+    except OSError:
+        return False
+    return "GNU time" in result.stdout
+
+
 def run_metered(command, stdout_handle, stderr_handle, resource_log, timeout, environment):
     """Run without a shell, preferring GNU time and disclosing a wait4 fallback."""
-    if GNU_TIME.is_file():
+    if gnu_time_available():
         time_format = f"{TIME_PREFIX}\t%e\t%U\t%S\t%M\t%x"
         try:
             completed = subprocess.run(
