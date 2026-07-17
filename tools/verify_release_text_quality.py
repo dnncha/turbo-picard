@@ -21,6 +21,7 @@ RELEASE_TEXT_PATHS = [
     Path("docs/compatibility-contract.rst"),
     Path("docs/packaging.rst"),
     Path("docs/parity.rst"),
+    Path("docs/picard-alternatives.rst"),
     Path("docs/performance.rst"),
     Path("docs/production-readiness.rst"),
     Path("docs/troubleshooting.rst"),

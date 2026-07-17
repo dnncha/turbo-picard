@@ -14,7 +14,7 @@
   },
   "software": {
     "picard_version": "3.4.0",
-    "turbo_picard_version": "0.1.8",
+    "turbo_picard_version": "0.1.9",
     "turbo_picard_commit": "replace-with-40-character-commit",
     "container_digest": "sha256:replace-with-64-character-digest"
   },
@@ -57,4 +57,3 @@
     "evidence_url": null
   }
 }
-

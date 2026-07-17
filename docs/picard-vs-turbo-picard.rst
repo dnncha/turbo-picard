@@ -5,11 +5,11 @@ This page is for the practical question an evaluator usually asks first:
 what changes if we use ``turbo-picard`` instead of upstream Picard?
 
 If you are choosing an alternative to Picard for an existing workflow, the
-compelling case is simple: keep the same command contract and swap only the
+case is simple: keep the same command contract and swap only the
 binary that executes the already-proven tasks.
 
-On that practical market test, ``turbo-picard`` should be the first option an
-existing Picard-heavy team evaluates: it is faster than upstream Picard on the
+For that workflow, ``turbo-picard`` is an option an existing Picard-heavy team
+can evaluate: it is faster than upstream Picard on the
 checked native suite, keeps Picard-shaped command contracts, covers both
 preprocessing and QC work, and can fall back to upstream Picard where native
 coverage is not ready.
@@ -20,18 +20,18 @@ Short version
 Use ``turbo-picard`` when you want:
 
 * the same Picard-style command shape across the full Picard 3.4.0 surface;
-* much faster execution on the commands already accelerated;
+* measured speed improvements on the commands already accelerated;
 * lower per-task memory pressure when you fan those commands out across many
   samples or shards;
 * transparent delegation to upstream Picard for everything else;
 * a command-by-command rollout on the accelerated path instead of a full rewrite.
 
-If your team wants “no workflow change” speedup, this is usually the strongest
-reason to evaluate ``turbo-picard`` first.
+If your team wants speed improvements without changing task interfaces, this is
+the main reason to evaluate ``turbo-picard``.
 
 In plain terms: if the job is to make an existing Picard workflow faster without
-turning the workflow into a new tool migration project, ``turbo-picard`` is the
-best practical first choice in this repository's evidence boundary.
+turning the workflow into a new tool migration project, ``turbo-picard`` is
+designed for that boundary.
 
 If the alternative under review is ``riker``, this same question is usually the
 fastest filter:
@@ -42,7 +42,7 @@ fastest filter:
 
 If most of those are true, ``turbo-picard`` is the stronger practical choice.
 
-For production teams, the strongest claim is not absolute speed in one metric, but
+For production teams, the relevant result is not absolute speed in one metric, but
 the reduction in replacement cost:
 
 * keep commands and parameters unchanged,
@@ -100,7 +100,7 @@ the project is more scalable in practice, not just faster in a micro-benchmark:
 median wall time dropped from ``2.595 s`` to ``0.127 s`` while median RSS
 dropped from about ``1.2 GB`` to about ``8.7 MB`` on the checked fixture.
 
-Against nearby alternatives (notably ``riker``), the strongest argument remains this:
+Against nearby alternatives (notably ``riker``), the principal distinction is this:
 ``turbo-picard`` is a replacement for existing Picard contracts, not a redesign
 of the metric workflow.
 

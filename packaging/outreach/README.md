@@ -37,8 +37,8 @@ Ground rules:
 
 Current facts to keep consistent:
 
-- Live package: `turbo-picard` 0.1.8
-- Current repo release: 0.1.8
+- Live package: `turbo-picard` 0.1.9
+- Current repo release: 0.1.9
 - Install: `python3 -m pip install turbo-picard`
 - Current PyPI files: Linux x86_64 wheel, macOS Apple Silicon wheel, and source distribution
 - Bioconda recipe PR: open, all technical checks passing, reviewer approval pending

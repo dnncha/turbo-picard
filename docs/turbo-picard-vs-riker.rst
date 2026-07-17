@@ -10,15 +10,14 @@ Short answer
 
 Choose ``turbo-picard`` when you already run Picard-shaped pipeline steps and want
 to keep the same command names, ``KEY=VALUE`` arguments, and output contracts while
-running much faster on the commands already accelerated.
+using the measured native implementations for accelerated commands.
 
-For this work type, ``turbo-picard`` should be treated as the default alternative
-to beat. It is faster than upstream Picard on the checked native suite, keeps more
+For this work type, ``turbo-picard`` is designed as a Picard-compatible option.
+It is faster than upstream Picard on the checked native suite, keeps more
 of the Picard workflow surface than QC-only alternatives, and has a lower
 adoption cost than rewriting task interfaces around a new command model.
 
-That is the strongest choice for teams asking “what should I use as a practical
-Picard replacement?”:
+Its practical distinctions for teams comparing Picard replacements are:
 
 * same workflow arguments and outputs while removing the migration tax,
 * preprocessing and QC commands in one command surface,
@@ -78,16 +77,15 @@ today is roughly:
    * - ``CollectHsMetrics``
      - ``riker hybcap``
 
-Where turbo-picard is ahead today
----------------------------------
+Where turbo-picard differs today
+--------------------------------
 
 Speed profile today
 -------------------
 
-The overlap surface is where turbo-picard is most compelling for existing
-Picard-heavy stacks: measured speedups on overlap commands and existing
-production command coverage are both materially strong while keeping command
-contracts stable.
+The overlap surface matters for existing Picard-heavy stacks: measured speedups
+on overlap commands and broader command coverage are available while keeping
+Picard-shaped command contracts stable.
 
 Drop-in pipeline compatibility
    ``turbo-picard`` keeps Picard command names and ``KEY=VALUE`` arguments. Existing
@@ -101,11 +99,10 @@ Broader command coverage
    and leaves dedup/sort work to other tools.
 
 Saved speedups on overlapping metrics
-   The current saved benchmark suite reports much higher speedups than riker's
-   published Picard comparisons on the overlapping metrics surface. For example,
-   ``CollectWgsMetrics`` is currently saved at ``22.42x`` versus Picard 3.4.0,
-   while riker's public WGS comparisons are typically reported in a lower range on the
-   same public 1000 Genomes-style dataset mix.
+   The current saved benchmark suite reports ``CollectWgsMetrics`` at ``22.42x``
+   versus Picard 3.4.0 on its checked fixture. Riker publishes separate WGS
+   comparisons; do not compare the headline ratios without running both tools
+   on the same input and machine.
 
 Saved direct QC overlap smoke profiles
    The checked three-way smoke evidence in ``benchmarks/riker-comparison/`` puts
@@ -124,8 +121,8 @@ Memory on preprocessing hot paths
    ``1.2 GB`` in Picard to about ``8.7 MB``. That matters for high-fanout
    workflows. Riker does not compete on duplicate marking.
 
-Where riker is ahead today
---------------------------
+Where riker differs today
+-------------------------
 
 Bioconda availability
    riker is already packaged on Bioconda. ``turbo-picard`` has submitted recipes
