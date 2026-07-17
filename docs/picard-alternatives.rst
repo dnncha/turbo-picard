@@ -1,6 +1,10 @@
 Picard alternatives for bioinformatics workflows
 ================================================
 
+.. meta::
+   :description: Compare turbo-picard, samtools, Sambamba, SAMBLASTER, FastDup and riker for Picard-compatible bioinformatics, duplicate marking and sequencing-QC workflows.
+   :keywords: Picard alternatives, bioinformatics, duplicate marking, MarkDuplicates, SAM, BAM, CRAM, sequencing QC
+
 The right alternative to Broad Picard depends on the command boundary. Duplicate
 marking, BAM sorting, streaming aligner output and sequencing QC are different
 workloads, and the tools below do not expose interchangeable inputs or outputs.
