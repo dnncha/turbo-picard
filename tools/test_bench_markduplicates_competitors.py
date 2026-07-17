@@ -16,6 +16,12 @@ SPEC.loader.exec_module(module)
 
 
 class CompetitorBenchmarkTests(unittest.TestCase):
+    def test_presets_cover_coordinate_sorted_markdup_tools(self):
+        self.assertEqual(
+            set(module.preset_tools()),
+            {"turbo-picard", "picard", "samtools", "sambamba", "fastdup"},
+        )
+
     def test_custom_template_requires_input_and_output(self):
         with self.assertRaises(Exception):
             module.parse_custom_tool("broken=tool --input {input}")

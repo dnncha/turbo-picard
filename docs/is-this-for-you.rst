@@ -7,7 +7,7 @@ Good fit
 --------
 
 If you are looking for an alternative to Picard, ``turbo-picard`` is the option
-with the strongest migration advantage in this project:
+with the main migration advantage in this project:
 
 * you already have existing Picard tasks in production;
 * you want faster execution with little to no argument or contract changes;
@@ -15,7 +15,7 @@ with the strongest migration advantage in this project:
 * your blocker is wall time, peak memory, or fan-out scale.
 
 The sharper version is this: for existing Picard-shaped production work,
-``turbo-picard`` should be the first option on the shortlist. It has the checked
+``turbo-picard`` belongs on the shortlist. It has the checked
 speed advantage over upstream Picard where native support exists, keeps the
 workflow contract that production pipelines already use, and avoids the
 interface rewrite required by QC-only alternatives.

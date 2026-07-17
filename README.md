@@ -89,6 +89,7 @@ Useful starting points:
 - [Choose your first command](https://turbo-picard.readthedocs.io/en/latest/first-command.html)
 - [Evaluation playbook](https://turbo-picard.readthedocs.io/en/latest/evaluation-playbook.html)
 - [Command coverage](https://turbo-picard.readthedocs.io/en/latest/commands.html)
+- [Picard alternatives](https://turbo-picard.readthedocs.io/en/latest/picard-alternatives.html)
 - [Trying it in a pipeline](https://turbo-picard.readthedocs.io/en/latest/adoption.html)
 - [Parity guide](https://turbo-picard.readthedocs.io/en/latest/parity.html)
 - [Fallback to Picard](https://turbo-picard.readthedocs.io/en/latest/fallback.html)
@@ -193,7 +194,7 @@ A command-level speedup is not a universal replacement claim. Keep upstream Pica
 
 ## Packaging Status
 
-The live PyPI release is `0.1.8`. It publishes Linux x86_64 and macOS Apple
+The live PyPI release is `0.1.9`. It publishes Linux x86_64 and macOS Apple
 Silicon wheels plus a source distribution.
 
 Bioconda recipes are tracked under [`packaging/bioconda/`](packaging/bioconda/).

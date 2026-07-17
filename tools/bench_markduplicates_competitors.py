@@ -124,6 +124,7 @@ def preset_tools() -> dict[str, ToolSpec | None]:
     )
     picard = executable_path("picard")
     samtools = executable_path("samtools")
+    sambamba = executable_path("sambamba")
     fastdup = executable_path("fastdup")
     common = (
         "ASSUME_SORTED=true",
@@ -153,6 +154,12 @@ def preset_tools() -> dict[str, ToolSpec | None]:
             (samtools, "--version"),
             "samtools",
         ) if samtools else None,
+        "sambamba": ToolSpec(
+            "sambamba",
+            (sambamba, "markdup", "-t", "{threads}", "--tmpdir={tmp}", "{input}", "{output}"),
+            (sambamba, "--version"),
+            "picard",
+        ) if sambamba else None,
         "fastdup": ToolSpec(
             "fastdup",
             (fastdup, "--input", "{input}", "--output", "{output}", "--metrics", "{metrics}", "--num-threads", "{threads}"),

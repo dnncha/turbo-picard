@@ -1,7 +1,7 @@
 # MarkDuplicates competitor evidence
 
 `tools/bench_markduplicates_competitors.py` creates a reproducible evidence
-bundle for Turbo-Picard, Picard, samtools and FastDup. It is an evidence
+bundle for Turbo-Picard, Picard, samtools, Sambamba and FastDup. It is an evidence
 generator, not a claim generator: unavailable programs, failed commands and
 parity failures remain visible in `report.json` and `report.md`.
 
@@ -24,7 +24,7 @@ python3 tools/bench_markduplicates_competitors.py \
   --threads 8 \
   --warmups 1 \
   --repeats 5 \
-  --require-tools turbo-picard,picard,samtools,fastdup \
+  --require-tools turbo-picard,picard,samtools,sambamba,fastdup \
   --source-url 'https://example.org/immutable/HG002.bam' \
   --source-revision 'accession-or-release'
 ```
@@ -34,6 +34,7 @@ Installed presets are attempted in this order:
 - `turbo-picard` (or the local `target/release/picard`);
 - `picard`;
 - `samtools markdup`;
+- `sambamba markdup`;
 - `fastdup`.
 
 Missing executables are reported as `unavailable`; they are never silently
@@ -47,8 +48,8 @@ The output directory must be new or empty; the runner refuses to mix evidence
 from different invocations.
 
 The preset exports `TURBO_PICARD_THREADS={threads}` to constrain Turbo-Picard's
-global HTS worker budget. FastDup and samtools receive their documented thread
-arguments. Picard MarkDuplicates is principally single-threaded; the evidence
+global HTS worker budget. FastDup, samtools and Sambamba receive their documented
+thread arguments. Picard MarkDuplicates is principally single-threaded; the evidence
 bundle preserves this distinction rather than implying that every program can
 consume the requested thread budget identically.
 
@@ -67,6 +68,11 @@ Supported placeholders are `{input}`, `{output}`, `{metrics}`, `{tmp}` and
 `{threads}`. Templates are parsed into argument arrays and never evaluated by a
 shell. Keep all tool-specific temporary output under `{tmp}` for comparable
 temporary-disk measurements.
+
+SAMBLASTER is not a preset in this coordinate-sorted BAM comparison. Its
+intended contract is a read-id-grouped SAM stream immediately after alignment,
+so a fair test must measure the complete aligner-to-sorted-BAM pipeline rather
+than insert an unreported input conversion into this runner.
 
 ## Recorded evidence
 

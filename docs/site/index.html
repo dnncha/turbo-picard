@@ -643,6 +643,7 @@
               <a class="button primary" href="#adopt">Start with one command</a>
               <a class="button secondary" href="../../README.md">Read the README</a>
               <a class="button secondary" href="https://turbo-picard.readthedocs.io/en/latest/">Open the docs</a>
+              <a class="button secondary" href="https://turbo-picard.readthedocs.io/en/latest/picard-alternatives.html">Compare Picard alternatives</a>
               <a class="button secondary" href="https://turbo-picard.readthedocs.io/en/latest/evaluation-playbook.html">Open evaluation playbook</a>
               <a class="button secondary" href="https://pypi.org/project/turbo-picard/">Open PyPI</a>
               <a class="button secondary" href="https://turbo-picard.readthedocs.io/en/latest/parity.html">What parity means</a>
@@ -662,25 +663,24 @@
       <section>
         <div class="section-inner">
           <div class="section-heading">
-            <h2>The default alternative to beat.</h2>
+            <h2>Choose by workflow contract.</h2>
             <p>
-              For this work type, the best option is the one that gets an existing Picard workflow
-              to a faster, reviewed production decision with the least churn. That is where
-              turbo-picard is designed to win: faster than upstream Picard on the checked native
-              suite, broader than QC-only tools such as riker, and easier to trial than a workflow
-              rewrite.
+              For an existing Picard workflow, compare runtime together with command compatibility,
+              output parity, memory, temporary disk, and the cost of changing downstream tasks.
+              Turbo-picard keeps Picard-shaped commands across preprocessing and QC while native
+              implementations accelerate the checked command surface.
             </p>
           </div>
           <div class="grid">
             <article class="tile">
-              <h3>Better than original Picard for hot steps</h3>
+              <h3>Measured against Picard</h3>
               <p>
                 The saved suite shows every benchmarked native command ahead of Picard 3.4.0 after
                 parity checks pass, with a 6.86x floor and 24.94x geometric mean speedup.
               </p>
             </article>
             <article class="tile">
-              <h3>Better fit than riker for Picard stacks</h3>
+              <h3>Picard-shaped rather than QC-only</h3>
               <p>
                 Riker is a fast QC toolkit. Turbo-picard keeps Picard command names, KEY=VALUE
                 arguments, preprocessing utilities, metrics commands, and fallback in one rollout
@@ -688,7 +688,7 @@
               </p>
             </article>
             <article class="tile">
-              <h3>Better adoption path than rewrites</h3>
+              <h3>Command-by-command migration</h3>
               <p>
                 Swap one command, compare the outputs your downstream jobs consume, keep upstream
                 Picard available, and expand only after the changed step has evidence.
@@ -1195,7 +1195,7 @@ picard RevertSam I=aligned.bam O=unmapped.bam</pre>
             <article class="tile">
               <h3>Bioconda path</h3>
               <p>
-                Release <code>v0.1.8</code> is prepared for Bioconda submission as
+                Release <code>v0.1.9</code> is prepared for Bioconda submission as
                 <code>turbo-picard</code> plus the optional
                 <code>turbo-picard-picard-shim</code>. The main package keeps the
                 <code>turbo-picard</code> command separate; the shim installs
