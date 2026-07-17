@@ -110,6 +110,6 @@ true:
    time; wall time alone is insufficient.
 7. A second machine independently reproduces the result.
 
-The runner does not calculate or print “SOTA”, “industry standard”, or a
-speedup headline. Those conclusions belong in reviewed evidence after the
-claim gate passes.
+The runner does not calculate or print broad performance superlatives or a
+speedup headline. Conclusions belong in reviewed evidence after the claim gate
+passes.

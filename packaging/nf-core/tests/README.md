@@ -6,7 +6,8 @@ CRAM evidence fixture. The tests check the BAM, BAI, metrics, version and
 stub output channels rather than treating process completion alone as proof of
 parity.
 
-Run after building the CLI and installing Nextflow/nf-test:
+Run after building the CLI and installing Nextflow 26.04.6 and nf-test 0.9.5
+(the versions pinned in CI):
 
 ```bash
 cargo build --release -p turbo-picard-cli --bin turbo-picard

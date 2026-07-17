@@ -185,9 +185,9 @@ dataset IDs are `gatk-na12878-mito`, `picard-snvq`, and
 `gatk-na12878-mito-cram`.
 
 
-## Production adoption
+## Workflow evaluation
 
-The project now publishes an explicit [production-readiness gate](docs/production-readiness.rst), a [compatibility contract](docs/compatibility-contract.rst), and a [production-scale benchmark evidence format](benchmarks/production/README.md). Use these before making a workflow-wide switch. The opt-in Nextflow process candidate is documented under [packaging/nf-core](packaging/nf-core/README.md).
+The project publishes a [workflow validation protocol](docs/production-readiness.rst), a [compatibility contract](docs/compatibility-contract.rst), and a [production-scale benchmark format](benchmarks/production/README.md). Use these before changing a workflow. The opt-in Nextflow process candidate is documented under [packaging/nf-core](packaging/nf-core/README.md).
 
 A command-level speedup is not a universal replacement claim. Keep upstream Picard available until representative BAM/CRAM evidence, output parity, failure behaviour, and independent review pass for the exact workflow.
 

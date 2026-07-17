@@ -216,6 +216,46 @@ jobs:
       - name: Smoke container entrypoint
         run: docker run --rm turbo-picard:ci MarkDuplicates --help
 
+  nf-core-process:
+    name: nf-core process candidate
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Install native dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang libclang-dev make pkg-config
+
+      - name: Build turbo-picard executable
+        run: cargo build --release --locked -p turbo-picard-cli --bin turbo-picard
+
+      - name: Install pinned Nextflow and nf-test
+        run: |
+          curl -fsSL https://github.com/nextflow-io/nextflow/releases/download/v26.04.6/nextflow-26.04.6-dist -o "$RUNNER_TEMP/nextflow"
+          echo "182a63c74074e2dc7956ffa3c8cd59de952ed2c44394e21faf5e1736b945444c  $RUNNER_TEMP/nextflow" | sha256sum --check
+          chmod +x "$RUNNER_TEMP/nextflow"
+          curl -fsSL https://github.com/askimed/nf-test/releases/download/v0.9.5/nf-test-0.9.5.tar.gz -o "$RUNNER_TEMP/nf-test.tar.gz"
+          echo "b7679eb90cdc9642bfa89e9634db02ce6e699de53ad35ef0e2f4847634fc1641  $RUNNER_TEMP/nf-test.tar.gz" | sha256sum --check
+          tar -xzf "$RUNNER_TEMP/nf-test.tar.gz" -C "$RUNNER_TEMP" nf-test.jar
+
+      - name: Test nf-core process candidate
+        env:
+          NXF_HOME: ${{ runner.temp }}/nextflow-home
+          TURBO_PICARD_REPO_ROOT: ${{ github.workspace }}
+        run: |
+          PATH="$RUNNER_TEMP:$GITHUB_WORKSPACE/target/release:$PATH" \
+            java -jar "$RUNNER_TEMP/nf-test.jar" \
+            test packaging/nf-core/tests/main.nf.test
+
   picard-parity:
     name: Picard parity
     runs-on: ubuntu-latest

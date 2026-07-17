@@ -492,7 +492,7 @@ def host_metadata() -> dict[str, object]:
 
 
 def markdown(report: dict[str, object]) -> str:
-    lines = ["# MarkDuplicates competitor benchmark", "", "> Evidence bundle only. No SOTA or production claim is implied.", "", f"Input SHA-256: `{report['input']['sha256']}`", "", "| Tool | Status | Median wall | Median CPU | Peak RSS | Peak temp | Parity |", "|---|---|---:|---:|---:|---:|---|"]
+    lines = ["# MarkDuplicates competitor benchmark", "", "> Results apply only to the recorded input, programs, options, and host.", "", f"Input SHA-256: `{report['input']['sha256']}`", "", "| Tool | Status | Median wall | Median CPU | Peak RSS | Peak temp | Parity |", "|---|---|---:|---:|---:|---:|---|"]
     for name, tool in report["tools"].items():
         if tool["status"] == "unavailable":
             lines.append(f"| {name} | unavailable | — | — | — | — | NOT RUN |")

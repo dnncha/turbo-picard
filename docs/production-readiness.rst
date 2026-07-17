@@ -1,10 +1,10 @@
-Production readiness
-====================
+Workflow validation protocol
+============================
 
-This is the release gate for using Turbo-Picard in a production research
-or clinical pipeline. It separates what is implemented from what still
-requires evidence. A passing synthetic benchmark is not enough to
-approve a migration.
+This protocol describes the evidence needed before using Turbo-Picard in a
+research or clinical pipeline. It separates implemented command behaviour from
+validated workflow scope. A passing synthetic benchmark is not sufficient to
+approve a workflow change.
 
 Current posture
 ---------------
@@ -98,18 +98,3 @@ reports, and route the step to upstream Picard through
 TURBO_PICARD_FALLBACK_COMMAND. Never silently accept a different
 duplicate flag, metric, FASTQ pairing, index, exit status or validation
 result.
-
-Replacement-readiness targets
------------------------------
-
-Do not claim industry-replacement readiness until the project has:
-
--  ten production-sized benchmark datasets;
--  30x WGS, WES/capture, RNA-seq, UMI, CRAM and multi-library coverage;
--  independent reproduction on two machine profiles;
--  native CollectHsMetrics or a documented tested fallback decision;
--  accepted Bioconda recipes and immutable container images;
--  at least three external maintainers, reviewers or institutional
-   advisers;
--  three real pipeline case studies;
--  a maintained compatibility report for each supported Picard release.

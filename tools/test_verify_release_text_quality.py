@@ -106,6 +106,22 @@ bioconda-utils build --docker --mulled-test turbo-picard
             errors,
         )
 
+    def test_rejects_internal_process_language(self) -> None:
+        root = self.make_tree()
+        phrase = "pilot " + "conversations"
+        readme = root / "benchmarks/production/README.md"
+        readme.write_text(
+            readme.read_text(encoding="utf-8") + f"\nTrack {phrase} here.\n",
+            encoding="utf-8",
+        )
+
+        errors = verify_release_text_quality.validate_release_text(root)
+        self.assertIn(
+            "benchmarks/production/README.md contains release-text banned phrase: "
+            + phrase,
+            errors,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
