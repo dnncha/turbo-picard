@@ -240,10 +240,10 @@ jobs:
 
       - name: Install pinned Nextflow and nf-test
         run: |
-          curl -fsSL https://github.com/nextflow-io/nextflow/releases/download/v26.04.6/nextflow-26.04.6-dist -o "$RUNNER_TEMP/nextflow"
+          curl -fsSL --retry 5 --retry-all-errors --retry-delay 2 https://github.com/nextflow-io/nextflow/releases/download/v26.04.6/nextflow-26.04.6-dist -o "$RUNNER_TEMP/nextflow"
           echo "182a63c74074e2dc7956ffa3c8cd59de952ed2c44394e21faf5e1736b945444c  $RUNNER_TEMP/nextflow" | sha256sum --check
           chmod +x "$RUNNER_TEMP/nextflow"
-          curl -fsSL https://github.com/askimed/nf-test/releases/download/v0.9.5/nf-test-0.9.5.tar.gz -o "$RUNNER_TEMP/nf-test.tar.gz"
+          curl -fsSL --retry 5 --retry-all-errors --retry-delay 2 https://github.com/askimed/nf-test/releases/download/v0.9.5/nf-test-0.9.5.tar.gz -o "$RUNNER_TEMP/nf-test.tar.gz"
           echo "b7679eb90cdc9642bfa89e9634db02ce6e699de53ad35ef0e2f4847634fc1641  $RUNNER_TEMP/nf-test.tar.gz" | sha256sum --check
           tar -xzf "$RUNNER_TEMP/nf-test.tar.gz" -C "$RUNNER_TEMP" nf-test.jar
 
