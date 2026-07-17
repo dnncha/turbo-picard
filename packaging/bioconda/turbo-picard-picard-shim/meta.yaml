@@ -7,7 +7,7 @@ package:
 
 source:
   url: https://github.com/dnncha/turbo-picard/archive/refs/tags/v0.1.9.tar.gz
-  sha256: <github-v0.1.9-source-archive-sha256>
+  sha256: 1fcc3b7b4a86028bd4326378c18ebd7940564469f76029f8014051c457a8e7f8
 build:
   number: 0
   skip: true  # [win]
