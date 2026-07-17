@@ -75,14 +75,14 @@ scan optional tags in one pass instead of allocating a per-line tag vector. Thes
 choices keep parity with Picard output while avoiding repeated vector growth on
 long reads.
 
-``CollectWgsMetrics`` keeps one contig-sized ``u16`` depth buffer at a time,
-loads reference lengths from ``.fai`` when present (no full-genome FASTA load),
-updates coverage histograms incrementally as depths change (no ``O(genome size)``
-contig-finalize rescan), applies Picard-style mate overlap exclusion with
+``CollectWgsMetrics`` keeps only the live coordinate window that future
+coordinate-sorted records can still overlap. Finalized loci are folded into the
+coverage histogram and discarded, so depth state is independent of chromosome
+length. The collector loads reference lengths from ``.fai`` when present (no
+full-genome FASTA load), applies Picard-style mate overlap exclusion with
 ``FxHashMap`` mate pairing and packed overlap bitmaps, and overlaps BGZF decode
-with pileup on BAM/CRAM inputs via a dedicated reader thread. That removes the
-memory and finalize costs that dominated WGS runs while keeping Picard-identical
-summary and histogram output.
+with pileup on BAM/CRAM inputs via a dedicated reader thread. These paths retain
+Picard-identical summary and histogram output for the validated option scope.
 
 ``CollectMultipleMetrics`` on BAM/CRAM inputs runs all selected collectors in
 one HTSlib pass (the same idea as riker's ``multi`` command) instead of
@@ -121,6 +121,21 @@ For focused regression work, run only the command family under investigation:
 repeated or comma-separated. This is the preferred loop when auditing the saved
 suite floor, because it preserves Picard parity checks while avoiding unrelated
 benchmark setup and runtime.
+
+The MarkDuplicates synthetic benchmark now defaults to BAM so it exercises the
+native production path. Stress large duplicate families and optical-name
+tracking explicitly with:
+
+.. code-block:: bash
+
+   python3 tools/bench_suite.py --repeats 5 --skip-build \
+     --only markduplicates --markduplicates-reads 1000000 \
+     --markduplicates-family-size 4096 \
+     --profile-output benchmarks/runs/markduplicates-highdup-profile.json
+
+Record both the normal family-size profile and this adversarial profile; the
+large-family result is a scalability guardrail, not a replacement for WGS/WES
+evidence.
 
 ``CollectGcBiasMetrics`` loads one reference contig at a time via ``.fai`` seek
 for read-time GC windows and precomputes genome-window counts without keeping

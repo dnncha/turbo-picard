@@ -1,0 +1,93 @@
+name: turbo_picard_markduplicates
+description: Locate and tag duplicate reads in BAM or CRAM input using the turbo-picard MarkDuplicates implementation.
+keywords:
+  - markduplicates
+  - duplicates
+  - bam
+  - cram
+tools:
+  - turbo-picard:
+      description: Picard-shaped command-line tools with selected native implementations in Rust.
+      homepage: https://github.com/dnncha/turbo-picard
+      documentation: https://turbo-picard.readthedocs.io/
+      licence: ["MIT"]
+      identifier: ""
+input:
+  - - meta:
+        type: map
+        description: |
+          Groovy Map containing sample information
+          e.g. [ id: 'test', single_end: false ]
+    - reads:
+        type: file
+        description: BAM or CRAM file to process
+        pattern: "*.{bam,cram}"
+        ontologies: []
+  - - meta2:
+        type: map
+        description: |
+          Groovy Map containing reference information; required for CRAM input
+          e.g. [ id: 'genome' ]
+    - fasta:
+        type: file
+        description: Reference FASTA file, required for CRAM input
+        pattern: "*.{fa,fasta}"
+        ontologies: []
+    - fai:
+        type: file
+        description: FASTA index file, required for CRAM input
+        pattern: "*.fai"
+        ontologies: []
+output:
+  bam:
+    - - meta:
+          type: map
+          description: Sample metadata
+      - "*.bam":
+          type: file
+          description: BAM file with duplicate reads marked
+          pattern: "*.bam"
+          ontologies: []
+  bai:
+    - - meta:
+          type: map
+          description: Sample metadata
+      - "*.bai":
+          type: file
+          description: BAI index for the marked BAM
+          pattern: "*.bai"
+          ontologies: []
+  metrics:
+    - - meta:
+          type: map
+          description: Sample metadata
+      - "*.metrics.txt":
+          type: file
+          description: Duplicate-marking metrics
+          pattern: "*.metrics.txt"
+          ontologies: []
+  versions_turbo_picard:
+    - - ${task.process}:
+          type: string
+          description: The process that produced the version
+      - turbo-picard:
+          type: string
+          description: The tool name
+      - "turbo-picard --version 2>&1 | sed -n 's/.* //p'":
+          type: string
+          description: Command used to obtain the tool version
+topics:
+  versions:
+    - - ${task.process}:
+          type: string
+          description: The process that produced the version
+      - turbo-picard:
+          type: string
+          description: The tool name
+      - "turbo-picard --version 2>&1 | sed -n 's/.* //p'":
+          type: string
+          description: Command used to obtain the tool version
+authors:
+  - "@dnncha"
+maintainers:
+  - "@dnncha"

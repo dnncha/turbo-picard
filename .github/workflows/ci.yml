@@ -38,6 +38,8 @@ jobs:
         run: |
           python3 -m pip install PyYAML==6.0.3
           python3 -m unittest tools/test_compare_markduplicates.py
+          python3 -m unittest tools/test_bench_markduplicates_competitors.py
+          python3 -m unittest tools/test_bench_markduplicates_synthetic.py
           python3 -m unittest tools/test_bioconda_release_preflight.py
           python3 -m unittest tools/test_audit_real_data.py
           python3 -m unittest tools/test_parity_compare.py
@@ -45,6 +47,7 @@ jobs:
           python3 -m unittest tools/test_prepare_bioconda_release.py
           python3 -m unittest tools/test_render_benchmark_assets.py
           python3 -m unittest tools/test_update_real_data_manifest.py
+          python3 -m unittest tools/test_validate_production_manifest.py
           python3 -m unittest tools/test_verify_benchmark_log_evidence.py
           python3 -m unittest tools/test_verify_benchmark_suite_coverage.py
           python3 -m unittest tools/test_verify_benchmark_thresholds.py
@@ -66,6 +69,7 @@ jobs:
           python3 -m unittest tools/test_verify_workflow_starters.py
           python3 -m py_compile \
             tools/parity_compare.py \
+            tools/bench_markduplicates_competitors.py \
             tools/compare_markduplicates.py \
             tools/bioconda_release_preflight.py \
             tools/audit_real_data.py \
@@ -76,6 +80,7 @@ jobs:
             tools/bench_bedtointervallist.py \
             tools/bench_markduplicates.py \
             tools/bench_markduplicates_synthetic.py \
+            tools/validate_production_manifest.py \
             tools/bench_buildbamindex.py \
             tools/bench_cleansam.py \
             tools/bench_collectbasedistributionbycycle.py \
@@ -129,11 +134,14 @@ jobs:
             tools/verify_site_links.py \
             tools/verify_workflow_starters.py \
             tools/test_compare_markduplicates.py \
+            tools/test_bench_markduplicates_competitors.py \
+            tools/test_bench_markduplicates_synthetic.py \
             tools/test_bioconda_release_preflight.py \
             tools/test_compare_real_data.py \
             tools/test_prepare_bioconda_release.py \
             tools/test_render_benchmark_assets.py \
             tools/test_update_real_data_manifest.py \
+            tools/test_validate_production_manifest.py \
             tools/test_verify_benchmark_log_evidence.py \
             tools/test_verify_benchmark_suite_coverage.py \
             tools/test_verify_benchmark_thresholds.py \
@@ -207,6 +215,46 @@ jobs:
         run: docker build -t turbo-picard:ci .
       - name: Smoke container entrypoint
         run: docker run --rm turbo-picard:ci MarkDuplicates --help
+
+  nf-core-process:
+    name: nf-core process candidate
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Install native dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang libclang-dev make pkg-config
+
+      - name: Build turbo-picard executable
+        run: cargo build --release --locked -p turbo-picard-cli --bin turbo-picard
+
+      - name: Install pinned Nextflow and nf-test
+        run: |
+          curl -fsSL --retry 5 --retry-all-errors --retry-delay 2 https://github.com/nextflow-io/nextflow/releases/download/v26.04.6/nextflow-26.04.6-dist -o "$RUNNER_TEMP/nextflow"
+          echo "182a63c74074e2dc7956ffa3c8cd59de952ed2c44394e21faf5e1736b945444c  $RUNNER_TEMP/nextflow" | sha256sum --check
+          chmod +x "$RUNNER_TEMP/nextflow"
+          curl -fsSL --retry 5 --retry-all-errors --retry-delay 2 https://github.com/askimed/nf-test/releases/download/v0.9.5/nf-test-0.9.5.tar.gz -o "$RUNNER_TEMP/nf-test.tar.gz"
+          echo "b7679eb90cdc9642bfa89e9634db02ce6e699de53ad35ef0e2f4847634fc1641  $RUNNER_TEMP/nf-test.tar.gz" | sha256sum --check
+          tar -xzf "$RUNNER_TEMP/nf-test.tar.gz" -C "$RUNNER_TEMP" nf-test.jar
+
+      - name: Test nf-core process candidate
+        env:
+          NXF_HOME: ${{ runner.temp }}/nextflow-home
+          TURBO_PICARD_REPO_ROOT: ${{ github.workspace }}
+        run: |
+          PATH="$RUNNER_TEMP:$GITHUB_WORKSPACE/target/release:$PATH" \
+            java -jar "$RUNNER_TEMP/nf-test.jar" \
+            test packaging/nf-core/tests/main.nf.test
 
   picard-parity:
     name: Picard parity

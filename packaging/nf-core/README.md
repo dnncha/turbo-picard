@@ -60,3 +60,18 @@ docker build -t turbo-picard:local .
 
 Use that image in a profile while evaluating speed and parity before opening an
 nf-core module PR.
+
+## Opt-in process candidate
+
+The repository also contains `turbo_picard_markduplicates.nf`, an opt-in process
+candidate with explicit BAM/CRAM reference inputs and marked BAM, BAI, metrics
+and version outputs. The test profile under `tests/` exercises the local BAM,
+reference-backed CRAM, output channels and stub behavior using redistributable
+repository fixtures. The candidate is still an adoption asset, not an nf-core
+release: a pinned public container or Conda artifact, module lint, and external
+nf-core review remain outstanding.
+
+The process deliberately does not turn the test profile into a Picard
+replacement claim. The tests establish wrapper wiring and output contracts;
+production parity and performance require the separate evidence gates described
+in `benchmarks/markduplicates-competitors/README.md`.
