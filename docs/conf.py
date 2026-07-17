@@ -26,6 +26,7 @@ exclude_patterns = [
 
 html_theme = "furo"
 html_title = "turbo-picard"
+html_baseurl = "https://turbo-picard.readthedocs.io/en/latest/"
 html_logo = None
 html_favicon = None
 
