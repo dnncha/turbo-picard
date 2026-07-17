@@ -1,9 +1,9 @@
 turbo-picard documentation
 ==========================
 
-``turbo-picard`` is for teams already using Picard that want the strongest
-practical replacement: faster execution, lower memory pressure, and a cleaner
-adoption path with almost no pipeline rewiring.
+``turbo-picard`` is for teams already using Picard that want faster execution,
+lower memory pressure, and a command-by-command migration path without
+redesigning pipeline task interfaces.
 
 It keeps the command shape people already know:
 
@@ -69,6 +69,13 @@ Start here
 
       See what stays the same, what changes, and when to stay with Picard.
 
+   .. grid-item-card:: Picard alternatives
+      :link: picard-alternatives
+      :link-type: doc
+
+      Compare turbo-picard, samtools, Sambamba, SAMBLASTER, FastDup and riker
+      by workflow and input contract.
+
    .. grid-item-card:: turbo-picard vs riker
       :link: turbo-picard-vs-riker
       :link-type: doc
@@ -103,6 +110,7 @@ Start here
    first-command
    evaluation-playbook
    use-cases
+   picard-alternatives
    picard-vs-turbo-picard
    turbo-picard-vs-riker
    faq

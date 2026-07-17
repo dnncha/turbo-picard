@@ -10,7 +10,7 @@ Title:
 
 Post:
 
-I have released `turbo-picard` 0.1.8:
+I have released `turbo-picard` 0.1.9:
 
 https://github.com/dnncha/turbo-picard
 
