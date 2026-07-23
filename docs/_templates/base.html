@@ -1,0 +1,31 @@
+{% extends "!base.html" %}
+
+{% block extrahead %}
+  {{ super() }}
+  {% if pagename == "index" %}
+    <meta
+      name="description"
+      content="Rust command-line tools for selected Picard-compatible genomics workflows."
+    />
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@type": "SoftwareSourceCode",
+        "name": "turbo-picard",
+        "description": "Rust command-line tools for selected Picard-compatible genomics workflows.",
+        "codeRepository": "https://github.com/dnncha/turbo-picard",
+        "downloadUrl": "https://pypi.org/project/turbo-picard/0.1.10/",
+        "license": "https://spdx.org/licenses/MIT.html",
+        "programmingLanguage": "Rust",
+        "runtimePlatform": "Linux and macOS",
+        "softwareVersion": "0.1.10",
+        "applicationCategory": "Bioinformatics",
+        "author": {
+          "@type": "Person",
+          "name": "Donncha O'Toole",
+          "sameAs": "https://orcid.org/0009-0003-5012-7229"
+        }
+      }
+    </script>
+  {% endif %}
+{% endblock %}

@@ -13,6 +13,7 @@ ROOT = Path(__file__).resolve().parents[1]
 RELEASE_TEXT_PATHS = [
     Path("README.md"),
     Path("docs/index.rst"),
+    Path("docs/_templates/base.html"),
     Path("docs/is-this-for-you.rst"),
     Path("docs/quickstart.rst"),
     Path("docs/adoption.rst"),

@@ -134,6 +134,20 @@ bioconda-utils build --docker --mulled-test turbo-picard
             errors,
         )
 
+    def test_scans_hosted_docs_template(self) -> None:
+        root = self.make_tree()
+        write(
+            root,
+            Path("docs/_templates/base.html"),
+            "This is the first choice for every workflow.",
+        )
+
+        errors = verify_release_text_quality.validate_release_text(root)
+        self.assertIn(
+            "docs/_templates/base.html contains release-text banned phrase: first choice",
+            errors,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
