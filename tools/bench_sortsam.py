@@ -66,6 +66,12 @@ def main():
     parser = argparse.ArgumentParser(description="Benchmark turbo-picard SortSam against Picard.")
     parser.add_argument("--reads", type=int, default=200_000, help="reads to synthesize")
     parser.add_argument(
+        "--max-records-in-ram",
+        type=int,
+        default=500_000,
+        help="SortSam MAX_RECORDS_IN_RAM for both implementations",
+    )
+    parser.add_argument(
         "--conda-prefix",
         default=os.environ.get("TURBO_PICARD_CONDA_PREFIX", str(ROOT / ".conda-turbo-picard")),
         help="conda environment prefix containing Picard",
@@ -92,6 +98,8 @@ def main():
             "SortSam",
             f"I={input_sam}",
             "SORT_ORDER=coordinate",
+            f"MAX_RECORDS_IN_RAM={args.max_records_in_ram}",
+            f"TMP_DIR={workdir}",
             "VALIDATION_STRINGENCY=SILENT",
             "QUIET=true",
         ]
@@ -102,6 +110,7 @@ def main():
         speedup = picard_time / turbo_time if turbo_time > 0 else float("inf")
         print("command=SortSam")
         print(f"reads={args.reads}")
+        print(f"max_records_in_ram={args.max_records_in_ram}")
         print(f"turbo_seconds={turbo_time:.6f}")
         print(f"picard_seconds={picard_time:.6f}")
         print(f"speedup={speedup:.2f}x")

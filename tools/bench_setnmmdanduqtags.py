@@ -44,6 +44,8 @@ def write_reference(path, reads):
         handle.write(">chr1\n")
         for offset in range(0, len(sequence), 80):
             handle.write(sequence[offset : offset + 80] + "\n")
+    with open(str(path) + ".fai", "w", encoding="utf-8") as handle:
+        handle.write(f"chr1\t{len(sequence)}\t6\t80\t81\n")
 
 
 def write_sam(path, reads):
