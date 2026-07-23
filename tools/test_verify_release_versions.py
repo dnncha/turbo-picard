@@ -97,6 +97,10 @@ type: software
 title: "turbo-picard"
 version: "0.1.0"
 abstract: "Picard-shaped tooling with parity evidence."
+identifiers:
+  - type: doi
+    value: 10.5281/zenodo.12345678
+    description: "Zenodo archive for v0.1.0"
 authors:
   - name: "turbo-picard contributors"
 repository-code: "https://github.com/dnncha/turbo-picard"
@@ -184,6 +188,23 @@ keywords:
 
         self.assertIn(
             "CITATION.cff type must be software",
+            verify_release_versions.collect_errors(root),
+        )
+
+    def test_rejects_stale_zenodo_citation_identifier(self) -> None:
+        root = self.make_tree()
+        citation = root / "CITATION.cff"
+        citation.write_text(
+            citation.read_text(encoding="utf-8").replace(
+                "Zenodo archive for v0.1.0",
+                "Zenodo archive for v0.0.9",
+            ),
+            encoding="utf-8",
+        )
+
+        self.assertIn(
+            "CITATION.cff must include a Zenodo DOI identifier for "
+            "Zenodo archive for v0.1.0",
             verify_release_versions.collect_errors(root),
         )
 
