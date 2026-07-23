@@ -24,6 +24,7 @@ use rust_htslib::bam::header::HeaderRecord;
 use rust_htslib::bam::index;
 use rust_htslib::bam::record::{Aux, Cigar, CigarString};
 use rust_htslib::bam::{self, Read};
+use rust_htslib::faidx;
 use rustc_hash::{FxBuildHasher, FxHashMap};
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet, BinaryHeap, HashSet};
@@ -35,6 +36,8 @@ use std::path::Path;
 use std::process::{self, Command};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
+use turbo_picard_core::bam_external_sort::{BamExternalSortConfig, BamExternalSorter};
+use turbo_picard_core::external_sort::{ExternalSortConfig, ExternalSorter};
 use turbo_picard_core::hts_io;
 use turbo_picard_core::markdup_config::MarkDuplicatesConfig;
 use turbo_picard_core::picard_args::normalize_picard_args_for_command;
@@ -2145,6 +2148,13 @@ fn run_sortsam(args: &[String]) -> Result<(), String> {
     let input = required_scalar(&args, "INPUT")?;
     let output = required_scalar(&args, "OUTPUT")?;
     let compression_level = optional_u32(&args, "COMPRESSION_LEVEL")?;
+    let max_records_in_ram = optional_u32(&args, "MAX_RECORDS_IN_RAM")?
+        .map(|value| value as usize)
+        .unwrap_or(500_000);
+    let tmp_dir = optional_scalar(&args, "TMP_DIR")?
+        .filter(|value| !value.trim().is_empty())
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(env::temp_dir);
     let create_index = optional_bool(&args, "CREATE_INDEX")?.unwrap_or(false);
     let create_md5_file = optional_bool(&args, "CREATE_MD5_FILE")?.unwrap_or(false);
     let sort_order = match required_scalar(&args, "SORT_ORDER")?.as_str() {
@@ -2155,6 +2165,18 @@ fn run_sortsam(args: &[String]) -> Result<(), String> {
     if create_index && sort_order != SortOrder::Coordinate {
         return Err("SortSam CREATE_INDEX=true requires SORT_ORDER=coordinate".to_string());
     }
+    let reference = picard_reference(&args)?;
+
+    if try_raw_copy_sortsam(
+        &input,
+        &output,
+        sort_order,
+        compression_level,
+        reference.as_deref(),
+    )? {
+        write_requested_sidecars(&output, create_md5_file, create_index)?;
+        return Ok(());
+    }
 
     if has_sam_extension(&input)
         && has_sam_extension(&output)
@@ -2162,10 +2184,9 @@ fn run_sortsam(args: &[String]) -> Result<(), String> {
         && !create_md5_file
         && compression_level.is_none()
     {
-        return run_sortsam_sam_text(&input, &output, sort_order);
+        return run_sortsam_sam_text(&input, &output, sort_order, &tmp_dir, max_records_in_ram);
     }
 
-    let reference = picard_reference(&args)?;
     let reader = open_bam_reader_with_reference(&input, reference.as_deref())
         .map_err(|error| error.to_string())?;
     let header = sorted_header(reader.header(), sort_order);
@@ -2193,17 +2214,19 @@ fn run_sortsam(args: &[String]) -> Result<(), String> {
     }
 
     let mut reader = open_bam_reader_with_reference(&input, reference.as_deref())?;
-    let mut records = reader
-        .records()
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|error| error.to_string())?;
-
-    match sort_order {
-        SortOrder::Coordinate => records.sort_unstable_by(compare_coordinate),
-        SortOrder::QueryName => records.sort_unstable_by(compare_queryname),
+    let run_header = bam::Header::from_template(reader.header());
+    let mut sort_config = BamExternalSortConfig::new(&tmp_dir);
+    sort_config.prefix = "turbo-picard-sortsam-bam".to_string();
+    sort_config.max_records_in_ram = max_records_in_ram.max(1);
+    let mut sorter = BamExternalSorter::new(run_header, sort_config)?;
+    let comparator = match sort_order {
+        SortOrder::Coordinate => compare_coordinate,
+        SortOrder::QueryName => compare_queryname,
         SortOrder::Unsorted => unreachable!("SortSam rejects SORT_ORDER=unsorted"),
+    };
+    for record in reader.records() {
+        sorter.push(record.map_err(|error| error.to_string())?, comparator)?;
     }
-
     let mut writer = bam_writer_for_path_with_reference(
         &output,
         &header,
@@ -2211,12 +2234,44 @@ fn run_sortsam(args: &[String]) -> Result<(), String> {
         reference.as_deref(),
         compression_level,
     )?;
-    for record in records {
-        writer.write(&record).map_err(|error| error.to_string())?;
-    }
+    sorter.finish_into(comparator, |record| {
+        writer.write(&record).map_err(|error| error.to_string())
+    })?;
     drop(writer);
 
     write_requested_sidecars(&output, create_md5_file, create_index)
+}
+
+fn try_raw_copy_sortsam(
+    input: &str,
+    output: &str,
+    sort_order: SortOrder,
+    compression_level: Option<u32>,
+    reference: Option<&str>,
+) -> Result<bool, String> {
+    if compression_level.is_some()
+        || hts_io::path_format(input) != hts_io::path_format(output)
+        || !hts_io::is_hts_container_input(input)
+    {
+        return Ok(false);
+    }
+    let input_path = fs::canonicalize(input).unwrap_or_else(|_| std::path::PathBuf::from(input));
+    let output_path = fs::canonicalize(output).unwrap_or_else(|_| std::path::PathBuf::from(output));
+    if input_path == output_path {
+        return Ok(false);
+    }
+    let reader = open_bam_reader_with_reference(input, reference)?;
+    let expected = match sort_order {
+        SortOrder::Coordinate => "coordinate",
+        SortOrder::QueryName => "queryname",
+        SortOrder::Unsorted => return Ok(false),
+    };
+    if header_sort_order(reader.header()).as_deref() != Some(expected) {
+        return Ok(false);
+    }
+    drop(reader);
+    fs::copy(input, output).map_err(|error| error.to_string())?;
+    Ok(true)
 }
 
 fn run_cleansam(args: &[String]) -> Result<(), String> {
@@ -2608,14 +2663,22 @@ fn push_text_cigar(cigars: &mut Vec<(u64, char)>, len: u64, op: char) {
     cigars.push((len, op));
 }
 
-fn run_sortsam_sam_text(input: &str, output: &str, sort_order: SortOrder) -> Result<(), String> {
+fn run_sortsam_sam_text(
+    input: &str,
+    output: &str,
+    sort_order: SortOrder,
+    tmp_dir: &Path,
+    max_records_in_ram: usize,
+) -> Result<(), String> {
     let file = fs::File::open(input).map_err(|error| error.to_string())?;
     let mut reader = BufReader::with_capacity(1024 * 1024, file);
     let mut header_lines = Vec::<String>::new();
     let mut contig_order = BTreeMap::<String, i32>::new();
-    let mut records = Vec::<SamTextSortRecord>::new();
     let mut line = String::new();
-    let mut serial = 0usize;
+    let mut config = ExternalSortConfig::new(tmp_dir);
+    config.prefix = "turbo-picard-sortsam-sam".to_string();
+    config.max_records_in_ram = max_records_in_ram.max(1);
+    let mut sorter = ExternalSorter::new(config)?;
 
     loop {
         line.clear();
@@ -2640,19 +2703,9 @@ fn run_sortsam_sam_text(input: &str, output: &str, sort_order: SortOrder) -> Res
             }
             header_lines.push(line.clone());
         } else if !line.trim().is_empty() {
-            records.push(SamTextSortRecord::parse(
-                line.clone(),
-                &contig_order,
-                serial,
-            )?);
-            serial += 1;
+            let record = SamTextSortRecord::parse(line.clone(), &contig_order)?;
+            sorter.push(record.sort_key(sort_order), record.line.into_bytes())?;
         }
-    }
-
-    match sort_order {
-        SortOrder::Coordinate => records.sort_unstable_by(compare_sam_text_coordinate),
-        SortOrder::QueryName => records.sort_unstable_by(compare_sam_text_queryname),
-        SortOrder::Unsorted => unreachable!("SortSam rejects SORT_ORDER=unsorted"),
     }
 
     let mut writer = BufWriter::with_capacity(
@@ -2660,11 +2713,11 @@ fn run_sortsam_sam_text(input: &str, output: &str, sort_order: SortOrder) -> Res
         fs::File::create(output).map_err(|error| error.to_string())?,
     );
     write_sorted_sam_text_header(&mut writer, &header_lines, sort_order)?;
-    for record in records {
+    sorter.finish_into(|record| {
         writer
-            .write_all(record.line.as_bytes())
-            .map_err(|error| error.to_string())?;
-    }
+            .write_all(&record.payload)
+            .map_err(|error| error.to_string())
+    })?;
     writer.flush().map_err(|error| error.to_string())
 }
 
@@ -2675,15 +2728,10 @@ struct SamTextSortRecord {
     flags: u16,
     tid: i32,
     pos: i64,
-    serial: usize,
 }
 
 impl SamTextSortRecord {
-    fn parse(
-        line: String,
-        contig_order: &BTreeMap<String, i32>,
-        serial: usize,
-    ) -> Result<Self, String> {
+    fn parse(line: String, contig_order: &BTreeMap<String, i32>) -> Result<Self, String> {
         let mut fields = line.trim_end_matches(['\r', '\n']).split('\t');
         let qname = fields
             .next()
@@ -2716,25 +2764,31 @@ impl SamTextSortRecord {
             flags,
             tid,
             pos,
-            serial,
         })
+    }
+
+    fn sort_key(&self, sort_order: SortOrder) -> Vec<u8> {
+        match sort_order {
+            SortOrder::Coordinate => coordinate_sam_text_key(self),
+            SortOrder::QueryName => {
+                let mut key = self.qname.as_bytes().to_vec();
+                key.push(0);
+                key.extend(coordinate_sam_text_key(self));
+                key
+            }
+            SortOrder::Unsorted => Vec::new(),
+        }
     }
 }
 
-fn compare_sam_text_coordinate(left: &SamTextSortRecord, right: &SamTextSortRecord) -> Ordering {
-    left.tid
-        .cmp(&right.tid)
-        .then_with(|| left.pos.cmp(&right.pos))
-        .then_with(|| left.qname.as_bytes().cmp(right.qname.as_bytes()))
-        .then_with(|| left.flags.cmp(&right.flags))
-        .then_with(|| left.serial.cmp(&right.serial))
-}
-
-fn compare_sam_text_queryname(left: &SamTextSortRecord, right: &SamTextSortRecord) -> Ordering {
-    left.qname
-        .as_bytes()
-        .cmp(right.qname.as_bytes())
-        .then_with(|| compare_sam_text_coordinate(left, right))
+fn coordinate_sam_text_key(record: &SamTextSortRecord) -> Vec<u8> {
+    let mut key = Vec::with_capacity(record.qname.len() + 15);
+    key.extend((record.tid as u32 ^ (1 << 31)).to_be_bytes());
+    key.extend((record.pos as u64 ^ (1 << 63)).to_be_bytes());
+    key.extend(record.qname.as_bytes());
+    key.push(0);
+    key.extend(record.flags.to_be_bytes());
+    key
 }
 
 fn write_sorted_sam_text_header(
@@ -2789,6 +2843,13 @@ fn run_mergesamfiles(args: &[String]) -> Result<(), String> {
     let inputs = required_values_for(&args, "INPUT", "MergeSamFiles")?;
     let output = required_scalar_for(&args, "OUTPUT", "MergeSamFiles")?;
     let compression_level = optional_u32(&args, "COMPRESSION_LEVEL")?;
+    let max_records_in_ram = optional_u32(&args, "MAX_RECORDS_IN_RAM")?
+        .map(|value| value as usize)
+        .unwrap_or(500_000);
+    let tmp_dir = optional_scalar(&args, "TMP_DIR")?
+        .filter(|value| !value.trim().is_empty())
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(env::temp_dir);
     let create_index = optional_bool(&args, "CREATE_INDEX")?.unwrap_or(false);
     let create_md5_file = optional_bool(&args, "CREATE_MD5_FILE")?.unwrap_or(false);
     let assume_sorted = optional_bool(&args, "ASSUME_SORTED")?.unwrap_or(false);
@@ -2836,18 +2897,36 @@ fn run_mergesamfiles(args: &[String]) -> Result<(), String> {
             interval_filter.as_ref(),
         )?;
     } else {
-        let mut records = collect_merge_records(
-            &merge_plan.inputs,
-            reference.as_deref(),
-            interval_filter.as_ref(),
-        )?;
-        match sort_order {
-            SortOrder::Coordinate => records.sort_by(compare_coordinate),
-            SortOrder::QueryName => records.sort_by(compare_queryname),
-            SortOrder::Unsorted => {}
-        }
-        for record in records {
-            writer.write(&record).map_err(|error| error.to_string())?;
+        if sort_order == SortOrder::Unsorted {
+            stream_merge_records(
+                &merge_plan.inputs,
+                reference.as_deref(),
+                interval_filter.as_ref(),
+                |record| writer.write(&record).map_err(|error| error.to_string()),
+            )?;
+        } else {
+            let run_reader =
+                open_bam_reader_with_reference(&merge_plan.inputs[0].path, reference.as_deref())
+                    .map_err(|error| error.to_string())?;
+            let mut config = BamExternalSortConfig::new(&tmp_dir);
+            config.prefix = "turbo-picard-mergesam".to_string();
+            config.max_records_in_ram = max_records_in_ram.max(1);
+            let mut sorter =
+                BamExternalSorter::new(bam::Header::from_template(run_reader.header()), config)?;
+            let comparator = match sort_order {
+                SortOrder::Coordinate => compare_coordinate,
+                SortOrder::QueryName => compare_queryname,
+                SortOrder::Unsorted => unreachable!(),
+            };
+            stream_merge_records(
+                &merge_plan.inputs,
+                reference.as_deref(),
+                interval_filter.as_ref(),
+                |record| sorter.push(record, comparator),
+            )?;
+            sorter.finish_into(comparator, |record| {
+                writer.write(&record).map_err(|error| error.to_string())
+            })?;
         }
     }
     drop(writer);
@@ -5093,6 +5172,13 @@ fn run_fixmateinformation(args: &[String]) -> Result<(), String> {
     let create_index = optional_bool(&args, "CREATE_INDEX")?.unwrap_or(false);
     let reference = picard_reference(&args)?;
     let compression_level = optional_u32(&args, "COMPRESSION_LEVEL")?;
+    let max_records_in_ram = optional_u32(&args, "MAX_RECORDS_IN_RAM")?
+        .map(|value| value as usize)
+        .unwrap_or(500_000);
+    let tmp_dir = optional_scalar(&args, "TMP_DIR")?
+        .filter(|value| !value.trim().is_empty())
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(env::temp_dir);
     let mut reader = open_bam_reader_with_reference(&inputs[0], reference.as_deref())
         .map_err(|error| error.to_string())?;
     let first_input_sort_order = header_sort_order(reader.header());
@@ -5148,14 +5234,24 @@ fn run_fixmateinformation(args: &[String]) -> Result<(), String> {
         reference.as_deref(),
         compression_level,
     )?;
+    let mut coordinate_sorter = if sort_order == SortOrder::Coordinate {
+        let mut config = BamExternalSortConfig::new(&tmp_dir);
+        config.prefix = "turbo-picard-fixmate".to_string();
+        config.max_records_in_ram = max_records_in_ram.max(1);
+        Some(BamExternalSorter::new(
+            bam::Header::from_template(reader.header()),
+            config,
+        )?)
+    } else {
+        None
+    };
     let mut pending = Vec::<bam::Record>::new();
-    let mut fixed_records = Vec::<bam::Record>::new();
 
     process_fixmate_reader(
         &mut reader,
         &mut writer,
         &mut pending,
-        &mut fixed_records,
+        coordinate_sorter.as_mut(),
         sort_order,
         add_mate_cigar,
         ignore_missing_mates,
@@ -5167,22 +5263,25 @@ fn run_fixmateinformation(args: &[String]) -> Result<(), String> {
             &mut reader,
             &mut writer,
             &mut pending,
-            &mut fixed_records,
+            coordinate_sorter.as_mut(),
             sort_order,
             add_mate_cigar,
             ignore_missing_mates,
         )?;
     }
     if sort_order == SortOrder::Coordinate {
-        fixed_records.extend(drain_fixed_mate_group(
-            &mut pending,
-            add_mate_cigar,
-            ignore_missing_mates,
-        )?);
-        fixed_records.sort_by(compare_coordinate);
-        for record in fixed_records {
-            writer.write(&record).map_err(|error| error.to_string())?;
+        for record in drain_fixed_mate_group(&mut pending, add_mate_cigar, ignore_missing_mates)? {
+            coordinate_sorter
+                .as_mut()
+                .expect("coordinate sorter exists")
+                .push(record, compare_coordinate)?;
         }
+        coordinate_sorter
+            .take()
+            .expect("coordinate sorter exists")
+            .finish_into(compare_coordinate, |record| {
+                writer.write(&record).map_err(|error| error.to_string())
+            })?;
     } else {
         write_fixed_mate_group(
             &mut writer,
@@ -5200,17 +5299,18 @@ fn process_fixmate_reader(
     reader: &mut bam::Reader,
     writer: &mut bam::Writer,
     pending: &mut Vec<bam::Record>,
-    fixed_records: &mut Vec<bam::Record>,
+    coordinate_sorter: Option<&mut BamExternalSorter>,
     sort_order: SortOrder,
     add_mate_cigar: bool,
     ignore_missing_mates: bool,
 ) -> Result<(), String> {
+    let mut coordinate_sorter = coordinate_sorter;
     for record in reader.records() {
         process_fixmate_record(
             record.map_err(|error| error.to_string())?,
             writer,
             pending,
-            fixed_records,
+            coordinate_sorter.as_deref_mut(),
             sort_order,
             add_mate_cigar,
             ignore_missing_mates,
@@ -5223,7 +5323,7 @@ fn process_fixmate_record(
     record: bam::Record,
     writer: &mut bam::Writer,
     pending: &mut Vec<bam::Record>,
-    fixed_records: &mut Vec<bam::Record>,
+    coordinate_sorter: Option<&mut BamExternalSorter>,
     sort_order: SortOrder,
     add_mate_cigar: bool,
     ignore_missing_mates: bool,
@@ -5233,11 +5333,13 @@ fn process_fixmate_record(
         .is_some_and(|first| first.qname() != record.qname())
     {
         if sort_order == SortOrder::Coordinate {
-            fixed_records.extend(drain_fixed_mate_group(
-                pending,
-                add_mate_cigar,
-                ignore_missing_mates,
-            )?);
+            let fixed_records =
+                drain_fixed_mate_group(pending, add_mate_cigar, ignore_missing_mates)?;
+            let sorter = coordinate_sorter
+                .ok_or_else(|| "FixMateInformation coordinate sorter missing".to_string())?;
+            for fixed_record in fixed_records {
+                sorter.push(fixed_record, compare_coordinate)?;
+            }
         } else {
             write_fixed_mate_group(writer, pending, add_mate_cigar, ignore_missing_mates)?;
         }
@@ -6127,6 +6229,13 @@ fn run_revertsam(args: &[String]) -> Result<(), String> {
     let output = required_scalar_for(&args, "OUTPUT", "RevertSam")?;
     let output_format = output_format_for(&output, "RevertSam")?;
     let compression_level = optional_u32(&args, "COMPRESSION_LEVEL")?;
+    let max_records_in_ram = optional_u32(&args, "MAX_RECORDS_IN_RAM")?
+        .map(|value| value as usize)
+        .unwrap_or(500_000);
+    let tmp_dir = optional_scalar(&args, "TMP_DIR")?
+        .filter(|value| !value.trim().is_empty())
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(env::temp_dir);
     let restore_original_qualities =
         optional_bool(&args, "RESTORE_ORIGINAL_QUALITIES")?.unwrap_or(true);
     let remove_alignment_information =
@@ -6215,28 +6324,6 @@ fn run_revertsam(args: &[String]) -> Result<(), String> {
 
     let mut reader = open_bam_reader_with_reference(&input, reference.as_deref())?;
     let header = reverted_header(reader.header(), remove_alignment_information, sort_order);
-    let mut records = Vec::new();
-    for record in reader.records() {
-        let mut record = record.map_err(|error| error.to_string())?;
-        if record.is_secondary() || record.is_supplementary() {
-            continue;
-        }
-        revert_record(
-            &mut record,
-            restore_original_qualities,
-            remove_alignment_information,
-            remove_duplicate_information,
-            restore_hardclips,
-            &attributes_to_clear,
-            &attributes_to_reverse,
-            &attributes_to_reverse_complement,
-        )?;
-        records.push(record);
-    }
-    if sort_order == SortOrder::QueryName && !queryname_records_are_monotonic(&records) {
-        records.sort_unstable_by(compare_queryname);
-    }
-
     let mut writer = bam_writer_for_path_with_reference(
         &output,
         &header,
@@ -6244,8 +6331,50 @@ fn run_revertsam(args: &[String]) -> Result<(), String> {
         reference.as_deref(),
         compression_level,
     )?;
-    for record in records {
-        writer.write(&record).map_err(|error| error.to_string())?;
+    if sort_order == SortOrder::QueryName {
+        let mut config = BamExternalSortConfig::new(&tmp_dir);
+        config.prefix = "turbo-picard-revertsam".to_string();
+        config.max_records_in_ram = max_records_in_ram.max(1);
+        let mut sorter =
+            BamExternalSorter::new(bam::Header::from_template(reader.header()), config)?;
+        for record in reader.records() {
+            let mut record = record.map_err(|error| error.to_string())?;
+            if record.is_secondary() || record.is_supplementary() {
+                continue;
+            }
+            revert_record(
+                &mut record,
+                restore_original_qualities,
+                remove_alignment_information,
+                remove_duplicate_information,
+                restore_hardclips,
+                &attributes_to_clear,
+                &attributes_to_reverse,
+                &attributes_to_reverse_complement,
+            )?;
+            sorter.push(record, compare_queryname)?;
+        }
+        sorter.finish_into(compare_queryname, |record| {
+            writer.write(&record).map_err(|error| error.to_string())
+        })?;
+    } else {
+        for record in reader.records() {
+            let mut record = record.map_err(|error| error.to_string())?;
+            if record.is_secondary() || record.is_supplementary() {
+                continue;
+            }
+            revert_record(
+                &mut record,
+                restore_original_qualities,
+                remove_alignment_information,
+                remove_duplicate_information,
+                restore_hardclips,
+                &attributes_to_clear,
+                &attributes_to_reverse,
+                &attributes_to_reverse_complement,
+            )?;
+            writer.write(&record).map_err(|error| error.to_string())?;
+        }
     }
     drop(writer);
 
@@ -6353,7 +6482,6 @@ fn run_setnmmdanduqtags(args: &[String]) -> Result<(), String> {
     let create_md5_file = optional_bool(&args, "CREATE_MD5_FILE")?.unwrap_or(false);
     let create_index = optional_bool(&args, "CREATE_INDEX")?.unwrap_or(false);
 
-    let reference = reference_sequences_by_name(&reference_fasta)?;
     let mut reader = open_bam_reader_with_reference(&input, Some(reference_fasta.as_str()))
         .map_err(|error| error.to_string())?;
     if header_sort_order(reader.header()).as_deref() != Some("coordinate") {
@@ -6366,10 +6494,7 @@ fn run_setnmmdanduqtags(args: &[String]) -> Result<(), String> {
         .iter()
         .map(|name| String::from_utf8_lossy(name).to_string())
         .collect::<Vec<_>>();
-    let references_by_tid = target_names
-        .iter()
-        .map(|name| reference.get(name).map(Vec::as_slice))
-        .collect::<Vec<_>>();
+    let mut reference = ReferenceWindowCache::new(&reference_fasta, target_names)?;
     let mut writer = bam_writer_for_path_with_reference(
         &output,
         &header,
@@ -6380,7 +6505,7 @@ fn run_setnmmdanduqtags(args: &[String]) -> Result<(), String> {
 
     for record in reader.records() {
         let mut record = record.map_err(|error| error.to_string())?;
-        set_nm_md_uq_tags(&mut record, &references_by_tid, set_only_uq)?;
+        set_nm_md_uq_tags(&mut record, &mut reference, set_only_uq)?;
         writer.write(&record).map_err(|error| error.to_string())?;
     }
     drop(writer);
@@ -18770,9 +18895,91 @@ fn remove_aux_if_present(record: &mut bam::Record, tag: &[u8]) -> Result<(), Str
     Ok(())
 }
 
+/// Coordinate-local FASTA access for `SetNmMdAndUqTags`.
+///
+/// Indexed references are fetched in 4 MiB windows.  Coordinate-sorted input
+/// therefore advances through a contig without retaining the rest of the
+/// genome.  The existing whole-contig reader remains a compatibility fallback
+/// for an unindexed reference.
+struct ReferenceWindowCache {
+    reference_path: String,
+    target_names: Vec<String>,
+    indexed: Option<faidx::Reader>,
+    active_tid: Option<usize>,
+    active_start: usize,
+    active_sequence: Vec<u8>,
+}
+
+impl ReferenceWindowCache {
+    const WINDOW_SIZE: usize = 4 * 1024 * 1024;
+
+    fn new(reference_path: &str, target_names: Vec<String>) -> Result<Self, String> {
+        let fai_path = format!("{reference_path}.fai");
+        let indexed = if Path::new(&fai_path).is_file() {
+            Some(faidx::Reader::from_path(reference_path).map_err(|error| error.to_string())?)
+        } else {
+            None
+        };
+        Ok(Self {
+            reference_path: reference_path.to_string(),
+            target_names,
+            indexed,
+            active_tid: None,
+            active_start: 0,
+            active_sequence: Vec::new(),
+        })
+    }
+
+    fn base(&mut self, tid: usize, position: usize) -> Result<u8, String> {
+        if self.active_tid != Some(tid)
+            || position < self.active_start
+            || position >= self.active_start.saturating_add(self.active_sequence.len())
+        {
+            self.load_window(tid, position)?;
+        }
+        self.active_sequence
+            .get(position - self.active_start)
+            .copied()
+            .ok_or_else(|| "SetNmMdAndUqTags alignment extends beyond reference".to_string())
+    }
+
+    fn load_window(&mut self, tid: usize, position: usize) -> Result<(), String> {
+        let contig = self
+            .target_names
+            .get(tid)
+            .ok_or_else(|| format!("SetNmMdAndUqTags reference missing target {tid}"))?
+            .clone();
+        let (start, mut sequence) = if let Some(indexed) = self.indexed.as_ref() {
+            let length = usize::try_from(indexed.fetch_seq_len(&contig))
+                .map_err(|_| format!("SetNmMdAndUqTags reference {contig} is too large"))?;
+            if position >= length {
+                return Err("SetNmMdAndUqTags alignment extends beyond reference".to_string());
+            }
+            let start = position / Self::WINDOW_SIZE * Self::WINDOW_SIZE;
+            let end = length
+                .min(start.saturating_add(Self::WINDOW_SIZE))
+                .saturating_sub(1);
+            let sequence = indexed
+                .fetch_seq(&contig, start, end)
+                .map_err(|error| error.to_string())?;
+            (start, sequence)
+        } else {
+            (
+                0,
+                load_fasta_contig_sequence(&self.reference_path, &contig)?,
+            )
+        };
+        sequence.make_ascii_uppercase();
+        self.active_tid = Some(tid);
+        self.active_start = start;
+        self.active_sequence = sequence;
+        Ok(())
+    }
+}
+
 fn set_nm_md_uq_tags(
     record: &mut bam::Record,
-    references_by_tid: &[Option<&[u8]>],
+    reference: &mut ReferenceWindowCache,
     set_only_uq: bool,
 ) -> Result<(), String> {
     if record.is_unmapped() {
@@ -18781,11 +18988,7 @@ fn set_nm_md_uq_tags(
     if record.tid() < 0 || record.pos() < 0 {
         return Ok(());
     }
-    let reference = references_by_tid
-        .get(record.tid() as usize)
-        .copied()
-        .flatten()
-        .ok_or_else(|| format!("SetNmMdAndUqTags reference missing target {}", record.tid()))?;
+    let tid = record.tid() as usize;
     let read_bases = record.seq();
     let qualities = record.qual();
     let mut read_offset = 0usize;
@@ -18806,9 +19009,7 @@ fn set_nm_md_uq_tags(
                         return Err("SetNmMdAndUqTags read sequence shorter than CIGAR".to_string());
                     }
                     let read_base = read_bases[read_offset];
-                    let ref_base = *reference.get(ref_offset).ok_or_else(|| {
-                        "SetNmMdAndUqTags alignment extends beyond reference".to_string()
-                    })?;
+                    let ref_base = reference.base(tid, ref_offset)?;
                     if dna_bases_equal(read_base, ref_base) {
                         matches += 1;
                     } else {
@@ -18831,9 +19032,7 @@ fn set_nm_md_uq_tags(
                 md.push('^');
                 matches = 0;
                 for _ in 0..length {
-                    let ref_base = *reference.get(ref_offset).ok_or_else(|| {
-                        "SetNmMdAndUqTags deletion extends beyond reference".to_string()
-                    })?;
+                    let ref_base = reference.base(tid, ref_offset)?;
                     md.push(ref_base as char);
                     ref_offset += 1;
                 }
@@ -19343,12 +19542,12 @@ fn build_merge_plan(
     })
 }
 
-fn collect_merge_records(
+fn stream_merge_records(
     input_plans: &[MergeInputPlan],
     reference: Option<&str>,
     interval_filter: Option<&BTreeMap<i32, Vec<(u64, u64)>>>,
-) -> Result<Vec<bam::Record>, String> {
-    let mut records = Vec::new();
+    mut emit: impl FnMut(bam::Record) -> Result<(), String>,
+) -> Result<(), String> {
     for input in input_plans {
         let mut reader = open_bam_reader_with_reference(&input.path, reference)
             .map_err(|error| error.to_string())?;
@@ -19358,10 +19557,10 @@ fn collect_merge_records(
                 continue;
             }
             rewrite_record_read_group(&mut record, &input.read_group_renames)?;
-            records.push(record);
+            emit(record)?;
         }
     }
-    Ok(records)
+    Ok(())
 }
 
 fn header_declares_sort_order(header: &bam::HeaderView, sort_order: SortOrder) -> bool {
@@ -19735,6 +19934,7 @@ fn compare_queryname(left: &bam::Record, right: &bam::Record) -> Ordering {
         .then_with(|| compare_coordinate(left, right))
 }
 
+#[cfg(test)]
 fn queryname_records_are_monotonic(records: &[bam::Record]) -> bool {
     records
         .windows(2)

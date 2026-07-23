@@ -44,6 +44,7 @@ RELEASE_TEXT_PATHS = [
 ]
 
 BANNED_PHRASES = [
+    "ai " + "slop",
     "ai-powered",
     "adoption " + "evidence",
     "adoption " + "trust",

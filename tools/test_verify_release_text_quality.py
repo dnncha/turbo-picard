@@ -109,9 +109,11 @@ bioconda-utils build --docker --mulled-test turbo-picard
     def test_rejects_internal_process_language(self) -> None:
         root = self.make_tree()
         phrase = "pilot " + "conversations"
+        ai_phrase = "AI " + "slop"
         readme = root / "benchmarks/production/README.md"
         readme.write_text(
-            readme.read_text(encoding="utf-8") + f"\nTrack {phrase} here.\n",
+            readme.read_text(encoding="utf-8")
+            + f"\nTrack {phrase} here. Avoid {ai_phrase}.\n",
             encoding="utf-8",
         )
 
@@ -119,6 +121,12 @@ bioconda-utils build --docker --mulled-test turbo-picard
         self.assertIn(
             "benchmarks/production/README.md contains release-text banned phrase: "
             + phrase,
+            errors,
+        )
+        self.assertIn(
+            "benchmarks/production/README.md contains release-text banned phrase: "
+            + "ai "
+            + "slop",
             errors,
         )
 

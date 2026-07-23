@@ -530,6 +530,54 @@ fn sortsam_sorts_sam_by_coordinate() {
 }
 
 #[test]
+fn sortsam_spills_sam_runs_when_max_records_is_one() {
+    let tempdir = tempfile::tempdir().expect("tempdir exists");
+    let input = tempdir.path().join("input.sam");
+    let output = tempdir.path().join("coordinate.sam");
+    fs::write(
+        &input,
+        concat!(
+            "@HD\tVN:1.6\tSO:unsorted\n",
+            "@SQ\tSN:chr1\tLN:1000\n",
+            "read-c\t0\tchr1\t90\t60\t4M\t*\t0\t0\tCCCC\tFFFF\n",
+            "read-a\t0\tchr1\t10\t60\t4M\t*\t0\t0\tAAAA\tFFFF\n",
+            "read-b\t0\tchr1\t50\t60\t4M\t*\t0\t0\tBBBB\tFFFF\n",
+        ),
+    )
+    .expect("input fixture is written");
+
+    Command::cargo_bin("picard")
+        .expect("binary exists")
+        .args([
+            "SortSam",
+            &format!("I={}", input.display()),
+            &format!("O={}", output.display()),
+            "SORT_ORDER=coordinate",
+            "MAX_RECORDS_IN_RAM=1",
+            &format!("TMP_DIR={}", tempdir.path().display()),
+        ])
+        .assert()
+        .success();
+
+    let output_sam = fs::read_to_string(&output).expect("output SAM exists");
+    assert_eq!(
+        record_names(&output_sam),
+        vec!["read-a", "read-b", "read-c"]
+    );
+    assert_eq!(
+        fs::read_dir(tempdir.path())
+            .expect("temporary directory can be read")
+            .filter_map(Result::ok)
+            .filter(|entry| entry
+                .file_name()
+                .to_string_lossy()
+                .contains("turbo-picard-sortsam"))
+            .count(),
+        0
+    );
+}
+
+#[test]
 fn sortsam_sorts_sam_by_queryname() {
     let tempdir = tempfile::tempdir().expect("tempdir exists");
     let input = tempdir.path().join("input.sam");
@@ -653,7 +701,7 @@ fn cleansam_writes_requested_bam_sidecars() {
         "CREATE_MD5_FILE=true",
         "CREATE_INDEX=true",
         "COMPRESSION_LEVEL=5",
-        "MAX_RECORDS_IN_RAM=500",
+        "MAX_RECORDS_IN_RAM=1",
         &format!("TMP_DIR={}", tempdir.path().display()),
         "VERBOSITY=WARNING",
     ])
@@ -937,6 +985,8 @@ fn mergesamfiles_falls_back_to_full_sort_for_unsorted_inputs() {
         &format!("I={}", input_b.display()),
         &format!("O={}", output.display()),
         "SORT_ORDER=coordinate",
+        "MAX_RECORDS_IN_RAM=1",
+        &format!("TMP_DIR={}", tempdir.path().display()),
     ])
     .assert()
     .success();
@@ -5388,6 +5438,8 @@ fn fixmateinformation_can_coordinate_sort_and_index_bam() {
             "ASSUME_SORTED=true",
             "SORT_ORDER=coordinate",
             "CREATE_INDEX=true",
+            "MAX_RECORDS_IN_RAM=1",
+            &format!("TMP_DIR={}", tempdir.path().display()),
             "VALIDATION_STRINGENCY=SILENT",
             "QUIET=true",
         ])
@@ -6117,6 +6169,11 @@ fn setnmmdanduqtags_computes_reference_tags() {
     let input = tempdir.path().join("input.sam");
     let output = tempdir.path().join("tagged.sam");
     fs::write(&reference, ">chr1\nACGTACGTACGT\n").expect("reference is written");
+    fs::write(
+        format!("{}.fai", reference.display()),
+        "chr1\t12\t6\t12\t13\n",
+    )
+    .expect("reference index is written");
     fs::write(
         &input,
         concat!(
