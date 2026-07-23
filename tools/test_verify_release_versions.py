@@ -116,6 +116,26 @@ keywords:
   - Rust
 """,
         )
+        write(
+            root,
+            str(verify_release_versions.BIOTOOLS_RECORD_PATH),
+            """
+{
+  "biotoolsID": "turbo-picard",
+  "name": "turbo-picard",
+  "description": "Rust command-line tools for selected Picard-compatible genomics workflows.",
+  "homepage": "https://turbo-picard.readthedocs.io/",
+  "version": ["0.1.0"],
+  "toolType": ["Command-line tool"],
+  "operatingSystem": ["Linux", "Mac"],
+  "language": ["Rust"],
+  "license": "MIT",
+  "link": [{"url": "https://github.com/dnncha/turbo-picard", "type": ["Repository"]}],
+  "documentation": [{"url": "https://turbo-picard.readthedocs.io/", "type": ["General"]}],
+  "credit": [{"name": "Donncha O'Toole", "orcidid": "https://orcid.org/0009-0003-5012-7229", "typeRole": ["Developer", "Primary contact"]}]
+}
+""",
+        )
         for doc in verify_release_versions.VERSIONED_DOC_PATHS:
             write(
                 root,
@@ -205,6 +225,19 @@ keywords:
         self.assertIn(
             "CITATION.cff must include a Zenodo DOI identifier for "
             "Zenodo archive for v0.1.0",
+            verify_release_versions.collect_errors(root),
+        )
+
+    def test_rejects_stale_biotools_record_version(self) -> None:
+        root = self.make_tree()
+        record = root / verify_release_versions.BIOTOOLS_RECORD_PATH
+        record.write_text(
+            record.read_text(encoding="utf-8").replace('"0.1.0"', '"0.0.9"'),
+            encoding="utf-8",
+        )
+
+        self.assertIn(
+            "bio.tools registration record version must match workspace 0.1.0",
             verify_release_versions.collect_errors(root),
         )
 

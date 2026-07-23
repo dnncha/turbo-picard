@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import re
 import sys
 from pathlib import Path
@@ -19,6 +20,7 @@ RECIPE_PATHS = [
 ]
 
 CITATION_PATH = Path("CITATION.cff")
+BIOTOOLS_RECORD_PATH = Path("packaging/biotools/turbo-picard.json")
 
 VERSIONED_DOC_PATHS = [
     Path("README.md"),
@@ -257,6 +259,77 @@ def collect_errors(root: Path = ROOT) -> list[str]:
                 "CITATION.cff must cite only the software release; "
                 "move input-data citation details to evidence manifests/docs: "
                 + ", ".join(leaked_terms)
+            )
+
+    biotools_record = root / BIOTOOLS_RECORD_PATH
+    if not biotools_record.is_file():
+        errors.append("bio.tools registration record is required for discovery metadata")
+    else:
+        try:
+            biotools = json.loads(biotools_record.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as error:
+            errors.append(f"bio.tools registration record is not valid JSON: {error}")
+            biotools = {}
+        if not isinstance(biotools, dict):
+            errors.append("bio.tools registration record must be a JSON object")
+            biotools = {}
+        if biotools.get("biotoolsID") != "turbo-picard":
+            errors.append("bio.tools registration record must use biotoolsID turbo-picard")
+        if biotools.get("name") != "turbo-picard":
+            errors.append("bio.tools registration record must use name turbo-picard")
+        description = biotools.get("description")
+        if not isinstance(description, str) or not 10 <= len(description) <= 1000:
+            errors.append(
+                "bio.tools registration record description must contain 10-1000 characters"
+            )
+        if biotools.get("homepage") != "https://turbo-picard.readthedocs.io/":
+            errors.append(
+                "bio.tools registration record homepage must use the hosted documentation"
+            )
+        if biotools.get("version") != [version]:
+            errors.append(
+                f"bio.tools registration record version must match workspace {version}"
+            )
+        if biotools.get("toolType") != ["Command-line tool"]:
+            errors.append("bio.tools registration record must be a command-line tool")
+        if biotools.get("operatingSystem") != ["Linux", "Mac"]:
+            errors.append("bio.tools registration record must state Linux and Mac support")
+        if biotools.get("language") != ["Rust"]:
+            errors.append("bio.tools registration record must state Rust implementation")
+        if biotools.get("license") != "MIT":
+            errors.append("bio.tools registration record must state the MIT license")
+        links = biotools.get("link")
+        if not isinstance(links, list):
+            links = []
+        if not any(
+            isinstance(link, dict)
+            and link.get("url") == repository
+            and link.get("type") == ["Repository"]
+            for link in links
+        ):
+            errors.append("bio.tools registration record must link to the source repository")
+        documentation = biotools.get("documentation")
+        if not isinstance(documentation, list):
+            documentation = []
+        if not any(
+            isinstance(entry, dict)
+            and entry.get("url") == "https://turbo-picard.readthedocs.io/"
+            and entry.get("type") == ["General"]
+            for entry in documentation
+        ):
+            errors.append("bio.tools registration record must link to the hosted documentation")
+        credits = biotools.get("credit")
+        if not isinstance(credits, list):
+            credits = []
+        if not any(
+            isinstance(credit, dict)
+            and credit.get("name") == "Donncha O'Toole"
+            and credit.get("orcidid") == "https://orcid.org/0009-0003-5012-7229"
+            and {"Developer", "Primary contact"}.issubset(credit.get("typeRole", []))
+            for credit in credits
+        ):
+            errors.append(
+                "bio.tools registration record must identify the developer and primary contact"
             )
 
     for doc in VERSIONED_DOC_PATHS:

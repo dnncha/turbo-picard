@@ -30,6 +30,7 @@ RELEASE_TEXT_PATHS = [
     Path("docs/site/index.html"),
     Path("paper/paper.md"),
     Path("packaging/bioconda/BIOCONDA_PR.md"),
+    Path("packaging/biotools/turbo-picard.json"),
     Path("packaging/bioconda/turbo-picard/README.md"),
     Path("packaging/bioconda/turbo-picard-picard-shim/README.md"),
     Path("packaging/outreach/README.md"),

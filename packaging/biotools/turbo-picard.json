@@ -1,0 +1,69 @@
+{
+  "biotoolsID": "turbo-picard",
+  "name": "turbo-picard",
+  "description": "Rust command-line tools for selected Picard-compatible genomics workflows. turbo-picard keeps Picard-style command names and KEY=VALUE arguments, documents native and fallback scope by command, and can delegate unsupported commands to upstream Picard when configured.",
+  "homepage": "https://turbo-picard.readthedocs.io/",
+  "version": [
+    "0.1.10"
+  ],
+  "toolType": [
+    "Command-line tool"
+  ],
+  "topic": [
+    {
+      "uri": "http://edamontology.org/topic_3168",
+      "term": "Sequencing"
+    },
+    {
+      "uri": "http://edamontology.org/topic_0080",
+      "term": "Sequence analysis"
+    },
+    {
+      "uri": "http://edamontology.org/topic_3071",
+      "term": "Data management"
+    }
+  ],
+  "operatingSystem": [
+    "Linux",
+    "Mac"
+  ],
+  "language": [
+    "Rust"
+  ],
+  "license": "MIT",
+  "link": [
+    {
+      "url": "https://github.com/dnncha/turbo-picard",
+      "type": [
+        "Repository"
+      ],
+      "note": null
+    }
+  ],
+  "documentation": [
+    {
+      "url": "https://turbo-picard.readthedocs.io/",
+      "type": [
+        "General"
+      ],
+      "note": null
+    }
+  ],
+  "credit": [
+    {
+      "name": "Donncha O'Toole",
+      "email": null,
+      "url": "https://github.com/dnncha",
+      "orcidid": "https://orcid.org/0009-0003-5012-7229",
+      "gridid": null,
+      "rorid": null,
+      "fundrefid": null,
+      "typeEntity": "Person",
+      "typeRole": [
+        "Developer",
+        "Primary contact"
+      ],
+      "note": null
+    }
+  ]
+}
