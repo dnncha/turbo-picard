@@ -18,7 +18,7 @@ a desk rejection for a reason we can already see.
 Before submitting later:
 
 * Confirm the current public release is archived and citable.
-  Current release DOI: https://doi.org/10.5281/zenodo.20541928.
+  Current release: ``v0.1.10``, DOI: https://doi.org/10.5281/zenodo.21511256.
 * Confirm the repository still satisfies the current JOSS pre-review gates:
   public development history, demonstrated research use, active open-source
   practices, tests, documentation, releases, contribution/support expectations,
@@ -45,7 +45,7 @@ Before submitting later:
 
   * repository: ``https://github.com/dnncha/turbo-picard``
   * paper path: ``paper/paper.md``
-  * archive DOI: ``10.5281/zenodo.20541928``
+  * archive DOI: ``10.5281/zenodo.21511256``
   * conflict of interest: none, unless that changes before submission
   * related publications: none, unless a Bioinformatics/BMC/preprint submission
     exists by then

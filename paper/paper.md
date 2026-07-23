@@ -15,7 +15,7 @@ authors:
 affiliations:
   - name: Independent researcher
     index: 1
-date: 4 June 2026
+date: 23 July 2026
 bibliography: paper.bib
 ---
 
@@ -54,9 +54,10 @@ Faster implementations are useful only if they reduce queue time and compute
 cost without changing the analysis record. `turbo-picard` addresses this by
 targeting Picard-compatible commands rather than requiring a new interface. Its
 release evidence ties every public speed claim to parity checks:
-the saved benchmark suite reports 32/32 benchmarked commands passing parity,
-with a geometric mean speedup of 26.74x and a slowest saved speedup of 8.55x in
-the 2026-06-04 benchmark log.
+the latest saved benchmark suite, run on 2026-06-13, reports 32/32 benchmarked
+commands passing parity, with a geometric mean speedup of 24.94x and a slowest
+saved speedup of 6.86x. These results are specific to the checked command set
+and benchmark environment.
 
 # State of the field
 
@@ -115,7 +116,9 @@ the analysis record.
 The project is early, so this paper does not claim broad community adoption or
 published downstream discoveries enabled by the software. The current value is
 more practical: a tested and documented implementation that laboratories can
-evaluate command by command. The Zenodo archive for version 0.1.1 provides a
+software DOI for the current release [@turbo-picard-zenodo].
+evaluate command by command. The Zenodo archive for version 0.1.10 provides a
+software DOI for the current release [@turbo-picard-zenodo].
 software DOI for the current release [@turbo-picard-zenodo].
 
 # AI usage disclosure

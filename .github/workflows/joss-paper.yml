@@ -5,14 +5,14 @@ on:
     paths:
       - "paper/**"
       - "README.md"
-      - "docs/joss-submission.md"
+      - "docs/joss-submission.rst"
       - "tools/verify_joss_paper.py"
       - ".github/workflows/joss-paper.yml"
   pull_request:
     paths:
       - "paper/**"
       - "README.md"
-      - "docs/joss-submission.md"
+      - "docs/joss-submission.rst"
       - "tools/verify_joss_paper.py"
       - ".github/workflows/joss-paper.yml"
   workflow_dispatch:

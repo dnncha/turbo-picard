@@ -14,6 +14,8 @@ BIB = ROOT / "paper" / "paper.bib"
 CHECKLIST = ROOT / "docs" / "joss-submission.rst"
 README = ROOT / "README.md"
 WORKFLOW = ROOT / ".github" / "workflows" / "joss-paper.yml"
+ZENODO_RELEASE_VERSION = "v0.1.10"
+ZENODO_RELEASE_DOI = "10.5281/zenodo.21511256"
 
 REQUIRED_SECTIONS = [
     "Summary",
@@ -95,12 +97,22 @@ def validate() -> list[str]:
         errors.append("paper must include a clear AI usage disclosure")
     if "No external funding" not in paper:
         errors.append("paper must include funding acknowledgement")
+    if f"Zenodo archive for version {ZENODO_RELEASE_VERSION.removeprefix('v')}" not in paper:
+        errors.append(
+            f"paper must cite the current Zenodo archive version {ZENODO_RELEASE_VERSION}"
+        )
+    if f"version = {{{ZENODO_RELEASE_VERSION}}}" not in bib:
+        errors.append(
+            f"paper.bib must cite the current Zenodo archive version {ZENODO_RELEASE_VERSION}"
+        )
+    if f"doi = {{{ZENODO_RELEASE_DOI}}}" not in bib:
+        errors.append(f"paper.bib must cite the current Zenodo DOI {ZENODO_RELEASE_DOI}")
     if "docs/joss-submission.rst" not in readme:
         errors.append("README must link to the JOSS submission checklist")
     for needle in [
         "python3 tools/verify_joss_paper.py",
         "``paper/paper.md``",
-        "https://doi.org/10.5281/zenodo.20541928",
+        f"https://doi.org/{ZENODO_RELEASE_DOI}",
     ]:
         if needle not in checklist:
             errors.append(f"JOSS submission checklist missing {needle}")
