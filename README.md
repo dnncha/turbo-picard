@@ -201,8 +201,10 @@ A command-level speedup is not a universal replacement claim. Keep upstream Pica
 The live PyPI release is `0.1.10`. It publishes Linux x86_64 and macOS Apple
 Silicon wheels plus a source distribution.
 
-Bioconda recipes are tracked under [`packaging/bioconda/`](packaging/bioconda/).
-The main package installs `turbo-picard`; the separate shim package installs the
+The submitted [Bioconda recipe PR](https://github.com/bioconda/bioconda-recipes/pull/65922)
+covers the main package and an optional shim. Use PyPI or the container image
+until Bioconda accepts the PR and the packages appear in its indexes. The main
+package installs `turbo-picard`; the separate shim package installs the
 `picard` command only for environments that choose it.
 
 ## Citation
