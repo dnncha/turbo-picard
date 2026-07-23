@@ -19,6 +19,12 @@ Install from PyPI:
 python3 -m pip install turbo-picard
 ```
 
+For a containerized trial, use the published release image:
+
+```bash
+docker run --rm ghcr.io/dnncha/turbo-picard:0.1.10 --version
+```
+
 Installing from PyPI currently gives you both commands:
 
 - `turbo-picard`: the explicit command for evaluation and normal use.
