@@ -95,7 +95,9 @@ class VerifyPyPiPackageTests(unittest.TestCase):
         (root / ".github" / "workflows").mkdir(parents=True)
         (root / ".github" / "workflows" / "publish-pypi.yml").write_text(
             "release:\nworkflow_dispatch:\nBuild Linux wheels\n"
-            "wheels-linux-x86_64\nmanylinux: 2014\nperl-core\n"
+            "wheels-linux-x86_64\nlinux-aarch64:\nBuild Linux ARM64 wheels\n"
+            "wheels-linux-aarch64\nneeds: [linux, linux-aarch64, macos, sdist]\n"
+            "manylinux: 2014\nperl-core\n"
             "llvm-toolset-7.0-clang-devel\nLIBCLANG_PATH\n"
             "PyO3/maturin-action@v1\n"
             "--compatibility pypi\npypa/gh-action-pypi-publish@release/v1\n"
