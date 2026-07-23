@@ -240,6 +240,8 @@ def validate_publish_workflow(root: Path = ROOT) -> list[str]:
         ("wheels-linux-aarch64", "PyPI workflow must upload Linux ARM64 wheel artifacts"),
         ("apt-get install -y --no-install-recommends perl libclang-dev", "PyPI workflow must install ARM64 cross-build dependencies"),
         ("find /usr/lib -name libclang.so", "PyPI workflow must locate libclang in the ARM64 cross image"),
+        ("BINDGEN_EXTRA_CLANG_ARGS_aarch64_unknown_linux_gnu", "PyPI workflow must provide bindgen target arguments for Linux ARM64"),
+        ("--target=aarch64-unknown-linux-gnu --sysroot=$target_sysroot", "PyPI workflow must bindgen against the Linux ARM64 sysroot"),
         ("macos-x86_64:", "PyPI workflow must build macOS Intel wheels"),
         ("Build macOS Intel wheels", "PyPI workflow must name the macOS Intel build"),
         ("macos-15-intel", "PyPI workflow must use an Intel macOS runner"),

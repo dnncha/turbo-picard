@@ -60,6 +60,10 @@ jobs:
             apt-get install -y --no-install-recommends perl libclang-dev
             export LIBCLANG_PATH="$(dirname "$(find /usr/lib -name libclang.so -print -quit)")"
             test -f "$LIBCLANG_PATH/libclang.so"
+            target_header="$(find /usr -path '*/aarch64*/include/bits/libc-header-start.h' -print -quit)"
+            target_sysroot="${target_header%/include/bits/libc-header-start.h}"
+            test -f "$target_sysroot/include/bits/libc-header-start.h"
+            export BINDGEN_EXTRA_CLANG_ARGS_aarch64_unknown_linux_gnu="--target=aarch64-unknown-linux-gnu --sysroot=$target_sysroot"
           args: --release --locked --compatibility pypi --out dist
 
       - name: Upload wheel

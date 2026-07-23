@@ -102,6 +102,8 @@ class VerifyPyPiPackageTests(unittest.TestCase):
             "manylinux: 2014\nperl-core\n"
             "apt-get install -y --no-install-recommends perl libclang-dev\n"
             "find /usr/lib -name libclang.so\n"
+            "BINDGEN_EXTRA_CLANG_ARGS_aarch64_unknown_linux_gnu\n"
+            "--target=aarch64-unknown-linux-gnu --sysroot=$target_sysroot\n"
             "llvm-toolset-7.0-clang-devel\nLIBCLANG_PATH\n"
             "PyO3/maturin-action@v1\n"
             "--compatibility pypi\npypa/gh-action-pypi-publish@release/v1\n"
