@@ -218,8 +218,8 @@ def render_speedup_chart(data: dict) -> str:
 
 def render_hero() -> str:
     return """<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="900" viewBox="0 0 1600 900" role="img" aria-labelledby="title desc">
-  <title id="title">accelerated genomic pipeline hero artwork</title>
-  <desc id="desc">Abstract genomic read streams flowing through a high-performance compute pipeline into benchmark bars.</desc>
+  <title id="title">Genomic pipeline flow</title>
+  <desc id="desc">Abstract genomic read streams flowing through a compute pipeline into benchmark bars.</desc>
   <defs>
     <linearGradient id="heroBg" x1="0" x2="1" y1="0" y2="1">
       <stop offset="0" stop-color="#071013"/>
