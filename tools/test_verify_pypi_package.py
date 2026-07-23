@@ -100,6 +100,8 @@ class VerifyPyPiPackageTests(unittest.TestCase):
             "macos-15-intel\nwheels-macos-x86_64\n"
             "needs: [linux, linux-aarch64, macos, macos-x86_64, sdist]\n"
             "manylinux: 2014\nperl-core\n"
+            "apt-get install -y --no-install-recommends perl libclang-dev\n"
+            "find /usr/lib -name libclang.so\n"
             "llvm-toolset-7.0-clang-devel\nLIBCLANG_PATH\n"
             "PyO3/maturin-action@v1\n"
             "--compatibility pypi\npypa/gh-action-pypi-publish@release/v1\n"

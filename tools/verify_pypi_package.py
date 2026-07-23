@@ -238,6 +238,8 @@ def validate_publish_workflow(root: Path = ROOT) -> list[str]:
         ("linux-aarch64:", "PyPI workflow must build Linux ARM64 wheels"),
         ("Build Linux ARM64 wheels", "PyPI workflow must name the Linux ARM64 build"),
         ("wheels-linux-aarch64", "PyPI workflow must upload Linux ARM64 wheel artifacts"),
+        ("apt-get install -y --no-install-recommends perl libclang-dev", "PyPI workflow must install ARM64 cross-build dependencies"),
+        ("find /usr/lib -name libclang.so", "PyPI workflow must locate libclang in the ARM64 cross image"),
         ("macos-x86_64:", "PyPI workflow must build macOS Intel wheels"),
         ("Build macOS Intel wheels", "PyPI workflow must name the macOS Intel build"),
         ("macos-15-intel", "PyPI workflow must use an Intel macOS runner"),
