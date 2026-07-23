@@ -30,7 +30,7 @@ def valid_manifest():
         },
         "software": {
             "picard_version": "3.4.0",
-            "turbo_picard_version": "0.1.9",
+            "turbo_picard_version": "0.1.10",
             "turbo_picard_commit": "c" * 40,
         },
         "host": {

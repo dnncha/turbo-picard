@@ -194,7 +194,7 @@ A command-level speedup is not a universal replacement claim. Keep upstream Pica
 
 ## Packaging Status
 
-The live PyPI release is `0.1.9`. It publishes Linux x86_64 and macOS Apple
+The live PyPI release is `0.1.10`. It publishes Linux x86_64 and macOS Apple
 Silicon wheels plus a source distribution.
 
 Bioconda recipes are tracked under [`packaging/bioconda/`](packaging/bioconda/).
