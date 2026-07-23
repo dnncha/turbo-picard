@@ -59,6 +59,7 @@ BANNED_PHRASES = [
     "evidence-" + "bounded",
     "effortless",
     "empower",
+    "first choice",
     "game changer",
     "game-" + "changing",
     "harness",

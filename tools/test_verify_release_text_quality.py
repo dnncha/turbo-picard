@@ -57,7 +57,7 @@ The full docs are on Read the Docs
 Why Use It
 Do not flip a whole production pipeline at once
 Cite the archived release.
-This is a seamless comprehensive solution.
+This is a seamless comprehensive solution and the first choice.
 """,
         )
 
@@ -68,6 +68,10 @@ This is a seamless comprehensive solution.
         )
         self.assertIn(
             "README.md contains release-text banned phrase: comprehensive solution",
+            errors,
+        )
+        self.assertIn(
+            "README.md contains release-text banned phrase: first choice",
             errors,
         )
 

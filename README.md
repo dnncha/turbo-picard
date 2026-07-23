@@ -1,7 +1,5 @@
 # turbo-picard
 
-![Turbo Picard starship captain accelerating genomic pipeline data streams](docs/site/assets/turbo-picard-readme-hero.png)
-
 **Faster Rust implementations of common Picard commands, built for Picard-shaped
 pipelines.**
 
