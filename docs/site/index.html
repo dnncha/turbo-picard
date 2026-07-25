@@ -1202,12 +1202,14 @@ picard RevertSam I=aligned.bam O=unmapped.bam</pre>
             <article class="tile">
               <h3>Bioconda path</h3>
               <p>
-                Release <code>v0.1.10</code> is submitted in the
+                Release <code>v0.1.11</code> includes prepared recipes for
+                <code>turbo-picard</code> plus the optional
+                <code>turbo-picard-picard-shim</code>. The existing
                 <a href="https://github.com/bioconda/bioconda-recipes/pull/65922">Bioconda recipe PR</a>
-                as <code>turbo-picard</code> plus the optional
-                <code>turbo-picard-picard-shim</code>. Use PyPI or the container image
-                until Bioconda accepts the PR and publishes the packages. The main package
-                keeps the <code>turbo-picard</code> command separate; the shim installs
+                is for <code>v0.1.10</code>; a <code>v0.1.11</code> submission has not
+                been opened. Use PyPI or the container image until Bioconda accepts a
+                version-specific PR and publishes the packages. The main package keeps the
+                <code>turbo-picard</code> command separate; the shim installs
                 <code>picard</code> only for environments that want that command name. Release checks include
                 <code>python3 tools/bioconda_release_preflight.py</code> and
                 <code>bioconda-utils lint recipes config.yml --packages turbo-picard turbo-picard-picard-shim</code>.
