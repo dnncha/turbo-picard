@@ -5,20 +5,17 @@ Benchmarks are useful only when they are reproducible and tied to parity. The
 repository benchmark suite is designed to report speed while keeping command
 coverage and Picard-compatible behavior visible.
 
-The current saved suite is already strong enough to support a plain-language
-claim: for the commands ``turbo-picard`` has accelerated and parity-checked, it
-is materially faster than Picard across the board, with a ``6.86x`` slowest
-saved speedup, ``24.94x`` geometric mean speedup, and ``94.36x`` top speedup.
-The companion ``MarkDuplicates`` performance run is also a useful reminder that
-"more scalable" is not marketing filler here; it cut median RSS from about
-``1.2 GB`` in Picard 3.4.0 to about ``8.7 MB`` on the checked fixture.
+The current saved suite records ``6.86x`` as its slowest saved speedup,
+``24.94x`` as its geometric mean speedup, and ``94.36x`` as its top speedup for
+the documented command, option, input, and machine scopes. The companion
+``MarkDuplicates`` fixture records median RSS of about ``1.2 GB`` for Picard
+3.4.0 and ``8.7 MB`` for ``turbo-picard``. These are reproducible fixture
+measurements, not performance guarantees for another workflow.
 
-For evaluators comparing nearby tools, the saved riker overlap smoke evidence
-also supports the practical first-choice story: on the checked WGS bundle and
-WGS-only smoke profiles, ``turbo-picard`` is ``2.14x`` and ``2.10x`` faster than
-``riker`` respectively. Those are small-input overlap checks; for WGS-scale
-selection, rerun the comparison on your own representative BAMs with the same
-versions and machine profile.
+Small direct QC overlap fixtures with riker are kept separately in
+``benchmarks/riker-comparison/``. They are useful smoke checks, but a tool
+selection should use representative data and the same versions, machine, thread
+settings, outputs, and downstream comparisons.
 
 Run the suite
 -------------
@@ -106,7 +103,7 @@ performance claims stay tied to parity-checked outputs.
 Large-input speed evidence
 --------------------------
 
-Use large-input speed evidence for market comparisons against tools such as
+Use large-input speed evidence for direct comparisons with tools such as
 ``riker``. Keep it separate from the small release-candidate parity fixtures so
 readers can tell which numbers are smoke checks and which numbers came from a
 workflow-sized BAM.

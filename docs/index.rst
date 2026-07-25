@@ -1,9 +1,9 @@
 turbo-picard documentation
 ==========================
 
-``turbo-picard`` is for teams already using Picard that want faster execution,
-lower memory pressure, and a command-by-command migration path without
-redesigning pipeline task interfaces.
+``turbo-picard`` is for bioinformatics teams that already use Picard and want
+to evaluate a known preprocessing or QC bottleneck without redesigning the
+surrounding task interface.
 
 It keeps the command shape people already know:
 
@@ -11,19 +11,19 @@ It keeps the command shape people already know:
 
    picard MarkDuplicates I=input.bam O=marked.bam M=metrics.txt
 
-``turbo-picard`` keeps the full Picard 3.4.0 interface. Accelerated commands
-run natively in Rust, and every other command delegates to upstream Picard when it
-is installed or auto-discovered. The rollout model is deliberately incremental:
-replace one Picard command at a time, compare outputs with your pipeline,
-then expand once the first boundary is proven.
+Native and partial-native commands run in Rust. Other Picard 3.4.0 commands can
+delegate to upstream Picard only when fallback is available; delegation is not
+native support. The command matrix records the exact scope, known caveats, and
+fallback behaviour. The intended evaluation is incremental: choose one command,
+compare the outputs your workflow consumes on representative data, then decide
+whether to use that command.
 
-The current saved benchmark suite reports ``32/32`` parity-checked commands,
-a ``6.86x`` floor speedup, ``24.94x`` geometric mean speedup, and ``94.36x``
-top speedup. The checked ``MarkDuplicates`` performance run in the repository
-also cuts median RSS from about ``1.2 GB`` in Picard 3.4.0 to about ``8.7 MB``
-in ``turbo-picard``. That is why the project is positioned as both faster and
-easier to fan out across real pipeline workloads, even though the intended
-workflow is still careful switching rather than blind replacement.
+The saved benchmark suite records ``32/32`` parity-checked command runs, a
+``6.86x`` floor speedup, ``24.94x`` geometric mean speedup, and ``94.36x`` top
+speedup on its documented fixtures. Those results describe the saved commands,
+options, inputs, and machine profile; they are not a prediction for another
+workflow. See :doc:`benchmarks` and :doc:`parity` before using them in an
+evaluation.
 
 Start here
 ----------
@@ -80,7 +80,8 @@ Start here
       :link: turbo-picard-vs-riker
       :link-type: doc
 
-      Compare drop-in Picard acceleration against riker's QC-only redesign.
+      Compare workflow contracts and evaluation boundaries without assuming a
+      universal performance ordering.
 
    .. grid-item-card:: FAQ
       :link: faq
