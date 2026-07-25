@@ -77,9 +77,9 @@ configure a trusted publisher for project ``turbo-picard`` with owner
 Container image
 ---------------
 
-The published ``0.1.10`` image is available at
-``ghcr.io/dnncha/turbo-picard:0.1.10``. It resolves to
-``sha256:8c308bbfaaa54c33c8e681d609697a5465266f3a7a6eb7443d4035821c3f0f11``.
+The published ``0.1.11`` image is available at
+``ghcr.io/dnncha/turbo-picard:0.1.11``. It resolves to
+``sha256:a48b0208d47245e050bc941ae84ff510a669e74930cd16bc42b04f8c19f0abec``.
 It contains both ``turbo-picard`` and the ``picard`` shim, with
 ``turbo-picard`` as the container entrypoint. Use the release tag or digest for
 side-by-side nf-core profiles or cloud jobs where you want a pinned binary
@@ -87,7 +87,7 @@ without a Conda solve.
 
 .. code-block:: bash
 
-   docker run --rm ghcr.io/dnncha/turbo-picard:0.1.10 --version
+   docker run --rm ghcr.io/dnncha/turbo-picard:0.1.11 --version
 
 The repository root ``Dockerfile`` builds the same runtime shape locally:
 
