@@ -57,7 +57,7 @@ jobs:
           manylinux: 2014
           before-script-linux: |
             apt-get update
-            apt-get install -y --no-install-recommends perl libclang-dev
+            apt-get install -y --no-install-recommends perl libclang-dev libc6-dev-arm64-cross
             export LIBCLANG_PATH="$(dirname "$(find /usr/lib -name libclang.so -print -quit)")"
             test -f "$LIBCLANG_PATH/libclang.so"
             target_header="$(find /usr -path '*/aarch64*/include/bits/libc-header-start.h' -print -quit)"
