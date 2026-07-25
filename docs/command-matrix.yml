@@ -316,7 +316,7 @@ commands:
   - name: GatherVcfs
     status: partial-native
     parity_script: tools/verify_basic_gathervcfs_parity.sh
-    native_scope: "Concatenation of compatible VCF shards with matching samples and sequence dictionaries, common Picard runtime option acceptance, and VCF index sidecar creation when requested."
+    native_scope: "Streaming concatenation of compatible VCF shards with matching samples and sequence dictionaries, common Picard runtime option acceptance, and VCF index sidecar creation when requested."
     fallback_scope: Dictionary/sample reconciliation and nontrivial VCF compatibility handling should use upstream Picard.
   - name: GenotypeConcordance
     status: fallback-only
@@ -402,7 +402,7 @@ commands:
   - name: MergeVcfs
     status: partial-native
     parity_script: tools/verify_basic_mergevcfs_parity.sh
-    native_scope: "Merge compatible VCF inputs by dictionary order with optional explicit sequence dictionary replacement, common Picard runtime option acceptance, and VCF index sidecar creation when requested."
+    native_scope: "Merge compatible VCF inputs by dictionary order with optional explicit sequence dictionary replacement, bounded external sorting controlled by TMP_DIR and MAX_RECORDS_IN_RAM, common Picard runtime option acceptance, and VCF index sidecar creation when requested."
     fallback_scope: "Inputs with incompatible samples, missing dictionaries, or advanced merge semantics should use upstream Picard."
   - name: NonNFastaSize
     status: fallback-only
@@ -451,7 +451,7 @@ commands:
   - name: SamToFastq
     status: partial-native
     parity_script: tools/verify_basic_samtofastq_parity.sh
-    native_scope: "Single-end, paired, dedicated unpaired FASTQ, interleaved, gzipped, per-read-group OUTPUT_PER_RG output with PU/ID routing and OUTPUT_DIR support, and MD5 FASTQ output from SAM/BAM/CRAM with REFERENCE_SEQUENCE, Picard-compatible RE_REVERSE handling, primary/PF filtering, clipping-attribute actions, read-end trimming, quality end-trimming, max-bases output caps, common Picard runtime option acceptance, and GATK NA12878 mitochondrial real-data parity."
+    native_scope: "Single-end, paired, dedicated unpaired FASTQ, interleaved, gzipped, per-read-group OUTPUT_PER_RG output with PU/ID routing and OUTPUT_DIR support, and MD5 FASTQ output from SAM/BAM/CRAM with REFERENCE_SEQUENCE. For BAM/CRAM inputs not declared queryname-sorted, setting TMP_DIR or MAX_RECORDS_IN_RAM enables a bounded temporary queryname stage. The native path also covers Picard-compatible RE_REVERSE handling, primary/PF filtering, clipping-attribute actions, read-end trimming, quality end-trimming, max-bases output caps, common Picard runtime option acceptance, and GATK NA12878 mitochondrial real-data parity."
     fallback_scope: Unsupported Picard FASTQ export combinations should use upstream Picard.
   - name: SamToFastqWithTags
     status: fallback-only
@@ -486,7 +486,7 @@ commands:
   - name: SortVcf
     status: partial-native
     parity_script: tools/verify_basic_sortvcf_parity.sh
-    native_scope: "Sort compatible VCF inputs by sequence dictionary order with optional explicit dictionary replacement, common Picard runtime option acceptance, and VCF index sidecar creation when requested."
+    native_scope: "Sort compatible VCF inputs by sequence dictionary order with optional explicit dictionary replacement and bounded external sorting controlled by TMP_DIR and MAX_RECORDS_IN_RAM, plus common Picard runtime option acceptance and VCF index sidecar creation when requested."
     fallback_scope: "Inputs with incompatible samples, missing dictionaries, or advanced VCF normalization should use upstream Picard."
   - name: SplitSamByLibrary
     status: fallback-only
@@ -512,7 +512,7 @@ commands:
   - name: UpdateVcfSequenceDictionary
     status: partial-native
     parity_script: tools/verify_basic_updatevcfsequencedictionary_parity.sh
-    native_scope: "Replace VCF contig headers from a Picard sequence dictionary while preserving stable records, accepting common Picard runtime options, and writing a VCF index sidecar when requested."
+    native_scope: "Stream a replacement VCF contig header from a Picard sequence dictionary while preserving stable records, accepting common Picard runtime options, and writing a VCF index sidecar when requested."
     fallback_scope: Unsupported VCF header forms and advanced dictionary reconciliation should use fallback.
   - name: ValidateSamFile
     status: partial-native

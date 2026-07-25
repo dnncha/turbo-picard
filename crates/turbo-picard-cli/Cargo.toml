@@ -27,8 +27,8 @@ rustc-hash.workspace = true
 crossbeam-channel.workspace = true
 turbo-picard-core = { path = "../turbo-picard-core", version = "0.1.10" }
 turbo-picard-markdup = { path = "../turbo-picard-markdup", version = "0.1.10" }
+tempfile.workspace = true
 
 [dev-dependencies]
 assert_cmd.workspace = true
 predicates.workspace = true
-tempfile.workspace = true
