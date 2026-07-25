@@ -662,7 +662,7 @@
             <div class="proof"><strong>32/32</strong><span>benchmark parity checks passing</span></div>
             <div class="proof"><strong>24.94x</strong><span>geometric mean speedup in the saved suite</span></div>
             <div class="proof"><strong>6.86x+</strong><span>speedup even at the slow end of the saved suite</span></div>
-            <div class="proof"><strong>2.10x+</strong><span>faster than riker in the saved QC overlap smoke profiles</span></div>
+            <div class="proof"><strong>36</strong><span>native or partial-native commands documented in the matrix</span></div>
           </div>
         </div>
       </section>
@@ -682,16 +682,16 @@
             <article class="tile">
               <h3>Measured against Picard</h3>
               <p>
-                The saved suite shows every benchmarked native command ahead of Picard 3.4.0 after
-                parity checks pass, with a 6.86x floor and 24.94x geometric mean speedup.
+              The saved suite records fixture-specific timings against Picard 3.4.0 after
+              parity checks pass, with a 6.86x floor and 24.94x geometric mean speedup.
               </p>
             </article>
             <article class="tile">
-              <h3>Picard-shaped rather than QC-only</h3>
+              <h3>Documented command scope</h3>
               <p>
-                Riker is a fast QC toolkit. Turbo-picard keeps Picard command names, KEY=VALUE
-                arguments, preprocessing utilities, metrics commands, and fallback in one rollout
-                model.
+                Turbo-picard keeps Picard command names and KEY=VALUE arguments for its documented
+                native scope. The command matrix distinguishes native, partial-native, and delegated
+                execution paths.
               </p>
             </article>
             <article class="tile">
@@ -712,9 +712,9 @@
             <p>
               The chart is rendered from the saved suite output in this repository. Each benchmark
               compares turbo-picard against Picard and reports speed only after the stable output
-              comparison passes. That makes the story simple: the saved suite shows turbo-picard
-              ahead on every benchmarked command, and the checked MarkDuplicates performance run
-              shows that the gains are about scheduler-friendly memory use too, not just wall time.
+              comparison passes. The values describe the saved commands, inputs, options, and
+              machine profile; they are not a prediction for another workflow. The checked
+              MarkDuplicates fixture also reports wall time and RSS for that same scoped comparison.
               The current asset was saved on <code>2026-06-13</code> from
               <code>python3 tools/bench_suite.py --repeats 3 --skip-build</code>; the raw log is
               <code>docs/site/assets/bench-suite-output.txt</code>.
@@ -734,8 +734,8 @@
             <div class="benchmark-highlight"><b>32/32 PASS</b><span>All 32 commands in the saved benchmark suite passed parity checks.</span></div>
             <div class="benchmark-highlight"><b>24.94x</b><span>Geometric mean speedup across the current 32-command suite.</span></div>
             <div class="benchmark-highlight"><b>94.36x</b><span>UpdateVcfSequenceDictionary is the current top saved speedup.</span></div>
-            <div class="benchmark-highlight"><b>6.86x floor</b><span>Even the slowest saved command is still well ahead of Picard.</span></div>
-            <div class="benchmark-highlight"><b>2.10x+ vs riker</b><span>The saved QC overlap smoke profiles put turbo-picard ahead on WGS-only and WGS-bundle profiles.</span></div>
+            <div class="benchmark-highlight"><b>6.86x floor</b><span>Slowest saved speedup in the documented fixture suite.</span></div>
+            <div class="benchmark-highlight"><b>Command scope</b><span>Check native and delegated paths before changing a workflow task.</span></div>
             <div class="benchmark-highlight"><b>Rebuildable</b><span>The chart is rendered from benchmark-data.json with rank and summary stats.</span></div>
           </div>
         </div>
@@ -902,10 +902,10 @@
             </p>
           </div>
           <div class="install-grid">
-            <div class="install-card"><b>PyPI</b><span>Best for a quick local try. Current release ships a macOS Apple Silicon wheel and a source distribution.</span></div>
-            <div class="install-card"><b>Source</b><span>Best when you want the current checkout, local development, or explicit control over the binaries.</span></div>
-            <div class="install-card"><b>Container</b><span>Best for pinned runtime behavior in cloud jobs, workflow profiles, and reproducible side-by-side tests.</span></div>
-            <div class="install-card"><b>Bioconda</b><span>Best long-term fit for Linux clusters and shared scientific environments once the submitted recipe is accepted.</span></div>
+            <div class="install-card"><b>PyPI</b><span>For a quick local evaluation with the published package.</span></div>
+            <div class="install-card"><b>Source</b><span>For the current checkout, local development, or explicit control over the binaries.</span></div>
+            <div class="install-card"><b>Container</b><span>For a tagged runtime in cloud jobs, workflow profiles, and side-by-side tests.</span></div>
+            <div class="install-card"><b>Bioconda</b><span>For shared environments after the submitted recipes are accepted and published.</span></div>
           </div>
         </div>
       </section>
@@ -924,7 +924,7 @@
             <div class="benchmark-highlight"><b>Playbook</b><span>Start with the evaluation playbook on Read the Docs for the shortest path from interest to trial.</span></div>
             <div class="benchmark-highlight"><b>Command choice</b><span>Use <code>choose-your-first-command.md</code> when the right first Picard step is still unclear.</span></div>
             <div class="benchmark-highlight"><b>Trial flow</b><span>Use <code>one-command-trial.md</code> plus the tiny <code>trial.wdl</code> or <code>trial.nf</code> workflow for a minimal honest evaluation.</span></div>
-            <div class="benchmark-highlight"><b>Share it</b><span>Use the outreach kit after a good trial when you need to brief a team, open a PR, or post more widely.</span></div>
+            <div class="benchmark-highlight"><b>Record it</b><span>Keep the command lines, versions, input digest, outputs, and timings with the workflow review.</span></div>
           </div>
         </div>
       </section>
@@ -1240,7 +1240,7 @@ picard RevertSam I=aligned.bam O=unmapped.bam</pre>
       <section class="cta">
         <div class="section-inner cta-panel">
           <div>
-            <h2>Make Picard-heavy pipelines feel less stuck.</h2>
+            <h2>Evaluate one Picard bottleneck without changing the whole workflow.</h2>
             <p class="lead">
               Start with the commands already accelerated, keep upstream Picard as fallback, and
               switch only the commands where the evidence supports the change.
