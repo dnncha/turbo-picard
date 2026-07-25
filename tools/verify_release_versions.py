@@ -210,15 +210,23 @@ def collect_errors(root: Path = ROOT) -> list[str]:
             )
         identifiers = citation_yaml.get("identifiers")
         zenodo_description = f"Zenodo archive for v{version}"
-        has_current_zenodo_identifier = isinstance(identifiers, list) and any(
-            isinstance(identifier, dict)
-            and identifier.get("type") == "doi"
-            and isinstance(identifier.get("value"), str)
-            and re.fullmatch(r"10\.5281/zenodo\.\d+", identifier["value"])
-            and identifier.get("description") == zenodo_description
-            for identifier in identifiers
+        zenodo_identifiers = (
+            [
+                identifier
+                for identifier in identifiers
+                if isinstance(identifier, dict)
+                and identifier.get("type") == "doi"
+                and isinstance(identifier.get("value"), str)
+                and re.fullmatch(r"10\.5281/zenodo\.\d+", identifier["value"])
+            ]
+            if isinstance(identifiers, list)
+            else []
         )
-        if not has_current_zenodo_identifier:
+        has_current_zenodo_identifier = any(
+            identifier.get("description") == zenodo_description
+            for identifier in zenodo_identifiers
+        )
+        if zenodo_identifiers and not has_current_zenodo_identifier:
             errors.append(
                 "CITATION.cff must include a Zenodo DOI identifier for "
                 + zenodo_description
