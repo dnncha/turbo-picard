@@ -17,8 +17,10 @@ a desk rejection for a reason we can already see.
 
 Before submitting later:
 
-* Confirm the current public release is archived and citable.
-  Current release: ``v0.1.10``, DOI: https://doi.org/10.5281/zenodo.21511256.
+* Confirm the intended public release is archived and citable. The latest Zenodo
+  archive documented here is ``v0.1.10``, DOI:
+  https://doi.org/10.5281/zenodo.21511256. Confirm an archive for a later
+  release before describing its DOI as current.
 * Confirm the repository still satisfies the current JOSS pre-review gates:
   public development history, demonstrated research use, active open-source
   practices, tests, documentation, releases, contribution/support expectations,

@@ -134,6 +134,20 @@ bioconda-utils build --docker --mulled-test turbo-picard
             errors,
         )
 
+    def test_rejects_unsupported_market_positioning(self) -> None:
+        root = self.make_tree()
+        write(
+            root,
+            Path("docs/is-this-for-you.rst"),
+            "This is the market default for every Picard pipeline.",
+        )
+
+        errors = verify_release_text_quality.validate_release_text(root)
+        self.assertIn(
+            "docs/is-this-for-you.rst contains release-text banned phrase: market default",
+            errors,
+        )
+
     def test_scans_hosted_docs_template(self) -> None:
         root = self.make_tree()
         write(

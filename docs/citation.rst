@@ -6,10 +6,10 @@ keep the relevant parity evidence with your analysis notes. The repository
 includes a ``CITATION.cff`` file and Zenodo metadata so GitHub, Zenodo, and
 citation tools can produce a standard software citation.
 
-Use the Zenodo DOI for the archived release you actually used. The current
-``v0.1.10`` archive is https://doi.org/10.5281/zenodo.21511256. GitHub and
-Zenodo update that metadata after a release is cut; check the archive version
-before citing a later release.
+Use the Zenodo DOI for the archived release you actually used. The latest
+Zenodo archive documented here is ``v0.1.10`` at
+https://doi.org/10.5281/zenodo.21511256. Check the archive version before
+citing a later GitHub or PyPI release.
 
 The project citation is for the software. It is separate from the input-data
 citations used by the real-data parity checks. ``CITATION.cff`` does not cite

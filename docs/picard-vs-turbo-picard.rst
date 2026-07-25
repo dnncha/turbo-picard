@@ -1,92 +1,50 @@
 Picard vs turbo-picard
 ======================
 
-This page is for the practical question an evaluator usually asks first:
-what changes if we use ``turbo-picard`` instead of upstream Picard?
-
-If you are choosing an alternative to Picard for an existing workflow, the
-case is simple: keep the same command contract and swap only the
-binary that executes the already-proven tasks.
-
-For that workflow, ``turbo-picard`` is an option an existing Picard-heavy team
-can evaluate: it is faster than upstream Picard on the
-checked native suite, keeps Picard-shaped command contracts, covers both
-preprocessing and QC work, and can fall back to upstream Picard where native
-coverage is not ready.
+This page describes what changes when an existing Picard task is evaluated with
+``turbo-picard``. It is not a recommendation to replace every Picard command.
 
 Short version
 -------------
 
-Use ``turbo-picard`` when you want:
-
-* the same Picard-style command shape across the full Picard 3.4.0 surface;
-* measured speed improvements on the commands already accelerated;
-* lower per-task memory pressure when you fan those commands out across many
-  samples or shards;
-* transparent delegation to upstream Picard for everything else;
-* a command-by-command rollout on the accelerated path instead of a full rewrite.
-
-If your team wants speed improvements without changing task interfaces, this is
-the main reason to evaluate ``turbo-picard``.
-
-In plain terms: if the job is to make an existing Picard workflow faster without
-turning the workflow into a new tool migration project, ``turbo-picard`` is
-designed for that boundary.
-
-If the alternative under review is ``riker``, this same question is usually the
-fastest filter:
-
-* Do you want the same command contract today (same entrypoint, same argument names, same outputs)?
-* Do you need duplicate marking, sorting, indexing, or SAM/VCF interoperability in the same command family as Picard?
-* Do you need to reduce migration risk while still getting multi-threaded, parity-checked performance?
-
-If most of those are true, ``turbo-picard`` is the stronger practical choice.
-
-For production teams, the relevant result is not absolute speed in one metric, but
-the reduction in replacement cost:
-
-* keep commands and parameters unchanged,
-* keep downstream parsers untouched,
-* keep validation in front of each command migration instead of after a full rewrite.
-
-In other words, the win is: lower switching overhead + strong verified speedup where
-native support already exists.
-
-Stay with upstream Picard when you need:
-
-* every step to run on the JVM without delegation;
-* exact Picard-rendered chart PDFs rather than metrics text;
-* no mixed native/delegated execution model at all.
+Use ``turbo-picard`` for a command-level evaluation when keeping the Picard
+command name and ``KEY=VALUE`` arguments matters, the candidate command is in
+the documented native scope, and representative outputs can be compared. Use
+upstream Picard directly when the required command or option is outside that
+scope, exact Picard-rendered chart PDFs are required, or a mixed
+native/delegated execution model is unacceptable.
 
 What stays familiar
 -------------------
 
-``turbo-picard`` keeps the parts that make adoption easier:
+``turbo-picard`` retains these parts of a Picard task:
 
 * Picard command names;
 * Picard-style ``KEY=VALUE`` arguments;
 * workflow shapes that already call Picard inside ``WDL``, ``Nextflow``,
   ``Snakemake``, or shell steps.
 
-That means the usual migration path is to change the executable inside an
-existing step, not to redesign the workflow.
+The explicit ``turbo-picard`` command lets an evaluation distinguish its output
+from upstream Picard. The optional ``picard`` shim should be added only after a
+pipeline-specific review.
 
 What changes
 ------------
 
 The main differences are deliberate:
 
-* accelerated commands run natively in Rust instead of on the JVM;
-* every other Picard 3.4.0 command delegates to upstream Picard when available;
-* unsupported options on accelerated commands also delegate transparently;
+* selected commands and option scopes run natively in Rust instead of on the JVM;
+* Picard 3.4.0 commands without a native implementation delegate only when
+  upstream Picard is installed or configured as fallback;
+* unsupported options on an accelerated command must delegate or fail clearly;
 * the main package keeps ``turbo-picard`` explicit, with the ``picard`` shim
   left optional.
 
-That is a more conservative packaging and rollout model than pretending the
-whole suite is already interchangeable.
+Read :doc:`commands` for the native, partial-native, and delegated split. A
+command being accepted by the wrapper does not mean that it used a native path.
 
-What you get in return
-----------------------
+Saved comparison evidence
+-------------------------
 
 The current checked benchmark suite reports:
 
@@ -95,30 +53,16 @@ The current checked benchmark suite reports:
 * ``24.94x`` geometric mean speedup;
 * ``94.36x`` top saved speedup.
 
-The saved ``MarkDuplicates`` performance run in the repository also shows why
-the project is more scalable in practice, not just faster in a micro-benchmark:
-median wall time dropped from ``2.595 s`` to ``0.127 s`` while median RSS
-dropped from about ``1.2 GB`` to about ``8.7 MB`` on the checked fixture.
-
-Against nearby alternatives (notably ``riker``), the principal distinction is this:
-``turbo-picard`` is a replacement for existing Picard contracts, not a redesign
-of the metric workflow.
-
-That gives teams three speed-critical advantages at once:
-
-* no argument-mapping phase before the first speed comparison;
-* no downstream parser rewrites when output contracts are shared;
-* no all-or-nothing cutover, because fallback remains available command by command.
-
-Those numbers are only used together with output checks, benchmark logs, and
-real-data comparison records. The claim is not “faster at any cost”. The claim
-is “faster where the checked output still matches the reviewed comparison
-boundary.”
+The repository also records a ``MarkDuplicates`` fixture with a median wall
+time of ``2.595 s`` for Picard and ``0.127 s`` for ``turbo-picard``, and median
+RSS of about ``1.2 GB`` and ``8.7 MB`` respectively. These are fixture-specific
+measurements, not capacity or performance guarantees. See :doc:`benchmarks` for
+the command lines, input scope, output comparators, and reproduction commands.
 
 What you still need to do
 -------------------------
 
-Even with the public evidence in the repo, a real workflow should still:
+Even with the saved evidence in the repository, a workflow evaluation should:
 
 * choose one command to test first;
 * run upstream Picard and ``turbo-picard`` on representative inputs;
@@ -130,7 +74,7 @@ That is the difference between a benchmark claim and a workflow decision.
 How to choose
 -------------
 
-Choose ``turbo-picard`` first when:
+Evaluate ``turbo-picard`` when:
 
 * Picard is a real wall-time problem;
 * the command boundary is stable;
@@ -140,7 +84,7 @@ Choose ``turbo-picard`` first when:
   ``FixMateInformation`` runs;
 * the team can review one command-level change at a time.
 
-Choose upstream Picard first when:
+Use upstream Picard when:
 
 * the workflow depends on unsupported options or commands today;
 * the team cannot run side-by-side checks;
@@ -150,7 +94,7 @@ Where to go next
 ----------------
 
 * :doc:`is-this-for-you` for a quick fit decision
-* :doc:`first-command` for choosing the best first trial
+* :doc:`first-command` for choosing a first trial
 * :doc:`evaluation-playbook` for the full rollout path
 * :doc:`parity` for the exact meaning of the comparison evidence
 * :doc:`fallback` for mixed-coverage workflows

@@ -4,16 +4,18 @@
 [![PyPI](https://img.shields.io/pypi/v/turbo-picard.svg)](https://pypi.org/project/turbo-picard/)
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.20541927.svg)](https://doi.org/10.5281/zenodo.20541927)
 
-**Faster Rust implementations of common Picard commands, built for Picard-shaped
-pipelines.**
+**Evaluate selected Picard commands in Rust when a known preprocessing or QC
+step is a runtime or memory bottleneck.**
 
 `turbo-picard` keeps the workflow interface familiar: Picard command names,
 `KEY=VALUE` arguments, and an optional `picard` compatibility shim. Accelerated
 commands run natively. Commands outside the native surface can delegate to
 upstream Picard when fallback is configured.
 
-Use it when you already have Picard steps in WDL, Nextflow, Snakemake, or shell
-pipelines and want to test faster execution without rewriting task interfaces.
+It is for bioinformatics teams maintaining Picard steps in WDL, Nextflow,
+Snakemake, or shell pipelines. Start with one representative command, compare
+the outputs your downstream workflow consumes, and keep upstream Picard for
+commands or options outside the documented native scope.
 
 ## Quick Start
 
@@ -39,7 +41,7 @@ Use the explicit `turbo-picard` command while testing. Add the shim to a
 pipeline environment only after the specific commands you need have been
 checked.
 
-Check the install:
+Check the install and print a trial contract before changing a workflow:
 
 ```bash
 turbo-picard --version
@@ -48,7 +50,9 @@ turbo-picard doctor
 turbo-picard trial MarkDuplicates I=input.bam O=marked.bam M=metrics.txt
 ```
 
-Run one familiar command:
+The trial command prints matching Picard and turbo-picard invocations, declared
+outputs, fallback state, and comparison notes. Then run the chosen command on a
+representative input:
 
 ```bash
 turbo-picard MarkDuplicates I=input.bam O=marked.bam M=metrics.txt
