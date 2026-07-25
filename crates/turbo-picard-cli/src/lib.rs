@@ -2991,6 +2991,16 @@ fn run_samtofastq(args: &[String]) -> Result<(), String> {
     let include_non_primary_alignments =
         optional_bool(&args, "INCLUDE_NON_PRIMARY_ALIGNMENTS")?.unwrap_or(false);
     let compression_level = optional_u32(&args, "COMPRESSION_LEVEL")?.unwrap_or(5);
+    let configured_max_records_in_ram = optional_u32(&args, "MAX_RECORDS_IN_RAM")?;
+    let max_records_in_ram = configured_max_records_in_ram
+        .map(|value| value as usize)
+        .unwrap_or(500_000);
+    let configured_tmp_dir = optional_scalar(&args, "TMP_DIR")?
+        .filter(|value| !value.trim().is_empty())
+        .map(std::path::PathBuf::from);
+    let use_bounded_pairing_stage =
+        configured_max_records_in_ram.is_some() || configured_tmp_dir.is_some();
+    let tmp_dir = configured_tmp_dir.unwrap_or_else(env::temp_dir);
     let create_md5_file = optional_bool(&args, "CREATE_MD5_FILE")?.unwrap_or(false);
     let transform = SamToFastqTransform {
         read1_trim: optional_u32(&args, "READ1_TRIM")?.unwrap_or(0) as usize,
@@ -3038,6 +3048,26 @@ fn run_samtofastq(args: &[String]) -> Result<(), String> {
     let reference = picard_reference(&args)?;
     let mut reader = open_bam_reader_with_reference(input, reference.as_deref())
         .map_err(|error| error.to_string())?;
+    let input_is_queryname_sorted =
+        header_sort_order(reader.header()).as_deref() == Some("queryname");
+    let staged_input = (!input_is_queryname_sorted && use_bounded_pairing_stage)
+        .then(|| {
+            stage_samtofastq_queryname_input(
+                &mut reader,
+                &tmp_dir,
+                max_records_in_ram,
+                reference.as_deref(),
+            )
+        })
+        .transpose()?;
+    if let Some(staged_input) = staged_input.as_ref() {
+        reader = open_bam_reader_with_reference(
+            staged_input.as_path().to_string_lossy().as_ref(),
+            reference.as_deref(),
+        )
+        .map_err(|error| error.to_string())?;
+    }
+    let paired_reads_are_queryname_grouped = input_is_queryname_sorted || staged_input.is_some();
     let mut first_writer = match fastq.as_ref() {
         Some(path) => Some(fastq_writer(path, compression_level)?),
         None => None,
@@ -3059,6 +3089,7 @@ fn run_samtofastq(args: &[String]) -> Result<(), String> {
         None => None,
     };
     let mut first_seen_mates: FxHashMap<Vec<u8>, bam::Record> = FxHashMap::default();
+    let mut previous_pair_qname = Vec::new();
 
     for record in reader.records() {
         let record = record.map_err(|error| error.to_string())?;
@@ -3077,6 +3108,14 @@ fn run_samtofastq(args: &[String]) -> Result<(), String> {
         }
         if record.is_paired() {
             let key = record.qname().to_vec();
+            if paired_reads_are_queryname_grouped
+                && !previous_pair_qname.is_empty()
+                && previous_pair_qname != key
+            {
+                first_seen_mates.clear();
+            }
+            previous_pair_qname.clear();
+            previous_pair_qname.extend_from_slice(&key);
             if let Some(first_record) = first_seen_mates.remove(&key) {
                 let (read1, read2) = if record.is_first_in_template() {
                     (&record, &first_record)
@@ -3165,6 +3204,7 @@ fn run_samtofastq(args: &[String]) -> Result<(), String> {
     drop(first_writer);
     drop(second_writer);
     drop(unpaired_writer);
+    drop(reader);
     if let Some(outputs) = per_rg_outputs {
         outputs.write_md5_sidecars(create_md5_file)
     } else {
@@ -3175,6 +3215,52 @@ fn run_samtofastq(args: &[String]) -> Result<(), String> {
             create_md5_file,
         )
     }
+}
+
+struct ScopedTemporaryPath {
+    path: tempfile::TempPath,
+}
+
+impl ScopedTemporaryPath {
+    fn as_path(&self) -> &Path {
+        self.path.as_ref()
+    }
+}
+
+fn stage_samtofastq_queryname_input(
+    reader: &mut bam::Reader,
+    tmp_dir: &Path,
+    max_records_in_ram: usize,
+    reference: Option<&str>,
+) -> Result<ScopedTemporaryPath, String> {
+    fs::create_dir_all(tmp_dir).map_err(|error| error.to_string())?;
+    let staged = ScopedTemporaryPath {
+        path: tempfile::Builder::new()
+            .prefix("turbo-picard-samtofastq-queryname-")
+            .suffix(".bam")
+            .tempfile_in(tmp_dir)
+            .map_err(|error| error.to_string())?
+            .into_temp_path(),
+    };
+    let header = bam::Header::from_template(reader.header());
+    let mut config = BamExternalSortConfig::new(tmp_dir);
+    config.prefix = "turbo-picard-samtofastq-queryname".to_string();
+    config.max_records_in_ram = max_records_in_ram.max(1);
+    let mut sorter = BamExternalSorter::new(header.clone(), config)?;
+    for record in reader.records() {
+        sorter.push(
+            record.map_err(|error| error.to_string())?,
+            compare_queryname,
+        )?;
+    }
+    let output = staged.as_path().to_string_lossy().to_string();
+    let mut writer =
+        bam_writer_for_path_with_reference(&output, &header, bam::Format::Bam, reference, None)?;
+    sorter.finish_into(compare_queryname, |record| {
+        writer.write(&record).map_err(|error| error.to_string())
+    })?;
+    drop(writer);
+    Ok(staged)
 }
 
 fn run_fastqtosam(args: &[String]) -> Result<(), String> {
@@ -6909,13 +6995,47 @@ fn run_updatevcfsequencedictionary(args: &[String]) -> Result<(), String> {
 
     let dictionary_text = fs::read_to_string(dictionary_path).map_err(|error| error.to_string())?;
     let contig_lines = vcf_contig_lines_from_dictionary(&dictionary_text)?;
-    let input_text = read_text_or_gzip(&input)?;
-    let output_text = replace_vcf_contig_header(&input_text, &contig_lines)?;
-    write_text_or_gzip(&output, &output_text)?;
-    if create_index && has_extension(&output, "vcf") {
-        write_vcf_idx_sidecar(&output, &output_text)?;
+    let mut input_reader = open_text_or_gzip_reader(&input)?;
+    let mut output_writer = VcfOutput::create(&output, create_index)?;
+    let mut line = String::new();
+    let mut inserted_contigs = false;
+    let mut saw_column_header = false;
+
+    loop {
+        line.clear();
+        if input_reader
+            .read_line(&mut line)
+            .map_err(|error| error.to_string())?
+            == 0
+        {
+            break;
+        }
+        let line = line.trim_end_matches(['\r', '\n']);
+        if line.starts_with("##contig=<") {
+            continue;
+        }
+        if line.starts_with("#CHROM") && !inserted_contigs {
+            for contig in &contig_lines {
+                output_writer.write_header(contig)?;
+                output_writer.write_header("\n")?;
+            }
+            inserted_contigs = true;
+        }
+        if line.starts_with("#CHROM") {
+            saw_column_header = true;
+        }
+        if line.starts_with('#') {
+            output_writer.write_header(line)?;
+            output_writer.write_header("\n")?;
+        } else if !line.trim().is_empty() {
+            output_writer.write_record(line.as_bytes())?;
+        }
     }
-    Ok(())
+
+    if !saw_column_header {
+        return Err("VCF input is missing #CHROM header".to_string());
+    }
+    output_writer.finish()
 }
 
 fn run_liftovervcf(args: &[String]) -> Result<(), String> {
@@ -6994,96 +7114,32 @@ fn run_gathervcfs(args: &[String]) -> Result<(), String> {
     let output = required_scalar_for(&args, "OUTPUT", "GatherVcfs")?;
     let create_index = optional_bool(&args, "CREATE_INDEX")?.unwrap_or(false);
 
-    let first_input = inputs
+    let headers = inputs
+        .iter()
+        .map(|input| read_vcf_header(input))
+        .collect::<Result<Vec<_>, _>>()?;
+    let first = headers
         .first()
         .ok_or_else(|| "missing required GatherVcfs argument: INPUT".to_string())?;
-    let first_text = read_text_or_gzip(first_input)?;
-    let mut text = String::with_capacity(first_text.len());
-    let (first_column_header, first_contig_ids) =
-        append_gathervcfs_text(&first_text, first_input, true, &mut text)?;
-
-    for input in inputs.iter().skip(1) {
-        let input_text = read_text_or_gzip(input)?;
-        let (column_header, contig_ids) =
-            append_gathervcfs_text(&input_text, input, false, &mut text)?;
-        if column_header != first_column_header {
+    let first_contig_ids = first.contig_ids();
+    for header in headers.iter().skip(1) {
+        if header.column_header != first.column_header {
             return Err("unsupported GatherVcfs inputs with different sample columns".to_string());
         }
-        if contig_ids != first_contig_ids {
+        if header.contig_ids() != first_contig_ids {
             return Err(
                 "unsupported GatherVcfs inputs with different sequence dictionaries".to_string(),
             );
         }
     }
-    write_text_or_gzip(&output, &text)?;
-    if create_index && has_extension(&output, "vcf") {
-        write_vcf_idx_sidecar(&output, &text)?;
+    let mut output_writer = VcfOutput::create(&output, create_index)?;
+    output_writer.write_header(&first.header_text())?;
+    for input in &inputs {
+        stream_vcf_records(input, |record| {
+            output_writer.write_record(record.line.as_bytes())
+        })?;
     }
-    Ok(())
-}
-
-fn append_gathervcfs_text(
-    input_text: &str,
-    source: &str,
-    include_header: bool,
-    output: &mut String,
-) -> Result<(String, Vec<String>), String> {
-    let mut column_header = None::<String>;
-    let mut contig_ids = Vec::new();
-
-    for (line_index, line) in input_text.lines().enumerate() {
-        if line.starts_with("##") {
-            if column_header.is_some() {
-                return Err(format!("malformed VCF header in {source}"));
-            }
-            if let Some(contig_id) = parse_vcf_contig_id(line) {
-                contig_ids.push(contig_id);
-            }
-            if include_header {
-                output.push_str(line);
-                output.push('\n');
-            }
-        } else if line.starts_with("#CHROM") {
-            column_header = Some(line.to_string());
-            if include_header {
-                output.push_str(line);
-                output.push('\n');
-            }
-        } else if line.starts_with('#') {
-            return Err(format!(
-                "unsupported VCF header line {} in {source}",
-                line_index + 1
-            ));
-        } else if !line.trim().is_empty() {
-            if column_header.is_none() {
-                return Err(format!("VCF input {source} is missing #CHROM header"));
-            }
-            validate_gathervcfs_record_line(line, source, line_index + 1)?;
-            output.push_str(line);
-            output.push('\n');
-        }
-    }
-
-    let column_header =
-        column_header.ok_or_else(|| format!("VCF input {source} is missing #CHROM header"))?;
-    Ok((column_header, contig_ids))
-}
-
-fn validate_gathervcfs_record_line(
-    line: &str,
-    source: &str,
-    line_number: usize,
-) -> Result<(), String> {
-    let mut fields = line.split('\t');
-    fields
-        .next()
-        .ok_or_else(|| format!("malformed VCF record on line {line_number} in {source}"))?;
-    fields
-        .next()
-        .ok_or_else(|| format!("malformed VCF record on line {line_number} in {source}"))?
-        .parse::<u64>()
-        .map_err(|_| format!("malformed VCF POS on line {line_number} in {source}"))?;
-    Ok(())
+    output_writer.finish()
 }
 
 fn run_sortvcf(args: &[String]) -> Result<(), String> {
@@ -7094,11 +7150,18 @@ fn run_sortvcf(args: &[String]) -> Result<(), String> {
     let output = required_scalar_for(&args, "OUTPUT", "SortVcf")?;
     let dictionary_path = optional_scalar(&args, "SEQUENCE_DICTIONARY")?;
     let create_index = optional_bool(&args, "CREATE_INDEX")?.unwrap_or(false);
+    let max_records_in_ram = optional_u32(&args, "MAX_RECORDS_IN_RAM")?
+        .map(|value| value as usize)
+        .unwrap_or(500_000);
+    let tmp_dir = optional_scalar(&args, "TMP_DIR")?
+        .filter(|value| !value.trim().is_empty())
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(env::temp_dir);
 
-    let mut documents = Vec::with_capacity(inputs.len());
-    for input in &inputs {
-        documents.push(read_vcf_document(input)?);
-    }
+    let documents = inputs
+        .iter()
+        .map(|input| read_vcf_header(input))
+        .collect::<Result<Vec<_>, _>>()?;
     let first = documents
         .first()
         .ok_or_else(|| "missing required SortVcf argument: INPUT".to_string())?;
@@ -7126,40 +7189,19 @@ fn run_sortvcf(args: &[String]) -> Result<(), String> {
         return Err("unsupported SortVcf input without sequence dictionary".to_string());
     }
 
-    let mut text = vcf_header_text_with_contigs(first, contig_lines.as_deref())?;
-    let record_count = documents
-        .iter()
-        .map(|document| document.records.len())
-        .sum::<usize>();
-    let mut records = Vec::<(usize, u64, usize, String)>::with_capacity(record_count);
-    for document in documents {
-        for mut record in document.records {
-            record.serial = records.len();
-            let Some(contig_index) = contig_order.get(&record.contig).copied() else {
-                return Err(format!(
-                    "VCF contig {} is not present in sequence dictionary",
-                    record.contig
-                ));
-            };
-            records.push((contig_index, record.position, record.serial, record.line));
-        }
-    }
-    records.sort_unstable_by(|left, right| {
-        left.0
-            .cmp(&right.0)
-            .then_with(|| left.1.cmp(&right.1))
-            .then_with(|| left.2.cmp(&right.2))
-    });
+    let mut config = ExternalSortConfig::new(&tmp_dir);
+    config.prefix = "turbo-picard-sortvcf".to_string();
+    config.max_records_in_ram = max_records_in_ram.max(1);
+    let mut sorter = ExternalSorter::new(config)?;
+    push_vcf_records_into_sorter(&inputs, &contig_order, &mut sorter)?;
 
-    for (_, _, _, line) in records {
-        text.push_str(&line);
-        text.push('\n');
-    }
-    write_text_or_gzip(&output, &text)?;
-    if create_index && has_extension(&output, "vcf") {
-        write_vcf_idx_sidecar(&output, &text)?;
-    }
-    Ok(())
+    let mut output_writer = VcfOutput::create(&output, create_index)?;
+    output_writer.write_header(&vcf_header_text_with_contigs(
+        first,
+        contig_lines.as_deref(),
+    )?)?;
+    sorter.finish_into(|record| output_writer.write_record(&record.payload))?;
+    output_writer.finish()
 }
 
 fn run_mergevcfs(args: &[String]) -> Result<(), String> {
@@ -7170,11 +7212,18 @@ fn run_mergevcfs(args: &[String]) -> Result<(), String> {
     let output = required_scalar_for(&args, "OUTPUT", "MergeVcfs")?;
     let dictionary_path = optional_scalar(&args, "SEQUENCE_DICTIONARY")?;
     let create_index = optional_bool(&args, "CREATE_INDEX")?.unwrap_or(false);
+    let max_records_in_ram = optional_u32(&args, "MAX_RECORDS_IN_RAM")?
+        .map(|value| value as usize)
+        .unwrap_or(500_000);
+    let tmp_dir = optional_scalar(&args, "TMP_DIR")?
+        .filter(|value| !value.trim().is_empty())
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(env::temp_dir);
 
-    let mut documents = Vec::with_capacity(inputs.len());
-    for input in &inputs {
-        documents.push(read_vcf_document(input)?);
-    }
+    let documents = inputs
+        .iter()
+        .map(|input| read_vcf_header(input))
+        .collect::<Result<Vec<_>, _>>()?;
     let first = documents
         .first()
         .ok_or_else(|| "missing required MergeVcfs argument: INPUT".to_string())?;
@@ -7202,39 +7251,19 @@ fn run_mergevcfs(args: &[String]) -> Result<(), String> {
         return Err("unsupported MergeVcfs input without sequence dictionary".to_string());
     }
 
-    let mut text = vcf_header_text_with_contigs(first, contig_lines.as_deref())?;
-    let record_count = documents
-        .iter()
-        .map(|document| document.records.len())
-        .sum::<usize>();
-    let mut records = Vec::<(usize, u64, usize, String)>::with_capacity(record_count);
-    for document in documents {
-        for mut record in document.records {
-            record.serial = records.len();
-            let Some(contig_index) = contig_order.get(&record.contig).copied() else {
-                return Err(format!(
-                    "VCF contig {} is not present in sequence dictionary",
-                    record.contig
-                ));
-            };
-            records.push((contig_index, record.position, record.serial, record.line));
-        }
-    }
-    records.sort_unstable_by(|left, right| {
-        left.0
-            .cmp(&right.0)
-            .then_with(|| left.1.cmp(&right.1))
-            .then_with(|| left.2.cmp(&right.2))
-    });
-    for (_, _, _, line) in records {
-        text.push_str(&line);
-        text.push('\n');
-    }
-    write_text_or_gzip(&output, &text)?;
-    if create_index && has_extension(&output, "vcf") {
-        write_vcf_idx_sidecar(&output, &text)?;
-    }
-    Ok(())
+    let mut config = ExternalSortConfig::new(&tmp_dir);
+    config.prefix = "turbo-picard-mergevcfs".to_string();
+    config.max_records_in_ram = max_records_in_ram.max(1);
+    let mut sorter = ExternalSorter::new(config)?;
+    push_vcf_records_into_sorter(&inputs, &contig_order, &mut sorter)?;
+
+    let mut output_writer = VcfOutput::create(&output, create_index)?;
+    output_writer.write_header(&vcf_header_text_with_contigs(
+        first,
+        contig_lines.as_deref(),
+    )?)?;
+    sorter.finish_into(|record| output_writer.write_record(&record.payload))?;
+    output_writer.finish()
 }
 
 fn reject_unsupported_viewsam_args(args: &BTreeMap<String, Vec<String>>) -> Result<(), String> {
@@ -7638,6 +7667,141 @@ struct VcfRecord {
 fn read_vcf_document(path: &str) -> Result<VcfDocument, String> {
     let text = read_text_or_gzip(path)?;
     parse_vcf_document(&text, path)
+}
+
+/// Read only the VCF header.  Sorting and gathering use this first to validate
+/// all input contracts before they start producing output, then stream records
+/// in a second pass.
+fn read_vcf_header(path: &str) -> Result<VcfDocument, String> {
+    let mut reader = open_text_or_gzip_reader(path)?;
+    let mut meta_lines = Vec::new();
+    let mut column_header = None;
+    let mut line = String::new();
+    let mut line_number = 0usize;
+
+    loop {
+        line.clear();
+        if reader
+            .read_line(&mut line)
+            .map_err(|error| error.to_string())?
+            == 0
+        {
+            break;
+        }
+        line_number += 1;
+        let line = line.trim_end_matches(['\r', '\n']);
+        if line.starts_with("##") {
+            if column_header.is_some() {
+                return Err(format!("malformed VCF header in {path}"));
+            }
+            meta_lines.push(line.to_string());
+        } else if line.starts_with("#CHROM") {
+            column_header = Some(line.to_string());
+        } else if line.starts_with('#') {
+            return Err(format!(
+                "unsupported VCF header line {line_number} in {path}"
+            ));
+        } else if !line.trim().is_empty() {
+            if column_header.is_none() {
+                return Err(format!("VCF input {path} is missing #CHROM header"));
+            }
+            // Validate the first body line while checking that this really is a
+            // VCF rather than a header-only text file with arbitrary content.
+            parse_vcf_record(line, 0, path, line_number)?;
+            break;
+        }
+    }
+
+    let column_header =
+        column_header.ok_or_else(|| format!("VCF input {path} is missing #CHROM header"))?;
+    Ok(VcfDocument {
+        meta_lines,
+        column_header,
+        records: Vec::new(),
+    })
+}
+
+fn stream_vcf_records(
+    path: &str,
+    mut visit: impl FnMut(VcfRecord) -> Result<(), String>,
+) -> Result<(), String> {
+    let mut reader = open_text_or_gzip_reader(path)?;
+    let mut column_header = false;
+    let mut line = String::new();
+    let mut line_number = 0usize;
+    let mut serial = 0usize;
+
+    loop {
+        line.clear();
+        if reader
+            .read_line(&mut line)
+            .map_err(|error| error.to_string())?
+            == 0
+        {
+            break;
+        }
+        line_number += 1;
+        let line = line.trim_end_matches(['\r', '\n']);
+        if line.starts_with("##") {
+            if column_header {
+                return Err(format!("malformed VCF header in {path}"));
+            }
+        } else if line.starts_with("#CHROM") {
+            column_header = true;
+        } else if line.starts_with('#') {
+            return Err(format!(
+                "unsupported VCF header line {line_number} in {path}"
+            ));
+        } else if !line.trim().is_empty() {
+            if !column_header {
+                return Err(format!("VCF input {path} is missing #CHROM header"));
+            }
+            let record = parse_vcf_record(line, serial, path, line_number)?;
+            serial = serial
+                .checked_add(1)
+                .ok_or_else(|| "VCF input record count overflow".to_string())?;
+            visit(record)?;
+        }
+    }
+    if !column_header {
+        return Err(format!("VCF input {path} is missing #CHROM header"));
+    }
+    Ok(())
+}
+
+fn push_vcf_records_into_sorter(
+    inputs: &[String],
+    contig_order: &BTreeMap<String, usize>,
+    sorter: &mut ExternalSorter,
+) -> Result<(), String> {
+    let mut serial = 0u64;
+    for input in inputs {
+        stream_vcf_records(input, |record| {
+            let contig_index = contig_order.get(&record.contig).copied().ok_or_else(|| {
+                format!(
+                    "VCF contig {} is not present in sequence dictionary",
+                    record.contig
+                )
+            })?;
+            sorter.push(
+                vcf_sort_key(contig_index, record.position, serial),
+                record.line.into_bytes(),
+            )?;
+            serial = serial
+                .checked_add(1)
+                .ok_or_else(|| "VCF input record count overflow".to_string())?;
+            Ok(())
+        })?;
+    }
+    Ok(())
+}
+
+fn vcf_sort_key(contig_index: usize, position: u64, serial: u64) -> Vec<u8> {
+    let mut key = Vec::with_capacity(24);
+    key.extend_from_slice(&(contig_index as u64).to_be_bytes());
+    key.extend_from_slice(&position.to_be_bytes());
+    key.extend_from_slice(&serial.to_be_bytes());
+    key
 }
 
 fn parse_vcf_document(text: &str, source: &str) -> Result<VcfDocument, String> {
@@ -9554,6 +9718,110 @@ fn read_text_or_gzip(path: &str) -> Result<String, String> {
             .map_err(|error| error.to_string())?;
     }
     Ok(text)
+}
+
+fn open_text_or_gzip_reader(path: &str) -> Result<Box<dyn BufRead>, String> {
+    let file = fs::File::open(path).map_err(|error| error.to_string())?;
+    if has_gzip_extension(path) {
+        Ok(Box::new(BufReader::with_capacity(
+            1024 * 1024,
+            GzDecoder::new(file),
+        )))
+    } else {
+        Ok(Box::new(BufReader::with_capacity(1024 * 1024, file)))
+    }
+}
+
+enum VcfOutputWriter {
+    Plain(BufWriter<fs::File>),
+    Gzip(GzEncoder<BufWriter<fs::File>>),
+}
+
+impl VcfOutputWriter {
+    fn write_all(&mut self, bytes: &[u8]) -> Result<(), String> {
+        match self {
+            Self::Plain(writer) => writer.write_all(bytes),
+            Self::Gzip(writer) => writer.write_all(bytes),
+        }
+        .map_err(|error| error.to_string())
+    }
+
+    fn finish(self) -> Result<(), String> {
+        match self {
+            Self::Plain(mut writer) => writer.flush().map_err(|error| error.to_string()),
+            Self::Gzip(mut writer) => writer.try_finish().map_err(|error| error.to_string()),
+        }
+    }
+}
+
+/// Incrementally writes a VCF and its lightweight plain-VCF offset sidecar.
+///
+/// The sidecar is only requested for ``.vcf`` outputs, matching the existing
+/// command behaviour.  Keeping it incremental means a large VCF does not have
+/// to be retained merely to calculate output offsets.
+struct VcfOutput {
+    writer: VcfOutputWriter,
+    index: Option<BufWriter<fs::File>>,
+    offset: u64,
+}
+
+impl VcfOutput {
+    fn create(path: &str, create_index: bool) -> Result<Self, String> {
+        let file = fs::File::create(path).map_err(|error| error.to_string())?;
+        let writer = if has_gzip_extension(path) {
+            VcfOutputWriter::Gzip(GzEncoder::new(
+                BufWriter::with_capacity(1024 * 1024, file),
+                Compression::default(),
+            ))
+        } else {
+            VcfOutputWriter::Plain(BufWriter::with_capacity(1024 * 1024, file))
+        };
+        let index = if create_index && has_extension(path, "vcf") {
+            let index_file =
+                fs::File::create(format!("{path}.idx")).map_err(|error| error.to_string())?;
+            let mut index = BufWriter::with_capacity(1024 * 1024, index_file);
+            index
+                .write_all(b"# turbo-picard VCF record offsets\n")
+                .map_err(|error| error.to_string())?;
+            Some(index)
+        } else {
+            None
+        };
+        Ok(Self {
+            writer,
+            index,
+            offset: 0,
+        })
+    }
+
+    fn write_header(&mut self, text: &str) -> Result<(), String> {
+        self.write_bytes(text.as_bytes())
+    }
+
+    fn write_record(&mut self, record: &[u8]) -> Result<(), String> {
+        if let Some(index) = self.index.as_mut() {
+            writeln!(index, "{}", self.offset).map_err(|error| error.to_string())?;
+        }
+        self.write_bytes(record)?;
+        self.write_bytes(b"\n")
+    }
+
+    fn write_bytes(&mut self, bytes: &[u8]) -> Result<(), String> {
+        self.writer.write_all(bytes)?;
+        self.offset = self
+            .offset
+            .checked_add(bytes.len() as u64)
+            .ok_or_else(|| "VCF output offset overflow".to_string())?;
+        Ok(())
+    }
+
+    fn finish(mut self) -> Result<(), String> {
+        self.writer.finish()?;
+        if let Some(mut index) = self.index.take() {
+            index.flush().map_err(|error| error.to_string())?;
+        }
+        Ok(())
+    }
 }
 
 fn write_text_or_gzip(path: &str, text: &str) -> Result<(), String> {

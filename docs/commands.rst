@@ -86,6 +86,13 @@ VCF and interval examples
    picard LiftoverVcf I=input.vcf O=lifted.vcf CHAIN=build.chain REJECT=rejected.vcf R=target.fa
    picard IntervalListTools I=a.interval_list I=b.interval_list O=merged.interval_list ACTION=CONCAT SORT=true UNIQUE=true
 
+For large VCF inputs, ``GatherVcfs`` and
+``UpdateVcfSequenceDictionary`` write records as they are read. ``SortVcf``
+and ``MergeVcfs`` use bounded temporary runs; set ``TMP_DIR`` to local scratch
+space and ``MAX_RECORDS_IN_RAM`` to the desired run size. For coordinate-sorted
+BAM or CRAM input, set either of those options on ``SamToFastq`` to stage a
+bounded queryname sort before pairing mates.
+
 Machine-readable coverage
 -------------------------
 

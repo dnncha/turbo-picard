@@ -1957,6 +1957,100 @@ fn samtofastq_can_output_fastqs_per_read_group_from_bam_input() {
 }
 
 #[test]
+fn samtofastq_spills_coordinate_bam_before_pairing_mates() {
+    let tempdir = tempfile::tempdir().expect("tempdir exists");
+    let input_sam = tempdir.path().join("input.sam");
+    let input_bam = tempdir.path().join("input.bam");
+    let default_first_fastq = tempdir.path().join("default-r1.fastq");
+    let default_second_fastq = tempdir.path().join("default-r2.fastq");
+    let first_fastq = tempdir.path().join("r1.fastq");
+    let second_fastq = tempdir.path().join("r2.fastq");
+    fs::write(
+        &input_sam,
+        concat!(
+            "@HD\tVN:1.6\tSO:coordinate\n",
+            "@SQ\tSN:chr1\tLN:1000\n",
+            "pair-b\t65\tchr1\t1\t60\t4M\t=\t20\t0\tCCCC\tIIII\n",
+            "pair-a\t65\tchr1\t10\t60\t4M\t=\t30\t0\tAAAA\tFFFF\n",
+            "pair-b\t129\tchr1\t20\t60\t4M\t=\t1\t0\tGGGG\tJJJJ\n",
+            "pair-a\t129\tchr1\t30\t60\t4M\t=\t10\t0\tTTTT\tHHHH\n",
+        ),
+    )
+    .expect("input SAM is written");
+
+    Command::cargo_bin("picard")
+        .expect("binary exists")
+        .args([
+            "SortSam",
+            &format!("I={}", input_sam.display()),
+            &format!("O={}", input_bam.display()),
+            "SO=coordinate",
+            "VALIDATION_STRINGENCY=SILENT",
+            "QUIET=true",
+        ])
+        .assert()
+        .success();
+
+    Command::cargo_bin("picard")
+        .expect("binary exists")
+        .args([
+            "SamToFastq",
+            &format!("I={}", input_bam.display()),
+            &format!("F={}", default_first_fastq.display()),
+            &format!("F2={}", default_second_fastq.display()),
+            "VALIDATION_STRINGENCY=SILENT",
+            "QUIET=true",
+        ])
+        .assert()
+        .success();
+
+    assert_eq!(
+        fs::read_to_string(&default_first_fastq).expect("default first FASTQ exists"),
+        "@pair-b/1\nCCCC\n+\nIIII\n@pair-a/1\nAAAA\n+\nFFFF\n"
+    );
+    assert_eq!(
+        fs::read_to_string(&default_second_fastq).expect("default second FASTQ exists"),
+        "@pair-b/2\nGGGG\n+\nJJJJ\n@pair-a/2\nTTTT\n+\nHHHH\n"
+    );
+
+    Command::cargo_bin("picard")
+        .expect("binary exists")
+        .args([
+            "SamToFastq",
+            &format!("I={}", input_bam.display()),
+            &format!("F={}", first_fastq.display()),
+            &format!("F2={}", second_fastq.display()),
+            "MAX_RECORDS_IN_RAM=1",
+            &format!("TMP_DIR={}", tempdir.path().display()),
+            "VALIDATION_STRINGENCY=SILENT",
+            "QUIET=true",
+        ])
+        .assert()
+        .success();
+
+    assert_eq!(
+        fs::read_to_string(&first_fastq).expect("first FASTQ exists"),
+        "@pair-a/1\nAAAA\n+\nFFFF\n@pair-b/1\nCCCC\n+\nIIII\n"
+    );
+    assert_eq!(
+        fs::read_to_string(&second_fastq).expect("second FASTQ exists"),
+        "@pair-a/2\nTTTT\n+\nHHHH\n@pair-b/2\nGGGG\n+\nJJJJ\n"
+    );
+    assert!(
+        fs::read_dir(tempdir.path())
+            .expect("temporary directory is readable")
+            .all(|entry| {
+                !entry
+                    .expect("directory entry is readable")
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with("turbo-picard-samtofastq-queryname")
+            }),
+        "queryname staging files are cleaned up"
+    );
+}
+
+#[test]
 fn fastqtosam_writes_unmapped_paired_sam_with_read_group() {
     let tempdir = tempfile::tempdir().expect("tempdir exists");
     let r1 = tempdir.path().join("r1.fastq");
@@ -8361,6 +8455,8 @@ fn sortvcf_sorts_records_by_dictionary_order_and_position() {
             &format!("I={}", input.display()),
             &format!("O={}", output.display()),
             &format!("SD={}", dictionary.display()),
+            "MAX_RECORDS_IN_RAM=1",
+            &format!("TMP_DIR={}", tempdir.path().display()),
             "VALIDATION_STRINGENCY=SILENT",
             "QUIET=true",
         ])
@@ -8378,6 +8474,15 @@ fn sortvcf_sorts_records_by_dictionary_order_and_position() {
             "chr1\t9\t.\tA\tG\t.\tPASS\t.",
             "chr2\t3\t.\tA\tC\t.\tPASS\t.",
         ]
+    );
+    assert!(
+        fs::read_dir(tempdir.path())
+            .expect("temporary directory is readable")
+            .flatten()
+            .all(|entry| !entry
+                .file_name()
+                .to_string_lossy()
+                .starts_with("turbo-picard-sortvcf"))
     );
 }
 
@@ -8561,6 +8666,8 @@ fn mergevcfs_merges_compatible_inputs_by_coordinate() {
             &format!("I={}", first.display()),
             &format!("I={}", second.display()),
             &format!("O={}", output.display()),
+            "MAX_RECORDS_IN_RAM=1",
+            &format!("TMP_DIR={}", tempdir.path().display()),
             "VALIDATION_STRINGENCY=SILENT",
             "QUIET=true",
         ])
@@ -8577,6 +8684,15 @@ fn mergevcfs_merges_compatible_inputs_by_coordinate() {
             "chr1\t2\t.\tT\tC\t.\tPASS\t.",
             "chr2\t3\t.\tA\tC\t.\tPASS\t.",
         ]
+    );
+    assert!(
+        fs::read_dir(tempdir.path())
+            .expect("temporary directory is readable")
+            .flatten()
+            .all(|entry| !entry
+                .file_name()
+                .to_string_lossy()
+                .starts_with("turbo-picard-mergevcfs"))
     );
 }
 

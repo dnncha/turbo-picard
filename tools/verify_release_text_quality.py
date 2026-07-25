@@ -19,6 +19,8 @@ RELEASE_TEXT_PATHS = [
     Path("docs/adoption.rst"),
     Path("docs/benchmarks.rst"),
     Path("docs/citation.rst"),
+    Path("docs/command-matrix.yml"),
+    Path("docs/commands.rst"),
     Path("docs/compatibility-contract.rst"),
     Path("docs/packaging.rst"),
     Path("docs/parity.rst"),
