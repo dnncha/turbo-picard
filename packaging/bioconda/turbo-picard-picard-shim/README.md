@@ -18,7 +18,7 @@ GitHub release archive:
 
 ```bash
 python3 tools/prepare_bioconda_release.py \
-  --archive ~/Downloads/turbo-picard-0.1.10.tar.gz
+  --archive ~/Downloads/turbo-picard-0.1.11.tar.gz
 python3 tools/verify_benchmark_suite_coverage.py
 python3 tools/verify_benchmark_thresholds.py
 python3 tools/verify_ci_coverage.py

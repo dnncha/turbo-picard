@@ -228,6 +228,22 @@ keywords:
             verify_release_versions.collect_errors(root),
         )
 
+    def test_allows_release_without_zenodo_identifier(self) -> None:
+        root = self.make_tree()
+        citation = root / "CITATION.cff"
+        citation.write_text(
+            citation.read_text(encoding="utf-8").replace(
+                "identifiers:\n"
+                "  - type: doi\n"
+                "    value: 10.5281/zenodo.12345678\n"
+                "    description: \"Zenodo archive for v0.1.0\"\n",
+                "",
+            ),
+            encoding="utf-8",
+        )
+
+        self.assertEqual([], verify_release_versions.collect_errors(root))
+
     def test_rejects_stale_biotools_record_version(self) -> None:
         root = self.make_tree()
         record = root / verify_release_versions.BIOTOOLS_RECORD_PATH

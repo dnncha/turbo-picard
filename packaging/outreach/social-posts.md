@@ -2,7 +2,7 @@
 
 ## LinkedIn
 
-I have released `turbo-picard` 0.1.10, a Rust implementation of selected Broad
+I have released `turbo-picard` 0.1.11, a Rust implementation of selected Broad
 Picard commands used in genomics workflows.
 
 It is meant for the practical case where a workflow already calls Picard and one
@@ -27,7 +27,7 @@ PyPI: https://pypi.org/project/turbo-picard/
 
 ## Mastodon / Bluesky
 
-I released `turbo-picard` 0.1.10: Rust implementations of selected Broad Picard
+I released `turbo-picard` 0.1.11: Rust implementations of selected Broad Picard
 commands for genomics workflows.
 
 It keeps Picard-style command lines, so you can test one slow step without
@@ -38,7 +38,7 @@ Docs: https://turbo-picard.readthedocs.io/
 
 ## Short version
 
-`turbo-picard` 0.1.10 is out: Rust implementations of selected Picard genomics
+`turbo-picard` 0.1.11 is out: Rust implementations of selected Picard genomics
 commands.
 
 Try one slow Picard step, compare outputs on a real input, and switch only what
