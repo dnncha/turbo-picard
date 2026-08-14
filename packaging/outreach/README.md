@@ -46,7 +46,7 @@ Current facts to keep consistent:
   container until the exact `0.1.12` tag, archive, review, and publication are
   complete.
 - Trial helper: `turbo-picard trial <PicardCommand> ...`
-- Benchmark evidence in the repo reports 32/32 parity-checked commands, 24.94x
-  geometric mean speedup, and 94.36x top speedup versus Picard 3.4.0
+- Benchmark evidence in the repo reports 32/32 parity-checked commands, 84.94x
+  geometric mean speedup, and 248.00x top speedup versus Picard 3.4.0
 - Recommended first commands: `MarkDuplicates`, `SortSam`, `SamToFastq`,
   `FastqToSam`, `FixMateInformation`, `BuildBamIndex`, and metrics commands

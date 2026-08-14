@@ -26,7 +26,7 @@ turbo-picard MarkDuplicates I=input.bam O=marked.bam M=metrics.txt
 
 The repo includes parity fixtures, real-data checks, benchmark logs, and
 examples for WDL, Nextflow, and Snakemake. The current benchmark table covers 32
-commands against Picard 3.4.0, with a 24.94x geometric mean speedup and 94.36x
+commands against Picard 3.4.0, with an 84.94x geometric mean speedup and 248.00x
 top speedup.
 
 The safe way to use it is one command at a time: run Picard and `turbo-picard`

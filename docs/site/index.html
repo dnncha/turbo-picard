@@ -660,8 +660,8 @@
           </div>
           <div class="proof-strip" aria-label="Benchmark summary">
             <div class="proof"><strong>32/32</strong><span>benchmark parity checks passing</span></div>
-            <div class="proof"><strong>24.94x</strong><span>geometric mean speedup in the saved suite</span></div>
-            <div class="proof"><strong>6.86x+</strong><span>speedup even at the slow end of the saved suite</span></div>
+            <div class="proof"><strong>84.94x</strong><span>geometric mean speedup in the saved suite</span></div>
+            <div class="proof"><strong>22.29x+</strong><span>speedup even at the slow end of the saved suite</span></div>
             <div class="proof"><strong>36</strong><span>native or partial-native commands documented in the matrix</span></div>
           </div>
         </div>
@@ -683,7 +683,7 @@
               <h3>Measured against Picard</h3>
               <p>
               The saved suite records fixture-specific timings against Picard 3.4.0 after
-              parity checks pass, with a 6.86x floor and 24.94x geometric mean speedup.
+              parity checks pass, with a 22.29x floor and 84.94x geometric mean speedup.
               </p>
             </article>
             <article class="tile">
@@ -715,7 +715,7 @@
               comparison passes. The values describe the saved commands, inputs, options, and
               machine profile; they are not a prediction for another workflow. The checked
               MarkDuplicates fixture also reports wall time and RSS for that same scoped comparison.
-              The current asset was saved on <code>2026-06-13</code> from
+              The current asset was saved on <code>2026-08-14</code> from
               <code>python3 tools/bench_suite.py --repeats 3 --skip-build</code>; the raw log is
               <code>docs/site/assets/bench-suite-output.txt</code>.
               Benchmark note: <code>AccelerationStatus</code>, <code>doctor</code>,
@@ -732,9 +732,9 @@
           </div>
           <div class="benchmark-highlights" aria-label="Benchmark highlights">
             <div class="benchmark-highlight"><b>32/32 PASS</b><span>All 32 commands in the saved benchmark suite passed parity checks.</span></div>
-            <div class="benchmark-highlight"><b>24.94x</b><span>Geometric mean speedup across the current 32-command suite.</span></div>
-            <div class="benchmark-highlight"><b>94.36x</b><span>UpdateVcfSequenceDictionary is the current top saved speedup.</span></div>
-            <div class="benchmark-highlight"><b>6.86x floor</b><span>Slowest saved speedup in the documented fixture suite.</span></div>
+            <div class="benchmark-highlight"><b>84.94x</b><span>Geometric mean speedup across the current 32-command suite.</span></div>
+            <div class="benchmark-highlight"><b>248.00x</b><span>NormalizeFasta is the current top saved speedup.</span></div>
+            <div class="benchmark-highlight"><b>22.29x floor</b><span>SetNmMdAndUqTags is the slowest saved speedup in the documented fixture suite.</span></div>
             <div class="benchmark-highlight"><b>Command scope</b><span>Check native and delegated paths before changing a workflow task.</span></div>
             <div class="benchmark-highlight"><b>Rebuildable</b><span>The chart is rendered from benchmark-data.json with rank and summary stats.</span></div>
           </div>

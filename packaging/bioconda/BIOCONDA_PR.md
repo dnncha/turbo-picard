@@ -51,12 +51,12 @@ Benchmark evidence:
 
 Current benchmark summary:
 
-- Date: 2026-06-13.
+- Date: 2026-08-14.
 - Parity: 32/32 PASS.
-- Geometric mean speedup: 24.94x.
-- Median speedup: 26.72x.
-- Slowest saved speedup: 6.86x on RevertSam.
-- Fastest saved speedup: 94.36x on UpdateVcfSequenceDictionary.
+- Geometric mean speedup: 84.94x.
+- Median speedup: 101.93x.
+- Slowest saved speedup: 22.29x on SetNmMdAndUqTags.
+- Fastest saved speedup: 248.00x on NormalizeFasta.
 - Recently promoted benchmarks include IntervalListTools, LiftoverVcf,
   CollectMultipleMetrics, and CollectGcBiasMetrics.
 

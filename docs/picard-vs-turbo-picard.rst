@@ -49,9 +49,9 @@ Saved comparison evidence
 The current checked benchmark suite reports:
 
 * ``32/32`` parity-checked commands;
-* ``6.86x`` slowest saved speedup;
-* ``24.94x`` geometric mean speedup;
-* ``94.36x`` top saved speedup.
+* ``22.29x`` slowest saved speedup;
+* ``84.94x`` geometric mean speedup;
+* ``248.00x`` top saved speedup.
 
 The repository also records a ``MarkDuplicates`` fixture with a median wall
 time of ``2.595 s`` for Picard and ``0.127 s`` for ``turbo-picard``, and median

@@ -33,8 +33,8 @@ The way I suggest testing it is deliberately small:
 4. only then decide whether that command is worth switching.
 
 The repo has parity and benchmark checks against Picard 3.4.0. The current
-benchmark table covers 32 checked commands, with a 24.94x geometric mean speedup
-and a 94.36x top speedup. There is also a `MarkDuplicates` run showing much
+benchmark table covers 32 checked commands, with an 84.94x geometric mean speedup
+and a 248.00x top speedup. There is also a `MarkDuplicates` run showing much
 lower memory use than Picard on the same input.
 
 Install:

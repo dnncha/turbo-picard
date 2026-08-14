@@ -36,26 +36,30 @@ and evidence-backed growth.
   `MarkDuplicates` trial shape and fallback-only behavior. The production-
   readiness golden surface now keeps `CollectHsMetrics` explicitly delegated
   until native bait/target accounting and parity evidence exist.
+- The current committed `50f68cc845eb990535b3a70b2339c8fd61580820` binary passes
+  all 32 three-repeat benchmark parity checks against Picard 3.4.0. The
+  refreshed checked-in assets report an `84.94x` geometric mean, `101.93x`
+  median, `22.29x` floor on `SetNmMdAndUqTags`, and `248.00x` maximum on
+  `NormalizeFasta`. A focused `FastqToSam` five-repeat baseline passes parity at
+  `22.31x` median on 100,000 paired reads; no speculative source change was
+  justified.
 - An isolated exact-commit Bioconda archive rehearsal passes: the local archive
   was accepted by `prepare_bioconda_release.py`, both recipes passed the
   release-ready verifier, and source/version/link checks passed. The live
   recipe placeholders remain intentional until the actual GitHub `v0.1.12`
   archive exists; the local archive hash is not release evidence.
-- The next measured candidate optimization reduces reference-cache overhead in
+- The measured candidate optimization reduces reference-cache overhead in
   `SetNmMdAndUqTags`: five focused repeats moved from 18.84x to 20.94x with
-  exact parity, while the exact-commit three-repeat 32-command suite remained
-  32/32 parity with an 82.19x geometric mean, a 16.30x floor, and a 251.26x
-  maximum. In-window segments use bounded borrowed slices; oversized and
+  exact parity. In-window segments use bounded borrowed slices; oversized and
   window-crossing segments retain the prior fallback. This remains local
   release-candidate evidence only.
 - Measured the next MarkDuplicates adoption optimization on the candidate
   source: single BAM/CRAM inputs up to 100,000 records now use a bounded
   compact plan after an exact count preflight, while larger and multi-input
-  shapes retain the external or existing bounded path. The current three-
-  repeat 32-command suite passed 32/32 parity with an 84.45x geometric mean,
-  an 18.40x floor, a 245.33x maximum, and 31.66x for MarkDuplicates. This is
-  local release-candidate evidence only; production-scale and independent
-  reproduction gates remain open.
+  shapes retain the external or existing bounded path. The refreshed suite
+  still passes 32/32 parity, with `MarkDuplicates` at `27.82x` on its saved
+  fixture. This is local release-candidate evidence only; production-scale and
+  independent reproduction gates remain open.
 - The post-`0.1.11` corrections are now a locally consistent `0.1.12` release
   candidate: Cargo, PyPI metadata, citation, bio.tools, both Bioconda recipes,
   release archive instructions, and the source-release marker align. The
