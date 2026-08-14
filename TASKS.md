@@ -56,6 +56,9 @@ and evidence-backed growth.
   checked-in BAM fixture after pinning `PuLP==2.7.0` for Snakemake 7.32.4. The
   compatibility note is now in the adoption docs; this run exposed and closed
   an actual environment friction point without claiming production readiness.
+- The Snakemake starter now has a checked-in disposable smoke harness
+  (`tools/verify_snakemake_starter.sh`) and a CI job with the pinned compatible
+  runtime, so the workflow wiring cannot regress silently.
 - The benchmarked candidate runtime at source SHA
   `3c43bca0cc8624008cef6979e0c5b5450a965124` passes all 32 three-repeat
   benchmark parity checks against Picard 3.4.0. The refreshed checked-in assets

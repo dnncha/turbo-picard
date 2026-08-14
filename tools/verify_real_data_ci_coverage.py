@@ -23,6 +23,8 @@ REQUIRED_SNIPPETS = [
     "python3 -m unittest tools/test_verify_release_versions.py",
     "python3 -m unittest tools/test_verify_real_data_evidence.py",
     "python3 -m unittest tools/test_verify_site_benchmark_evidence.py",
+    'python3 -m pip install "snakemake==7.32.4" "PuLP==2.7.0"',
+    "bash tools/verify_snakemake_starter.sh",
     "python3 -m unittest tools/test_verify_site_disclosures.py",
     "python3 -m unittest tools/test_verify_site_links.py",
     "tools/compare_real_data.py",

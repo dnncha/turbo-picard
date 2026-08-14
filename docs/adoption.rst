@@ -167,6 +167,14 @@ pin keeps the documented Snakemake 7.32.4 starter reproducible.
    . .venv-snakemake-trial/bin/activate
    python3 -m pip install "snakemake==7.32.4" "PuLP==2.7.0"
 
+From a repository checkout, run the disposable starter smoke against the
+checked-in BAM fixture:
+
+.. code-block:: bash
+
+   TURBO_PICARD_BIN="$(command -v turbo-picard)" \
+     bash tools/verify_snakemake_starter.sh
+
 For the smallest reviewable trial shape, it also includes
 ``one-command-trial.md`` plus tiny ``trial.wdl`` and ``trial.nf`` workflows
 that show a single-command evaluation flow.

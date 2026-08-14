@@ -1,5 +1,15 @@
 # Turbo Picard work log
 
+## 2026-08-14 — Snakemake starter smoke promoted to CI
+
+- Added `tools/verify_snakemake_starter.sh`, a disposable smoke that runs the
+  shipped `mark_duplicates` rule on the checked-in BAM fixture, verifies BAM /
+  metrics output and ViewSam materialization, and cleans its workdir. CI now
+  installs the documented Snakemake `7.32.4` / PuLP `2.7.0` pair and runs the
+  smoke after building the native executable. The local run passed; this is
+  repeatable workflow-wiring evidence, not production parity or independent
+  review. No external state changed.
+
 ## 2026-08-14 — Snakemake starter runs after compatibility pin
 
 - Installed Snakemake `7.32.4` in an isolated ARM64 environment and ran the

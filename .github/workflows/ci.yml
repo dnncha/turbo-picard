@@ -292,6 +292,35 @@ jobs:
             java -jar "$RUNNER_TEMP/nf-test.jar" \
             test packaging/nf-core/tests/main.nf.test
 
+  snakemake-starter:
+    name: Snakemake starter
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.9"
+
+      - name: Install native dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang libclang-dev make pkg-config
+
+      - name: Build turbo-picard executable
+        run: cargo build --release --locked -p turbo-picard-cli --bin turbo-picard
+
+      - name: Install pinned Snakemake trial runtime
+        run: python3 -m pip install "snakemake==7.32.4" "PuLP==2.7.0"
+
+      - name: Test Snakemake starter
+        env:
+          TURBO_PICARD_BIN: ${{ github.workspace }}/target/release/turbo-picard
+        run: bash tools/verify_snakemake_starter.sh
+
   picard-parity:
     name: Picard parity
     runs-on: ubuntu-latest

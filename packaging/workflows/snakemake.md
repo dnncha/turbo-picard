@@ -25,6 +25,13 @@ snakemake --version
 
 Use the newest Snakemake/PuLP pair supported by the workflow environment when
 available; keep the explicit pin above for the Snakemake 7.32.4 trial shape.
+From a repository checkout, the disposable starter smoke uses the same
+checked-in BAM fixture and validates the generated BAM and metrics outputs:
+
+```bash
+TURBO_PICARD_BIN="$(command -v turbo-picard)" \
+  bash tools/verify_snakemake_starter.sh
+```
 
 Recommended next command after that:
 
