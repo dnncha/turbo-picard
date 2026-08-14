@@ -1,5 +1,20 @@
 # Turbo Picard work log
 
+## 2026-08-14 — comparator manifest requests fail fast
+
+- The reviewable real-data comparator now validates manifest output layout,
+  pinned source citation, duplicate command arguments, release-candidate
+  command coverage, and minimum input size before starting an expensive
+  comparison. This prevents a malformed trial request from consuming a full
+  BAM or CRAM run before failing at manifest creation.
+- Added focused coverage for invalid output and citation requests plus a valid
+  release-candidate shape. The complete Python tool suite passes 413 tests with
+  one skip, and release, evidence, workflow-starter, publication, text-quality,
+  and adoption-report validators pass.
+- Updated the one-command trial guide with the repository-ready manifest
+  requirements. No tag, push, publication, issue, comment, outreach, or
+  external-service mutation occurred.
+
 ## 2026-08-14 — exact committed-source package verification
 
 - Rebuilt the `0.1.12` arm64 wheel and source distribution from the clean

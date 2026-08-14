@@ -71,6 +71,11 @@ and evidence-backed growth.
   A no-`samtools` run passed all five SNVQ commands plus six reference-backed
   CRAM commands, with focused regression coverage for BAM and CRAM command
   construction.
+- The reviewable comparator now validates repository-ready manifest requests
+  before running expensive real-data commands. Invalid output layout, missing
+  pinned source citation, duplicate command selection, release-candidate
+  command coverage, and undersized inputs fail immediately; the one-command
+  trial guide documents the required manifest shape.
 - The trial caught and fixed a real no-reference metrics regression: Picard
   leaves mismatch-rate fields at zero without `REFERENCE_SEQUENCE`, even when
   NM/MD tags are present. Turbo Picard now matches that boundary and has a

@@ -3,6 +3,7 @@ import unittest
 from pathlib import Path
 import os
 import sys
+from types import SimpleNamespace
 from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -279,6 +280,59 @@ class CompareRealDataTests(unittest.TestCase):
 
             self.assertEqual(metadata["source_url"], "https://github.com/samtools/htslib/blob/0123456789abcdef0123456789abcdef01234567/test/range.bam")
             self.assertEqual(metadata["source_commit"], "0123456789abcdef0123456789abcdef01234567")
+
+    def test_manifest_request_rejects_invalid_output_before_running_comparison(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            input_bam = Path(tmp) / "input.bam"
+            input_bam.write_bytes(b"bam")
+            args = SimpleNamespace(
+                dataset_id="example",
+                output_dir=Path(tmp) / "evidence",
+                input_source_url="https://github.com/example/repo/blob/0123456789abcdef0123456789abcdef01234567/input.bam",
+                input_source_commit="0123456789abcdef0123456789abcdef01234567",
+                input_bam=input_bam,
+                release_tier="public_smoke",
+                commands=["ViewSam"],
+            )
+
+            with self.assertRaisesRegex(
+                SystemExit,
+                "manifest output directory must be under benchmarks/real-data/<dataset-id>/evidence",
+            ):
+                compare_real_data.validate_manifest_request(args)
+
+    def test_manifest_request_rejects_missing_citation_before_running_comparison(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            input_bam = Path(tmp) / "input.bam"
+            input_bam.write_bytes(b"bam")
+            args = SimpleNamespace(
+                dataset_id="example",
+                output_dir=Path("benchmarks/real-data/example/evidence"),
+                input_source_url=None,
+                input_source_commit=None,
+                input_bam=input_bam,
+                release_tier="public_smoke",
+                commands=["ViewSam"],
+            )
+
+            with self.assertRaisesRegex(
+                SystemExit,
+                "manifest entries require input citation fields",
+            ):
+                compare_real_data.validate_manifest_request(args)
+
+    def test_manifest_request_accepts_valid_release_candidate_shape(self):
+        args = SimpleNamespace(
+            dataset_id="picard-snvq",
+            output_dir=Path("benchmarks/real-data/picard-snvq/evidence"),
+            input_source_url="https://github.com/broadinstitute/picard/blob/fc0b08410d38a10afd08e467dab74bf5e2e71310/testdata/picard/sam/snvq_metrics_test.bam",
+            input_source_commit="fc0b08410d38a10afd08e467dab74bf5e2e71310",
+            input_bam=Path("benchmarks/real-data/picard-snvq/input.bam"),
+            release_tier="release_candidate",
+            commands=sorted(compare_real_data.RELEASE_CANDIDATE_REQUIRED_COMMANDS),
+        )
+
+        compare_real_data.validate_manifest_request(args)
 
     def test_manifest_entry_is_generated_from_passing_evidence(self):
         summary = {

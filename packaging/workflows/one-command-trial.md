@@ -85,6 +85,12 @@ posting, and do not attach the full `work/` directory or the raw comparison
 JSON when the input is private. Add `--include-public-source` only when the
 source URL and revision are genuinely public.
 
+If you add `--dataset-id` to create a repository-ready `manifest-entry.json`,
+also pass `--input-source-url` and `--input-source-commit`, and put the output
+under `benchmarks/real-data/<dataset-id>/evidence/`. The comparator checks this
+layout and citation before starting the comparison, so a malformed release
+candidate request fails immediately instead of consuming a full real-data run.
+
 Use the generated `shareable-trial-report.md` as the starting point for the
 [trial report issue](https://github.com/dnncha/turbo-picard/issues/new?template=trial-report.yml).
 If GitHub does not offer new-issue creation, paste the reviewed report as a

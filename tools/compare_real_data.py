@@ -231,6 +231,8 @@ def main() -> int:
     if merge_input.suffix.lower() == ".cram" and args.reference_fasta is None:
         raise SystemExit("CRAM merge input requires --reference-fasta")
 
+    validate_manifest_request(args)
+
     args.output_dir.mkdir(parents=True, exist_ok=True)
     if not args.skip_build:
         run(["cargo", "build", "--release", "-p", "turbo-picard-cli", "--bin", "picard"])
@@ -316,6 +318,80 @@ def main() -> int:
         speedup = f"{row.speedup:.2f}x" if row.speedup is not None else "n/a"
         print(f"{row.command}: {row.status} parity, speedup={speedup}")
     return 0 if summary["parity"] == "PASS" else 1
+
+
+def validate_manifest_request(args: argparse.Namespace) -> None:
+    """Reject invalid manifest requests before running expensive comparisons."""
+
+    if not args.dataset_id:
+        return
+
+    if args.output_dir.name != "evidence":
+        raise SystemExit(
+            "manifest output directory must end in "
+            "benchmarks/real-data/<dataset-id>/evidence when --dataset-id is set"
+        )
+    try:
+        require_manifest_path(
+            "manifest evidence JSON",
+            args.output_dir / "real-data-comparison.json",
+        )
+    except SystemExit as error:
+        raise SystemExit(
+            "manifest output directory must be under "
+            "benchmarks/real-data/<dataset-id>/evidence; "
+            f"got {args.output_dir}"
+        ) from error
+    if not args.input_source_url or not args.input_source_commit:
+        raise SystemExit(
+            "manifest entries require input citation fields: source_url, source_commit "
+            "(pass --input-source-url and --input-source-commit)"
+        )
+    validate_source_citation(
+        str(args.dataset_id),
+        str(args.input_source_url),
+        str(args.input_source_commit),
+    )
+
+    commands = list(args.commands)
+    duplicate_commands = sorted(
+        command for command in set(commands) if commands.count(command) > 1
+    )
+    if duplicate_commands:
+        raise SystemExit(
+            "comparison command list contains duplicate commands: "
+            + ", ".join(duplicate_commands)
+        )
+
+    if args.release_tier != "release_candidate":
+        return
+
+    required_commands = RELEASE_CANDIDATE_REQUIRED_COMMANDS
+    if args.input_bam.suffix.lower() == ".cram":
+        required_commands = CRAM_RELEASE_CANDIDATE_REQUIRED_COMMANDS
+    missing_commands = sorted(set(required_commands) - set(commands))
+    if missing_commands:
+        raise SystemExit(
+            "release_candidate manifest entries require commands: "
+            + ", ".join(missing_commands)
+        )
+
+    size_bytes = args.input_bam.stat().st_size
+    minimum_bytes = (
+        CRAM_RELEASE_CANDIDATE_MIN_BYTES
+        if args.input_bam.suffix.lower() == ".cram"
+        else RELEASE_CANDIDATE_MIN_BYTES
+    )
+    if size_bytes < minimum_bytes:
+        label = (
+            "release_candidate CRAM"
+            if args.input_bam.suffix.lower() == ".cram"
+            else "release_candidate"
+        )
+        raise SystemExit(
+            f"{label} manifest entries require input size >= {minimum_bytes} bytes; "
+            f"got {size_bytes}"
+        )
 
 
 def split_command(command: str | None) -> list[str]:
