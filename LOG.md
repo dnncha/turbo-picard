@@ -20,6 +20,20 @@
   passed. No tag, push, publication, provider change, or external
   communication occurred.
 
+## 2026-08-14 — refresh local package handoff after WES trial-path change
+
+- Rebuilt the current arm64 wheel and source distribution after the WES/capture
+  comparator change. Release-artifact validation, the installed-wheel smoke,
+  `pip check`, version/doctor/trial checks, real install smoke, and
+  mate-specific barcode smoke passed.
+- The exact handoff manifest is retained at
+  `/private/tmp/turbo-picard-package-b4515fb-release-manifest.json`. It records
+  the current clean source SHA, artifact digests, and the expected missing
+  local/origin `v0.1.12` tag blockers. The package remains a release candidate;
+  production-scale and independent reproduction are unverified.
+- No tag, push, package publication, container publication, provider change,
+  or external communication occurred.
+
 ## 2026-08-14 — re-audit public distribution and candidate lineage
 
 - A fresh read-only public adoption audit observed PyPI `0.1.11`, container

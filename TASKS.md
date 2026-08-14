@@ -26,7 +26,7 @@ and evidence-backed growth.
   contains the intentional native `CollectHsMetrics` changes described below.
   The exact candidate source SHA and arm64 package digests are retained in the
   final local release handoff manifest at
-  `/private/tmp/turbo-picard-final-release-manifest.json`.
+  `/private/tmp/turbo-picard-package-b4515fb-release-manifest.json`.
   The candidate remains a release candidate because neither local nor origin
   has the matching `v0.1.12` tag.
 - Fresh current-HEAD release-candidate evidence passed the five-repeat
