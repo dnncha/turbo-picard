@@ -10,6 +10,7 @@ turbo-picard MarkDuplicates --help
 turbo-picard SortSam --help
 turbo-picard CleanSam --help
 turbo-picard ViewSam --help
+turbo-picard CollectHsMetrics --help
 
 cat > input.sam <<'SAM'
 @HD	VN:1.6	SO:coordinate

@@ -11,9 +11,9 @@ and evidence-backed growth.
    multi-library, and reference-backed CRAM profiles.
 2. Reproduce the production-scale result on a second machine or by an
    independent reviewer, retaining the exact manifest and raw resource logs.
-3. Reconcile the dirty release checkout with the intended mainline commit,
-   verify the exact `v0.1.12` release tag, and only then publish the prepared
-   PyPI and Bioconda distribution updates.
+3. Verify the clean candidate is the intended mainline-relative release state,
+   create and verify the exact `v0.1.12` release tag, and only then publish the
+   prepared PyPI and Bioconda distribution updates.
 4. Collect real one-command trial reports from workflow owners, including
    successful matches, mismatches, and installation or integration friction.
 5. Expand the bounded MarkDuplicates path to advanced UMI normalization only
@@ -22,10 +22,11 @@ and evidence-backed growth.
 ## Current verified direction
 
 - The current `0.1.12` candidate is committed locally on the existing `codex/`
-  branch; the worktree is clean and the branch is ahead of `origin/main`. The
-  exact current source SHA and arm64 package digests are retained in the
-  release handoff manifest at
-  `/private/tmp/turbo-picard-package-final/release-manifest.json`.
+  branch and the branch is ahead of `origin/main`; this success-work checkout
+  contains the intentional native `CollectHsMetrics` changes described below.
+  The exact candidate source SHA and arm64 package digests are retained in the
+  final local release handoff manifest at
+  `/private/tmp/turbo-picard-final-release-manifest.json`.
   The candidate remains a release candidate because neither local nor origin
   has the matching `v0.1.12` tag.
 - Fresh current-HEAD release-candidate evidence passed the five-repeat
@@ -35,9 +36,21 @@ and evidence-backed growth.
   versus `1,018,560,512` bytes. The retained manifest leaves independent
   reproduction `not_run` and does not claim production-scale readiness.
 - The copy-paste trial contract passes on current HEAD, including the native
-  `MarkDuplicates` trial shape and fallback-only behavior. The production-
-  readiness golden surface now keeps `CollectHsMetrics` explicitly delegated
-  until native bait/target accounting and parity evidence exist.
+  `MarkDuplicates` trial shape and fallback-only behavior. `CollectHsMetrics`
+  now has a bounded partial-native ALL_READS path with exact local parity
+  across ten Picard 3.4.0 directed-metrics fixtures, including per-target and
+  per-base sidecars, plus a CI parity script; production-sized WES evidence
+  remains an open gate.
+- The main Bioconda recipe now includes `CollectHsMetrics` in both its metadata
+  command surface and executable package smoke; recipe shape passes, while the
+  exact release tag and immutable source archive hash remain owner-controlled.
+- The isolated package-install smoke now executes `CollectHsMetrics` and checks
+  its metrics, per-target, and per-base artifacts through the installed binary.
+- The reusable PyPI wheel-install smoke now exercises the same
+  `CollectHsMetrics` metrics and sidecar contract through the installed wheel,
+  closing the distribution-artifact gap for this newly native command.
+- The same install smoke caught and closed a stale top-level help omission;
+  fresh non-shim and optional-shim release installs now pass end to end.
 - The production-scale evidence dispatch path now shares a tested
   `tools/validate_production_dispatch.py` contract between local validation and
   GitHub Actions. It fails before input download/build for missing Picard/Turbo

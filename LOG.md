@@ -1,5 +1,59 @@
 # Turbo Picard work log
 
+## 2026-08-14 — re-audit public distribution and candidate lineage
+
+- A fresh read-only public adoption audit observed PyPI `0.1.11`, container
+  tag `0.1.11`, no indexed Bioconda packages, open Bioconda PR `#65922` titled
+  for `0.1.10`, `605` downloads without mirrors in the last 30 days, and no
+  externally authored or workflow-owner trial reports. These are distribution
+  signals and channel-state observations, not usage or production claims.
+- Reconciled `origin/main` at `6c99885798654a43728dd80c12cc51dfa931e9fd`.
+  The local success-work branch is 46 commits ahead, not behind, and still has
+  no local or remote `v0.1.12` tag. No tag, push, publication, provider change,
+  or external communication occurred.
+
+## 2026-08-14 — add parity-guarded native CollectHsMetrics core
+
+- Replaced the fallback-only `CollectHsMetrics` scaffold with a bounded native
+  ALL_READS collector covering unique bait/target territory, on/near/off-bait
+  accounting, Picard filter ordering, adapter and overlap handling, target
+  coverage thresholds, GC dropout, theoretical het sensitivity, and the full
+  Picard-shaped metrics/histogram output. Added parity-tested per-target and
+  per-base coverage sidecars for the same ALL_READS scope.
+- Added CLI coverage, argument aliases, a command-matrix `partial-native`
+  entry, and `tools/verify_basic_collecthsmetrics_parity.sh`. The native output
+  matched Picard 3.4.0 exactly across ten directed-metrics fixtures locally;
+  the parity script covers mapping-quality, off-target, duplicate-adjacent,
+  and clipped/unclipped overlapping-pair cases for CI.
+- The native runner now reads indexed reference contig lengths and loads only
+  target-contig sequences for GC calculations instead of materialising the
+  entire reference genome, reducing the memory risk for human WES references.
+- Added the native command to the main Bioconda recipe's metadata and package
+  smoke surfaces; recipe validation and its focused 25-test suite pass.
+- Extended the isolated package-install smoke to execute native
+  `CollectHsMetrics` with both sidecar outputs, so the installed distribution
+  checks the same artifact contracts as the source parity fixture.
+- Extended the reusable PyPI wheel-install smoke with a native
+  `CollectHsMetrics` metrics/per-target/per-base fixture, so the architecture
+  wheel path checks the new command rather than only the existing
+  MarkDuplicates smoke.
+- Rebuilt the clean candidate's arm64 wheel and source distribution, validated
+  both artifact types, and ran the full installed-wheel smoke. The final local
+  handoff manifest is retained at
+  `/private/tmp/turbo-picard-final-release-manifest.json`; it remains a release
+  candidate until the exact tag and immutable GitHub archive metadata exist.
+- That smoke initially caught a stale top-level help list; adding the command
+  there closed the source/matrix/installed-help mismatch, and the complete
+  non-shim plus optional-shim install smoke now passes.
+- The shared benchmark-exemption guard then caught missing `CollectHsMetrics`
+  disclosure in the README, rendered site, and their test fixtures; those
+  outward-facing claim surfaces are now synchronized, and the full 430-test
+  Python tooling suite passes with one existing skip.
+- Non-ALL_READS accumulation, WES-scale performance, and independent workflow
+  reproduction remain open. The native command count is not a release or
+  adoption claim; no tag, push, publication, provider change, or external
+  communication occurred.
+
 ## 2026-08-14 — guard benchmark claims across release surfaces
 
 - Added `tools/verify_benchmark_claim_surfaces.py` and focused tests, then wired

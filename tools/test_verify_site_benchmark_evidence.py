@@ -56,6 +56,7 @@ AccelerationStatus
 doctor
 explain
 trial
+CollectHsMetrics
 IntervalListTools
 LiftoverVcf
 <a href="#adopt">Adoption</a>
