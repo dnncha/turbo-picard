@@ -60,6 +60,7 @@ AccelerationStatus
 doctor
 explain
 trial
+CollectHsMetrics
 IntervalListTools
 LiftoverVcf
 https://turbo-picard.readthedocs.io/en/latest/adoption.html

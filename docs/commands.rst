@@ -103,8 +103,8 @@ Picard 3.4.0 command plus turbo-only utilities such as
 
 Current matrix status summary:
 
-* ``36 accelerated`` commands with native or partial-native Rust implementations
-* ``89 delegated`` Picard 3.4.0 commands forwarded to upstream Picard
+* ``37 accelerated`` commands with native or partial-native Rust implementations
+* ``88 delegated`` Picard 3.4.0 commands forwarded to upstream Picard
 
 Accelerated command status:
 
@@ -116,6 +116,9 @@ Accelerated command status:
 * ``CollectAlignmentSummaryMetrics``: ``partial-native``
 * ``CollectBaseDistributionByCycle``: ``partial-native``
 * ``CollectGcBiasMetrics``: ``partial-native``
+* ``CollectHsMetrics``: ``partial-native`` for the core ALL_READS
+  hybrid-capture metrics, histogram, per-target coverage, and per-base
+  coverage; unsupported advanced options remain delegated.
 * ``CollectQualityYieldMetrics``: ``native``
 * ``CollectWgsMetrics``: ``partial-native``. ``INCLUDE_BQ_HISTOGRAM`` defaults
   to ``false`` to match Picard 3.4.0 histogram output. ``USE_FAST_ALGORITHM=true``

@@ -54,6 +54,7 @@ test:
     - turbo-picard CollectAlignmentSummaryMetrics --help
     - turbo-picard CollectBaseDistributionByCycle --help
     - turbo-picard CollectGcBiasMetrics --help
+    - turbo-picard CollectHsMetrics --help
     - turbo-picard CollectQualityYieldMetrics --help
     - turbo-picard CollectWgsMetrics --help
     - turbo-picard QualityScoreDistribution --help

@@ -25,6 +25,7 @@ BENCHMARK_EXEMPTIONS: dict[str, str] = {
     "doctor": "status/preflight command with no Picard data-processing runtime to benchmark",
     "explain": "status/preflight command with no Picard data-processing runtime to benchmark",
     "trial": "status/preflight command with no Picard data-processing runtime to benchmark",
+    "CollectHsMetrics": "ALL_READS metrics and sidecar parity are guarded separately; public performance benchmark awaits representative capture data",
 }
 
 
