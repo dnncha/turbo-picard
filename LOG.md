@@ -13,11 +13,11 @@
   README, benchmark docs, static site, changelog, and outreach facts so public
   numbers no longer describe the earlier source profile.
 - Rebuilt the `0.1.12` arm64 wheel and source distribution from the clean
-  follow-on commit `80dd5aeb9dcd60e92f123f5e0d0f453f16671d9b`. Artifact
+  final candidate commit `25a8623a30aeb56a3415a8ba5954f17ca64d7467`. Artifact
   validation, isolated wheel installation, `pip check`, version/doctor/trial,
   real install smoke, and mate-specific barcode smoke passed. The exact
   handoff manifest is retained at
-  `/private/tmp/turbo-picard-package-80dd5ae/release-manifest.json`; it records
+  `/private/tmp/turbo-picard-package-25a8623/release-manifest.json`; it records
   the new artifact digests and the two missing release-tag blockers.
 - The benchmark evidence, coverage, threshold, README, and whitespace checks
   passed. No tag, push, package publication, container publication, issue,
