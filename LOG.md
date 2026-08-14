@@ -1,5 +1,14 @@
 # Turbo Picard work log
 
+## 2026-08-14 — nf-core process integration passes locally
+
+- Built the exact `10057ef5f6d8bf25719442e2765e5270c0a7edb9` release binary and
+  ran the pinned `Nextflow 26.04.6` / `nf-test 0.9.5` suite on the local ARM64
+  host. The basic BAM, reference-backed CRAM, and stub `TURBO_PICARD_MARKDUPLICATES`
+  tests all passed (`3/3`); the raw output is retained in the temporary
+  adoption evidence bundle. This verifies process wiring and output channels,
+  not production-scale parity, independent reproduction, or nf-core approval.
+
 ## 2026-08-14 — production evidence workflow contract statically guarded
 
 - Added `tools/verify_production_evidence_workflow.py` and focused tests. The

@@ -47,6 +47,11 @@ and evidence-backed growth.
 - The production-evidence workflow itself is statically guarded by
   `tools/verify_production_evidence_workflow.py`, including the pre-download
   ordering, manual-dispatch dependency, test coverage, and path triggers.
+- The exact candidate binary now passes the pinned nf-core process integration
+  suite locally on ARM64: basic BAM, reference-backed CRAM, and stub
+  `TURBO_PICARD_MARKDUPLICATES` all pass under Nextflow 26.04.6 and nf-test
+  0.9.5. This strengthens workflow wiring evidence only; external nf-core
+  review, production-scale parity, and independent reproduction remain open.
 - The benchmarked candidate runtime at source SHA
   `3c43bca0cc8624008cef6979e0c5b5450a965124` passes all 32 three-repeat
   benchmark parity checks against Picard 3.4.0. The refreshed checked-in assets
