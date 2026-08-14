@@ -1,5 +1,16 @@
 # Turbo Picard work log
 
+## 2026-08-14 — 2M-record synthetic MarkDuplicates stress passes
+
+- Ran `tools/bench_markduplicates_synthetic.py` with 2,000,000 BAM records,
+  duplicate families of 4,096, and `READ_NAME_REGEX=null` against the current
+  candidate runtime. Parity passed; Turbo measured `5.257s` versus Picard
+  `9.794s` (`1.86x`) in the single timed pass. Raw output is retained at
+  `/private/tmp/turbo-picard-synthetic-stress-a242dd0.txt`. This extends the
+  synthetic scalability guardrail only; it is not 30x WGS, production-scale,
+  resource-profiled, or independent-reproduction evidence. No external state
+  changed.
+
 ## 2026-08-14 — current candidate shareable public trial passes
 
 - Re-ran the redacted one-command trial against the checked-in public SNVQ BAM

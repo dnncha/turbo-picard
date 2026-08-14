@@ -71,6 +71,9 @@ and evidence-backed growth.
   trial packet at `/private/tmp/turbo-picard-shareable-trial-c3db358/`: Picard
   `3.4.0` and Turbo matched `MarkDuplicates` digests exactly at `3.99x` on the
   checked-in SNVQ BAM. It remains command-level release-candidate evidence.
+- A 2,000,000-record synthetic `MarkDuplicates` stress pass also matched Picard
+  exactly at `1.86x` with `READ_NAME_REGEX=null`; it strengthens scalability
+  guardrails only and does not replace production-scale or independent evidence.
 - The benchmarked candidate runtime at source SHA
   `3c43bca0cc8624008cef6979e0c5b5450a965124` passes all 32 three-repeat
   benchmark parity checks against Picard 3.4.0. The refreshed checked-in assets
