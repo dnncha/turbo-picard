@@ -61,3 +61,33 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+
+      - name: Smoke-test published image
+        run: |
+          set -euo pipefail
+          image="ghcr.io/${GITHUB_REPOSITORY}:${GITHUB_REF_NAME#v}"
+          for attempt in 1 2 3 4 5; do
+            if docker pull "${image}"; then
+              break
+            fi
+            if [ "${attempt}" -eq 5 ]; then
+              exit 1
+            fi
+            sleep 5
+          done
+          docker run --rm "${image}" --version
+          docker run --rm "${image}" doctor
+          docker run --rm "${image}" trial MarkDuplicates I=input.bam O=marked.bam M=metrics.txt
+          smoke_dir="${RUNNER_TEMP}/turbo-picard-container-smoke"
+          mkdir -p "${smoke_dir}"
+          docker run --rm \
+            -v "${GITHUB_WORKSPACE}:/workspace:ro" \
+            -v "${smoke_dir}:/out" \
+            "${image}" MarkDuplicates \
+            I=/workspace/fixtures/markduplicates/basic/input.bam \
+            O=/out/marked.bam \
+            M=/out/metrics.txt \
+            VALIDATION_STRINGENCY=SILENT \
+            QUIET=true
+          test -s "${smoke_dir}/marked.bam"
+          test -s "${smoke_dir}/metrics.txt"

@@ -137,7 +137,10 @@ without a Conda solve.
 The container publication workflow supports manual dispatch for operational
 convenience, but it fails before GHCR login unless the selected ref is the
 exact ``v<workspace-version>`` tag. Branch dispatch cannot publish an image.
-The local guard is checked by ``python3 tools/verify_publish_workflows.py``.
+After pushing, it pulls the exact version tag and runs ``--version``, ``doctor``,
+the read-only ``trial`` contract, and a real MarkDuplicates fixture against the
+published image. The local guard is checked by
+``python3 tools/verify_publish_workflows.py``.
 
 The repository root ``Dockerfile`` builds the same runtime shape locally:
 

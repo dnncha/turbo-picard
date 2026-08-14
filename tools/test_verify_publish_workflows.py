@@ -30,6 +30,15 @@ jobs:
           test "${GITHUB_REF_NAME}" = "${expected_tag}"
       - uses: docker/login-action@v3
       - uses: docker/build-push-action@v6
+      - name: Smoke-test published image
+        run: |
+          image="ghcr.io/${GITHUB_REPOSITORY}:${GITHUB_REF_NAME#v}"
+          docker pull "${image}"
+          docker run --rm "${image}" --version
+          docker run --rm "${image}" doctor
+          docker run --rm "${image}" trial MarkDuplicates
+          -v "${GITHUB_WORKSPACE}:/workspace:ro"
+          I=/workspace/fixtures/markduplicates/basic/input.bam
 """
 
 

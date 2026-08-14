@@ -67,6 +67,10 @@ and evidence-backed growth.
   real-data, and mate-barcode smoke before artifact upload. Linux arm64 remains
   explicitly cross-built and artifact-validated, not falsely runtime-tested on
   an x86 runner. The current arm64 wheel passed the reusable smoke locally.
+- Closed the corresponding container-release gap: after GHCR push, the workflow
+  now pulls the exact version tag and runs version, doctor, trial, and a real
+  MarkDuplicates fixture with checked-in inputs. The verifier enforces that this
+  smoke happens after the push and before the job can finish.
 - Re-ran the full current `0.1.12` 32-command suite: all parity checks passed;
   one-repeat geometric mean was 83.27x, the floor was 8.41x, the maximum was
   278.74x, and MarkDuplicates measured 15.99x. This is local regression

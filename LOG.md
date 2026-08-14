@@ -1,5 +1,14 @@
 # Turbo Picard work log
 
+## 2026-08-14 — published container tag is runtime-smoke-tested
+
+- Extended the guarded container workflow to pull the exact version tag after
+  GHCR push, then run `--version`, `doctor`, the read-only `trial` contract, and
+  a real checked-in `MarkDuplicates` fixture with read-only source mounting.
+- Added ordering and command-content checks to the publish-workflow verifier and
+  its tests. This remains workflow proof until a tagged run executes; no image,
+  tag, package, or external state was changed in this task.
+
 ## 2026-08-14 — PyPI workflow smoke-tests native macOS wheels
 
 - Added `tools/verify_pypi_wheel_install_smoke.sh`, a reusable offline wheel

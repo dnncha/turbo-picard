@@ -25,6 +25,13 @@ def validate_docker_publish_workflow(root: Path = ROOT) -> list[str]:
         ('test "${GITHUB_REF_NAME}" = "${expected_tag}"', "Docker publishing must require the matching version tag"),
         ("docker/login-action@v3", "Docker publish workflow must authenticate with the Docker action"),
         ("docker/build-push-action@v6", "Docker publish workflow must build and push the image"),
+        ("Smoke-test published image", "Docker publish workflow must smoke-test the pushed image"),
+        ("docker pull", "Docker publish workflow must pull the exact published tag before smoke-testing"),
+        ('"${image}" --version', "Docker publish workflow must execute the published image version command"),
+        ('"${image}" doctor', "Docker publish workflow must execute the published image doctor command"),
+        ('"${image}" trial MarkDuplicates', "Docker publish workflow must execute the published image trial contract"),
+        ('-v "${GITHUB_WORKSPACE}:/workspace:ro"', "Docker publish workflow must mount the checked-in smoke fixture read-only"),
+        ('I=/workspace/fixtures/markduplicates/basic/input.bam', "Docker publish workflow must run a real MarkDuplicates fixture"),
     )
     for needle, message in required:
         if needle not in text:
@@ -35,9 +42,13 @@ def validate_docker_publish_workflow(root: Path = ROOT) -> list[str]:
 
     validation_marker = "Validate release source metadata"
     login_marker = "docker/login-action@v3"
+    build_marker = "docker/build-push-action@v6"
+    smoke_marker = "Smoke-test published image"
     if validation_marker in text and login_marker in text:
         if text.index(validation_marker) > text.index(login_marker):
             errors.append("Docker release validation must run before registry login")
+    if build_marker in text and smoke_marker in text and text.index(smoke_marker) < text.index(build_marker):
+        errors.append("Docker image smoke test must run after the image is pushed")
     return errors
 
 
