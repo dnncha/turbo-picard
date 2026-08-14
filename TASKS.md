@@ -82,6 +82,11 @@ and evidence-backed growth.
   reruns pass for family sizes `4` and `4096`; observed single-host timings
   were `0.85x` and `1.38x` versus Picard respectively, so this remains a
   scoped optimization rather than a universal performance claim.
+- The exact current candidate also passed a fresh full 32-command one-repeat
+  parity profile (`32/32`) with `98.62x` geometric-mean, `12.35x` floor, and
+  `267.27x` maximum local speedups. The profile is retained as regression
+  evidence only; repeated and production-scale evidence remain the claims
+  boundary.
 - The benchmarked candidate runtime at source SHA
   `3c43bca0cc8624008cef6979e0c5b5450a965124` passes all 32 three-repeat
   benchmark parity checks against Picard 3.4.0. The refreshed checked-in assets

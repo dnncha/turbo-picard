@@ -1,5 +1,18 @@
 # Turbo Picard work log
 
+## 2026-08-14 — current candidate 32-command parity profile
+
+- Ran the full `tools/bench_suite.py --repeats 1 --skip-build` profile against
+  the exact current candidate. All `32/32` parity checks passed; the local
+  one-repeat profile measured `98.62x` geometric-mean speedup, `12.35x` floor,
+  `267.27x` maximum, and `44.20x` for `MarkDuplicates`.
+- Raw profile JSON is retained at
+  `/private/tmp/turbo-picard-bench-suite-a19fb30.json`, and the candidate
+  release manifest includes its summary. This is a current-host regression
+  check, not a replacement for repeated benchmark evidence or
+  production-scale, independent, or workflow-owner proof. No external state
+  changed.
+
 ## 2026-08-14 — read-only public adoption audit refreshed at `b32aef7`
 
 - The validated report at
