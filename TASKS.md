@@ -85,6 +85,11 @@ and evidence-backed growth.
   required-tool gate and exact duplicate/metrics parity passed for 26,577
   records; the resulting `release_candidate` manifest retains resource and
   provenance fields while leaving independent reproduction unrun.
+- Extended the same release-candidate path across the public reference-backed
+  CRAM fixture and bounded primary and mate-specific barcode fixtures. All
+  three five-repeat profiles passed exact parity with the required tools and
+  validated manifests; they strengthen profile coverage without satisfying
+  production-scale, independent, or advanced UMI-normalization gates.
 - The trial caught and fixed a real no-reference metrics regression: Picard
   leaves mismatch-rate fields at zero without `REFERENCE_SEQUENCE`, even when
   NM/MD tags are present. Turbo Picard now matches that boundary and has a

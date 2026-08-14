@@ -1,5 +1,23 @@
 # Turbo Picard work log
 
+## 2026-08-14 — representative CRAM and barcode profiles pass
+
+- Extended the repeated competitor evidence path to the public reference-backed
+  CRAM fixture with profile `cram_reference`: five repeats, 14,917 records,
+  required Turbo-Picard/Picard tools, exact parity, and a validated
+  `release_candidate` manifest at
+  `/private/tmp/turbo-picard-profile-cram-c51faef/evidence/`.
+- Ran the bounded primary barcode fixture with profile `umi_panel`,
+  `BARCODE_TAG=RX`, and paired `DS`/`DI` tagging: five repeats, exact parity,
+  and a validated manifest at
+  `/private/tmp/turbo-picard-profile-umi-c51faef/evidence/`.
+- Ran the mate-specific barcode fixture with `READ_ONE_BARCODE_TAG=BX` and
+  `READ_TWO_BARCODE_TAG=BY`: five repeats, exact parity, and a validated
+  manifest at `/private/tmp/turbo-picard-profile-umi-mate-c51faef/evidence/`.
+  These are bounded release-candidate profile checks, not production-scale
+  WGS/WES evidence or advanced UMI-normalization approval. No external
+  mutation occurred.
+
 ## 2026-08-14 — production-evidence path smoke-tested end to end
 
 - Ran the pinned competitor benchmark and manifest adapter on the public Picard
