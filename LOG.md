@@ -10,10 +10,10 @@
   reference slice when it fits the active bounded 4 MiB window. Oversized or
   window-crossing operations retain the existing per-base fallback, so the
   optimization does not widen reference-memory behavior.
-- The post-change three-repeat 32-command suite passed 32/32 parity with an
-  81.35x geometric mean, an 18.93x floor on `FastqToSam`, and a 264.26x
-  maximum. The focused CLI unit and integration suites passed 58 and 220
-  tests, and strict workspace Clippy passed.
+- The exact-commit three-repeat 32-command suite passed 32/32 parity with an
+  82.19x geometric mean, a 16.30x floor on `FastqToSam`, a 251.26x maximum,
+  and 22.15x for `SetNmMdAndUqTags`. The focused CLI unit and integration
+  suites passed 58 and 220 tests, and strict workspace Clippy passed.
 - These are local release-candidate measurements, not production-scale or
   independent-reproduction evidence. No tag, package, container, Bioconda
   update, issue, comment, outreach, or external service state changed.

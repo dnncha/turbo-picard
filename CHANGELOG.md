@@ -27,9 +27,9 @@ Highlights:
 
 Evidence boundaries:
 
-- The current three-repeat 32-command local suite is 32/32 parity-pass, with a
-  geometric-mean speedup of 81.35x, an 18.93x floor on `FastqToSam`, and a
-  264.26x maximum.
+- The current exact-commit three-repeat 32-command local suite is 32/32
+  parity-pass, with a geometric-mean speedup of 82.19x, a 16.30x floor on
+  `FastqToSam`, and a 251.26x maximum.
 - The refreshed 1M synthetic and reference-backed CRAM MarkDuplicates
   guardrails pass exact parity. These are fixture-level evidence only; they do
   not establish 30x WGS production readiness, universal replacement, or
