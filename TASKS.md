@@ -36,6 +36,11 @@ and evidence-backed growth.
   `MarkDuplicates` trial shape and fallback-only behavior. The production-
   readiness golden surface now keeps `CollectHsMetrics` explicitly delegated
   until native bait/target accounting and parity evidence exist.
+- An isolated exact-commit Bioconda archive rehearsal passes: the local archive
+  was accepted by `prepare_bioconda_release.py`, both recipes passed the
+  release-ready verifier, and source/version/link checks passed. The live
+  recipe placeholders remain intentional until the actual GitHub `v0.1.12`
+  archive exists; the local archive hash is not release evidence.
 - The next measured candidate optimization reduces reference-cache overhead in
   `SetNmMdAndUqTags`: five focused repeats moved from 18.84x to 20.94x with
   exact parity, while the exact-commit three-repeat 32-command suite remained

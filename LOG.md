@@ -1,5 +1,20 @@
 # Turbo Picard work log
 
+## 2026-08-14 — Bioconda release archive rehearsal passes in isolation
+
+- Created a detached temporary worktree at exact candidate commit
+  `45c9a9fb5818e657ba9ee73ac5003a3e735b891c` and generated a local
+  `turbo-picard-0.1.12.tar.gz` source archive with the expected release tree.
+- Ran `tools/prepare_bioconda_release.py --archive` in that isolated worktree;
+  both recipes and the draft PR body converted cleanly from placeholder source
+  metadata to immutable-tag form. `verify_bioconda_recipes.py --release-ready`,
+  release-version, source-marker, and README-link checks all passed.
+- This is a packaging rehearsal only. A local `git archive` is not the eventual
+  GitHub tag archive, so its SHA was not copied into the live checkout. The live
+  recipes correctly remain waiting for the human-controlled `v0.1.12` tag and
+  downloaded GitHub archive. No tag, push, publication, issue, comment,
+  outreach, or external service state changed.
+
 ## 2026-08-14 — current trial and release boundary rechecked
 
 - Refreshed origin refs: `origin/main` remains
