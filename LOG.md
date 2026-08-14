@@ -1,5 +1,21 @@
 # Turbo Picard work log
 
+## 2026-08-14 — refreshed current-HEAD public benchmark assets
+
+- Ran the full `tools/bench_suite.py --repeats 3 --skip-build` profile against
+  the exact clean candidate HEAD `aca2bef9a64b1d3d9104da60a3d0a8f4fdfe712d`.
+  All `32/32` parity checks passed; the three-repeat profile measured an
+  `84.52x` geometric-mean speedup, `22.88x` floor, `272.12x` maximum, and
+  `28.70x` for `MarkDuplicates`.
+- Retained the raw current-HEAD profile at
+  `/private/tmp/turbo-picard-bench-suite-aca2bef.json` and regenerated the
+  checked-in benchmark log, summary JSON, and speedup chart. Updated the
+  README, benchmark docs, static site, changelog, and outreach facts so public
+  numbers no longer describe the earlier source profile.
+- The benchmark evidence, coverage, threshold, README, and whitespace checks
+  passed. No tag, push, package publication, container publication, issue,
+  comment, outreach, or external service mutation occurred.
+
 ## 2026-08-14 — corrected synthetic optical-path scope
 
 - Audited the earlier default-regex synthetic profile and found that its

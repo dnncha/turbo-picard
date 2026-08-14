@@ -19,7 +19,7 @@ compare the outputs your workflow consumes on representative data, then decide
 whether to use that command.
 
 The saved benchmark suite records ``32/32`` parity-checked command runs, a
-``22.17x`` floor speedup, ``87.47x`` geometric mean speedup, and ``261.75x`` top
+``22.88x`` floor speedup, ``84.52x`` geometric mean speedup, and ``272.12x`` top
 speedup on its documented fixtures. Those results describe the saved commands,
 options, inputs, and machine profile; they are not a prediction for another
 workflow. See :doc:`benchmarks` and :doc:`parity` before using them in an

@@ -82,11 +82,13 @@ and evidence-backed growth.
   reruns pass for family sizes `4` and `4096`; observed single-host timings
   were `0.85x` and `1.38x` versus Picard respectively, so this remains a
   scoped optimization rather than a universal performance claim.
-- The exact current candidate also passed a fresh full 32-command one-repeat
-  parity profile (`32/32`) with `98.62x` geometric-mean, `12.35x` floor, and
-  `267.27x` maximum local speedups. The profile is retained as regression
-  evidence only; repeated and production-scale evidence remain the claims
-  boundary.
+- The exact current candidate also passed a fresh full 32-command three-repeat
+  parity profile (`32/32`) with `84.52x` geometric-mean, `22.88x` floor, and
+  `272.12x` maximum local speedups. The raw current-HEAD profile is retained at
+  `/private/tmp/turbo-picard-bench-suite-aca2bef.json`, and the checked-in
+  public benchmark log, JSON, chart, README, and docs now point at this exact
+  run. This remains current-host regression evidence; production-scale and
+  independent reproduction remain the claims boundary.
 - A fresh five-repeat, 1,000,000-record high-duplicate MarkDuplicates profile
   also passed exact parity at `5.39x` median speedup (`1.602s` versus
   `11.971s`), with per-repeat speedups ranging from `1.84x` to `8.47x`.
