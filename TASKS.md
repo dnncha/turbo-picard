@@ -90,6 +90,10 @@ and evidence-backed growth.
   three five-repeat profiles passed exact parity with the required tools and
   validated manifests; they strengthen profile coverage without satisfying
   production-scale, independent, or advanced UMI-normalization gates.
+- Corrected the prepared outreach drafts after a read-only Bioconda check:
+  PR #65922 is for older `0.1.10` metadata, not the current candidate. Drafts
+  now point users to published PyPI/container installs and describe `0.1.12`
+  as unpublished until its tag, archive, review, and publication gates pass.
 - The trial caught and fixed a real no-reference metrics regression: Picard
   leaves mismatch-rate fields at zero without `REFERENCE_SEQUENCE`, even when
   NM/MD tags are present. Turbo Picard now matches that boundary and has a

@@ -1,5 +1,16 @@
 # Turbo Picard work log
 
+## 2026-08-14 — outreach bundle corrected for Bioconda state
+
+- A read-only check of Bioconda PR #65922 found it open for older `0.1.10`
+  metadata, not the current `0.1.12` candidate. Updated the prepared Biostars,
+  Hacker News, nf-core, Reddit, Seqera, and outreach README drafts so they do
+  not imply that current Bioconda packages are available or imminent.
+- The drafts now direct current users to the published PyPI `0.1.11` package or
+  container and keep `0.1.12` tagging, archive, review, and publication as
+  separate gates. Release-text and link checks pass; no post, issue, comment,
+  outreach message, or external setting was changed.
+
 ## 2026-08-14 — representative CRAM and barcode profiles pass
 
 - Extended the repeated competitor evidence path to the public reference-backed

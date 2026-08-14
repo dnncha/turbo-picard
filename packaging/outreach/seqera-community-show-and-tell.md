@@ -51,8 +51,9 @@ python3 -m pip install turbo-picard
 ```
 
 PyPI has Linux x86_64 and macOS Apple Silicon wheels plus a source tarball. The
-Bioconda recipe PR is open; packages will be available after review and
-publication.
+existing Bioconda PR (#65922) covers older `0.1.10` metadata, so Bioconda is not
+yet a current `0.1.12` install path. Use the published PyPI package or
+container until the new candidate is tagged, reviewed, and published.
 
 I would be glad to hear from Nextflow maintainers about which Picard command would be
 worth testing first in a real pipeline.
