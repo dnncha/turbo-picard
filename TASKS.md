@@ -57,6 +57,11 @@ and evidence-backed growth.
   GitHub API responses. `workflow_owner_trial_reports_verified=false` remains
   correct: public maintainer activity is not workflow-owner adoption evidence,
   and an empty external count does not rule out private or unreported trials.
+- Extended the same read-only audit to distribution channels. The 2026-08-14
+  snapshot found GitHub release `v0.1.11` and GHCR tag `0.1.11` as the latest
+  published channels; neither Bioconda package is indexed, and PR #65922 still
+  targets older `0.1.10` metadata. The audit records these as channel-state
+  gaps without attempting publication or repair.
 - Re-ran the full current `0.1.12` 32-command suite: all parity checks passed;
   one-repeat geometric mean was 83.27x, the floor was 8.41x, the maximum was
   278.74x, and MarkDuplicates measured 15.99x. This is local regression

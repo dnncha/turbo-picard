@@ -18,6 +18,7 @@ import sys
 import subprocess
 import time
 from typing import Any, Callable
+from urllib.error import HTTPError
 import urllib.request
 
 
@@ -28,6 +29,10 @@ PYPISTATS_OVERALL_URL = (
     "https://pypistats.org/api/packages/turbo-picard/overall?mirrors=false"
 )
 GITHUB_REPOSITORY_URL = "https://api.github.com/repos/dnncha/turbo-picard"
+GITHUB_RELEASES_URL = (
+    "https://api.github.com/repos/dnncha/turbo-picard/releases"
+    "?per_page=100"
+)
 GITHUB_ISSUES_URL = (
     "https://api.github.com/repos/dnncha/turbo-picard/issues"
     "?state=open&per_page=100"
@@ -37,9 +42,21 @@ GITHUB_TRIAL_COMMENTS_URL = (
     "?per_page=100"
 )
 GITHUB_OWNER_LOGIN = "dnncha"
+GHCR_TOKEN_URL = (
+    "https://ghcr.io/token?service=ghcr.io"
+    "&scope=repository%3Adnncha%2Fturbo-picard%3Apull"
+)
+GHCR_TAGS_URL = "https://ghcr.io/v2/dnncha/turbo-picard/tags/list"
+ANACONDA_TURBO_PICARD_URL = "https://api.anaconda.org/package/bioconda/turbo-picard"
+ANACONDA_SHIM_URL = (
+    "https://api.anaconda.org/package/bioconda/turbo-picard-picard-shim"
+)
+BIOCONDA_PR_URL = "https://api.github.com/repos/bioconda/bioconda-recipes/pulls/65922"
+BIOCONDA_PR_NUMBER = 65922
 TRIAL_REPORT_ISSUE_NUMBER = 4
 TRIAL_REPORT_ISSUE_URL = "https://github.com/dnncha/turbo-picard/issues/4"
 USER_AGENT = "turbo-picard-public-adoption-audit/1"
+SEMVER = re.compile(r"^\d+\.\d+\.\d+$")
 
 
 def normalize_text(text: str) -> str:
@@ -180,8 +197,10 @@ def fetch_json(
     timeout: float = 15.0,
     retries: int = 3,
     retry_delay: float = 1.0,
+    headers: dict[str, str] | None = None,
+    allow_not_found: bool = False,
 ) -> object:
-    """Fetch a public JSON endpoint with bounded retries and no credentials."""
+    """Fetch a public JSON endpoint with bounded retries."""
 
     if retries < 1:
         raise ValueError("retries must be at least 1")
@@ -192,16 +211,25 @@ def fetch_json(
 
     last_error: Exception | None = None
     for attempt in range(retries):
+        request_headers = {
+            "Accept": "application/json",
+            "User-Agent": USER_AGENT,
+        }
+        if headers:
+            request_headers.update(headers)
         request = urllib.request.Request(
             url,
-            headers={
-                "Accept": "application/json",
-                "User-Agent": USER_AGENT,
-            },
+            headers=request_headers,
         )
         try:
             with urllib.request.urlopen(request, timeout=timeout) as response:
                 return json.load(response)
+        except HTTPError as error:
+            if allow_not_found and error.code == 404:
+                return None
+            last_error = error
+            if attempt + 1 < retries:
+                time.sleep(retry_delay)
         except (OSError, ValueError, json.JSONDecodeError) as error:
             last_error = error
             if attempt + 1 < retries:
@@ -323,6 +351,239 @@ def parse_repository(payload: object) -> dict[str, Any]:
         "open_issues_count_including_pull_requests": data.get("open_issues_count"),
         "updated_at": data.get("updated_at"),
         "pushed_at": data.get("pushed_at"),
+    }
+
+
+def _semver_from_tag(tag: object) -> str | None:
+    if not isinstance(tag, str):
+        return None
+    candidate = tag[1:] if tag.startswith("v") else tag
+    return candidate if SEMVER.fullmatch(candidate) else None
+
+
+def parse_github_releases(payload: object, *, expected_version: str) -> dict[str, Any]:
+    if not isinstance(payload, list):
+        raise ValueError("GitHub releases response must be a list")
+    published: list[dict[str, Any]] = []
+    for item in payload:
+        if not isinstance(item, dict):
+            continue
+        if item.get("draft") is True or item.get("prerelease") is True:
+            continue
+        tag = item.get("tag_name")
+        published_at = item.get("published_at")
+        if not isinstance(tag, str) or not tag.strip() or not isinstance(published_at, str):
+            continue
+        published.append(item)
+    published.sort(key=lambda item: item["published_at"], reverse=True)
+    latest = published[0] if published else None
+    workspace_release = next(
+        (item for item in published if _semver_from_tag(item.get("tag_name")) == expected_version),
+        None,
+    )
+    latest_tag = latest.get("tag_name") if latest else None
+    latest_version = _semver_from_tag(latest_tag)
+    workspace_url = workspace_release.get("html_url") if workspace_release else None
+    if workspace_url is not None and (
+        not isinstance(workspace_url, str) or not workspace_url.strip()
+    ):
+        workspace_url = None
+    return {
+        "status": "available",
+        "published_release_count": len(published),
+        "response_page_size": len(payload),
+        "possibly_truncated": len(payload) >= 100,
+        "latest_published_tag": latest_tag,
+        "latest_published_version": latest_version,
+        "workspace_release_published": workspace_release is not None,
+        "workspace_release_url": workspace_url,
+    }
+
+
+def parse_ghcr_token(payload: object) -> str:
+    data = _require_mapping(payload, "GHCR token")
+    return _require_nonempty_string(data.get("token"), "GHCR token")
+
+
+def parse_ghcr_tags(payload: object, *, expected_version: str) -> dict[str, Any]:
+    data = _require_mapping(payload, "GHCR tags")
+    name = _require_nonempty_string(data.get("name"), "GHCR image name")
+    tags = data.get("tags")
+    if not isinstance(tags, list) or not all(isinstance(tag, str) for tag in tags):
+        raise ValueError("GHCR tags must be a list of strings")
+    version_tags = sorted(
+        {version for tag in tags if (version := _semver_from_tag(tag)) is not None},
+        key=lambda version: tuple(int(part) for part in version.split(".")),
+    )
+    return {
+        "status": "available",
+        "image": name,
+        "version_tag_count": len(version_tags),
+        "version_tags": version_tags,
+        "latest_version": version_tags[-1] if version_tags else None,
+        "workspace_version_tag_present": expected_version in version_tags,
+        "response_page_size": len(tags),
+        "possibly_truncated": len(tags) >= 100,
+    }
+
+
+def unavailable_distribution_channel(reason: str) -> dict[str, Any]:
+    return {
+        "status": "unavailable",
+        "reason": reason,
+    }
+
+
+def parse_anaconda_package(
+    payload: object,
+    *,
+    package_name: str,
+    package_url: str,
+    expected_version: str,
+) -> dict[str, Any]:
+    if payload is None:
+        return {
+            "status": "not_found",
+            "package": package_name,
+            "package_url": package_url,
+            "latest_version": None,
+            "workspace_version_available": False,
+            "version_count": 0,
+        }
+    data = _require_mapping(payload, f"Anaconda package {package_name}")
+    versions = data.get("versions") or []
+    if not isinstance(versions, list) or not all(isinstance(version, str) for version in versions):
+        raise ValueError(f"Anaconda package {package_name} versions must be a list of strings")
+    latest_version = data.get("latest_version")
+    if latest_version is not None and not isinstance(latest_version, str):
+        raise ValueError(f"Anaconda package {package_name} latest_version must be text or null")
+    if not latest_version:
+        semver_versions = [version for version in versions if SEMVER.fullmatch(version)]
+        latest_version = max(
+            semver_versions,
+            key=lambda version: tuple(int(part) for part in version.split(".")),
+            default=None,
+        )
+    return {
+        "status": "available",
+        "package": _require_nonempty_string(data.get("name", package_name), "Anaconda package name"),
+        "package_url": package_url,
+        "latest_version": latest_version,
+        "workspace_version_available": expected_version in versions,
+        "version_count": len(versions),
+    }
+
+
+def parse_bioconda_pull_request(payload: object) -> dict[str, Any]:
+    if payload is None:
+        return {
+            "status": "not_found",
+            "number": BIOCONDA_PR_NUMBER,
+            "state": "not_found",
+            "title": None,
+            "version_in_title": None,
+            "url": BIOCONDA_PR_URL,
+        }
+    data = _require_mapping(payload, "Bioconda pull request")
+    title = data.get("title")
+    if title is not None and not isinstance(title, str):
+        raise ValueError("Bioconda pull request title must be text or null")
+    version_match = re.search(r"\b(\d+\.\d+\.\d+)\b", title or "")
+    url = data.get("html_url")
+    if not isinstance(url, str) or not url.strip():
+        url = BIOCONDA_PR_URL
+    state = data.get("state")
+    if not isinstance(state, str) or not state.strip():
+        state = "unknown"
+    return {
+        "status": "available",
+        "number": data.get("number", BIOCONDA_PR_NUMBER),
+        "state": state,
+        "title": title,
+        "version_in_title": version_match.group(1) if version_match else None,
+        "url": url,
+        "updated_at": data.get("updated_at"),
+    }
+
+
+def collect_distribution_state(
+    *,
+    expected_version: str,
+    fetcher: Fetcher,
+    timeout: float,
+    retries: int,
+    retry_delay: float,
+) -> dict[str, Any]:
+    github_releases = parse_github_releases(
+        fetcher(
+            GITHUB_RELEASES_URL,
+            timeout=timeout,
+            retries=retries,
+            retry_delay=retry_delay,
+        ),
+        expected_version=expected_version,
+    )
+    bioconda = {
+        "main_package": parse_anaconda_package(
+            fetcher(
+                ANACONDA_TURBO_PICARD_URL,
+                timeout=timeout,
+                retries=retries,
+                retry_delay=retry_delay,
+                allow_not_found=True,
+            ),
+            package_name="turbo-picard",
+            package_url=ANACONDA_TURBO_PICARD_URL,
+            expected_version=expected_version,
+        ),
+        "shim_package": parse_anaconda_package(
+            fetcher(
+                ANACONDA_SHIM_URL,
+                timeout=timeout,
+                retries=retries,
+                retry_delay=retry_delay,
+                allow_not_found=True,
+            ),
+            package_name="turbo-picard-picard-shim",
+            package_url=ANACONDA_SHIM_URL,
+            expected_version=expected_version,
+        ),
+        "pull_request": parse_bioconda_pull_request(
+            fetcher(
+                BIOCONDA_PR_URL,
+                timeout=timeout,
+                retries=retries,
+                retry_delay=retry_delay,
+                allow_not_found=True,
+            )
+        ),
+    }
+    try:
+        token = parse_ghcr_token(
+            fetcher(
+                GHCR_TOKEN_URL,
+                timeout=timeout,
+                retries=retries,
+                retry_delay=retry_delay,
+            )
+        )
+        container = parse_ghcr_tags(
+            fetcher(
+                GHCR_TAGS_URL,
+                timeout=timeout,
+                retries=retries,
+                retry_delay=retry_delay,
+                headers={"Authorization": f"Bearer {token}"},
+            ),
+            expected_version=expected_version,
+        )
+    except (RuntimeError, ValueError):
+        container = unavailable_distribution_channel("registry_query_failed")
+    return {
+        "workspace_version": expected_version,
+        "github_release": github_releases,
+        "container": container,
+        "bioconda": bioconda,
     }
 
 
@@ -460,28 +721,37 @@ def build_report(
     downloads: dict[str, Any],
     repository: dict[str, Any],
     issues: dict[str, Any],
+    distribution: dict[str, Any],
     release_state: dict[str, Any],
     sources: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     return {
-        "schema_version": 3,
+        "schema_version": 4,
         "observed_at_utc": observed_at_utc,
         "release_state": release_state,
         "package": pypi,
         "downloads": downloads,
         "repository": repository,
         "community": issues,
+        "distribution": distribution,
         "sources": sources
         or {
             "pypi": PYPI_JSON_URL,
             "pypistats_overall_without_mirrors": PYPISTATS_OVERALL_URL,
             "github_repository": GITHUB_REPOSITORY_URL,
+            "github_releases": GITHUB_RELEASES_URL,
             "github_open_issues": GITHUB_ISSUES_URL,
             "github_trial_report_comments": GITHUB_TRIAL_COMMENTS_URL,
+            "ghcr_token": GHCR_TOKEN_URL,
+            "ghcr_tags": GHCR_TAGS_URL,
+            "anaconda_turbo_picard": ANACONDA_TURBO_PICARD_URL,
+            "anaconda_picard_shim": ANACONDA_SHIM_URL,
+            "bioconda_pull_request": BIOCONDA_PR_URL,
         },
         "interpretation": {
             "download_counts_are_distribution_signals": True,
             "repository_counts_are_public_interest_signals": True,
+            "distribution_channels_are_read_only_signals": True,
             "sustained_external_usage_verified": False,
             "customer_demand_verified": False,
             "production_readiness_verified": False,
@@ -492,6 +762,18 @@ def build_report(
             "public_package_matches_source_verified": bool(
                 pypi.get("version_matches_workspace")
                 and pypi.get("long_description_matches_workspace")
+            ),
+            "distribution_channels_match_workspace_verified": bool(
+                pypi.get("version_matches_workspace")
+                and pypi.get("long_description_matches_workspace")
+                and distribution["github_release"].get("workspace_release_published")
+                and distribution["container"].get("workspace_version_tag_present")
+                and distribution["bioconda"]["main_package"].get(
+                    "workspace_version_available"
+                )
+                and distribution["bioconda"]["shim_package"].get(
+                    "workspace_version_available"
+                )
             ),
         },
     }
@@ -553,6 +835,13 @@ def collect_report(
         )
     )
     issues["trial_report_thread"].update(trial_comments)
+    distribution = collect_distribution_state(
+        expected_version=expected_version,
+        fetcher=fetcher,
+        timeout=timeout,
+        retries=retries,
+        retry_delay=retry_delay,
+    )
     release_state = collect_release_state(root)
     return build_report(
         observed_at_utc=observed_at_utc or utc_timestamp(),
@@ -560,6 +849,7 @@ def collect_report(
         downloads=downloads,
         repository=repository,
         issues=issues,
+        distribution=distribution,
         release_state=release_state,
     )
 

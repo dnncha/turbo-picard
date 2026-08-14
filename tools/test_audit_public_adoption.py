@@ -123,6 +123,36 @@ class AuditPublicAdoptionTests(unittest.TestCase):
         self.assertFalse(result["long_description_matches_workspace"])
         self.assertEqual(result["latest_file_upload_time"], "2026-07-25T21:00:00Z")
 
+    def test_parse_distribution_channels_records_release_container_and_missing_conda(self) -> None:
+        releases = audit_public_adoption.parse_github_releases(
+            [
+                {
+                    "tag_name": "v0.1.11",
+                    "published_at": "2026-07-25T20:37:57Z",
+                    "draft": False,
+                    "prerelease": False,
+                    "html_url": "https://github.com/dnncha/turbo-picard/releases/tag/v0.1.11",
+                }
+            ],
+            expected_version="0.1.12",
+        )
+        container = audit_public_adoption.parse_ghcr_tags(
+            {"name": "dnncha/turbo-picard", "tags": ["0.1.10", "0.1.11", "latest"]},
+            expected_version="0.1.12",
+        )
+        package = audit_public_adoption.parse_anaconda_package(
+            None,
+            package_name="turbo-picard",
+            package_url=audit_public_adoption.ANACONDA_TURBO_PICARD_URL,
+            expected_version="0.1.12",
+        )
+        self.assertFalse(releases["workspace_release_published"])
+        self.assertEqual(releases["latest_published_version"], "0.1.11")
+        self.assertFalse(container["workspace_version_tag_present"])
+        self.assertEqual(container["latest_version"], "0.1.11")
+        self.assertEqual(package["status"], "not_found")
+        self.assertFalse(package["workspace_version_available"])
+
     def test_parse_open_issues_excludes_pull_requests(self) -> None:
         result = audit_public_adoption.parse_open_issues(
             [
@@ -208,6 +238,15 @@ class AuditPublicAdoptionTests(unittest.TestCase):
                     "subscribers_count": 0,
                     "open_issues_count": 1,
                 },
+                audit_public_adoption.GITHUB_RELEASES_URL: [
+                    {
+                        "tag_name": "v0.1.11",
+                        "published_at": "2026-07-25T20:37:57Z",
+                        "draft": False,
+                        "prerelease": False,
+                        "html_url": "https://github.com/dnncha/turbo-picard/releases/tag/v0.1.11",
+                    }
+                ],
                 audit_public_adoption.GITHUB_ISSUES_URL: [
                     {
                         "number": 4,
@@ -220,6 +259,20 @@ class AuditPublicAdoptionTests(unittest.TestCase):
                 audit_public_adoption.GITHUB_TRIAL_COMMENTS_URL: [
                     {"user": {"login": "dnncha"}}
                 ],
+                audit_public_adoption.GHCR_TOKEN_URL: {"token": "test-token"},
+                audit_public_adoption.GHCR_TAGS_URL: {
+                    "name": "dnncha/turbo-picard",
+                    "tags": ["0.1.11", "latest"],
+                },
+                audit_public_adoption.ANACONDA_TURBO_PICARD_URL: None,
+                audit_public_adoption.ANACONDA_SHIM_URL: None,
+                audit_public_adoption.BIOCONDA_PR_URL: {
+                    "number": 65922,
+                    "state": "open",
+                    "title": "Add turbo-picard 0.1.10",
+                    "html_url": "https://github.com/bioconda/bioconda-recipes/pull/65922",
+                    "updated_at": "2026-07-23T17:22:37Z",
+                },
             }
 
             def fake_fetch(url: str, **_kwargs: object) -> object:
@@ -235,7 +288,7 @@ class AuditPublicAdoptionTests(unittest.TestCase):
             self.assertEqual(report["downloads"]["downloads_total"], 3)
             self.assertEqual(report["community"]["open_issue_numbers"], [4])
             self.assertEqual(report["community"]["trial_report_thread"]["comment_count"], 1)
-            self.assertEqual(report["schema_version"], 3)
+            self.assertEqual(report["schema_version"], 4)
             self.assertIn("release_state", report)
             self.assertFalse(report["interpretation"]["release_source_ready_verified"])
             self.assertFalse(report["interpretation"]["sustained_external_usage_verified"])
@@ -246,6 +299,16 @@ class AuditPublicAdoptionTests(unittest.TestCase):
                 report["community"]["trial_report_thread"]["external_comment_count"],
                 0,
             )
+            self.assertEqual(
+                report["distribution"]["github_release"]["latest_published_version"],
+                "0.1.11",
+            )
+            self.assertFalse(report["distribution"]["container"]["workspace_version_tag_present"])
+            self.assertEqual(
+                report["distribution"]["bioconda"]["pull_request"]["version_in_title"],
+                "0.1.10",
+            )
+            self.assertFalse(report["interpretation"]["distribution_channels_match_workspace_verified"])
 
 
 if __name__ == "__main__":

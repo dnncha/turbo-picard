@@ -16,7 +16,7 @@ SPEC.loader.exec_module(verify_public_adoption_report)
 
 def valid_report() -> dict[str, object]:
     return {
-        "schema_version": 3,
+        "schema_version": 4,
         "observed_at_utc": "2026-08-14T00:00:00Z",
         "release_state": {
             "workspace_version": "0.1.12",
@@ -35,6 +35,56 @@ def valid_report() -> dict[str, object]:
             "live_version": "0.1.12",
             "version_matches_workspace": True,
             "long_description_matches_workspace": True,
+        },
+        "distribution": {
+            "workspace_version": "0.1.12",
+            "github_release": {
+                "status": "available",
+                "published_release_count": 1,
+                "response_page_size": 1,
+                "possibly_truncated": False,
+                "latest_published_tag": "v0.1.12",
+                "latest_published_version": "0.1.12",
+                "workspace_release_published": True,
+                "workspace_release_url": "https://github.com/dnncha/turbo-picard/releases/tag/v0.1.12",
+            },
+            "container": {
+                "status": "available",
+                "image": "dnncha/turbo-picard",
+                "version_tag_count": 1,
+                "version_tags": ["0.1.12"],
+                "latest_version": "0.1.12",
+                "workspace_version_tag_present": True,
+                "response_page_size": 1,
+                "possibly_truncated": False,
+            },
+            "bioconda": {
+                "main_package": {
+                    "status": "available",
+                    "package": "turbo-picard",
+                    "package_url": "https://api.anaconda.org/package/bioconda/turbo-picard",
+                    "latest_version": "0.1.12",
+                    "workspace_version_available": True,
+                    "version_count": 1,
+                },
+                "shim_package": {
+                    "status": "available",
+                    "package": "turbo-picard-picard-shim",
+                    "package_url": "https://api.anaconda.org/package/bioconda/turbo-picard-picard-shim",
+                    "latest_version": "0.1.12",
+                    "workspace_version_available": True,
+                    "version_count": 1,
+                },
+                "pull_request": {
+                    "status": "available",
+                    "number": 65922,
+                    "state": "merged",
+                    "title": "Add turbo-picard 0.1.12",
+                    "version_in_title": "0.1.12",
+                    "url": "https://github.com/bioconda/bioconda-recipes/pull/65922",
+                    "updated_at": "2026-08-14T00:00:00Z",
+                },
+            },
         },
         "community": {
             "open_issue_count_excluding_pull_requests": 1,
@@ -66,6 +116,7 @@ def valid_report() -> dict[str, object]:
         "interpretation": {
             "download_counts_are_distribution_signals": True,
             "repository_counts_are_public_interest_signals": True,
+            "distribution_channels_are_read_only_signals": True,
             "sustained_external_usage_verified": False,
             "customer_demand_verified": False,
             "production_readiness_verified": False,
@@ -74,6 +125,7 @@ def valid_report() -> dict[str, object]:
             "community_provenance_is_recorded": True,
             "release_source_ready_verified": True,
             "public_package_matches_source_verified": True,
+            "distribution_channels_match_workspace_verified": True,
         },
     }
 
@@ -86,7 +138,7 @@ class VerifyPublicAdoptionReportTests(unittest.TestCase):
         payload = valid_report()
         payload["schema_version"] = 1
         self.assertIn(
-            "report schema_version must be 3",
+            "report schema_version must be 4",
             verify_public_adoption_report.collect_errors(payload),
         )
 

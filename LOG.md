@@ -1,5 +1,19 @@
 # Turbo Picard work log
 
+## 2026-08-14 — distribution channel audit added
+
+- Extended the read-only public adoption report to schema version 4. It now
+  records published GitHub releases, anonymous GHCR image tags, Bioconda main
+  and shim package availability, and the existing Bioconda PR state alongside
+  PyPI and GitHub interest signals. No credentials or mutation paths were added.
+- The live snapshot at `2026-08-14T06:03:24Z` found GitHub release `v0.1.11`
+  and GHCR tag `0.1.11` as the latest public distribution versions. Neither
+  Bioconda package is indexed, and PR #65922 remains open for `0.1.10`; the
+  workspace `0.1.12` version is not present across those channels.
+- Added parser, validator, and offline collection tests. The report remains
+  explicit that channel state is observational and that no publication or
+  repair was attempted.
+
 ## 2026-08-14 — public adoption audit records author provenance
 
 - Extended the read-only public adoption report to schema version 3. It now

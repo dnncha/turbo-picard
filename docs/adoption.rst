@@ -102,13 +102,15 @@ release:
      --output turbo-picard-public-adoption.json
 
 The report combines the live PyPI version and README freshness, PyPIStats
-downloads without mirrors, GitHub repository interest signals, and open issue
-counts. It also records the source version, current commit, worktree
-cleanliness, and whether the matching local and ``origin`` release tag points
-at that commit. This makes a post-release source/package mismatch visible
-without turning download counts into user telemetry. It records the source
-URLs and explicitly marks sustained external usage, customer demand, and
-production readiness as unverified. Download and repository counters are
+downloads without mirrors, GitHub repository interest signals, open issue
+counts, published GitHub releases, public GHCR image tags, and Bioconda package
+and pull-request state. It also records the source version, current commit,
+worktree cleanliness, and whether the matching local and ``origin`` release tag
+points at that commit. This makes a post-release source/package mismatch and a
+channel that is still serving an older version visible without turning download
+counts into user telemetry. It records the source URLs and explicitly marks
+sustained external usage, customer demand, and production readiness as
+unverified. Download, repository, release, container, and package counters are
 distribution and interest signals, not user telemetry or a substitute for
 reviewed workflow-owner trials.
 The community section also records the public trial-report thread's comment
@@ -119,6 +121,9 @@ workflow-owner trial reports; ``workflow_owner_trial_reports_verified`` stays
 false until a human reviews the reports and confirms their workflow context.
 An empty external-author count is only an observation about the sampled public
 API response, not evidence that no private or unreported trials exist.
+The distribution section is also read-only: a missing workspace-version tag,
+release, or Bioconda package is recorded as a channel-state gap, not silently
+treated as a publication failure or repaired by the audit.
 The repository also has a quiet weekly and manual
 ``.github/workflows/public-adoption-audit.yml`` job that stores the JSON report
 as a short-lived GitHub Actions artifact; it has read-only repository
