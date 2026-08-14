@@ -35,6 +35,11 @@ and evidence-backed growth.
   a clean offline virtual environment passed `pip check`, `--version`,
   `doctor`, the read-only `trial` contract, the `picard` shim, the real install
   smoke, and the mate-specific barcode install smoke.
+- Rebuilt those artifacts from the clean committed candidate and rechecked the
+  exact wheel in an isolated environment. The fresh entrypoints match the
+  release target binaries byte-for-byte, and the fresh wheel passes five BAM
+  and six reference-backed CRAM parity comparisons through the no-`samtools`
+  helper path.
 - Fresh wheel-binary MarkDuplicates guardrails passed exact parity against
   Picard 3.4.0: the 1M synthetic fixture measured 0.531 versus 1.861 seconds
   and 237,420,544 versus 1,160,527,872 bytes median RSS; the reference-backed

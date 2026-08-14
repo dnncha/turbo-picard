@@ -1,5 +1,21 @@
 # Turbo Picard work log
 
+## 2026-08-14 — exact committed-source package verification
+
+- Rebuilt the `0.1.12` arm64 wheel and source distribution from the clean
+  candidate source, then passed `tools/verify_release_artifacts.py` against
+  those exact files. The fresh wheel's `turbo-picard` and `picard` entrypoint
+  hashes match the release target binaries byte-for-byte.
+- Installed the fresh wheel in an isolated virtual environment. `pip check`,
+  both version entrypoints, the text `doctor` contract, JSON `trial` contract,
+  the real install smoke, and the mate-specific barcode smoke all passed.
+- Ran the fresh wheel through the no-`samtools` real-data comparator: five
+  public SNVQ BAM commands and six reference-backed CRAM commands all passed
+  exact Picard parity. The exact-source artifact manifest records the hashes,
+  clean source state, benchmark summary, and remaining tag blockers.
+- No tag, push, package publication, container publication, Bioconda update,
+  issue, comment, outreach, or external service mutation occurred.
+
 ## 2026-08-14 — clean local release-candidate handoff
 
 - Committed the complete current candidate changeset as
