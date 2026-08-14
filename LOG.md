@@ -6,8 +6,8 @@
   `5d968a3ead1ad8350f60e9ff9ab937f5f65353a2`
   (`Prepare Turbo Picard 0.1.12 release candidate`) on the existing
   `codex/turbo-picard-bioconda-0-1-11` branch.
-- The worktree is clean and the branch is one local commit ahead of
-  `origin/main`. The release handoff manifest at
+- The worktree is clean and the branch contains the local candidate commits
+  ahead of `origin/main`. The release handoff manifest at
   `/private/tmp/turbo-picard-release-manifest-0.1.12-commit-5d968a3.json`
   records the candidate artifacts, 32/32 parity benchmark, and only the
   missing local and origin `v0.1.12` tags as source blockers.
