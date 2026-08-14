@@ -76,6 +76,10 @@ and evidence-backed growth.
   pinned source citation, duplicate command selection, release-candidate
   command coverage, and undersized inputs fail immediately; the one-command
   trial guide documents the required manifest shape.
+- The manual production-evidence workflow's validation bootstrap now uses the
+  current checkout and Python setup actions used by the rest of the release
+  path, removing its stale action-version mismatch before the next
+  owner-controlled production-scale run.
 - The trial caught and fixed a real no-reference metrics regression: Picard
   leaves mismatch-rate fields at zero without `REFERENCE_SEQUENCE`, even when
   NM/MD tags are present. Turbo Picard now matches that boundary and has a

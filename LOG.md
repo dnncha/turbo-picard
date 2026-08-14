@@ -1,5 +1,16 @@
 # Turbo Picard work log
 
+## 2026-08-14 — production-evidence bootstrap uses current actions
+
+- Updated the manual production-evidence workflow's validation job from
+  `actions/checkout@v4` and `actions/setup-python@v5` to the current repository
+  action generations, matching the build and publication workflows. This
+  removes a known stale bootstrap path before the next owner-controlled
+  production-scale run.
+- The workflow remains manual, pinned-input, and fail-closed; no production
+  evidence was fabricated and no workflow dispatch or external mutation
+  occurred.
+
 ## 2026-08-14 — comparator manifest requests fail fast
 
 - The reviewable real-data comparator now validates manifest output layout,
