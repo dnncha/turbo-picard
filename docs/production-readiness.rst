@@ -63,14 +63,16 @@ Prioritise evidence and compatibility for:
 -  AddOrReplaceReadGroups, BuildBamIndex, ValidateSamFile,
    SetNmMdAndUqTags and CreateSequenceDictionary.
 -  CollectMultipleMetrics, CollectAlignmentSummaryMetrics,
-   CollectInsertSizeMetrics, CollectWgsMetrics and CollectGcBiasMetrics.
-   ``CollectHsMetrics`` remains delegated until native bait/target accounting
-   and matching parity evidence exist.
+   CollectInsertSizeMetrics, CollectWgsMetrics, CollectGcBiasMetrics and the
+   core ALL_READS path of ``CollectHsMetrics``. The latter now has matching
+   Picard fixture parity including per-target/per-base sidecar reports;
+   production-sized WES evidence remains open.
 -  GatherVcfs, SortVcf, MergeVcfs, LiftoverVcf and
    UpdateVcfSequenceDictionary.
 
-Do not increase the native command count while a golden command lacks
-production-sized evidence.
+Do not treat small parity fixtures as production-sized evidence, and do not
+promote a command beyond its documented native scope without representative
+workflow data.
 
 Evidence tiers
 --------------

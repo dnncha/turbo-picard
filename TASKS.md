@@ -21,10 +21,11 @@ and evidence-backed growth.
 
 ## Current verified direction
 
-- The current `0.1.12` candidate is committed locally on the existing `codex/`
-  branch; the worktree is clean and the branch is ahead of `origin/main`. The
-  exact current source SHA and arm64 package digests are retained in the
-  release handoff manifest at
+- The pre-existing `0.1.12` candidate is committed locally on the existing
+  `codex/` branch and the branch is ahead of `origin/main`; this success-work
+  checkout contains the intentional native `CollectHsMetrics` changes
+  described below. The exact candidate source SHA and arm64 package digests
+  are retained in the release handoff manifest at
   `/private/tmp/turbo-picard-package-final/release-manifest.json`.
   The candidate remains a release candidate because neither local nor origin
   has the matching `v0.1.12` tag.
@@ -35,9 +36,18 @@ and evidence-backed growth.
   versus `1,018,560,512` bytes. The retained manifest leaves independent
   reproduction `not_run` and does not claim production-scale readiness.
 - The copy-paste trial contract passes on current HEAD, including the native
-  `MarkDuplicates` trial shape and fallback-only behavior. The production-
-  readiness golden surface now keeps `CollectHsMetrics` explicitly delegated
-  until native bait/target accounting and parity evidence exist.
+  `MarkDuplicates` trial shape and fallback-only behavior. `CollectHsMetrics`
+  now has a bounded partial-native ALL_READS path with exact local parity
+  across ten Picard 3.4.0 directed-metrics fixtures, including per-target and
+  per-base sidecars, plus a CI parity script; production-sized WES evidence
+  remains an open gate.
+- The main Bioconda recipe now includes `CollectHsMetrics` in both its metadata
+  command surface and executable package smoke; recipe shape passes, while the
+  exact release tag and immutable source archive hash remain owner-controlled.
+- The isolated package-install smoke now executes `CollectHsMetrics` and checks
+  its metrics, per-target, and per-base artifacts through the installed binary.
+- The same install smoke caught and closed a stale top-level help omission;
+  fresh non-shim and optional-shim release installs now pass end to end.
 - The production-scale evidence dispatch path now shares a tested
   `tools/validate_production_dispatch.py` contract between local validation and
   GitHub Actions. It fails before input download/build for missing Picard/Turbo

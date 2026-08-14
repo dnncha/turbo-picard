@@ -777,6 +777,7 @@ Available commands:
                     Writes nucleotide distribution by sequencing cycle
   CollectGcBiasMetrics
                     Writes GC-bias detail and summary metrics
+  CollectHsMetrics   Writes hybrid-capture metrics and coverage sidecars
   CollectInsertSizeMetrics
                     Writes paired-read insert size metrics
   CollectMultipleMetrics
@@ -1738,15 +1739,22 @@ Required arguments:
   TARGET_INTERVALS / TARGET Target interval_list file
   REFERENCE_SEQUENCE / R Reference FASTA file
 
-Scaffold options accepted for argument validation:
+Native core options:
+  MINIMUM_MAPPING_QUALITY (default 20)
+  MINIMUM_BASE_QUALITY (default 20)
+  COVERAGE_CAP (default 200)
+  SAMPLE_SIZE (default 10000)
+  INCLUDE_INDELS=false
+  BAIT_SET_NAME
   CLIP_OVERLAPPING_READS
   NEAR_DISTANCE
   METRIC_ACCUMULATION_LEVEL=ALL_READS
   ASSUME_SORTED
   STOP_AFTER
 
-Native bait/target accumulation is not implemented yet. Configure
-TURBO_PICARD_FALLBACK_COMMAND to run upstream Picard for production use."
+Native output covers the core ALL_READS hybrid-capture metrics and histogram.
+PER_TARGET_COVERAGE and PER_BASE_COVERAGE sidecar reports are native for
+ALL_READS; unsupported advanced options remain delegated to upstream Picard."
     );
 }
 
@@ -3832,14 +3840,34 @@ fn run_collecthsmetrics(args: &[String]) -> Result<(), String> {
     let bait_intervals_path = required_scalar_for(&args, "BAIT_INTERVALS", "CollectHsMetrics")?;
     let target_intervals_path = required_scalar_for(&args, "TARGET_INTERVALS", "CollectHsMetrics")?;
     let reference = required_scalar_for(&args, "REFERENCE_SEQUENCE", "CollectHsMetrics")?;
-    let clip_overlapping_reads = optional_bool(&args, "CLIP_OVERLAPPING_READS")?.unwrap_or(false);
+    let clip_overlapping_reads = optional_bool(&args, "CLIP_OVERLAPPING_READS")?.unwrap_or(true);
     let near_distance = optional_u32(&args, "NEAR_DISTANCE")?.unwrap_or(250);
+    let minimum_mapping_quality = optional_u32(&args, "MINIMUM_MAPPING_QUALITY")?.unwrap_or(20);
+    let minimum_base_quality = optional_u32(&args, "MINIMUM_BASE_QUALITY")?.unwrap_or(20);
+    let coverage_cap = optional_u32(&args, "COVERAGE_CAP")?.unwrap_or(200);
+    let sample_size = optional_u32(&args, "SAMPLE_SIZE")?.unwrap_or(10_000);
+    let include_indels = optional_bool(&args, "INCLUDE_INDELS")?.unwrap_or(false);
+    let per_target_coverage = optional_scalar(&args, "PER_TARGET_COVERAGE")?;
+    let per_base_report = optional_scalar(&args, "PER_BASE_REPORT")?;
+    let per_base_coverage = optional_scalar(&args, "PER_BASE_COVERAGE")?;
+    if per_base_report.is_some() && per_base_coverage.is_some() {
+        return Err(
+            "CollectHsMetrics accepts only one of PER_BASE_REPORT or PER_BASE_COVERAGE".to_string(),
+        );
+    }
+    let bait_set_name = optional_scalar(&args, "BAIT_SET_NAME")?
+        .unwrap_or_else(|| hs_metrics_bait_set_name(&bait_intervals_path));
+    let minimum_mapping_quality = u8::try_from(minimum_mapping_quality).map_err(|_| {
+        "unsupported CollectHsMetrics MINIMUM_MAPPING_QUALITY above 255".to_string()
+    })?;
+    let minimum_base_quality = u8::try_from(minimum_base_quality)
+        .map_err(|_| "unsupported CollectHsMetrics MINIMUM_BASE_QUALITY above 255".to_string())?;
 
-    let references = read_fasta_sequences(&reference, true)?;
-    let contig_order = references
+    let reference_contigs = read_reference_contigs_for_wgs(&reference)?;
+    let contig_order = reference_contigs
         .iter()
         .enumerate()
-        .map(|(index, sequence)| (sequence.name.clone(), index))
+        .map(|(index, (name, _length))| (name.clone(), index))
         .collect::<BTreeMap<_, _>>();
 
     let bait_text = fs::read_to_string(&bait_intervals_path).map_err(|error| error.to_string())?;
@@ -3853,12 +3881,42 @@ fn run_collecthsmetrics(args: &[String]) -> Result<(), String> {
         .into_iter()
         .map(hs_metrics_interval_from_bed)
         .collect::<Vec<_>>();
+    let genome_size = reference_contigs
+        .iter()
+        .map(|(_name, length)| *length as u64)
+        .sum::<u64>();
+    let reference_lengths = reference_contigs
+        .iter()
+        .map(|(name, length)| (name.clone(), *length as u64))
+        .collect::<BTreeMap<_, _>>();
+    let target_contigs = target_intervals
+        .iter()
+        .map(|interval| interval.contig.clone())
+        .collect::<BTreeSet<_>>();
+    let reference_sequences = target_contigs
+        .into_iter()
+        .map(|contig| {
+            load_fasta_contig_sequence(&reference, &contig).map(|sequence| (contig, sequence))
+        })
+        .collect::<Result<BTreeMap<_, _>, _>>()?;
 
     let config = hs_metrics::HsMetricsConfig {
         bait_intervals,
         target_intervals,
+        reference_lengths,
+        reference_sequences,
+        per_target_coverage,
+        per_base_coverage: per_base_coverage.or(per_base_report),
+        genome_size,
+        bait_set_name,
         clip_overlapping_reads,
         near_distance,
+        minimum_mapping_quality,
+        minimum_base_quality,
+        coverage_cap,
+        sample_size,
+        include_indels,
+        stop_after: optional_u32(&args, "STOP_AFTER")?.unwrap_or(0),
     };
 
     let mut reader = open_bam_reader_for_args(&input, &args).map_err(|error| error.to_string())?;
@@ -3871,7 +3929,20 @@ fn hs_metrics_interval_from_bed(interval: BedInterval) -> hs_metrics::GenomicInt
         contig: interval.contig,
         start: interval.start,
         end: interval.end,
+        name: interval.name,
     }
+}
+
+fn hs_metrics_bait_set_name(path: &str) -> String {
+    let filename = Path::new(path)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or(path);
+    let without_gzip = filename.strip_suffix(".gz").unwrap_or(filename);
+    without_gzip
+        .strip_suffix(".interval_list")
+        .unwrap_or(without_gzip)
+        .to_string()
 }
 
 fn collectmultiplemetrics_can_single_pass(input: &str, programs: &[String]) -> bool {
@@ -10686,10 +10757,17 @@ fn reject_unsupported_collecthsmetrics_args(
         "BAIT_INTERVALS",
         "TARGET_INTERVALS",
         "REFERENCE_SEQUENCE",
+        "BAIT_SET_NAME",
         "PER_TARGET_COVERAGE",
         "PER_BASE_REPORT",
+        "PER_BASE_COVERAGE",
         "CLIP_OVERLAPPING_READS",
         "NEAR_DISTANCE",
+        "MINIMUM_MAPPING_QUALITY",
+        "MINIMUM_BASE_QUALITY",
+        "COVERAGE_CAP",
+        "SAMPLE_SIZE",
+        "INCLUDE_INDELS",
         "METRIC_ACCUMULATION_LEVEL",
         "ASSUME_SORTED",
         "STOP_AFTER",
@@ -10707,8 +10785,15 @@ fn reject_unsupported_collecthsmetrics_args(
     }
     optional_scalar(args, "PER_TARGET_COVERAGE")?;
     optional_scalar(args, "PER_BASE_REPORT")?;
+    optional_scalar(args, "PER_BASE_COVERAGE")?;
+    optional_scalar(args, "BAIT_SET_NAME")?;
     optional_bool(args, "CLIP_OVERLAPPING_READS")?;
     optional_u32(args, "NEAR_DISTANCE")?;
+    optional_u32(args, "MINIMUM_MAPPING_QUALITY")?;
+    optional_u32(args, "MINIMUM_BASE_QUALITY")?;
+    optional_u32(args, "COVERAGE_CAP")?;
+    optional_u32(args, "SAMPLE_SIZE")?;
+    optional_bool(args, "INCLUDE_INDELS")?;
     optional_bool(args, "ASSUME_SORTED")?;
     optional_u32(args, "STOP_AFTER")?;
     optional_scalar(args, "VALIDATION_STRINGENCY")?;
