@@ -3,6 +3,20 @@
 Use this when your workflow already wraps Picard in `WDL` tasks and you want a
 small first substitution instead of a broader rewrite.
 
+From a repository checkout, the starter smoke uses `miniwdl` to strictly
+validate every checked-in WDL document:
+
+```bash
+python3 -m pip install "miniwdl==1.15.0"
+bash tools/verify_wdl_starters.sh
+```
+
+To execute the checked-in `MarkDuplicates` trial as well, set
+`TURBO_PICARD_WDL_IMAGE` to a Docker image containing `turbo-picard`. The CI
+smoke builds a no-entrypoint derivative of the repository reference image so
+the WDL command is executed inside the image rather than being doubled by its
+interactive container entrypoint.
+
 Start here:
 
 - `markduplicates.wdl` if duplicate marking is the obvious wall-time problem

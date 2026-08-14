@@ -23,6 +23,7 @@ Files:
 - `samtofastq.nf`: minimal `Nextflow` process for `SamToFastq`, including per-read-group export
 - `Snakefile`: minimal `Snakemake` rule set using `turbo-picard BuildBamIndex`, `SortSam`, `MarkDuplicates`, `SamToFastq`, `FastqToSam`, and `FixMateInformation`, including a dedicated per-read-group `SamToFastq` rule and sequential-ingest toggles
 - `wdl-cromwell.md`: short walkthrough for choosing and testing the `WDL` starters
+- `../../tools/verify_wdl_starters.sh`: strict WDL validation with an optional Docker-backed trial smoke
 - `nextflow-nf-core.md`: short walkthrough for the `Nextflow` / nf-core starters
 - `snakemake.md`: short walkthrough for the `Snakemake` starter
 - `trial.wdl`: tiny single-command `WDL` workflow for a `MarkDuplicates` evaluation

@@ -252,6 +252,25 @@ jobs:
       - name: Smoke container entrypoint
         run: docker run --rm turbo-picard:ci MarkDuplicates --help
 
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.9"
+
+      - name: Install pinned miniwdl trial runtime
+        run: python3 -m pip install "miniwdl==1.15.0"
+
+      - name: Build WDL runtime image
+        run: |
+          docker build -t turbo-picard-wdl:ci -f - . <<'EOF'
+          FROM turbo-picard:ci
+          ENTRYPOINT []
+          EOF
+
+      - name: Test WDL starters
+        env:
+          TURBO_PICARD_WDL_IMAGE: turbo-picard-wdl:ci
+        run: bash tools/verify_wdl_starters.sh
+
   nf-core-process:
     name: nf-core process candidate
     runs-on: ubuntu-latest

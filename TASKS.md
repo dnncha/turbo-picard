@@ -59,6 +59,9 @@ and evidence-backed growth.
 - The Snakemake starter now has a checked-in disposable smoke harness
   (`tools/verify_snakemake_starter.sh`) and a CI job with the pinned compatible
   runtime, so the workflow wiring cannot regress silently.
+- All nine checked-in WDL starters now pass strict miniwdl 1.15.0 validation;
+  the CI Docker job also executes the MarkDuplicates trial with a derived
+  no-entrypoint image, while local execution remains explicitly Docker-bound.
 - The benchmarked candidate runtime at source SHA
   `3c43bca0cc8624008cef6979e0c5b5450a965124` passes all 32 three-repeat
   benchmark parity checks against Picard 3.4.0. The refreshed checked-in assets

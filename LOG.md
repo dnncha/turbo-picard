@@ -1,5 +1,16 @@
 # Turbo Picard work log
 
+## 2026-08-14 — WDL starter smoke added with explicit Docker boundary
+
+- Installed `miniwdl==1.15.0` in an isolated environment and strictly checked
+  all nine checked-in WDL documents. The local execution attempt reached the
+  expected Docker-daemon boundary, so `tools/verify_wdl_starters.sh` performs
+  strict static validation locally and runs the full `MarkDuplicates` trial
+  when `TURBO_PICARD_WDL_IMAGE` is provided. CI now builds a no-entrypoint
+  derivative of the reference image and exercises that full path. This is
+  workflow-wiring evidence, not workflow-owner adoption or production-scale
+  evidence. No external state changed.
+
 ## 2026-08-14 — Snakemake starter smoke promoted to CI
 
 - Added `tools/verify_snakemake_starter.sh`, a disposable smoke that runs the

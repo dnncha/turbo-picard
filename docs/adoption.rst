@@ -69,6 +69,16 @@ Keep the task inputs and outputs the same, and swap only the executable:
      >>>
    }
 
+From a repository checkout, install ``miniwdl`` and run the WDL starter smoke
+to catch syntax and type drift. If ``TURBO_PICARD_WDL_IMAGE`` names a Docker
+image containing ``turbo-picard``, the same command also executes the checked-in
+``MarkDuplicates`` trial and validates its BAM and metrics outputs:
+
+.. code-block:: bash
+
+   python3 -m pip install "miniwdl==1.15.0"
+   bash tools/verify_wdl_starters.sh
+
 Nextflow / nf-core
 ~~~~~~~~~~~~~~~~~~
 
