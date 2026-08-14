@@ -1,5 +1,17 @@
 # Turbo Picard work log
 
+## 2026-08-14 — current optical-heavy MarkDuplicates profile
+
+- Ran the documented three-repeat, 300,000-record synthetic BAM profile with
+  duplicate families of 4,096 and the default optical-name parser. Exact
+  parity passed; the median was `0.432s` Turbo versus `3.517s` Picard
+  (`7.54x`), with per-run speedups from `6.93x` to `11.28x`.
+- Raw profile JSON is retained at
+  `/private/tmp/turbo-picard-markduplicates-optical-fe14aee.json`. The result
+  strengthens optical-path regression evidence only; it does not prove
+  production-scale WGS/WES behavior, independent reproduction, or workflow
+  owner adoption. No external state changed.
+
 ## 2026-08-14 — current high-duplicate MarkDuplicates profile
 
 - Ran the documented five-repeat, 1,000,000-record synthetic BAM profile with

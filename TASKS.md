@@ -92,6 +92,10 @@ and evidence-backed growth.
   `11.971s`), with per-repeat speedups ranging from `1.84x` to `8.47x`.
   This is scoped synthetic evidence; the variance and comparator RSS prevent
   it from supporting a universal or production-scale claim.
+- The default optical-name path also passed a fresh three-repeat,
+  300,000-record high-duplicate profile at `7.54x` median speedup (`0.432s`
+  versus `3.517s`) with exact parity. This remains synthetic optical-path
+  evidence, not production-scale or independent workflow proof.
 - The benchmarked candidate runtime at source SHA
   `3c43bca0cc8624008cef6979e0c5b5450a965124` passes all 32 three-repeat
   benchmark parity checks against Picard 3.4.0. The refreshed checked-in assets
