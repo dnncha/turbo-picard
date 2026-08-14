@@ -46,11 +46,16 @@ jobs:
           python3 -m unittest tools/test_bench_markduplicates_synthetic.py
           python3 -m unittest tools/test_bioconda_release_preflight.py
           python3 -m unittest tools/test_audit_real_data.py
+          python3 -m unittest tools/test_audit_public_adoption.py
+          python3 -m unittest tools/test_verify_public_adoption_report.py
+          python3 -m unittest tools/test_verify_publish_workflows.py
           python3 -m unittest tools/test_parity_compare.py
           python3 -m unittest tools/test_compare_real_data.py
           python3 -m unittest tools/test_prepare_bioconda_release.py
           python3 -m unittest tools/test_render_benchmark_assets.py
           python3 -m unittest tools/test_update_real_data_manifest.py
+          python3 -m unittest tools/test_build_production_manifest.py
+          python3 -m unittest tools/test_build_release_manifest.py
           python3 -m unittest tools/test_validate_production_manifest.py
           python3 -m unittest tools/test_verify_benchmark_log_evidence.py
           python3 -m unittest tools/test_verify_benchmark_suite_coverage.py
@@ -65,25 +70,35 @@ jobs:
           python3 -m unittest tools/test_verify_readme_links.py
           python3 -m unittest tools/test_verify_real_data_ci_coverage.py
           python3 -m unittest tools/test_verify_real_data_evidence.py
+          python3 -m unittest tools/test_verify_release_artifacts.py
+          python3 -m unittest tools/test_verify_markduplicates_guardrails.py
           python3 -m unittest tools/test_verify_release_text_quality.py
           python3 -m unittest tools/test_verify_release_versions.py
           python3 -m unittest tools/test_verify_site_disclosures.py
           python3 -m unittest tools/test_verify_site_benchmark_evidence.py
           python3 -m unittest tools/test_verify_site_links.py
           python3 -m unittest tools/test_verify_workflow_starters.py
+          python3 tools/verify_public_adoption_report.py --help >/dev/null
           python3 -m py_compile \
             tools/parity_compare.py \
             tools/bench_markduplicates_competitors.py \
             tools/compare_markduplicates.py \
             tools/bioconda_release_preflight.py \
             tools/audit_real_data.py \
+            tools/audit_public_adoption.py \
+            tools/verify_public_adoption_report.py \
             tools/compare_real_data.py \
+            tools/verify_publish_workflows.py \
             tools/prepare_bioconda_release.py \
             tools/bench_addorreplacereadgroups.py \
             tools/bench_alignmentmetrics.py \
             tools/bench_bedtointervallist.py \
             tools/bench_markduplicates.py \
             tools/bench_markduplicates_synthetic.py \
+            tools/build_production_manifest.py \
+            tools/build_release_manifest.py \
+            tools/verify_markduplicates_guardrails.py \
+            tools/test_verify_markduplicates_guardrails.py \
             tools/validate_production_manifest.py \
             tools/bench_buildbamindex.py \
             tools/bench_cleansam.py \
@@ -131,6 +146,7 @@ jobs:
             tools/verify_readme_links.py \
             tools/verify_real_data_ci_coverage.py \
             tools/verify_real_data_evidence.py \
+            tools/verify_release_artifacts.py \
             tools/verify_release_text_quality.py \
             tools/verify_release_versions.py \
             tools/verify_site_disclosures.py \
@@ -141,10 +157,15 @@ jobs:
             tools/test_bench_markduplicates_competitors.py \
             tools/test_bench_markduplicates_synthetic.py \
             tools/test_bioconda_release_preflight.py \
+            tools/test_audit_public_adoption.py \
+            tools/test_verify_public_adoption_report.py \
             tools/test_compare_real_data.py \
+            tools/test_verify_publish_workflows.py \
             tools/test_prepare_bioconda_release.py \
             tools/test_render_benchmark_assets.py \
             tools/test_update_real_data_manifest.py \
+            tools/test_build_production_manifest.py \
+            tools/test_build_release_manifest.py \
             tools/test_validate_production_manifest.py \
             tools/test_verify_benchmark_log_evidence.py \
             tools/test_verify_benchmark_suite_coverage.py \
@@ -159,6 +180,7 @@ jobs:
             tools/test_verify_readme_links.py \
             tools/test_verify_real_data_ci_coverage.py \
             tools/test_verify_real_data_evidence.py \
+            tools/test_verify_release_artifacts.py \
             tools/test_verify_release_text_quality.py \
             tools/test_verify_release_versions.py \
             tools/test_verify_site_disclosures.py \
@@ -182,6 +204,9 @@ jobs:
           python3 tools/verify_real_data_ci_coverage.py
           python3 tools/verify_real_data_evidence.py
           python3 tools/verify_real_data_evidence.py --release-ready
+          python3 tools/verify_release_artifacts.py --source-only
+          python3 tools/verify_markduplicates_guardrails.py
+          python3 tools/verify_publish_workflows.py
           python3 tools/verify_release_text_quality.py
           python3 tools/verify_release_versions.py
           set +e

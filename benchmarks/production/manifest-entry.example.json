@@ -14,7 +14,7 @@
   },
   "software": {
     "picard_version": "3.4.0",
-    "turbo_picard_version": "0.1.11",
+    "turbo_picard_version": "0.1.12",
     "turbo_picard_commit": "replace-with-40-character-commit",
     "container_digest": "sha256:replace-with-64-character-digest"
   },
@@ -29,6 +29,7 @@
   "commands": [
     {
       "name": "MarkDuplicates",
+      "profile": "wgs_30x",
       "arguments_sha256": "replace-with-64-character-sha256",
       "compatibility_level": "B",
       "comparator": "duplicate flags/tags plus stable metrics table",
@@ -54,6 +55,9 @@
     "status": "not_run",
     "reviewer": null,
     "host_profile": null,
-    "evidence_url": null
+    "evidence_url": null,
+    "turbo_picard_commit": null,
+    "input_sha256": null,
+    "arguments_sha256": null
   }
 }

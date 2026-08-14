@@ -15,7 +15,7 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /src
 COPY . .
-RUN cargo build --release -p turbo-picard-cli --bin turbo-picard --bin picard
+RUN cargo build --release --locked -p turbo-picard-cli --bin turbo-picard --bin picard
 
 FROM debian:bookworm-slim
 RUN apt-get update \

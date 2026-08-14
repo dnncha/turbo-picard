@@ -1,4 +1,6 @@
 import importlib.util
+import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -26,6 +28,16 @@ class MarkDuplicatesSyntheticBenchmarkTests(unittest.TestCase):
         self.assertEqual([row[3] for row in records], ["1", "1", "1", "3", "3", "3"])
         self.assertEqual(len({row[0] for row in records}), 6)
         self.assertTrue(all(row[0].startswith("INST:RUN:FLOW:1:") for row in records))
+
+    def test_help_exposes_external_plan_read_name_regex_switch(self):
+        completed = subprocess.run(
+            [sys.executable, str(MODULE_PATH), "--help"],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(completed.returncode, 0)
+        self.assertIn("--read-name-regex", completed.stdout)
 
 
 if __name__ == "__main__":

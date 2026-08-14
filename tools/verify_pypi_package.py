@@ -3,9 +3,13 @@
 
 from __future__ import annotations
 
+import argparse
+import json
 from pathlib import Path
 import re
 import sys
+import time
+import urllib.request
 
 try:
     import tomllib
@@ -14,12 +18,18 @@ except ModuleNotFoundError:  # pragma: no cover - exercised on older local Pytho
 
 
 ROOT = Path(__file__).resolve().parents[1]
+PACKAGE_NAME = "turbo-picard"
 PYPROJECT = ROOT / "pyproject.toml"
 CARGO = ROOT / "Cargo.toml"
 CLI_CARGO = ROOT / "crates" / "turbo-picard-cli" / "Cargo.toml"
 README = ROOT / "README.md"
 PACKAGING_DOCS = ROOT / "docs" / "packaging.rst"
 PUBLISH_WORKFLOW = ROOT / ".github" / "workflows" / "publish-pypi.yml"
+PYPI_JSON_URL = "https://pypi.org/pypi/turbo-picard/json"
+
+
+def normalize_text(text: str) -> str:
+    return text.replace("\r\n", "\n").replace("\r", "\n").rstrip()
 
 
 def workspace_version(root: Path = ROOT) -> str:
@@ -220,6 +230,7 @@ def validate_docs(root: Path = ROOT) -> list[str]:
         (packaging, "python3 -m twine check dist/*", "packaging docs missing twine check command"),
         (packaging, "Trusted Publishing", "packaging docs missing PyPI publishing note"),
         (packaging, ".github/workflows/publish-pypi.yml", "packaging docs missing PyPI workflow filename"),
+        (packaging, "build_release_manifest.py", "packaging docs missing release handoff manifest command"),
         (packaging, "picard", "packaging docs must mention the shim command"),
     ]
     return [message for text, needle, message in checks if needle not in text]
@@ -233,6 +244,10 @@ def validate_publish_workflow(root: Path = ROOT) -> list[str]:
     checks = [
         ("release:", "PyPI workflow must run from GitHub releases"),
         ("workflow_dispatch:", "PyPI workflow must support manual dispatch"),
+        ("Validate publishing ref", "PyPI workflow must validate the publishing ref"),
+        ("expected_ref=\"v$(python3 - <<'PY'", "PyPI workflow must derive the expected tag from the workspace version"),
+        ('test "${GITHUB_REF_TYPE}" = "tag"', "PyPI workflow must publish only from a tag"),
+        ('test "${GITHUB_REF_NAME}" = "${expected_ref}"', "PyPI workflow must publish only from the matching version tag"),
         ("Build Linux wheels", "PyPI workflow must build Linux wheels"),
         ("wheels-linux-x86_64", "PyPI workflow must upload Linux wheel artifacts"),
         ("linux-aarch64:", "PyPI workflow must build Linux ARM64 wheels"),
@@ -257,8 +272,106 @@ def validate_publish_workflow(root: Path = ROOT) -> list[str]:
         ("skip-existing: true", "PyPI workflow must skip already-uploaded files"),
         ("id-token: write", "PyPI workflow must allow Trusted Publishing OIDC"),
         ("environment: pypi", "PyPI workflow must use the pypi environment"),
+        ("validate:", "PyPI workflow must validate distributions before publishing"),
+        ("Validate distributions", "PyPI workflow must name the distribution validation job"),
+        ("python3 tools/verify_release_artifacts.py --dist dist", "PyPI workflow must validate built artifact contents"),
+        ("Build release handoff manifest", "PyPI workflow must build a release handoff manifest"),
+        ("python3 tools/build_release_manifest.py", "PyPI workflow must run the release handoff manifest builder"),
+        ("Upload release handoff manifest", "PyPI workflow must upload the release handoff manifest"),
+        ("turbo-picard-release-manifest", "PyPI workflow must name the release handoff manifest artifact"),
+        ("Smoke-test Linux x86_64 wheel", "PyPI workflow must execute an installed Linux wheel"),
+        ("python3 -m venv", "PyPI workflow must create an isolated install smoke environment"),
+        ("dist/turbo_picard-*-manylinux_2_17_x86_64*.whl", "PyPI workflow must install the Linux x86_64 wheel"),
+        ("-m pip install --no-deps", "PyPI workflow must smoke-test the built wheel without network dependencies"),
+        ("turbo-picard\" --version", "PyPI workflow must execute the installed turbo-picard entrypoint"),
+        ("turbo-picard\" doctor", "PyPI workflow must smoke-test the installed doctor command"),
+        ("turbo-picard\" trial MarkDuplicates I=input.bam O=marked.bam M=metrics.txt", "PyPI workflow must smoke-test the trial contract"),
+        ("picard\" --version", "PyPI workflow must execute the installed compatibility shim"),
+        ("bash tools/verify_install_smoke.sh", "PyPI workflow must execute a real data-path install smoke"),
+        ("needs: [linux, linux-aarch64, macos, macos-x86_64, sdist, validate]", "PyPI publishing must wait for artifact validation"),
+        ("Verify live PyPI metadata", "PyPI workflow must verify the live record after upload"),
+        ("verify_pypi_package.py --live", "PyPI workflow must compare live metadata with README"),
+        ("--retries 12 --retry-delay 5", "PyPI workflow must allow for PyPI metadata propagation"),
     ]
     return [message for needle, message in checks if needle not in text]
+
+
+def validate_live_metadata(
+    payload: object,
+    expected_version: str,
+    readme: str,
+) -> list[str]:
+    """Validate the public PyPI JSON record against the release source."""
+
+    if not isinstance(payload, dict):
+        return ["live PyPI metadata response must be a JSON object"]
+    info = payload.get("info")
+    if not isinstance(info, dict):
+        return ["live PyPI metadata response is missing its info object"]
+
+    errors: list[str] = []
+    if info.get("name") != PACKAGE_NAME:
+        errors.append(f"live PyPI package name must be {PACKAGE_NAME}")
+    version = info.get("version")
+    if version != expected_version:
+        errors.append(
+            f"live PyPI version {version or '<missing>'} must be {expected_version}"
+        )
+    content_type = str(info.get("description_content_type") or "")
+    if not content_type.startswith("text/markdown"):
+        errors.append("live PyPI long description must declare Markdown content")
+    description = info.get("description")
+    if not isinstance(description, str):
+        errors.append("live PyPI metadata has no long description")
+    elif normalize_text(description) != normalize_text(readme):
+        errors.append("live PyPI long description must match the checked-out README.md")
+    return errors
+
+
+def fetch_live_metadata(timeout: float = 15.0) -> object:
+    request = urllib.request.Request(
+        PYPI_JSON_URL,
+        headers={
+            "Accept": "application/json",
+            "User-Agent": "turbo-picard-release-verifier",
+        },
+    )
+    with urllib.request.urlopen(request, timeout=timeout) as response:
+        return json.load(response)
+
+
+def validate_live_pypi(
+    root: Path = ROOT,
+    *,
+    retries: int = 1,
+    retry_delay: float = 0.0,
+    timeout: float = 15.0,
+) -> list[str]:
+    """Fetch and validate the public PyPI record, retrying eventual consistency."""
+
+    if retries < 1:
+        return ["--retries must be at least 1"]
+    if retry_delay < 0:
+        return ["--retry-delay must not be negative"]
+    if timeout <= 0:
+        return ["--timeout must be greater than 0"]
+
+    expected_version = workspace_version(root)
+    readme = (root / "README.md").read_text(encoding="utf-8")
+    last_errors: list[str] = []
+    for attempt in range(retries):
+        try:
+            errors = validate_live_metadata(
+                fetch_live_metadata(timeout=timeout), expected_version, readme
+            )
+        except (OSError, ValueError, json.JSONDecodeError) as error:
+            errors = [f"live PyPI metadata request failed: {error}"]
+        if not errors:
+            return []
+        last_errors = errors
+        if attempt + 1 < retries:
+            time.sleep(retry_delay)
+    return last_errors
 
 
 def collect_errors(root: Path = ROOT) -> list[str]:
@@ -270,13 +383,50 @@ def collect_errors(root: Path = ROOT) -> list[str]:
     return errors
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--live",
+        action="store_true",
+        help="also fetch and validate the public PyPI JSON record",
+    )
+    parser.add_argument(
+        "--retries",
+        type=int,
+        default=1,
+        help="number of live PyPI attempts (default: 1)",
+    )
+    parser.add_argument(
+        "--retry-delay",
+        type=float,
+        default=0.0,
+        help="seconds between live PyPI attempts (default: 0)",
+    )
+    parser.add_argument(
+        "--timeout",
+        type=float,
+        default=15.0,
+        help="live PyPI request timeout in seconds (default: 15)",
+    )
+    args = parser.parse_args(argv)
+
     errors = collect_errors()
+    if args.live:
+        errors.extend(
+            validate_live_pypi(
+                retries=args.retries,
+                retry_delay=args.retry_delay,
+                timeout=args.timeout,
+            )
+        )
     if errors:
         for error in errors:
             print(error, file=sys.stderr)
         return 1
-    print("PyPI packaging metadata is ready")
+    print(
+        "PyPI packaging metadata is ready"
+        + ("; live PyPI metadata matches the checked-out README" if args.live else "")
+    )
     return 0
 
 

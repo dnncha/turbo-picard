@@ -156,6 +156,18 @@ def parse_args() -> argparse.Namespace:
         help="Commands to compare on the real BAM.",
     )
     parser.add_argument(
+        "--markduplicates-arg",
+        dest="markduplicates_args",
+        action="append",
+        default=[],
+        type=parse_markduplicates_arg,
+        metavar="KEY=VALUE",
+        help=(
+            "Additional MarkDuplicates KEY=VALUE argument, repeatable; "
+            "I/O/M are reserved by the comparator"
+        ),
+    )
+    parser.add_argument(
         "--picard-command",
         default=None,
         help="Picard command prefix. Defaults to '<mamba|micromamba> run -p <conda-prefix> picard'.",
@@ -181,11 +193,29 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Remove intermediate command outputs after writing JSON/Markdown digests.",
     )
+    parser.add_argument(
+        "--shareable-report",
+        type=Path,
+        help=(
+            "Write an issue-ready Markdown summary that omits local paths, input "
+            "hashes, command arguments, generated artifacts, and raw data."
+        ),
+    )
+    parser.add_argument(
+        "--include-public-source",
+        action="store_true",
+        help=(
+            "Include the supplied source URL and revision in --shareable-report; "
+            "use only when both are public and safe to disclose."
+        ),
+    )
     return parser.parse_args()
 
 
 def main() -> int:
     args = parse_args()
+    if args.include_public_source and args.shareable_report is None:
+        raise SystemExit("--include-public-source requires --shareable-report")
     if not args.input_bam.exists():
         raise SystemExit(f"missing input alignment: {args.input_bam}")
     if args.input_bam.suffix.lower() == ".cram":
@@ -228,6 +258,7 @@ def main() -> int:
                     args.stop_after,
                     args.reference_fasta,
                     merge_input,
+                    args.markduplicates_args,
                 )
             )
     finally:
@@ -245,6 +276,7 @@ def main() -> int:
         "picard_version": capture_version([*picard_prefix, "ViewSam", "--version"]),
         "turbo_picard_command": " ".join(turbo_prefix),
         "turbo_picard_version": capture_version([*turbo_prefix, "--version"]),
+        "markduplicates_args": args.markduplicates_args,
         "commands": [command_evidence_dict(row) for row in evidence],
         "parity": "PASS" if all(row.status == "PASS" for row in evidence) else "FAIL",
     }
@@ -266,11 +298,20 @@ def main() -> int:
             json.dumps(manifest_entry, indent=2, sort_keys=True) + "\n",
             encoding="utf-8",
         )
+    if args.shareable_report is not None:
+        args.shareable_report.parent.mkdir(parents=True, exist_ok=True)
+        write_shareable_markdown(
+            args.shareable_report,
+            summary,
+            include_public_source=args.include_public_source,
+        )
 
     print(f"wrote {json_path}")
     print(f"wrote {markdown_path}")
     if args.dataset_id:
         print(f"wrote {args.output_dir / 'manifest-entry.json'}")
+    if args.shareable_report is not None:
+        print(f"wrote {args.shareable_report}")
     for row in evidence:
         speedup = f"{row.speedup:.2f}x" if row.speedup is not None else "n/a"
         print(f"{row.command}: {row.status} parity, speedup={speedup}")
@@ -283,6 +324,17 @@ def split_command(command: str | None) -> list[str]:
     import shlex
 
     return shlex.split(command)
+
+
+def parse_markduplicates_arg(value: str) -> str:
+    key, separator, argument_value = value.partition("=")
+    if not separator or not key or not argument_value:
+        raise argparse.ArgumentTypeError("MarkDuplicates arguments must be KEY=VALUE")
+    if key.upper() in {"I", "INPUT", "O", "OUTPUT", "M", "METRICS_FILE"}:
+        raise argparse.ArgumentTypeError(
+            "MarkDuplicates I, O, and M are owned by the comparator"
+        )
+    return value
 
 
 def default_picard_prefix(conda_prefix: str) -> list[str]:
@@ -311,15 +363,17 @@ def alignment_io_args(input_alignment: Path, reference_fasta: Path | None) -> li
 def materialize_alignment_sam(
     input_alignment: Path,
     output_sam: Path,
+    command_prefix: list[str],
     reference_fasta: Path | None,
 ) -> float:
-    command = ["samtools", "view", "-h"]
-    if input_alignment.suffix.lower() == ".cram":
-        if reference_fasta is None:
-            raise SystemExit("CRAM view requires --reference-fasta")
-        command.extend(["-T", str(reference_fasta)])
-    command.extend(["-o", str(output_sam), str(input_alignment)])
-    return run(command)
+    command = [
+        *command_prefix,
+        "ViewSam",
+        *alignment_io_args(input_alignment, reference_fasta),
+        "VALIDATION_STRINGENCY=SILENT",
+        "QUIET=true",
+    ]
+    return run(command, stdout=output_sam)
 
 
 def write_comparison_sams(
@@ -327,10 +381,12 @@ def write_comparison_sams(
     picard_alignment: Path,
     turbo_sam: Path,
     picard_sam: Path,
+    turbo_prefix: list[str],
+    picard_prefix: list[str],
     reference_fasta: Path | None,
 ) -> None:
-    materialize_alignment_sam(turbo_alignment, turbo_sam, reference_fasta)
-    materialize_alignment_sam(picard_alignment, picard_sam, reference_fasta)
+    materialize_alignment_sam(turbo_alignment, turbo_sam, turbo_prefix, reference_fasta)
+    materialize_alignment_sam(picard_alignment, picard_sam, picard_prefix, reference_fasta)
 
 
 def output_container_path(workdir: Path, prefix: str, input_alignment: Path) -> Path:
@@ -350,7 +406,9 @@ def compare_command(
     stop_after: int | None,
     reference_fasta: Path | None,
     merge_input_bam: Path,
+    markduplicates_args: list[str] | None = None,
 ) -> CommandEvidence:
+    markduplicates_args = markduplicates_args or []
     workdir = work_root / command
     workdir.mkdir(parents=True)
     if command == "ViewSam":
@@ -377,7 +435,7 @@ def compare_command(
             workdir,
             turbo_prefix,
             picard_prefix,
-            ["M={metrics}"],
+            ["M={metrics}", *markduplicates_args],
             reference_fasta,
         )
     if command == "AddOrReplaceReadGroups":
@@ -811,7 +869,15 @@ def compare_add_or_replace_read_groups(
     ]
     turbo_seconds = run([*turbo_prefix, *common, f"O={turbo_bam}"])
     picard_seconds = run([*picard_prefix, *common, f"O={picard_bam}"])
-    write_comparison_sams(turbo_bam, picard_bam, turbo_sam, picard_sam, reference_fasta)
+    write_comparison_sams(
+        turbo_bam,
+        picard_bam,
+        turbo_sam,
+        picard_sam,
+        turbo_prefix,
+        picard_prefix,
+        reference_fasta,
+    )
     turbo_digest = digest_sam_records_and_read_groups(turbo_sam)
     picard_digest = digest_sam_records_and_read_groups(picard_sam)
     return evidence(
@@ -846,7 +912,15 @@ def compare_revertsam(
     ]
     turbo_seconds = run([*turbo_prefix, *common, f"O={turbo_bam}"])
     picard_seconds = run([*picard_prefix, *common, f"O={picard_bam}"])
-    write_comparison_sams(turbo_bam, picard_bam, turbo_sam, picard_sam, reference_fasta)
+    write_comparison_sams(
+        turbo_bam,
+        picard_bam,
+        turbo_sam,
+        picard_sam,
+        turbo_prefix,
+        picard_prefix,
+        reference_fasta,
+    )
     turbo_digest = digest_sam_records(turbo_sam)
     picard_digest = digest_sam_records(picard_sam)
     return evidence(
@@ -929,8 +1003,8 @@ def compare_bam_output(
     turbo_sam = workdir / "turbo.view.sam"
     picard_sam = workdir / "picard.view.sam"
 
-    turbo_extra = [value.format(metrics=turbo_metrics) for value in extra_templates]
-    picard_extra = [value.format(metrics=picard_metrics) for value in extra_templates]
+    turbo_extra = [value.replace("{metrics}", str(turbo_metrics)) for value in extra_templates]
+    picard_extra = [value.replace("{metrics}", str(picard_metrics)) for value in extra_templates]
     common = [
         command,
         *alignment_io_args(input_bam, reference_fasta),
@@ -940,7 +1014,15 @@ def compare_bam_output(
     turbo_seconds = run([*turbo_prefix, *common, f"O={turbo_bam}", *turbo_extra])
     picard_seconds = run([*picard_prefix, *common, f"O={picard_bam}", *picard_extra])
 
-    write_comparison_sams(turbo_bam, picard_bam, turbo_sam, picard_sam, reference_fasta)
+    write_comparison_sams(
+        turbo_bam,
+        picard_bam,
+        turbo_sam,
+        picard_sam,
+        turbo_prefix,
+        picard_prefix,
+        reference_fasta,
+    )
     turbo_digest = digest_sam_records(turbo_sam)
     picard_digest = digest_sam_records(picard_sam)
     comparison = "post-command SAM record digest"
@@ -1026,7 +1108,15 @@ def compare_fix_mate_information(
             f"O={picard_out}",
         ]
     )
-    write_comparison_sams(turbo_out, picard_out, turbo_sam, picard_sam, reference_fasta)
+    write_comparison_sams(
+        turbo_out,
+        picard_out,
+        turbo_sam,
+        picard_sam,
+        turbo_prefix,
+        picard_prefix,
+        reference_fasta,
+    )
     turbo_digest = digest_stable_sam(turbo_sam)
     picard_digest = digest_stable_sam(picard_sam)
     return evidence(
@@ -1062,7 +1152,15 @@ def compare_set_nm_md_and_uq_tags(
     ]
     turbo_seconds = run([*turbo_prefix, *common, f"O={turbo_out}"])
     picard_seconds = run([*picard_prefix, *common, f"O={picard_out}"])
-    write_comparison_sams(turbo_out, picard_out, turbo_sam, picard_sam, reference)
+    write_comparison_sams(
+        turbo_out,
+        picard_out,
+        turbo_sam,
+        picard_sam,
+        turbo_prefix,
+        picard_prefix,
+        reference,
+    )
     turbo_digest = digest_stable_sam(turbo_sam)
     picard_digest = digest_stable_sam(picard_sam)
     return evidence(
@@ -1123,7 +1221,15 @@ def compare_merge_sam_files(
             *tail,
         ]
     )
-    write_comparison_sams(turbo_out, picard_out, turbo_sam, picard_sam, reference_fasta)
+    write_comparison_sams(
+        turbo_out,
+        picard_out,
+        turbo_sam,
+        picard_sam,
+        turbo_prefix,
+        picard_prefix,
+        reference_fasta,
+    )
     turbo_digest = digest_coordinate_sorted_sam_multiset(turbo_sam)
     picard_digest = digest_coordinate_sorted_sam_multiset(picard_sam)
     return evidence(
@@ -1187,7 +1293,15 @@ def compare_replace_sam_header(
             *common_tail,
         ]
     )
-    write_comparison_sams(turbo_out, picard_out, turbo_sam, picard_sam, reference_fasta)
+    write_comparison_sams(
+        turbo_out,
+        picard_out,
+        turbo_sam,
+        picard_sam,
+        turbo_prefix,
+        picard_prefix,
+        reference_fasta,
+    )
     turbo_digest = digest_replace_sam_header(turbo_sam)
     picard_digest = digest_replace_sam_header(picard_sam)
     return evidence(
@@ -1263,7 +1377,15 @@ def compare_sortsam(
         common.insert(3, "CREATE_INDEX=true")
     turbo_seconds = run([*turbo_prefix, *common, f"O={turbo_bam}"])
     picard_seconds = run([*picard_prefix, *common, f"O={picard_bam}"])
-    write_comparison_sams(turbo_bam, picard_bam, turbo_sam, picard_sam, reference_fasta)
+    write_comparison_sams(
+        turbo_bam,
+        picard_bam,
+        turbo_sam,
+        picard_sam,
+        turbo_prefix,
+        picard_prefix,
+        reference_fasta,
+    )
     turbo_digest = digest_coordinate_sorted_sam_multiset(turbo_sam)
     picard_digest = digest_coordinate_sorted_sam_multiset(picard_sam)
     return evidence(
@@ -1460,7 +1582,11 @@ def capture_version(command: list[str]) -> str:
         text=True,
         check=False,
     )
-    text = " ".join(line.strip() for line in completed.stdout.splitlines() if line.strip())
+    lines = [line.strip() for line in completed.stdout.splitlines() if line.strip()]
+    for line in lines:
+        if re.fullmatch(r"Version:\s*\S+", line):
+            return line
+    text = " ".join(lines)
     if text.startswith("Version:"):
         return text
     if completed.returncode != 0:
@@ -1922,6 +2048,95 @@ def write_markdown(path: Path, summary: dict) -> None:
     lines.extend(["", "## Artifact digests", ""])
     lines.extend(artifact_digest_lines(summary["commands"]))
     lines.append("")
+    path.write_text("\n".join(lines), encoding="utf-8")
+
+
+def markdown_cell(value: object) -> str:
+    """Return a single safe Markdown table cell for tool-produced text."""
+
+    return str(value).replace("`", "'").replace("|", "\\|").replace("\n", " ").strip()
+
+
+def human_size(size_bytes: object) -> str:
+    """Render an input size without exposing its path or content hash."""
+
+    try:
+        size = int(size_bytes)
+    except (TypeError, ValueError):
+        return "unknown size"
+    if size < 1024:
+        return f"{size} bytes"
+    value = float(size)
+    for unit in ("KiB", "MiB", "GiB", "TiB"):
+        value /= 1024.0
+        if value < 1024.0 or unit == "TiB":
+            return f"{value:.1f} {unit}"
+    return "unknown size"
+
+
+def write_shareable_markdown(
+    path: Path,
+    summary: dict,
+    *,
+    include_public_source: bool = False,
+) -> None:
+    """Write a privacy-conscious summary suitable for a public trial issue.
+
+    The full comparison Markdown remains the audit artifact. This report is a
+    separate, intentionally lossy view: it keeps the evidence a workflow owner
+    needs to describe a trial while excluding local paths, hashes, command
+    arguments, generated artifact names, and raw output.
+    """
+
+    input_summary = summary.get("input", {})
+    input_format = input_summary.get("format", "alignment input")
+    lines = [
+        "# turbo-picard trial report",
+        "",
+        "> Review this summary before posting. It intentionally omits local paths, "
+        "input hashes, command arguments, generated artifacts, and raw data.",
+        "",
+        f"- Overall parity: `{markdown_cell(summary.get('parity', 'UNKNOWN'))}`",
+        f"- turbo-picard: `{markdown_cell(summary.get('turbo_picard_version', 'unknown'))}`",
+        f"- Picard: `{markdown_cell(summary.get('picard_version', 'unknown'))}`",
+        f"- Input shape: `{markdown_cell(input_format)}`, about {human_size(input_summary.get('size_bytes'))}",
+    ]
+    if include_public_source:
+        source_url = input_summary.get("source_url")
+        source_commit = input_summary.get("source_commit")
+        if source_url:
+            lines.append(f"- Public source URL: `{markdown_cell(source_url)}`")
+        if source_commit:
+            lines.append(f"- Public source revision: `{markdown_cell(source_commit)}`")
+    lines.extend(
+        [
+            "",
+            "| Command | Status | Comparison | turbo-picard | Picard | Speedup |",
+            "| --- | --- | --- | ---: | ---: | ---: |",
+        ]
+    )
+    for row in summary.get("commands", []):
+        speedup = row.get("speedup")
+        speedup_text = "n/a" if speedup is None else f"{float(speedup):.2f}x"
+        lines.append(
+            f"| {markdown_cell(row.get('command', 'unknown'))} | "
+            f"{markdown_cell(row.get('status', 'UNKNOWN'))} | "
+            f"{markdown_cell(row.get('comparison', 'not recorded'))} | "
+            f"{float(row.get('turbo_seconds', 0.0)):.3f}s | "
+            f"{float(row.get('picard_seconds', 0.0)):.3f}s | {speedup_text} |"
+        )
+    lines.extend(
+        [
+            "",
+            "A PASS means the command-specific comparison digest matched Picard "
+            "on this input. This is a command-level trial, not approval for a "
+            "whole cohort or production workflow.",
+            "",
+            "If the trial did not match, report the command, input shape, "
+            "comparison result, and next blocker without attaching private data.",
+            "",
+        ]
+    )
     path.write_text("\n".join(lines), encoding="utf-8")
 
 

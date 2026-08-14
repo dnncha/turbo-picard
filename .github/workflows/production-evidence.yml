@@ -4,7 +4,10 @@ on:
   pull_request:
     paths:
       - "benchmarks/production/**"
+      - "tools/bench_markduplicates_competitors.py"
+      - "tools/build_production_manifest.py"
       - "tools/validate_production_manifest.py"
+      - "tools/test_build_production_manifest.py"
       - "tools/test_validate_production_manifest.py"
       - "docs/production-readiness.rst"
       - "docs/compatibility-contract.rst"
@@ -12,10 +15,126 @@ on:
     branches: [main]
     paths:
       - "benchmarks/production/**"
+      - "tools/bench_markduplicates_competitors.py"
+      - "tools/build_production_manifest.py"
       - "tools/validate_production_manifest.py"
+      - "tools/test_build_production_manifest.py"
       - "tools/test_validate_production_manifest.py"
       - "docs/production-readiness.rst"
       - "docs/compatibility-contract.rst"
+
+  workflow_dispatch:
+    inputs:
+      dataset_id:
+        description: "Stable identifier for the pinned alignment dataset"
+        required: true
+        type: string
+      input_url:
+        description: "Immutable HTTPS URL for the coordinate-sorted BAM or CRAM"
+        required: true
+        type: string
+      input_format:
+        description: "Alignment format downloaded from input_url"
+        required: true
+        default: BAM
+        type: choice
+        options:
+          - BAM
+          - CRAM
+      input_sha256:
+        description: "64-character SHA-256 of the downloaded alignment"
+        required: true
+        type: string
+      reference_url:
+        description: "Immutable HTTPS URL for the CRAM reference FASTA; required for CRAM"
+        required: false
+        default: ""
+        type: string
+      reference_sha256:
+        description: "64-character SHA-256 of the CRAM reference FASTA"
+        required: false
+        default: ""
+        type: string
+      source_revision:
+        description: "Accession, release, or source commit for the input"
+        required: true
+        type: string
+      scope_caveat:
+        description: "Exact scope that this evidence does and does not represent"
+        required: true
+        default: "Pinned coordinate-sorted alignment; MarkDuplicates only; independent reproduction not yet run."
+        type: string
+      tier:
+        description: "Evidence tier; production_scale still requires independent review"
+        required: true
+        default: release_candidate
+        type: choice
+        options:
+          - release_candidate
+          - production_scale
+      tools:
+        description: "Comma-separated installed competitor presets to measure"
+        required: true
+        default: "turbo-picard,picard"
+        type: string
+      require_tools:
+        description: "Comma-separated tools that must complete and pass parity"
+        required: true
+        default: "turbo-picard,picard"
+        type: string
+      repeats:
+        description: "Measured repeats; production evidence requires at least five"
+        required: true
+        default: "5"
+        type: string
+      warmups:
+        description: "Warm-up runs before measured repeats"
+        required: true
+        default: "1"
+        type: string
+      threads:
+        description: "Thread budget for tools that support it"
+        required: true
+        default: "8"
+        type: string
+      read_name_regex:
+        description: "READ_NAME_REGEX: null for bounded no-optical, default for tool default, or an exact regex"
+        required: true
+        default: "null"
+        type: string
+      profile:
+        description: "Workflow shape recorded in the evidence manifest"
+        required: true
+        default: wgs_30x
+        type: choice
+        options:
+          - wgs_30x
+          - wes_capture
+          - rna_seq
+          - umi_panel
+          - cram_reference
+          - multi_library
+          - cohort_batch
+      tag_duplicate_set_members:
+        description: "Request paired DS/DI duplicate-set tags"
+        required: true
+        default: false
+        type: boolean
+      barcode_tag:
+        description: "Primary barcode SAM tag, for example RX; required for umi_panel unless mate tags are supplied"
+        required: false
+        default: ""
+        type: string
+      read_one_barcode_tag:
+        description: "Mate-one barcode SAM tag, for example BX"
+        required: false
+        default: ""
+        type: string
+      read_two_barcode_tag:
+        description: "Mate-two barcode SAM tag, for example BY"
+        required: false
+        default: ""
+        type: string
 
 permissions:
   contents: read
@@ -32,3 +151,236 @@ jobs:
         run: python -m unittest discover tools -p 'test_validate_production_manifest.py'
       - name: Validate example JSON syntax
         run: python -m json.tool benchmarks/production/manifest-entry.example.json >/dev/null
+
+  measure:
+    name: Measure pinned production evidence
+    if: github.event_name == 'workflow_dispatch'
+    needs: validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    env:
+      DATASET_ID: ${{ inputs.dataset_id }}
+      INPUT_URL: ${{ inputs.input_url }}
+      INPUT_FORMAT: ${{ inputs.input_format }}
+      INPUT_SHA256: ${{ inputs.input_sha256 }}
+      REFERENCE_URL: ${{ inputs.reference_url }}
+      REFERENCE_SHA256: ${{ inputs.reference_sha256 }}
+      SOURCE_REVISION: ${{ inputs.source_revision }}
+      SCOPE_CAVEAT: ${{ inputs.scope_caveat }}
+      TIER: ${{ inputs.tier }}
+      TOOLS: ${{ inputs.tools }}
+      REQUIRE_TOOLS: ${{ inputs.require_tools }}
+      REPEATS: ${{ inputs.repeats }}
+      WARMUPS: ${{ inputs.warmups }}
+      THREADS: ${{ inputs.threads }}
+      READ_NAME_REGEX: ${{ inputs.read_name_regex }}
+      PROFILE: ${{ inputs.profile }}
+      TAG_DUPLICATE_SET_MEMBERS: ${{ inputs.tag_duplicate_set_members }}
+      BARCODE_TAG: ${{ inputs.barcode_tag }}
+      READ_ONE_BARCODE_TAG: ${{ inputs.read_one_barcode_tag }}
+      READ_TWO_BARCODE_TAG: ${{ inputs.read_two_barcode_tag }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Install native build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends clang libclang-dev make pkg-config
+
+      - name: Create pinned comparator environment
+        uses: mamba-org/setup-micromamba@v3
+        with:
+          environment-name: turbo-picard-production-evidence
+          init-shell: bash
+          cache-environment: true
+          channels: conda-forge,bioconda
+          create-args: >-
+            python=3.11
+            picard=3.4.0
+            pysam
+            samtools
+
+      - name: Validate dispatch inputs
+        shell: bash -el {0}
+        run: |
+          python3 - <<'PY'
+          import os
+          import re
+
+          sha256 = os.environ["INPUT_SHA256"]
+          if not re.fullmatch(r"[0-9a-fA-F]{64}", sha256):
+              raise SystemExit("INPUT_SHA256 must be a 64-character hexadecimal SHA-256")
+          input_format = os.environ["INPUT_FORMAT"].upper()
+          if input_format not in {"BAM", "CRAM"}:
+              raise SystemExit("INPUT_FORMAT must be BAM or CRAM")
+          if not os.environ["INPUT_URL"].startswith("https://"):
+              raise SystemExit("INPUT_URL must use https://")
+          reference_url = os.environ["REFERENCE_URL"].strip()
+          reference_sha256 = os.environ["REFERENCE_SHA256"].strip()
+          if input_format == "CRAM":
+              if not reference_url.startswith("https://"):
+                  raise SystemExit("CRAM evidence requires an HTTPS REFERENCE_URL")
+              if not re.fullmatch(r"[0-9a-fA-F]{64}", reference_sha256):
+                  raise SystemExit("CRAM evidence requires a 64-character REFERENCE_SHA256")
+          elif reference_url or reference_sha256:
+              raise SystemExit("reference URL and hash are only valid for CRAM input")
+          if not re.fullmatch(r"[A-Za-z0-9_.-]+", os.environ["DATASET_ID"]):
+              raise SystemExit("DATASET_ID may contain only letters, digits, '.', '_' and '-'")
+          if not os.environ["SOURCE_REVISION"].strip():
+              raise SystemExit("SOURCE_REVISION must be non-empty")
+          if not re.fullmatch(r"[a-z0-9_.-]+(?:,[a-z0-9_.-]+)*", os.environ["TOOLS"]):
+              raise SystemExit("TOOLS contains an invalid preset list")
+          if not re.fullmatch(r"[a-z0-9_.-]+(?:,[a-z0-9_.-]+)*", os.environ["REQUIRE_TOOLS"]):
+              raise SystemExit("REQUIRE_TOOLS contains an invalid preset list")
+          if not os.environ["READ_NAME_REGEX"].strip():
+              raise SystemExit("READ_NAME_REGEX must be non-empty; use null or default explicitly")
+          allowed_profiles = {
+              "wgs_30x", "wes_capture", "rna_seq", "umi_panel",
+              "cram_reference", "multi_library", "cohort_batch",
+          }
+          profile = os.environ["PROFILE"]
+          if profile not in allowed_profiles:
+              raise SystemExit("PROFILE is not a supported production evidence profile")
+          tag_values = {
+              "BARCODE_TAG": os.environ["BARCODE_TAG"].strip(),
+              "READ_ONE_BARCODE_TAG": os.environ["READ_ONE_BARCODE_TAG"].strip(),
+              "READ_TWO_BARCODE_TAG": os.environ["READ_TWO_BARCODE_TAG"].strip(),
+          }
+          for name, value in tag_values.items():
+              if value and not re.fullmatch(r"[A-Za-z0-9]{2}", value):
+                  raise SystemExit(f"{name} must be a two-character SAM tag")
+          if profile == "umi_panel" and not any(tag_values.values()):
+              raise SystemExit("umi_panel requires BARCODE_TAG or mate-specific barcode tags")
+          if profile == "cram_reference" and input_format != "CRAM":
+              raise SystemExit("cram_reference requires CRAM input")
+          if os.environ["TAG_DUPLICATE_SET_MEMBERS"] not in {"true", "false"}:
+              raise SystemExit("TAG_DUPLICATE_SET_MEMBERS must be true or false")
+          repeats = int(os.environ["REPEATS"])
+          warmups = int(os.environ["WARMUPS"])
+          threads = int(os.environ["THREADS"])
+          if repeats < 5 or warmups < 0 or threads < 1:
+              raise SystemExit("REPEATS must be at least 5; WARMUPS non-negative; THREADS positive")
+          if not os.environ["SCOPE_CAVEAT"].strip():
+              raise SystemExit("SCOPE_CAVEAT must be non-empty")
+          PY
+
+      - name: Download and hash input
+        id: input
+        shell: bash -el {0}
+        run: |
+          set -euo pipefail
+          evidence_root="$RUNNER_TEMP/turbo-picard-production-evidence"
+          mkdir -p "$evidence_root/evidence"
+          input_path="$evidence_root/input.${INPUT_FORMAT,,}"
+          curl --fail --location --retry 3 --retry-all-errors --silent --show-error \
+            --output "$input_path" "$INPUT_URL"
+          printf '%s  %s\n' "$INPUT_SHA256" "$input_path" | sha256sum --check --strict
+          reference_path=""
+          if [[ "$INPUT_FORMAT" == "CRAM" ]]; then
+            reference_path="$evidence_root/reference.fasta"
+            curl --fail --location --retry 3 --retry-all-errors --silent --show-error \
+              --output "$reference_path" "$REFERENCE_URL"
+            printf '%s  %s\n' "$REFERENCE_SHA256" "$reference_path" | sha256sum --check --strict
+          fi
+          echo "input_path=$input_path" >> "$GITHUB_OUTPUT"
+          echo "reference_path=$reference_path" >> "$GITHUB_OUTPUT"
+          echo "evidence_dir=$evidence_root/evidence" >> "$GITHUB_OUTPUT"
+
+      - name: Build Turbo-Picard
+        shell: bash -el {0}
+        run: cargo build --release --locked -p turbo-picard-cli --bin picard
+
+      - name: Count input records
+        id: count
+        shell: bash -el {0}
+        run: |
+          if [[ "$INPUT_FORMAT" == "CRAM" ]]; then
+            read_count=$(samtools view --reference '${{ steps.input.outputs.reference_path }}' -c '${{ steps.input.outputs.input_path }}')
+          else
+            read_count=$(samtools view -c '${{ steps.input.outputs.input_path }}')
+          fi
+          echo "read_count=$read_count" >> "$GITHUB_OUTPUT"
+
+      - name: Run auditable competitor benchmark
+        id: benchmark
+        continue-on-error: true
+        shell: bash -el {0}
+        run: |
+          reference_args=()
+          if [[ "$INPUT_FORMAT" == "CRAM" ]]; then
+            reference_args=(--reference-fasta '${{ steps.input.outputs.reference_path }}')
+          fi
+          profile_args=(--profile "$PROFILE")
+          option_args=()
+          if [[ "$TAG_DUPLICATE_SET_MEMBERS" == "true" ]]; then
+            option_args+=(--tag-duplicate-set-members)
+          fi
+          if [[ -n "$BARCODE_TAG" ]]; then
+            option_args+=(--barcode-tag "$BARCODE_TAG")
+          fi
+          if [[ -n "$READ_ONE_BARCODE_TAG" ]]; then
+            option_args+=(--read-one-barcode-tag "$READ_ONE_BARCODE_TAG")
+          fi
+          if [[ -n "$READ_TWO_BARCODE_TAG" ]]; then
+            option_args+=(--read-two-barcode-tag "$READ_TWO_BARCODE_TAG")
+          fi
+          python3 tools/bench_markduplicates_competitors.py \
+            --input '${{ steps.input.outputs.input_path }}' \
+            "${reference_args[@]}" \
+            "${profile_args[@]}" \
+            "${option_args[@]}" \
+            --output-dir '${{ steps.input.outputs.evidence_dir }}' \
+            --tools "$TOOLS" \
+            --reference-tool picard \
+            --require-tools "$REQUIRE_TOOLS" \
+            --threads "$THREADS" \
+            --warmups "$WARMUPS" \
+            --repeats "$REPEATS" \
+            --read-name-regex "$READ_NAME_REGEX" \
+            --source-url "$INPUT_URL" \
+            --source-revision "$SOURCE_REVISION"
+
+      - name: Build and validate evidence manifest
+        id: manifest
+        if: always()
+        continue-on-error: true
+        shell: bash -el {0}
+        run: |
+          set -euo pipefail
+          report='${{ steps.input.outputs.evidence_dir }}/report.json'
+          if [[ ! -f "$report" ]]; then
+            echo "benchmark report was not produced" >&2
+            exit 1
+          fi
+          reference_args=()
+          if [[ "$INPUT_FORMAT" == "CRAM" ]]; then
+            reference_args=(--reference-fasta-sha256 "$REFERENCE_SHA256")
+          fi
+          python3 tools/build_production_manifest.py \
+            --report "$report" \
+            --output '${{ steps.input.outputs.evidence_dir }}/manifest-entry.json' \
+            --dataset-id "$DATASET_ID" \
+            --scope-caveat "$SCOPE_CAVEAT" \
+            --turbo-picard-commit "$GITHUB_SHA" \
+            --read-count '${{ steps.count.outputs.read_count }}' \
+            --tier "$TIER" \
+            "${reference_args[@]}"
+          python3 tools/validate_production_manifest.py \
+            '${{ steps.input.outputs.evidence_dir }}/manifest-entry.json'
+
+      - name: Upload evidence bundle
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: turbo-picard-production-evidence-${{ inputs.dataset_id }}-${{ github.run_id }}
+          path: ${{ steps.input.outputs.evidence_dir }}
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Enforce benchmark and manifest gates
+        if: always()
+        run: |
+          test "${{ steps.benchmark.outcome }}" = success
+          test "${{ steps.manifest.outcome }}" = success

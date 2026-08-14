@@ -57,6 +57,13 @@ def parse_args() -> argparse.Namespace:
         ],
     )
     parser.add_argument(
+        "--markduplicates-arg",
+        action="append",
+        default=[],
+        metavar="KEY=VALUE",
+        help="Additional MarkDuplicates KEY=VALUE argument, repeatable",
+    )
+    parser.add_argument(
         "--picard-command",
         default="picard",
         help="Picard entrypoint, for example: mamba run -p /opt/conda/envs/picard picard",
@@ -102,6 +109,8 @@ def main() -> int:
         "--commands",
         *args.commands,
     ]
+    for argument in args.markduplicates_arg:
+        compare_args.extend(["--markduplicates-arg", argument])
     if args.skip_build:
         compare_args.append("--skip-build")
     if args.reference_fasta is not None:

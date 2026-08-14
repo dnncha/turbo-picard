@@ -5,6 +5,13 @@ whether a command or option is in scope:
 
 <https://github.com/dnncha/turbo-picard/issues>
 
+For a structured one-command evaluation, use the [trial report issue
+form](https://github.com/dnncha/turbo-picard/issues/new?template=trial-report.yml).
+It accepts successful trials, mismatches, packaging problems, and adoption
+blockers. Please redact private data before submitting.
+If GitHub does not offer new-issue creation, add the same redacted report as a
+comment on the [public trial report thread](https://github.com/dnncha/turbo-picard/issues/4).
+
 When asking for help with a pipeline, include the exact command line, the
 `turbo-picard` version, whether fallback is configured, and the upstream Picard
 version you are comparing against.

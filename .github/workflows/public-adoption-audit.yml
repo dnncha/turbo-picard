@@ -1,0 +1,41 @@
+name: Public adoption audit
+
+on:
+  schedule:
+    - cron: "17 08 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    name: Capture public distribution and interest signals
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+
+      - name: Run read-only public adoption audit
+        run: |
+          python3 tools/audit_public_adoption.py \
+            --pretty \
+            --output "$RUNNER_TEMP/turbo-picard-public-adoption.json"
+
+      - name: Validate captured report
+        run: |
+          python3 tools/verify_public_adoption_report.py \
+            "$RUNNER_TEMP/turbo-picard-public-adoption.json"
+
+      - name: Upload audit report
+        uses: actions/upload-artifact@v4
+        with:
+          name: turbo-picard-public-adoption-${{ github.run_id }}
+          path: ${{ runner.temp }}/turbo-picard-public-adoption.json
+          if-no-files-found: error
+          retention-days: 90

@@ -343,6 +343,20 @@ def collect_errors(root: Path = ROOT) -> list[str]:
     for doc in VERSIONED_DOC_PATHS:
         text = read(doc, root)
         prose = prose_text(text)
+        for container_match in re.finditer(
+            r"ghcr\.io/dnncha/turbo-picard:(\d+\.\d+\.\d+)", text
+        ):
+            container_version = container_match.group(1)
+            if container_version != version:
+                context = prose_text(
+                    text[max(0, container_match.start() - 500) : container_match.end() + 500]
+                ).lower()
+                if "published" in context:
+                    continue
+                errors.append(
+                    f"{doc} container image version {container_version} "
+                    f"must match workspace {version} unless explicitly marked published"
+                )
         if doc in {Path("README.md"), Path("docs/citation.rst")}:
             if "CITATION.cff" not in text:
                 errors.append(f"{doc} must mention CITATION.cff")

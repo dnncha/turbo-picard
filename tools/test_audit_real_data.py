@@ -20,6 +20,7 @@ class AuditRealDataTests(unittest.TestCase):
         )
         self.assertEqual(completed.returncode, 0)
         self.assertIn("production audit", completed.stdout.lower())
+        self.assertIn("markduplicates-arg", completed.stdout)
 
     def test_missing_compare_input_fails(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:

@@ -8913,10 +8913,10 @@ fn count_gc_bias_windows(reference_path: &str, window_size: usize) -> Result<[u6
         let sequence = load_fasta_contig_sequence(reference_path, &name)?;
         let window_end = sequence.len().saturating_sub(window_size);
         for start in 1..window_end {
-            if let Some(window) = sequence.get(start..start + window_size) {
-                if let Some(gc) = gc_percent(window, window_size) {
-                    windows[gc] += 1;
-                }
+            if let Some(window) = sequence.get(start..start + window_size)
+                && let Some(gc) = gc_percent(window, window_size)
+            {
+                windows[gc] += 1;
             }
         }
     }
@@ -11345,8 +11345,10 @@ impl AlignmentSummary {
 
         let is_aligned = !record.is_unmapped();
         if is_aligned {
-            let mismatch_bases =
-                mismatch_bases.unwrap_or_else(|| record_mismatch_bases(record, cigar));
+            // Picard only collects mismatch-rate metrics when a reference
+            // sequence is supplied. NM/MD tags alone must not make a
+            // no-reference run report rates that Picard leaves at zero.
+            let mismatch_bases = mismatch_bases.unwrap_or_default();
             self.pf_reads_aligned += 1;
             self.pf_aligned_bases += aligned_length;
             self.pf_read_aligned_bases += aligned_read_length;
@@ -11417,13 +11419,10 @@ impl AlignmentSummary {
             self.pf_reads_aligned += 1;
             self.pf_aligned_bases += aligned_length;
             self.pf_read_aligned_bases += cigar.read_aligned_length;
-            self.mismatch_bases += cigar.mismatch_bases;
             if mapq >= 20 {
                 self.pf_hq_aligned_reads += 1;
                 self.pf_hq_aligned_bases += aligned_length;
                 self.pf_hq_aligned_q20_bases += cigar.q20_match_bases;
-                self.hq_mismatch_bases += cigar.mismatch_bases;
-                observe_histogram_value(&mut self.hq_mismatches_by_read, cigar.mismatch_bases);
             }
             if flags & 0x10 != 0 {
                 self.reverse_aligned_reads += 1;
@@ -11627,10 +11626,7 @@ impl AlignmentSummary {
 struct CigarSummary {
     aligned_length: u64,
     read_aligned_length: u64,
-    insertion_bases: u64,
-    deletion_bases: u64,
     indel_events: u64,
-    mismatch_bases: u64,
     soft_clip_bases: u64,
     hard_clip_bases: u64,
     three_prime_soft_clip_bases: u64,
@@ -11654,12 +11650,10 @@ fn alignment_cigar_summary<'a>(
             }
             Cigar::Ins(len) => {
                 summary.read_aligned_length += u64::from(*len);
-                summary.insertion_bases += u64::from(*len);
                 summary.indel_events += 1;
                 last_soft_clip = 0;
             }
-            Cigar::Del(len) => {
-                summary.deletion_bases += u64::from(*len);
+            Cigar::Del(_) => {
                 summary.indel_events += 1;
                 last_soft_clip = 0;
             }
@@ -11776,13 +11770,6 @@ fn alignment_reference_mismatch_bases_locked(
         .lock()
         .map_err(|_| "CollectAlignmentSummaryMetrics reference cache lock poisoned".to_string())?;
     alignment_reference_mismatch_bases(record, target_names, Some(&mut reference_cache))
-}
-
-fn record_mismatch_bases(record: &bam::Record, cigar: CigarSummary) -> u64 {
-    let Some(nm) = record.aux(b"NM").ok().and_then(aux_i32) else {
-        return 0;
-    };
-    mismatch_bases_from_nm(nm, cigar)
 }
 
 fn record_reference_mismatch_bases(record: &bam::Record, reference: &[u8]) -> Result<u64, String> {
@@ -12143,21 +12130,14 @@ fn observe_alignment_sam_line(
     cigar_summary.q20_match_bases = q20_match_bases_from_sam(cigar, qualities)?;
     let mut read_group = None;
     let mut has_sa = false;
-    let mut nm = None::<i32>;
     for tag in fields {
         if !has_sa && tag.starts_with(b"SA:") {
             has_sa = true;
-        }
-        if nm.is_none()
-            && let Some(value) = tag.strip_prefix(b"NM:i:")
-        {
-            nm = Some(parse_i32_bytes(value)?);
         }
         if read_group.is_none() {
             read_group = insert_size_read_group_for_sam_tags(std::iter::once(tag), read_groups);
         }
     }
-    cigar_summary.mismatch_bases = sam_mismatch_bases(nm, cigar_summary);
     let chimeric = is_chimeric_sam_record(
         flags,
         reference_name,
@@ -12191,19 +12171,6 @@ fn observe_histogram_value(histogram: &mut Vec<u64>, value: u64) {
     };
     ensure_histogram_len(histogram, index);
     histogram[index] += 1;
-}
-
-fn sam_mismatch_bases(nm: Option<i32>, cigar: CigarSummary) -> u64 {
-    let Some(nm) = nm else {
-        return 0;
-    };
-    mismatch_bases_from_nm(nm, cigar)
-}
-
-fn mismatch_bases_from_nm(nm: i32, cigar: CigarSummary) -> u64 {
-    let indel_bases = cigar.insertion_bases.saturating_add(cigar.deletion_bases);
-    let indel_bases = i32::try_from(indel_bases).unwrap_or(i32::MAX);
-    nm.max(0).saturating_sub(indel_bases) as u64
 }
 
 fn ratio(numerator: u64, denominator: u64) -> f64 {
@@ -12686,10 +12653,6 @@ fn parse_i64_bytes(value: &[u8]) -> Result<i64, String> {
     }
 }
 
-fn parse_i32_bytes(value: &[u8]) -> Result<i32, String> {
-    i32::try_from(parse_i64_bytes(value)?).map_err(|_| "malformed integer".to_string())
-}
-
 fn parse_u8_bytes(value: &[u8]) -> Result<u8, String> {
     let parsed = parse_u16_bytes(value)?;
     u8::try_from(parsed).map_err(|_| "malformed integer".to_string())
@@ -12742,10 +12705,6 @@ fn cigar_summary_from_sam(cigar: &[u8], is_reverse: bool) -> Result<CigarSummary
                     .read_aligned_length
                     .checked_add(len)
                     .ok_or_else(|| "malformed CollectAlignmentSummaryMetrics CIGAR".to_string())?;
-                summary.insertion_bases = summary
-                    .insertion_bases
-                    .checked_add(len)
-                    .ok_or_else(|| "malformed CollectAlignmentSummaryMetrics CIGAR".to_string())?;
                 summary.indel_events = summary
                     .indel_events
                     .checked_add(1)
@@ -12753,10 +12712,6 @@ fn cigar_summary_from_sam(cigar: &[u8], is_reverse: bool) -> Result<CigarSummary
                 last_soft_clip = 0;
             }
             b'D' => {
-                summary.deletion_bases = summary
-                    .deletion_bases
-                    .checked_add(len)
-                    .ok_or_else(|| "malformed CollectAlignmentSummaryMetrics CIGAR".to_string())?;
                 summary.indel_events = summary
                     .indel_events
                     .checked_add(1)
@@ -13385,12 +13340,12 @@ impl WgsMetricsSummary {
     /// start. Coordinate sorting guarantees that discarded loci can never be
     /// observed again.
     fn advance_depth_window(&mut self, alignment_start: usize) -> Result<(), String> {
-        if let Some(previous) = self.last_alignment_start {
-            if alignment_start < previous {
-                return Err(format!(
-                    "CollectWgsMetrics alignment is not coordinate-sorted: position {alignment_start} follows {previous}"
-                ));
-            }
+        if let Some(previous) = self.last_alignment_start
+            && alignment_start < previous
+        {
+            return Err(format!(
+                "CollectWgsMetrics alignment is not coordinate-sorted: position {alignment_start} follows {previous}"
+            ));
         }
         self.last_alignment_start = Some(alignment_start);
         if alignment_start <= self.active_depth_base {
@@ -20697,7 +20652,7 @@ mod tests {
     }
 
     #[test]
-    fn alignment_reference_mismatches_fill_missing_nm() {
+    fn alignment_reference_mismatches_do_not_require_nm() {
         let mut record = bam::Record::new();
         record.set(
             b"missing-nm",
@@ -20709,12 +20664,39 @@ mod tests {
         record.set_pos(2);
         record.set_flags(0);
 
-        let cigar = alignment_cigar_summary(record.cigar().iter(), record.is_reverse());
-        assert_eq!(record_mismatch_bases(&record, cigar), 0);
         assert_eq!(
             record_reference_mismatch_bases(&record, b"TTACCTA").expect("reference matches"),
             1
         );
+    }
+
+    #[test]
+    fn alignment_summary_without_reference_ignores_nm_tag() {
+        let mut record = bam::Record::new();
+        record.set(
+            b"nm-without-reference",
+            Some(&CigarString(vec![Cigar::Match(4)])),
+            b"ACGT",
+            b"FFFF",
+        );
+        record.set_tid(0);
+        record.set_pos(0);
+        record.set_mapq(60);
+        record
+            .push_aux(b"NM", Aux::I32(1))
+            .expect("NM tag is added");
+
+        let mut summary = AlignmentSummary::default();
+        summary.observe(&record, None);
+        let fields = summary
+            .to_picard_row("UNPAIRED", None, None, None, None)
+            .trim_end()
+            .split('\t')
+            .map(str::to_owned)
+            .collect::<Vec<_>>();
+
+        assert_eq!(fields[12], "0");
+        assert_eq!(fields[13], "0");
     }
 
     #[test]

@@ -168,6 +168,42 @@ fn accepts_common_duplicate_tagging_options() {
 }
 
 #[test]
+fn accepts_custom_read_name_regex_with_three_capture_groups() {
+    let args = vec![
+        "I=in.bam".to_string(),
+        "O=out.bam".to_string(),
+        "M=metrics.txt".to_string(),
+        "READ_NAME_REGEX=^INST:[^:]+:[^:]+:[^:]+:([0-9]+):([0-9]+):([0-9]+)$".to_string(),
+    ];
+    let parsed = normalize_picard_args(&args).expect("arguments parse");
+
+    let config = MarkDuplicatesConfig::try_from_args(&parsed).expect("config validates");
+
+    assert_eq!(
+        config.read_name_regex.as_deref(),
+        Some("^INST:[^:]+:[^:]+:[^:]+:([0-9]+):([0-9]+):([0-9]+)$")
+    );
+}
+
+#[test]
+fn rejects_read_name_regex_without_three_capture_groups() {
+    let args = vec![
+        "I=in.bam".to_string(),
+        "O=out.bam".to_string(),
+        "M=metrics.txt".to_string(),
+        "READ_NAME_REGEX=^INST:[^:]+$".to_string(),
+    ];
+    let parsed = normalize_picard_args(&args).expect("arguments parse");
+
+    let err = MarkDuplicatesConfig::try_from_args(&parsed).unwrap_err();
+
+    assert_eq!(
+        err,
+        MarkDuplicatesConfigError::UnsupportedOption("READ_NAME_REGEX=^INST:[^:]+$".to_string())
+    );
+}
+
+#[test]
 fn accepts_common_workflow_passthrough_options_when_semantically_default() {
     let args = vec![
         "I=in.bam".to_string(),
@@ -198,6 +234,7 @@ fn accepts_common_workflow_passthrough_options_when_semantically_default() {
 
     assert_eq!(config.assume_sort_order.as_deref(), Some("coordinate"));
     assert_eq!(config.compression_level, Some(1));
+    assert_eq!(config.tmp_dir.as_deref(), Some("/scratch"));
 }
 
 #[test]

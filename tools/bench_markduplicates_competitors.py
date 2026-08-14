@@ -30,7 +30,17 @@ from typing import Iterator
 ROOT = Path(__file__).resolve().parents[1]
 GNU_TIME = Path("/usr/bin/time")
 TIME_PREFIX = "TPBENCH"
-PLACEHOLDERS = {"input", "output", "metrics", "tmp", "threads"}
+PLACEHOLDERS = {"input", "output", "metrics", "tmp", "threads", "reference"}
+PROFILE_CHOICES = (
+    "wgs_30x",
+    "wes_capture",
+    "rna_seq",
+    "umi_panel",
+    "cram_reference",
+    "multi_library",
+    "cohort_batch",
+)
+SAM_TAG_PATTERN = re.compile(r"^[A-Za-z0-9]{2}$")
 
 
 @dataclass(frozen=True)
@@ -117,7 +127,14 @@ def executable_path(name: str, local_candidates: tuple[Path, ...] = ()) -> str |
     return shutil.which(name)
 
 
-def preset_tools() -> dict[str, ToolSpec | None]:
+def preset_tools(
+    read_name_regex: str | None = "null",
+    reference_fasta: Path | None = None,
+    tag_duplicate_set_members: bool = False,
+    barcode_tag: str | None = None,
+    read_one_barcode_tag: str | None = None,
+    read_two_barcode_tag: str | None = None,
+) -> dict[str, ToolSpec | None]:
     turbo = executable_path(
         "turbo-picard",
         (ROOT / "target/release/turbo-picard", ROOT / "target/release/picard"),
@@ -130,27 +147,41 @@ def preset_tools() -> dict[str, ToolSpec | None]:
         "ASSUME_SORTED=true",
         "VALIDATION_STRINGENCY=SILENT",
         "QUIET=true",
-        "READ_NAME_REGEX=null",
         "ADD_PG_TAG_TO_READS=false",
         "CLEAR_DT=false",
     )
+    if read_name_regex is not None:
+        common = (f"READ_NAME_REGEX={read_name_regex}", *common)
+    requested_options: list[str] = []
+    if tag_duplicate_set_members:
+        requested_options.append("TAG_DUPLICATE_SET_MEMBERS=true")
+    for key, value in (
+        ("BARCODE_TAG", barcode_tag),
+        ("READ_ONE_BARCODE_TAG", read_one_barcode_tag),
+        ("READ_TWO_BARCODE_TAG", read_two_barcode_tag),
+    ):
+        if value is not None:
+            requested_options.append(f"{key}={value}")
+    common = (*requested_options, *common)
+    reference = ("REFERENCE_SEQUENCE={reference}",) if reference_fasta is not None else ()
+    samtools_reference = ("--reference", "{reference}") if reference_fasta is not None else ()
     return {
         "turbo-picard": ToolSpec(
             "turbo-picard",
-            (turbo, "MarkDuplicates", "I={input}", "O={output}", "M={metrics}", "TMP_DIR={tmp}", *common),
+            (turbo, "MarkDuplicates", "I={input}", "O={output}", "M={metrics}", "TMP_DIR={tmp}", *reference, *common),
             (turbo, "--version"),
             "picard",
             (("TURBO_PICARD_THREADS", "{threads}"),),
         ) if turbo else None,
         "picard": ToolSpec(
             "picard",
-            (picard, "MarkDuplicates", "I={input}", "O={output}", "M={metrics}", "TMP_DIR={tmp}", *common),
-            (picard, "--version"),
+            (picard, "MarkDuplicates", "I={input}", "O={output}", "M={metrics}", "TMP_DIR={tmp}", *reference, *common),
+            (picard, "MarkDuplicates", "--version"),
             "picard",
         ) if picard else None,
         "samtools": ToolSpec(
             "samtools",
-            (samtools, "markdup", "-@", "{threads}", "--no-PG", "-f", "{metrics}", "{input}", "{output}"),
+            (samtools, "markdup", "-@", "{threads}", "--no-PG", *samtools_reference, "-f", "{metrics}", "{input}", "{output}"),
             (samtools, "--version"),
             "samtools",
         ) if samtools else None,
@@ -195,15 +226,60 @@ def parse_custom_tool(value: str) -> ToolSpec:
     return ToolSpec(name, command, (command[0], "--version"), "unknown")
 
 
-def expand_command(spec: ToolSpec, *, input_path: Path, output: Path, metrics: Path, tmp: Path, threads: int) -> list[str]:
+def sam_tag_argument(value: str) -> str:
+    if not SAM_TAG_PATTERN.fullmatch(value):
+        raise argparse.ArgumentTypeError(
+            "SAM tags must be exactly two ASCII letters or digits"
+        )
+    return value
+
+
+def validate_profile(
+    profile: str | None,
+    input_format: str,
+    reference_fasta: Path | None,
+    barcode_tags: tuple[str | None, str | None, str | None],
+) -> None:
+    if profile == "cram_reference" and input_format != "CRAM":
+        raise SystemExit("--profile cram_reference requires a .cram input")
+    if profile == "umi_panel" and not any(barcode_tags):
+        raise SystemExit(
+            "--profile umi_panel requires --barcode-tag or a mate-specific barcode tag"
+        )
+    if input_format == "CRAM" and reference_fasta is None:
+        raise SystemExit("CRAM input requires --reference-fasta")
+
+
+def expand_command(
+    spec: ToolSpec,
+    *,
+    input_path: Path,
+    output: Path,
+    metrics: Path,
+    tmp: Path,
+    threads: int,
+    reference_fasta: Path | None = None,
+) -> list[str]:
     values = {
         "input": str(input_path.resolve()),
         "output": str(output.resolve()),
         "metrics": str(metrics.resolve()),
         "tmp": str(tmp.resolve()),
         "threads": str(threads),
+        "reference": str(reference_fasta.resolve()) if reference_fasta is not None else "",
     }
-    return [token.format(**values) for token in spec.command]
+    # Replace only supported placeholders. Picard optical-name regexes often
+    # contain quantifier braces such as ``\\d{4}``, which ``str.format`` would
+    # incorrectly interpret as template syntax.
+    return [
+        token.replace("{input}", values["input"])
+        .replace("{output}", values["output"])
+        .replace("{metrics}", values["metrics"])
+        .replace("{tmp}", values["tmp"])
+        .replace("{threads}", values["threads"])
+        .replace("{reference}", values["reference"])
+        for token in spec.command
+    ]
 
 
 def capture_version(spec: ToolSpec) -> dict[str, object]:
@@ -325,7 +401,17 @@ def run_metered(command, stdout_handle, stderr_handle, resource_log, timeout, en
     return process.returncode, resources, None, "posix-wait4"
 
 
-def run_once(spec: ToolSpec, input_path: Path, root: Path, repeat: int, warmup: bool, threads: int, sample_seconds: float, timeout: float | None) -> RunResult:
+def run_once(
+    spec: ToolSpec,
+    input_path: Path,
+    root: Path,
+    repeat: int,
+    warmup: bool,
+    threads: int,
+    sample_seconds: float,
+    timeout: float | None,
+    reference_fasta: Path | None = None,
+) -> RunResult:
     root.mkdir(parents=True, exist_ok=True)
     tmp = root / "tmp"
     tmp.mkdir()
@@ -334,7 +420,15 @@ def run_once(spec: ToolSpec, input_path: Path, root: Path, repeat: int, warmup: 
     stdout = root / "stdout.log"
     stderr = root / "stderr.log"
     resource_log = root / "resources.tsv"
-    command = expand_command(spec, input_path=input_path, output=output, metrics=metrics, tmp=tmp, threads=threads)
+    command = expand_command(
+        spec,
+        input_path=input_path,
+        output=output,
+        metrics=metrics,
+        tmp=tmp,
+        threads=threads,
+        reference_fasta=reference_fasta,
+    )
     run_environment = {
         key: value.format(threads=threads)
         for key, value in spec.environment
@@ -405,21 +499,79 @@ def summarize_runs(runs: list[RunResult]) -> dict[str, object]:
     return summary
 
 
-def sam_fields(path: Path) -> Iterator[tuple[object, ...]]:
+def parse_sam_fields(line: str) -> tuple[object, ...] | None:
+    if line.startswith("@") or not line.strip():
+        return None
+    fields = line.rstrip("\n").split("\t")
+    if len(fields) < 11:
+        raise ValueError(f"malformed SAM record: {line.rstrip()}")
+    tags = {tag[:2]: tag[5:] for tag in fields[11:] if len(tag) >= 5 and tag[2] == ":"}
+    return (
+        fields[0],
+        int(fields[1]) & 0x400 != 0,
+        fields[2],
+        int(fields[3]),
+        fields[5],
+        fields[6],
+        int(fields[7]),
+        int(fields[8]),
+        tags.get("DT"),
+        tags.get("DS"),
+        tags.get("DI"),
+        tags.get("RX"),
+        tags.get("BX"),
+        tags.get("BY"),
+    )
+
+
+def sam_fields(
+    path: Path,
+    reference_fasta: Path | None = None,
+) -> Iterator[tuple[object, ...]]:
     if path.suffix.lower() == ".sam":
         with path.open(encoding="utf-8") as handle:
             for line in handle:
-                if line.startswith("@") or not line.strip():
-                    continue
-                fields = line.rstrip("\n").split("\t")
-                tags = {tag[:2]: tag[5:] for tag in fields[11:] if len(tag) >= 5 and tag[2] == ":"}
-                yield (fields[0], int(fields[1]) & 0x400 != 0, fields[2], int(fields[3]), fields[5], fields[6], int(fields[7]), int(fields[8]), tags.get("DT"), tags.get("DS"), tags.get("DI"), tags.get("RX"), tags.get("BX"), tags.get("BY"))
+                parsed = parse_sam_fields(line)
+                if parsed is not None:
+                    yield parsed
         return
     try:
         import pysam  # type: ignore[import-not-found]
-    except ImportError as exc:
-        raise RuntimeError("BAM parity comparison requires pysam") from exc
-    with pysam.AlignmentFile(str(path), "rb") as handle:
+    except ImportError:
+        samtools = shutil.which("samtools")
+        if not samtools:
+            raise RuntimeError("alignment parity comparison requires pysam or samtools")
+        reference_args = (
+            ["--reference", str(reference_fasta.resolve())]
+            if reference_fasta is not None
+            else []
+        )
+        process = subprocess.Popen(
+            [samtools, "view", "-h", *reference_args, str(path)],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        assert process.stdout is not None
+        for line in process.stdout:
+            parsed = parse_sam_fields(line)
+            if parsed is not None:
+                yield parsed
+        process.stdout.close()
+        stderr = process.stderr.read() if process.stderr is not None else ""
+        if process.stderr is not None:
+            process.stderr.close()
+        return_code = process.wait()
+        if return_code != 0:
+            detail = stderr.strip() or f"samtools exited with status {return_code}"
+            raise RuntimeError(f"samtools could not read {path}: {detail}")
+        return
+    pysam_kwargs = (
+        {"reference_filename": str(reference_fasta.resolve())}
+        if reference_fasta is not None
+        else {}
+    )
+    with pysam.AlignmentFile(str(path), "rb", **pysam_kwargs) as handle:
         for record in handle.fetch(until_eof=True):
             tag = lambda name: record.get_tag(name) if record.has_tag(name) else None
             yield (record.query_name, record.is_duplicate, record.reference_id, record.reference_start, record.cigarstring, record.next_reference_id, record.next_reference_start, record.template_length, tag("DT"), tag("DS"), tag("DI"), tag("RX"), tag("BX"), tag("BY"))
@@ -446,12 +598,18 @@ def normalized_metrics(path: Path) -> list[str]:
     return rows
 
 
-def compare_outputs(reference_output: Path, candidate_output: Path, reference_metrics: Path, candidate_metrics: Path) -> dict[str, object]:
+def compare_outputs(
+    reference_output: Path,
+    candidate_output: Path,
+    reference_metrics: Path,
+    candidate_metrics: Path,
+    reference_fasta: Path | None = None,
+) -> dict[str, object]:
     compared = 0
     mismatch: dict[str, object] | None = None
     try:
-        left = sam_fields(reference_output)
-        right = sam_fields(candidate_output)
+        left = sam_fields(reference_output, reference_fasta)
+        right = sam_fields(candidate_output, reference_fasta)
         while True:
             a = next(left, None)
             b = next(right, None)
@@ -487,12 +645,31 @@ def host_metadata() -> dict[str, object]:
         match = re.search(r"^model name\s*:\s*(.+)$", cpuinfo.read_text(errors="replace"), re.MULTILINE)
         if match:
             cpu_model = match.group(1)
+    memory_bytes = 0
+    meminfo = Path("/proc/meminfo")
+    if meminfo.exists():
+        match = re.search(r"^MemTotal:\s+(\d+)\s+kB$", meminfo.read_text(errors="replace"), re.MULTILINE)
+        if match:
+            memory_bytes = int(match.group(1)) * 1024
+    else:
+        try:
+            completed = subprocess.run(
+                ["sysctl", "-n", "hw.memsize"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                text=True,
+                check=False,
+            )
+            memory_bytes = int(completed.stdout.strip()) if completed.returncode == 0 else 0
+        except (OSError, ValueError):
+            memory_bytes = 0
     return {
         "hostname": platform.node(),
         "os": platform.platform(),
         "architecture": platform.machine(),
         "cpu_model": cpu_model,
-        "logical_cpus": os.cpu_count(),
+        "logical_cpus": os.cpu_count() or 0,
+        "memory_bytes": memory_bytes,
         "python": sys.version.split()[0],
         "storage_note": "not automatically characterized; record device/filesystem externally",
     }
@@ -521,10 +698,20 @@ def markdown(report: dict[str, object]) -> str:
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--input", required=True, type=Path, help="coordinate-sorted, duplicate-marking-ready BAM")
+    parser.add_argument(
+        "--input",
+        required=True,
+        type=Path,
+        help="coordinate-sorted, duplicate-marking-ready BAM or CRAM",
+    )
+    parser.add_argument(
+        "--reference-fasta",
+        type=Path,
+        help="reference FASTA required for CRAM input and recorded in evidence",
+    )
     parser.add_argument("--output-dir", required=True, type=Path)
     parser.add_argument("--tools", default="turbo-picard,picard,samtools,fastdup", help="comma-separated installed presets to attempt")
-    parser.add_argument("--tool", action="append", default=[], type=parse_custom_tool, metavar="NAME=COMMAND", help="add/override a command template using {input}, {output}, {metrics}, {tmp}, {threads}")
+    parser.add_argument("--tool", action="append", default=[], type=parse_custom_tool, metavar="NAME=COMMAND", help="add/override a command template using {input}, {output}, {metrics}, {tmp}, {threads}, {reference}")
     parser.add_argument("--reference-tool", default="picard")
     parser.add_argument("--require-tools", default="", help="comma-separated tools which must complete and pass/reference parity")
     parser.add_argument("--threads", type=int, default=min(8, os.cpu_count() or 1))
@@ -534,6 +721,43 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--timeout-seconds", type=float)
     parser.add_argument("--source-url")
     parser.add_argument("--source-revision")
+    parser.add_argument(
+        "--read-name-regex",
+        default="null",
+        help=(
+            "READ_NAME_REGEX for Picard-compatible tools; use null for the "
+            "bounded no-optical plan, or default to omit it and use the "
+            "tool's default optical-family behavior"
+        ),
+    )
+    parser.add_argument(
+        "--tag-duplicate-set-members",
+        action="store_true",
+        help="request paired duplicate-set DS/DI tags from Picard-compatible tools",
+    )
+    parser.add_argument(
+        "--barcode-tag",
+        type=sam_tag_argument,
+        metavar="TAG",
+        help="BARCODE_TAG for Picard-compatible tools, for example RX",
+    )
+    parser.add_argument(
+        "--read-one-barcode-tag",
+        type=sam_tag_argument,
+        metavar="TAG",
+        help="READ_ONE_BARCODE_TAG for Picard-compatible tools",
+    )
+    parser.add_argument(
+        "--read-two-barcode-tag",
+        type=sam_tag_argument,
+        metavar="TAG",
+        help="READ_TWO_BARCODE_TAG for Picard-compatible tools",
+    )
+    parser.add_argument(
+        "--profile",
+        choices=PROFILE_CHOICES,
+        help="evidence profile label; UMI and CRAM profiles enforce their input contract",
+    )
     return parser.parse_args(argv)
 
 
@@ -541,13 +765,34 @@ def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     if not args.input.is_file():
         raise SystemExit(f"input does not exist: {args.input}")
+    input_format = args.input.suffix.lower().lstrip(".").upper()
+    if input_format not in {"BAM", "CRAM"}:
+        raise SystemExit("--input must have a .bam or .cram extension")
+    if args.reference_fasta is not None and not args.reference_fasta.is_file():
+        raise SystemExit(f"reference FASTA does not exist: {args.reference_fasta}")
+    validate_profile(
+        args.profile,
+        input_format,
+        args.reference_fasta,
+        (args.barcode_tag, args.read_one_barcode_tag, args.read_two_barcode_tag),
+    )
     if args.threads < 1 or args.repeats < 1 or args.warmups < 0 or args.disk_sample_ms < 10:
         raise SystemExit("threads/repeats must be positive, warmups non-negative, and disk sample >= 10 ms")
     output_dir = args.output_dir.resolve()
     if output_dir.exists() and any(output_dir.iterdir()):
         raise SystemExit(f"output directory must be empty to preserve evidence: {output_dir}")
     output_dir.mkdir(parents=True, exist_ok=True)
-    presets = preset_tools()
+    read_name_regex = args.read_name_regex
+    if read_name_regex.lower() == "default":
+        read_name_regex = None
+    presets = preset_tools(
+        read_name_regex,
+        args.reference_fasta,
+        args.tag_duplicate_set_members,
+        args.barcode_tag,
+        args.read_one_barcode_tag,
+        args.read_two_barcode_tag,
+    )
     names = [name.strip() for name in args.tools.split(",") if name.strip()]
     unknown = sorted(set(names) - set(presets))
     if unknown:
@@ -562,11 +807,21 @@ def main(argv: list[str] | None = None) -> int:
         "claim_status": "evidence_only",
         "input": {
             "path": str(args.input.resolve()),
+            "format": input_format,
             "bytes": args.input.stat().st_size,
             "sha256": sha256_file(args.input),
             "source_url": args.source_url,
             "source_revision": args.source_revision,
             "precondition": "coordinate-sorted and prepared as required by every selected tool; runner does not transform input",
+            "reference_fasta": (
+                {
+                    "path": str(args.reference_fasta.resolve()),
+                    "bytes": args.reference_fasta.stat().st_size,
+                    "sha256": sha256_file(args.reference_fasta),
+                }
+                if args.reference_fasta is not None
+                else None
+            ),
         },
         "protocol": {
             "threads": args.threads,
@@ -576,6 +831,17 @@ def main(argv: list[str] | None = None) -> int:
             "temporary_disk_scope": "bytes recursively present under the per-run {tmp} directory",
             "resource_meter": "per-run resource_backend; GNU time preferred, POSIX wait4 fallback disclosed",
             "reference_tool": args.reference_tool,
+            "profile": args.profile,
+            "read_name_regex": args.read_name_regex,
+            "tag_duplicate_set_members": args.tag_duplicate_set_members,
+            "barcode_tag": args.barcode_tag,
+            "read_one_barcode_tag": args.read_one_barcode_tag,
+            "read_two_barcode_tag": args.read_two_barcode_tag,
+            "reference_fasta_sha256": (
+                sha256_file(args.reference_fasta)
+                if args.reference_fasta is not None
+                else None
+            ),
         },
         "host": host_metadata(),
         "tools": {},
@@ -599,7 +865,17 @@ def main(argv: list[str] | None = None) -> int:
             warmup = index < args.warmups
             repeat = index + 1 if warmup else index - args.warmups + 1
             label = f"warmup-{repeat}" if warmup else f"repeat-{repeat}"
-            result = run_once(spec, args.input, output_dir / "runs" / name / label, repeat, warmup, args.threads, args.disk_sample_ms / 1000, args.timeout_seconds)
+            result = run_once(
+                spec,
+                args.input,
+                output_dir / "runs" / name / label,
+                repeat,
+                warmup,
+                args.threads,
+                args.disk_sample_ms / 1000,
+                args.timeout_seconds,
+                args.reference_fasta,
+            )
             runs.append(result)
         tool["runs"] = [asdict(run) for run in runs]
         tool["summary"] = summarize_runs(runs)
@@ -620,7 +896,13 @@ def main(argv: list[str] | None = None) -> int:
         elif name == args.reference_tool:
             tool["parity"] = {"status": "REFERENCE", "comparator": "self"}
         else:
-            tool["parity"] = compare_outputs(output_dir / reference_run["output"], output_dir / candidate["output"], output_dir / reference_run["metrics"], output_dir / candidate["metrics"])
+            tool["parity"] = compare_outputs(
+                output_dir / reference_run["output"],
+                output_dir / candidate["output"],
+                output_dir / reference_run["metrics"],
+                output_dir / candidate["metrics"],
+                args.reference_fasta,
+            )
 
     required_names = [name.strip() for name in args.require_tools.split(",") if name.strip()]
     required_failures = []

@@ -16,6 +16,29 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
+      - name: Validate release source metadata
+        run: |
+          set -euo pipefail
+          python3 tools/verify_release_versions.py
+          python3 tools/verify_release_artifacts.py --source-only
+          python3 tools/verify_markduplicates_guardrails.py
+          expected_tag="v$(python3 - <<'PY'
+          import re
+          from pathlib import Path
+
+          text = Path("Cargo.toml").read_text(encoding="utf-8")
+          match = re.search(
+              r"(?ms)^\[workspace\.package\]\s+.*?^version\s*=\s*\"([^\"]+)\"",
+              text,
+          )
+          if match is None:
+              raise SystemExit("Cargo.toml is missing [workspace.package] version")
+          print(match.group(1))
+          PY
+          )"
+          test "${GITHUB_REF_TYPE}" = "tag"
+          test "${GITHUB_REF_NAME}" = "${expected_tag}"
+
       - uses: docker/login-action@v3
         with:
           registry: ghcr.io

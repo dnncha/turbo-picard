@@ -72,6 +72,13 @@ def main():
         help="benchmark input format; BAM exercises the production native path",
     )
     parser.add_argument(
+        "--read-name-regex",
+        help=(
+            "pass READ_NAME_REGEX to MarkDuplicates; use null for the bounded "
+            "no-optical plan or omit it to exercise bounded default optical discovery"
+        ),
+    )
+    parser.add_argument(
         "--conda-prefix",
         default=os.environ.get("TURBO_PICARD_CONDA_PREFIX", str(ROOT / ".conda-turbo-picard")),
         help="conda environment prefix containing Picard",
@@ -120,6 +127,8 @@ def main():
             "VALIDATION_STRINGENCY=SILENT",
             "QUIET=true",
         ]
+        if args.read_name_regex is not None:
+            common.append(f"READ_NAME_REGEX={args.read_name_regex}")
         turbo_time = run([str(turbo), *common, f"O={turbo_out}", f"M={turbo_metrics}"])
         picard_time = run(
             [
@@ -158,6 +167,7 @@ def main():
         print(f"reads={args.reads}")
         print(f"input_format={args.input_format}")
         print(f"duplicate_family_size={args.duplicate_family_size}")
+        print(f"read_name_regex={args.read_name_regex or '<default>'}")
         print(f"turbo_seconds={turbo_time:.6f}")
         print(f"picard_seconds={picard_time:.6f}")
         print(f"speedup={speedup:.2f}x")

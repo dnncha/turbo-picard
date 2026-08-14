@@ -116,6 +116,13 @@ The smallest trial shape is
 Migration patterns that usually keep the surrounding workflow stable include
 per-read-group `SamToFastq`, sequential-shard `FastqToSam`, and
 mate-repair boundaries around `FixMateInformation`.
+If you run a real one-command evaluation, share the result through the
+[trial report issue form](https://github.com/dnncha/turbo-picard/issues/new?template=trial-report.yml);
+successful matches, mismatches, and adoption blockers are all useful evidence.
+If GitHub does not offer new-issue creation, add the same redacted report as a
+comment on the [public trial report thread](https://github.com/dnncha/turbo-picard/issues/4).
+From a repository checkout, `tools/compare_real_data.py --shareable-report`
+can create a reviewed, privacy-conscious starting point for that report.
 
 ## Benchmarks
 
@@ -206,8 +213,13 @@ A command-level speedup is not a universal replacement claim. Keep upstream Pica
 
 ## Packaging Status
 
-The live PyPI release is `0.1.11`. It publishes Linux x86_64 and macOS Apple
-Silicon wheels plus a source distribution.
+The latest published PyPI release is `0.1.11`. It publishes Linux x86_64 and
+macOS Apple Silicon wheels plus a source distribution. The current source
+release is `0.1.12`; it remains a release candidate until the matching tag,
+package, container, and evidence checks pass.
+
+Read the [release notes](CHANGELOG.md) for the candidate scope and evidence
+boundaries.
 
 The submitted [Bioconda recipe PR](https://github.com/bioconda/bioconda-recipes/pull/65922)
 covers the main package and an optional shim. Use PyPI or the container image

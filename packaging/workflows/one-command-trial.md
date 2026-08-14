@@ -69,60 +69,52 @@ python3 tools/compare_real_data.py \
   --commands MarkDuplicates \
   --picard-command "java -jar $PICARD_JAR" \
   --turbo-picard-command turbo-picard \
+  --shareable-report turbo-picard-trial/evidence/shareable-trial-report.md \
   --skip-build
 ```
 
-Copy/paste trial from PyPI:
+The comparison helper uses the configured Picard-compatible `ViewSam`
+entrypoints to inspect BAM/CRAM outputs, so it does not require a separate
+`samtools` executable on `PATH`. `samtools quickcheck` remains a useful
+optional manual integrity check for the generated files.
 
-```bash
-python3 -m venv .venv-turbo-picard-trial
-. .venv-turbo-picard-trial/bin/activate
-python3 -m pip install --upgrade pip
-python3 -m pip install turbo-picard
-turbo-picard --version
-turbo-picard doctor
-```
+The optional `--shareable-report` output is a deliberately lossy summary for
+the public trial-report issue form. It omits local paths, input hashes,
+command arguments, generated artifact names, and raw data. Review it before
+posting, and do not attach the full `work/` directory or the raw comparison
+JSON when the input is private. Add `--include-public-source` only when the
+source URL and revision are genuinely public.
 
-Then run the same Picard-shaped command twice on one representative shard. For a
-`MarkDuplicates` trial:
+Use the generated `shareable-trial-report.md` as the starting point for the
+[trial report issue](https://github.com/dnncha/turbo-picard/issues/new?template=trial-report.yml).
+If GitHub does not offer new-issue creation, paste the reviewed report as a
+comment on the [public trial report thread](https://github.com/dnncha/turbo-picard/issues/4).
+It is still a report to review, not an automatic publication step.
 
-```bash
-export INPUT_BAM=/path/to/representative.bam
-export PICARD_JAR=/path/to/picard.jar
-mkdir -p turbo-picard-trial/picard turbo-picard-trial/turbo
+Barcode/UMI panel trial:
 
-/usr/bin/time -p java -jar "$PICARD_JAR" MarkDuplicates \
-  I="$INPUT_BAM" \
-  O=turbo-picard-trial/picard/marked.bam \
-  M=turbo-picard-trial/picard/metrics.txt
-
-/usr/bin/time -p turbo-picard MarkDuplicates \
-  I="$INPUT_BAM" \
-  O=turbo-picard-trial/turbo/marked.bam \
-  M=turbo-picard-trial/turbo/metrics.txt
-```
-
-Minimum checks before you show the result to anyone else:
-
-```bash
-samtools quickcheck -v \
-  turbo-picard-trial/picard/marked.bam \
-  turbo-picard-trial/turbo/marked.bam
-diff -u turbo-picard-trial/picard/metrics.txt turbo-picard-trial/turbo/metrics.txt
-```
-
-If you are in a `turbo-picard` checkout and want a reviewable bundle, use the
-repo comparison helper instead of hand-collecting outputs:
+If the workflow already stores molecular barcodes in SAM tags, pass the exact
+fields to both sides of the comparison. The comparator records these options
+in the private JSON evidence while the shareable report remains redacted:
 
 ```bash
 python3 tools/compare_real_data.py \
   --input-bam "$INPUT_BAM" \
   --output-dir turbo-picard-trial/evidence \
   --commands MarkDuplicates \
+  --markduplicates-arg BARCODE_TAG=RX \
+  --markduplicates-arg TAG_DUPLICATE_SET_MEMBERS=true \
   --picard-command "java -jar $PICARD_JAR" \
   --turbo-picard-command turbo-picard \
+  --shareable-report turbo-picard-trial/evidence/shareable-trial-report.md \
   --skip-build
 ```
+
+Use `READ_ONE_BARCODE_TAG=BX` and `READ_TWO_BARCODE_TAG=BY` instead when the
+workflow keeps mate-specific barcode fields. `UmiAwareMarkDuplicatesWithMateCigar`
+and other advanced UMI normalization modes remain upstream-fallback commands;
+do not replace them with the standard `MarkDuplicates` trial unless the
+workflow's exact semantics are barcode grouping only.
 
 Files in this directory:
 

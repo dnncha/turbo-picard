@@ -371,7 +371,7 @@ commands:
   - name: MarkDuplicates
     status: partial-native
     parity_script: tools/verify_basic_picard_parity.sh
-    native_scope: "SAM/BAM/CRAM duplicate marking/removal with REFERENCE_SEQUENCE, metrics, barcode grouping, optical duplicate tagging, sidecars, multi-BAM input, and release-candidate real-data parity."
+    native_scope: "SAM/BAM/CRAM duplicate marking/removal with REFERENCE_SEQUENCE, metrics, barcode grouping, optical duplicate tagging, sidecars, multi-BAM input, and release-candidate real-data parity. Single-BAM, explicit-reference single-CRAM, or already globally coordinate-ordered multi-input runs use a bounded disk-backed two-pass plan, including BARCODE_TAG, READ_ONE_BARCODE_TAG/READ_TWO_BARCODE_TAG, default or validated three-capture-group READ_NAME_REGEX optical-family discovery, REMOVE_SEQUENCING_DUPLICATES, and paired duplicate-set DS/DI tagging; explicit READ_NAME_REGEX=null selects the no-optical variant."
     fallback_scope: Unsupported Picard MarkDuplicates options should use upstream Picard.
   - name: MarkDuplicatesWithMateCigar
     status: fallback-only

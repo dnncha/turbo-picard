@@ -22,6 +22,31 @@ Workflow shapes
 The easiest adoption pattern is to keep the workflow boundary stable and change
 only the command inside it.
 
+Barcode and UMI-tagged MarkDuplicates
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+If the workflow already stores molecular barcodes in SAM tags, the real-data
+comparator can audit the exact bounded barcode-grouping mode rather than
+silently comparing a default no-barcode run:
+
+.. code-block:: bash
+
+   python3 tools/compare_real_data.py \
+     --input-bam /data/umi-panel.coordinate.bam \
+     --output-dir benchmarks/real-data/umi-panel/evidence \
+     --commands MarkDuplicates \
+     --markduplicates-arg BARCODE_TAG=RX \
+     --markduplicates-arg TAG_DUPLICATE_SET_MEMBERS=true \
+     --picard-command "mamba run -p /opt/conda/envs/picard picard" \
+     --turbo-picard-command ./target/release/picard \
+     --skip-build
+
+Use ``READ_ONE_BARCODE_TAG=BX`` and ``READ_TWO_BARCODE_TAG=BY`` for mate-specific
+fields. The exact options are retained in the private JSON comparison evidence;
+the optional shareable report omits command arguments and local data. Advanced
+``UmiAwareMarkDuplicatesWithMateCigar`` normalization remains an upstream
+fallback until a separate parity-tested native implementation exists.
+
 WDL / Cromwell
 ~~~~~~~~~~~~~~
 
@@ -64,6 +89,36 @@ Pick the command at runtime so you can compare a module with and without
 The repository also keeps a more detailed nf-core note in
 ``packaging/nf-core/README.md`` and starter workflow files in
 ``packaging/workflows/``.
+
+Measure the adoption funnel
+~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Maintainers can capture a repeatable, read-only public baseline after a
+release:
+
+.. code-block:: bash
+
+   python3 tools/audit_public_adoption.py --pretty \
+     --output turbo-picard-public-adoption.json
+
+The report combines the live PyPI version and README freshness, PyPIStats
+downloads without mirrors, GitHub repository interest signals, and open issue
+counts. It also records the source version, current commit, worktree
+cleanliness, and whether the matching local and ``origin`` release tag points
+at that commit. This makes a post-release source/package mismatch visible
+without turning download counts into user telemetry. It records the source
+URLs and explicitly marks sustained external usage, customer demand, and
+production readiness as unverified. Download and repository counters are
+distribution and interest signals, not user telemetry or a substitute for
+reviewed workflow-owner trials.
+The community section also records the comment count on the public trial-report
+thread as a low-level activity signal. It deliberately does not count comments
+as workflow-owner trial reports; ``workflow_owner_trial_reports_verified`` stays
+false until a human reviews the reports and confirms their provenance.
+The repository also has a quiet weekly and manual
+``.github/workflows/public-adoption-audit.yml`` job that stores the JSON report
+as a short-lived GitHub Actions artifact; it has read-only repository
+permissions and performs no publication or outreach.
 
 Snakemake
 ~~~~~~~~~
@@ -177,6 +232,50 @@ targeted comparison output:
 .. code-block:: bash
 
    turbo-picard trial --json MarkDuplicates I=input.bam O=turbo.bam M=turbo.metrics.txt
+
+Share a trial result
+--------------------
+
+If you run a one-command trial, share the result through the `trial report issue
+form <https://github.com/dnncha/turbo-picard/issues/new?template=trial-report.yml>`_.
+Include the tool and Picard versions, install method, redacted command, input
+shape, comparison outcome, and any timing or workflow friction. Successful
+matches and negative results are both useful: they show which workflow shapes
+are checked and which still need work.
+
+If GitHub does not offer new-issue creation, add the same redacted report as a
+comment on the `public trial report thread
+<https://github.com/dnncha/turbo-picard/issues/4>`_. Do not include private
+clinical, human-subject, or controlled-access data.
+
+If you are working from a repository checkout, the real-data comparator can
+also produce a public-report starting point alongside the full private audit
+bundle:
+
+.. code-block:: bash
+
+   python3 tools/compare_real_data.py \
+     --input-bam "$INPUT_BAM" \
+     --output-dir turbo-picard-trial/evidence \
+     --commands MarkDuplicates \
+     --picard-command "java -jar $PICARD_JAR" \
+     --turbo-picard-command turbo-picard \
+     --shareable-report turbo-picard-trial/evidence/shareable-trial-report.md \
+     --skip-build
+
+The shareable report deliberately leaves out local paths, input hashes,
+command arguments, generated artifact names, and raw data. Review it before
+posting. Add ``--include-public-source`` only when the supplied source URL and
+revision are genuinely public; do not attach the full ``work/`` directory or
+the raw comparison JSON for a private input.
+The comparator materializes output SAM through the configured
+Picard-compatible ``ViewSam`` entrypoints, so this reviewable path does not
+require a separate ``samtools`` executable on ``PATH``. ``samtools quickcheck``
+remains an optional manual integrity check.
+
+Do not upload private clinical, human-subject, or controlled-access data. A
+summarized file shape, redacted command, and description of the outputs that
+matched or differed are enough.
 
 Check a representative file
 ---------------------------

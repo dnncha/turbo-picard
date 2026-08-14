@@ -54,6 +54,13 @@ This installs the same two commands:
    when you deliberately want workflow code that calls ``picard`` to resolve to
    ``turbo-picard``.
 
+To verify a checkout installation without needing private or external data, run
+the repository's small deterministic smoke fixture:
+
+.. code-block:: bash
+
+   TURBO_PICARD_BIN="$(command -v turbo-picard)" bash tools/verify_install_smoke.sh
+
 Run a familiar command
 ----------------------
 

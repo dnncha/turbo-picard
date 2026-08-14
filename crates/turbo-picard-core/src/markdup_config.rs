@@ -27,6 +27,7 @@ pub struct MarkDuplicatesConfig {
     pub optical_duplicate_pixel_distance: Option<u32>,
     pub compression_level: Option<u32>,
     pub reference_sequence: Option<String>,
+    pub tmp_dir: Option<String>,
 }
 
 #[derive(Debug, Clone, Error, PartialEq, Eq)]
@@ -79,6 +80,12 @@ impl MarkDuplicatesConfig {
             )?,
             compression_level: optional_compression_level(args)?,
             reference_sequence: optional_scalar(args, "REFERENCE_SEQUENCE")?,
+            // Picard permits repeated TMP_DIR values.  Keep the last one,
+            // matching the command-line convention used by the native sort
+            // paths while preserving acceptance of repeated options.
+            tmp_dir: args
+                .get("TMP_DIR")
+                .and_then(|values| values.last().cloned()),
         })
     }
 }
@@ -246,10 +253,21 @@ fn optional_read_name_regex(
 
     if value == "null" {
         Ok(Some(value))
-    } else {
+    } else if value.is_empty() {
         Err(MarkDuplicatesConfigError::UnsupportedOption(format!(
             "READ_NAME_REGEX={value}"
         )))
+    } else {
+        let regex_is_valid = regex::Regex::new(&value)
+            .map(|regex| regex.captures_len() == 4)
+            .unwrap_or(false);
+        if regex_is_valid {
+            Ok(Some(value))
+        } else {
+            Err(MarkDuplicatesConfigError::UnsupportedOption(format!(
+                "READ_NAME_REGEX={value}"
+            )))
+        }
     }
 }
 

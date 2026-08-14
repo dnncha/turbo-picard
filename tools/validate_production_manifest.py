@@ -13,6 +13,15 @@ HEX64 = re.compile(r"^[0-9a-fA-F]{64}$")
 HEX40 = re.compile(r"^[0-9a-fA-F]{40}$")
 TIERS = {"smoke", "release_candidate", "production_scale", "independent_reproduction"}
 LEVELS = {"A", "B", "C", "D", "X"}
+PROFILES = {
+    "wgs_30x",
+    "wes_capture",
+    "rna_seq",
+    "umi_panel",
+    "cram_reference",
+    "multi_library",
+    "cohort_batch",
+}
 
 
 class ManifestError(ValueError):
@@ -28,6 +37,13 @@ def require(mapping, keys, label):
 def non_negative_int(value, label):
     if not isinstance(value, int) or isinstance(value, bool) or value < 0:
         raise ManifestError(f"{label} must be a non-negative integer")
+
+
+def require_evidence_url(value, label):
+    if not isinstance(value, str) or not value.strip():
+        raise ManifestError(f"{label} must be a non-empty string")
+    if not value.startswith(("https://", "s3://", "gs://")):
+        raise ManifestError(f"{label} must be an immutable HTTPS, S3, or GCS URL")
 
 
 def validate(path: Path, release_ready: bool = False) -> dict:
@@ -57,10 +73,23 @@ def validate(path: Path, release_ready: bool = False) -> dict:
 
     if not HEX64.fullmatch(input_data["sha256"]):
         raise ManifestError("input.sha256 must be a 64-character hexadecimal SHA-256")
+    input_format = str(input_data["format"]).upper()
+    if input_format not in {"BAM", "CRAM"}:
+        raise ManifestError("input.format must be BAM or CRAM")
+    reference_hash = input_data.get("reference_fasta_sha256")
+    if reference_hash is not None and not HEX64.fullmatch(str(reference_hash)):
+        raise ManifestError("input.reference_fasta_sha256 must be a 64-character hexadecimal SHA-256")
+    if input_format == "CRAM" and reference_hash is None:
+        raise ManifestError("CRAM evidence requires input.reference_fasta_sha256")
     if not isinstance(input_data["source_url"], str) or not input_data["source_url"].startswith(("https://", "s3://", "gs://")):
         raise ManifestError("input.source_url must be an immutable HTTPS, S3, or GCS URL")
     non_negative_int(input_data["bytes"], "input.bytes")
     non_negative_int(input_data["read_count"], "input.read_count")
+    if payload["tier"] in {"production_scale", "independent_reproduction"}:
+        if input_data["bytes"] < 1:
+            raise ManifestError("production-scale evidence requires input.bytes greater than zero")
+        if input_data["read_count"] < 1:
+            raise ManifestError("production-scale evidence requires input.read_count greater than zero")
     if not input_data["source_revision"]:
         raise ManifestError("input.source_revision must be an accession, release, or full commit")
     if not HEX40.fullmatch(software["turbo_picard_commit"]):
@@ -84,6 +113,21 @@ def validate(path: Path, release_ready: bool = False) -> dict:
         require(command, {"name", "compatibility_level", "comparator", "parity", "repeats"}, label)
         if command["compatibility_level"] not in LEVELS:
             raise ManifestError(f"{label}.compatibility_level must be one of {sorted(LEVELS)}")
+        if "profile" in command and command["profile"] not in PROFILES:
+            raise ManifestError(f"{label}.profile must be one of {sorted(PROFILES)}")
+        barcode_tags = command.get("barcode_tags")
+        if barcode_tags is not None:
+            if not isinstance(barcode_tags, dict) or not barcode_tags:
+                raise ManifestError(f"{label}.barcode_tags must be a non-empty object")
+            for tag_name, tag_value in barcode_tags.items():
+                if tag_name not in {"barcode_tag", "read_one_barcode_tag", "read_two_barcode_tag"}:
+                    raise ManifestError(f"{label}.barcode_tags contains unknown field {tag_name!r}")
+                if not isinstance(tag_value, str) or not re.fullmatch(r"[A-Za-z0-9]{2}", tag_value):
+                    raise ManifestError(f"{label}.barcode_tags.{tag_name} must be a two-character SAM tag")
+        if command.get("profile") == "umi_panel" and not barcode_tags:
+            raise ManifestError(f"{label}.profile=umi_panel requires barcode_tags")
+        if payload["tier"] in {"production_scale", "independent_reproduction"} and not command.get("profile"):
+            raise ManifestError(f"{label}.profile is required for production-scale evidence")
         if command["parity"] not in {"PASS", "FAIL", "NOT_RUN"}:
             raise ManifestError(f"{label}.parity must be PASS, FAIL, or NOT_RUN")
         if not command["comparator"]:
@@ -110,9 +154,57 @@ def validate(path: Path, release_ready: bool = False) -> dict:
     reproduction = payload.get("independent_reproduction")
     if not isinstance(reproduction, dict):
         raise ManifestError("independent_reproduction must be an object")
-    if reproduction.get("status") not in {"not_run", "pass", "fail"}:
+    reproduction_status = reproduction.get("status")
+    if reproduction_status not in {"not_run", "pass", "fail"}:
         raise ManifestError("independent_reproduction.status must be not_run, pass, or fail")
-    if release_ready and reproduction["status"] != "pass":
+    if reproduction_status in {"pass", "fail"}:
+        require(
+            reproduction,
+            {
+                "reviewer",
+                "host_profile",
+                "evidence_url",
+                "turbo_picard_commit",
+                "input_sha256",
+                "arguments_sha256",
+            },
+            "independent_reproduction",
+        )
+        for key in ("reviewer", "host_profile"):
+            if not isinstance(reproduction[key], str) or not reproduction[key].strip():
+                raise ManifestError(f"independent_reproduction.{key} must be a non-empty string")
+        require_evidence_url(reproduction["evidence_url"], "independent_reproduction.evidence_url")
+        if not HEX40.fullmatch(str(reproduction["turbo_picard_commit"])):
+            raise ManifestError(
+                "independent_reproduction.turbo_picard_commit must be a 40-character hexadecimal SHA"
+            )
+        if reproduction["turbo_picard_commit"].lower() != software["turbo_picard_commit"].lower():
+            raise ManifestError(
+                "independent_reproduction.turbo_picard_commit must match software.turbo_picard_commit"
+            )
+        if not HEX64.fullmatch(str(reproduction["input_sha256"])):
+            raise ManifestError(
+                "independent_reproduction.input_sha256 must be a 64-character hexadecimal SHA-256"
+            )
+        if reproduction["input_sha256"].lower() != input_data["sha256"].lower():
+            raise ManifestError(
+                "independent_reproduction.input_sha256 must match input.sha256"
+            )
+        if not HEX64.fullmatch(str(reproduction["arguments_sha256"])):
+            raise ManifestError(
+                "independent_reproduction.arguments_sha256 must be a 64-character hexadecimal SHA-256"
+            )
+        if len(commands) != 1:
+            raise ManifestError(
+                "independent_reproduction.arguments_sha256 currently requires exactly one command"
+            )
+        if reproduction["arguments_sha256"].lower() != str(
+            commands[0].get("arguments_sha256", "")
+        ).lower():
+            raise ManifestError(
+                "independent_reproduction.arguments_sha256 must match commands[0].arguments_sha256"
+            )
+    if release_ready and reproduction_status != "pass":
         raise ManifestError("release-ready evidence requires independent_reproduction.status=pass")
     return payload
 
@@ -133,4 +225,3 @@ def main(argv=None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

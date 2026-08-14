@@ -16,6 +16,7 @@ if str(TOOL_DIR) not in sys.path:
 from verify_benchmark_suite_coverage import BENCHMARK_EXEMPTIONS  # noqa: E402
 
 README = ROOT / "README.md"
+BENCHMARKS_README = ROOT / "benchmarks" / "README.md"
 BENCHMARK_DATA = ROOT / "docs" / "site" / "assets" / "benchmark-data.json"
 
 
@@ -111,10 +112,40 @@ def validate_readme_benchmark_evidence(readme: str, data: dict) -> list[str]:
     return errors
 
 
+def validate_benchmarks_readme_evidence(benchmarks_readme: str, data: dict) -> list[str]:
+    normalized = " ".join(benchmarks_readme.split())
+    summary = data["summary"]
+    claims = [
+        (
+            f"`{format_speedup(summary['floor_speedup'])}` floor speedup",
+            "missing benchmarks README floor-speedup claim",
+        ),
+        (
+            f"`{format_speedup(summary['geometric_mean_speedup'])}` geometric mean speedup",
+            "missing benchmarks README geometric-mean claim",
+        ),
+        (
+            f"`{format_speedup(summary['top_speedup'])}` top speedup",
+            "missing benchmarks README top-speedup claim",
+        ),
+        (
+            "fixture-specific",
+            "missing benchmarks README fixture-specific evidence caveat",
+        ),
+        (
+            "capacity or production-scale guarantee",
+            "missing benchmarks README capacity caveat",
+        ),
+    ]
+    return [message for needle, message in claims if needle not in normalized]
+
+
 def main() -> int:
     readme = README.read_text(encoding="utf-8")
+    benchmarks_readme = BENCHMARKS_README.read_text(encoding="utf-8")
     data = json.loads(BENCHMARK_DATA.read_text(encoding="utf-8"))
     errors = validate_readme_benchmark_evidence(readme, data)
+    errors.extend(validate_benchmarks_readme_evidence(benchmarks_readme, data))
     if errors:
         for error in errors:
             print(error, file=sys.stderr)

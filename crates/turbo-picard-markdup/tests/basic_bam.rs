@@ -8,6 +8,7 @@ fn marks_duplicate_records_in_bam() {
     let tempdir = tempfile::tempdir().expect("tempdir exists");
     let output = tempdir.path().join("output.bam");
     let metrics = tempdir.path().join("metrics.txt");
+    let scratch = tempdir.path().join("scratch");
     let input = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../fixtures/markduplicates/basic/input.bam");
     let config = MarkDuplicatesConfig {
@@ -26,7 +27,8 @@ fn marks_duplicate_records_in_bam() {
         add_pg_tag_to_reads: true,
         tag_duplicate_set_members: false,
         duplicate_scoring_strategy: None,
-        read_name_regex: None,
+        // Explicit no-optical mode exercises the disk-backed two-pass plan.
+        read_name_regex: Some("null".to_string()),
         tagging_policy: None,
         barcode_tag: None,
         read_one_barcode_tag: None,
@@ -35,12 +37,21 @@ fn marks_duplicate_records_in_bam() {
         optical_duplicate_pixel_distance: None,
         compression_level: None,
         reference_sequence: None,
+        tmp_dir: Some(scratch.display().to_string()),
     };
 
     turbo_picard_markdup::run(&config).expect("BAM duplicate marking succeeds");
 
     let flags = read_flags(&output);
     assert_eq!(flags, vec![0, 1024, 0]);
+    assert!(scratch.is_dir());
+    assert!(
+        scratch
+            .read_dir()
+            .expect("scratch directory reads")
+            .next()
+            .is_none()
+    );
 }
 
 #[test]
@@ -66,7 +77,8 @@ fn marks_duplicate_pairs_and_reports_paired_metrics() {
         add_pg_tag_to_reads: true,
         tag_duplicate_set_members: false,
         duplicate_scoring_strategy: None,
-        read_name_regex: None,
+        // Explicit no-optical mode exercises the disk-backed two-pass plan.
+        read_name_regex: Some("null".to_string()),
         tagging_policy: None,
         barcode_tag: None,
         read_one_barcode_tag: None,
@@ -75,6 +87,7 @@ fn marks_duplicate_pairs_and_reports_paired_metrics() {
         optical_duplicate_pixel_distance: None,
         compression_level: None,
         reference_sequence: None,
+        tmp_dir: None,
     };
 
     turbo_picard_markdup::run(&config).expect("BAM duplicate marking succeeds");
@@ -85,6 +98,16 @@ fn marks_duplicate_pairs_and_reports_paired_metrics() {
     let metrics_text = std::fs::read_to_string(&metrics).expect("metrics file exists");
     assert!(metrics_text.contains("lib1\t0\t3\t0\t0\t0\t1\t0\t0.333333\t3\n"));
     assert!(metrics_text.contains("BIN\tCoverageMult\tall_sets\tnon_optical_sets\n"));
+    assert!(
+        metrics_text
+            .lines()
+            .any(|line| line.starts_with("1.0\t") && line.ends_with("\t1\t1"))
+    );
+    assert!(
+        metrics_text
+            .lines()
+            .any(|line| line.starts_with("2.0\t") && line.ends_with("\t0\t0"))
+    );
 }
 
 #[test]
@@ -119,6 +142,7 @@ fn mate_unmapped_aligned_reads_are_unpaired_duplicate_candidates() {
         optical_duplicate_pixel_distance: None,
         compression_level: None,
         reference_sequence: None,
+        tmp_dir: None,
     };
 
     turbo_picard_markdup::run(&config).expect("BAM duplicate marking succeeds");
@@ -163,6 +187,7 @@ fn keeps_highest_quality_duplicate_representative() {
         optical_duplicate_pixel_distance: None,
         compression_level: None,
         reference_sequence: None,
+        tmp_dir: None,
     };
 
     turbo_picard_markdup::run(&config).expect("BAM duplicate marking succeeds");
@@ -203,6 +228,7 @@ fn groups_duplicates_by_unclipped_five_prime_position() {
         optical_duplicate_pixel_distance: None,
         compression_level: None,
         reference_sequence: None,
+        tmp_dir: None,
     };
 
     turbo_picard_markdup::run(&config).expect("BAM duplicate marking succeeds");
@@ -243,6 +269,7 @@ fn excludes_secondary_alignments_from_duplicate_testing() {
         optical_duplicate_pixel_distance: None,
         compression_level: None,
         reference_sequence: None,
+        tmp_dir: None,
     };
 
     turbo_picard_markdup::run(&config).expect("BAM duplicate marking succeeds");
@@ -286,6 +313,7 @@ fn chooses_duplicate_representative_per_pair_not_per_mate() {
         optical_duplicate_pixel_distance: None,
         compression_level: None,
         reference_sequence: None,
+        tmp_dir: None,
     };
 
     turbo_picard_markdup::run(&config).expect("BAM duplicate marking succeeds");
@@ -326,6 +354,7 @@ fn duplicate_scoring_ignores_bases_below_q15() {
         optical_duplicate_pixel_distance: None,
         compression_level: None,
         reference_sequence: None,
+        tmp_dir: None,
     };
 
     turbo_picard_markdup::run(&config).expect("BAM duplicate marking succeeds");
@@ -365,6 +394,7 @@ fn paired_records_without_an_eligible_mate_are_not_marked_as_singleton_duplicate
         optical_duplicate_pixel_distance: None,
         compression_level: None,
         reference_sequence: None,
+        tmp_dir: None,
     };
 
     turbo_picard_markdup::run(&config).expect("BAM duplicate marking succeeds");
@@ -409,6 +439,7 @@ fn creates_bam_index_when_requested() {
         optical_duplicate_pixel_distance: None,
         compression_level: None,
         reference_sequence: None,
+        tmp_dir: None,
     };
 
     turbo_picard_markdup::run(&config).expect("BAM duplicate marking succeeds");
@@ -448,6 +479,7 @@ fn creates_md5_sidecar_when_requested() {
         optical_duplicate_pixel_distance: None,
         compression_level: None,
         reference_sequence: None,
+        tmp_dir: None,
     };
 
     turbo_picard_markdup::run(&config).expect("BAM duplicate marking succeeds");
@@ -489,6 +521,7 @@ fn adds_picard_program_group_header_and_read_tags_by_default() {
         optical_duplicate_pixel_distance: None,
         compression_level: None,
         reference_sequence: None,
+        tmp_dir: None,
     };
 
     turbo_picard_markdup::run(&config).expect("BAM duplicate marking succeeds");
@@ -534,6 +567,7 @@ fn tags_library_duplicates_when_tagging_policy_is_all() {
         optical_duplicate_pixel_distance: None,
         compression_level: None,
         reference_sequence: None,
+        tmp_dir: None,
     };
 
     turbo_picard_markdup::run(&config).expect("BAM duplicate marking succeeds");
@@ -574,10 +608,12 @@ fn tags_duplicate_set_members_when_requested() {
         optical_duplicate_pixel_distance: None,
         compression_level: None,
         reference_sequence: None,
+        tmp_dir: None,
     };
 
     turbo_picard_markdup::run(&config).expect("BAM duplicate marking succeeds");
 
+    assert_eq!(read_flags(&output), vec![99, 1123, 99, 147, 1171, 147]);
     assert_eq!(
         duplicate_set_member_tags(&output),
         vec![
@@ -589,6 +625,8 @@ fn tags_duplicate_set_members_when_requested() {
             ("pair-c".to_string(), None),
         ]
     );
+    let metrics_text = std::fs::read_to_string(&metrics).expect("metrics file exists");
+    assert!(metrics_text.contains("lib1\t0\t3\t0\t0\t0\t1\t0\t0.333333\t3\n"));
 }
 
 #[test]
@@ -596,6 +634,7 @@ fn separates_duplicate_groups_by_barcode_tag() {
     let tempdir = tempfile::tempdir().expect("tempdir exists");
     let output = tempdir.path().join("output.bam");
     let metrics = tempdir.path().join("metrics.txt");
+    let scratch = tempdir.path().join("scratch");
     let input = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../fixtures/markduplicates/barcode-tag/input.bam");
     let config = MarkDuplicatesConfig {
@@ -623,11 +662,22 @@ fn separates_duplicate_groups_by_barcode_tag() {
         optical_duplicate_pixel_distance: None,
         compression_level: None,
         reference_sequence: None,
+        tmp_dir: Some(scratch.display().to_string()),
     };
 
     turbo_picard_markdup::run(&config).expect("BAM duplicate marking succeeds");
 
     assert_eq!(read_flags(&output), vec![0, 1024, 0, 0]);
+    assert!(scratch.is_dir());
+    assert!(
+        scratch
+            .read_dir()
+            .expect("scratch directory reads")
+            .next()
+            .is_none()
+    );
+    let metrics_text = std::fs::read_to_string(&metrics).expect("metrics file exists");
+    assert!(!metrics_text.contains("## HISTOGRAM"));
 }
 
 #[test]
@@ -635,6 +685,7 @@ fn separates_duplicate_groups_by_read_one_and_read_two_barcode_tags() {
     let tempdir = tempfile::tempdir().expect("tempdir exists");
     let output = tempdir.path().join("output.bam");
     let metrics = tempdir.path().join("metrics.txt");
+    let scratch = tempdir.path().join("scratch");
     let input = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../fixtures/markduplicates/read-barcode-tags/input.bam");
     let config = MarkDuplicatesConfig {
@@ -662,11 +713,116 @@ fn separates_duplicate_groups_by_read_one_and_read_two_barcode_tags() {
         optical_duplicate_pixel_distance: None,
         compression_level: None,
         reference_sequence: None,
+        tmp_dir: Some(scratch.display().to_string()),
     };
 
     turbo_picard_markdup::run(&config).expect("BAM duplicate marking succeeds");
 
     assert_eq!(read_flags(&output), vec![99, 1123, 99, 147, 1171, 147]);
+    assert!(scratch.is_dir());
+    assert!(
+        scratch
+            .read_dir()
+            .expect("scratch directory reads")
+            .next()
+            .is_none()
+    );
+    let metrics_text = std::fs::read_to_string(&metrics).expect("metrics file exists");
+    assert!(
+        metrics_text
+            .lines()
+            .any(|line| line.starts_with("1.0\t") && line.ends_with("\t1\t1"))
+    );
+    assert!(
+        metrics_text
+            .lines()
+            .any(|line| line.starts_with("2.0\t") && line.ends_with("\t0\t0"))
+    );
+}
+
+#[test]
+fn respects_mate_specific_barcode_tags_in_external_plan() {
+    let tempdir = tempfile::tempdir().expect("tempdir exists");
+    let input = tempdir.path().join("input.bam");
+    let output = tempdir.path().join("output.bam");
+    let metrics = tempdir.path().join("metrics.txt");
+    let scratch = tempdir.path().join("scratch");
+    let mut writer = duplicate_fixture_writer(&input);
+    for (qname, barcode) in [
+        (b"pair-a".as_slice(), "AAAA"),
+        (b"pair-b".as_slice(), "AAAA"),
+        (b"pair-c".as_slice(), "CCCC"),
+    ] {
+        write_mapped_pair_record_with_tags(
+            &mut writer,
+            qname,
+            99,
+            10,
+            100,
+            90,
+            b"AAAAAAAAAA",
+            b"FFFFFFFFFF",
+            &[(b"BX", barcode)],
+        );
+    }
+    for qname in [
+        b"pair-a".as_slice(),
+        b"pair-b".as_slice(),
+        b"pair-c".as_slice(),
+    ] {
+        write_mapped_pair_record_with_tags(
+            &mut writer,
+            qname,
+            147,
+            100,
+            10,
+            -90,
+            b"TTTTTTTTTT",
+            b"FFFFFFFFFF",
+            &[(b"BY", "TTTT")],
+        );
+    }
+    drop(writer);
+
+    let config = MarkDuplicatesConfig {
+        input: input.display().to_string(),
+        inputs: vec![input.display().to_string()],
+        output: output.display().to_string(),
+        metrics_file: metrics.display().to_string(),
+        remove_duplicates: false,
+        remove_sequencing_duplicates: false,
+        assume_sorted: true,
+        assume_sort_order: None,
+        validation_stringency: Some("SILENT".to_string()),
+        quiet: true,
+        create_index: false,
+        create_md5_file: false,
+        add_pg_tag_to_reads: true,
+        tag_duplicate_set_members: false,
+        duplicate_scoring_strategy: None,
+        read_name_regex: Some("null".to_string()),
+        tagging_policy: None,
+        barcode_tag: None,
+        read_one_barcode_tag: Some("BX".to_string()),
+        read_two_barcode_tag: Some("BY".to_string()),
+        clear_dt: true,
+        optical_duplicate_pixel_distance: None,
+        compression_level: None,
+        reference_sequence: None,
+        tmp_dir: Some(scratch.display().to_string()),
+    };
+
+    turbo_picard_markdup::run(&config).expect("BAM duplicate marking succeeds");
+
+    assert_eq!(read_flags(&output), vec![99, 1123, 99, 147, 1171, 147]);
+    assert!(scratch.is_dir());
+    assert!(
+        scratch
+            .read_dir()
+            .expect("scratch directory reads")
+            .next()
+            .is_none()
+    );
 }
 
 #[test]
@@ -701,6 +857,7 @@ fn tags_optical_duplicate_pairs_and_reports_metrics() {
         optical_duplicate_pixel_distance: Some(100),
         compression_level: None,
         reference_sequence: None,
+        tmp_dir: None,
     };
 
     turbo_picard_markdup::run(&config).expect("BAM duplicate marking succeeds");
@@ -711,7 +868,54 @@ fn tags_optical_duplicate_pairs_and_reports_metrics() {
     );
     let metrics_text = std::fs::read_to_string(&metrics).expect("metrics file exists");
     assert!(metrics_text.contains("lib1\t0\t2\t0\t0\t0\t1\t1\t0.5\t\n"));
-    assert!(metrics_text.contains("BIN\tCoverageMult\tall_sets\tnon_optical_sets\n"));
+    assert!(metrics_text.contains("set_size\tall_sets\toptical_sets\tnon_optical_sets\n"));
+    assert!(metrics_text.contains("2.0\t1\t1\t0\n"));
+}
+
+#[test]
+fn bounded_optical_plan_accepts_custom_read_name_regex() {
+    let tempdir = tempfile::tempdir().expect("tempdir exists");
+    let output = tempdir.path().join("output.bam");
+    let metrics = tempdir.path().join("metrics.txt");
+    let input = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../fixtures/markduplicates/optical/input.bam");
+    let config = MarkDuplicatesConfig {
+        input: input.display().to_string(),
+        inputs: vec![input.display().to_string()],
+        output: output.display().to_string(),
+        metrics_file: metrics.display().to_string(),
+        remove_duplicates: false,
+        remove_sequencing_duplicates: false,
+        assume_sorted: true,
+        assume_sort_order: None,
+        validation_stringency: Some("SILENT".to_string()),
+        quiet: true,
+        create_index: false,
+        create_md5_file: false,
+        add_pg_tag_to_reads: true,
+        tag_duplicate_set_members: false,
+        duplicate_scoring_strategy: None,
+        read_name_regex: Some("^INST:[^:]+:[^:]+:[^:]+:([0-9]+):([0-9]+):([0-9]+)$".to_string()),
+        tagging_policy: Some("All".to_string()),
+        barcode_tag: None,
+        read_one_barcode_tag: None,
+        read_two_barcode_tag: None,
+        clear_dt: true,
+        optical_duplicate_pixel_distance: Some(100),
+        compression_level: None,
+        reference_sequence: None,
+        tmp_dir: None,
+    };
+
+    turbo_picard_markdup::run(&config).expect("custom optical regex succeeds");
+
+    assert_eq!(read_flags(&output), vec![99, 1123, 147, 1171]);
+    assert_eq!(
+        duplicate_dt_tags(&output),
+        vec![Some("SQ".to_string()), Some("SQ".to_string())]
+    );
+    let metrics_text = std::fs::read_to_string(&metrics).expect("metrics file exists");
+    assert!(metrics_text.contains("lib1\t0\t2\t0\t0\t0\t1\t1\t0.5\t\n"));
 }
 
 #[test]
@@ -746,6 +950,7 @@ fn removes_only_optical_duplicates_when_requested() {
         optical_duplicate_pixel_distance: Some(100),
         compression_level: None,
         reference_sequence: None,
+        tmp_dir: None,
     };
 
     turbo_picard_markdup::run(&config).expect("BAM duplicate marking succeeds");
@@ -791,6 +996,7 @@ fn removes_duplicate_pairs_when_requested() {
         optical_duplicate_pixel_distance: None,
         compression_level: None,
         reference_sequence: None,
+        tmp_dir: None,
     };
 
     turbo_picard_markdup::run(&config).expect("BAM duplicate marking succeeds");
@@ -831,6 +1037,7 @@ fn clears_existing_duplicate_type_tags_when_requested() {
         optical_duplicate_pixel_distance: Some(2500),
         compression_level: None,
         reference_sequence: None,
+        tmp_dir: None,
     };
 
     turbo_picard_markdup::run(&config).expect("BAM duplicate marking succeeds");
@@ -870,6 +1077,7 @@ fn preserves_existing_duplicate_type_tags_when_clear_dt_is_false() {
         optical_duplicate_pixel_distance: Some(2500),
         compression_level: None,
         reference_sequence: None,
+        tmp_dir: None,
     };
 
     turbo_picard_markdup::run(&config).expect("BAM duplicate marking succeeds");
@@ -911,6 +1119,7 @@ fn marks_duplicate_pairs_across_multiple_bam_inputs() {
         optical_duplicate_pixel_distance: None,
         compression_level: None,
         reference_sequence: None,
+        tmp_dir: None,
     };
 
     turbo_picard_markdup::run(&config).expect("BAM duplicate marking succeeds");
@@ -918,6 +1127,66 @@ fn marks_duplicate_pairs_across_multiple_bam_inputs() {
     assert_eq!(read_flags(&output), vec![99, 1123, 147, 1171]);
     let metrics_text = std::fs::read_to_string(&metrics).expect("metrics file exists");
     assert!(metrics_text.contains("lib1\t0\t2\t0\t0\t0\t1\t0\t0.5\t1\n"));
+}
+
+#[test]
+fn uses_bounded_plan_for_globally_ordered_multiple_bam_inputs() {
+    let tempdir = tempfile::tempdir().expect("tempdir exists");
+    let input1 = tempdir.path().join("lane-1.bam");
+    let input2 = tempdir.path().join("lane-2.bam");
+    let output = tempdir.path().join("output.bam");
+    let metrics = tempdir.path().join("metrics.txt");
+    let scratch = tempdir.path().join("scratch");
+
+    let mut writer = duplicate_fixture_writer(&input1);
+    write_mapped_pair_record(&mut writer, b"lane-1", 0x63, 10, 20, 14, b"ACGT", b"FFFF");
+    write_mapped_pair_record(&mut writer, b"lane-1", 0x93, 20, 10, -14, b"TGCA", b"FFFF");
+    drop(writer);
+
+    let mut writer = duplicate_fixture_writer(&input2);
+    write_mapped_pair_record(&mut writer, b"lane-2", 0x63, 30, 40, 14, b"ACGT", b"FFFF");
+    write_mapped_pair_record(&mut writer, b"lane-2", 0x93, 40, 30, -14, b"TGCA", b"FFFF");
+    drop(writer);
+
+    let config = MarkDuplicatesConfig {
+        input: input1.display().to_string(),
+        inputs: vec![input1.display().to_string(), input2.display().to_string()],
+        output: output.display().to_string(),
+        metrics_file: metrics.display().to_string(),
+        remove_duplicates: false,
+        remove_sequencing_duplicates: false,
+        assume_sorted: true,
+        assume_sort_order: None,
+        validation_stringency: Some("SILENT".to_string()),
+        quiet: true,
+        create_index: false,
+        create_md5_file: false,
+        add_pg_tag_to_reads: true,
+        tag_duplicate_set_members: false,
+        duplicate_scoring_strategy: None,
+        read_name_regex: Some("null".to_string()),
+        tagging_policy: Some("DontTag".to_string()),
+        barcode_tag: None,
+        read_one_barcode_tag: None,
+        read_two_barcode_tag: None,
+        clear_dt: true,
+        optical_duplicate_pixel_distance: None,
+        compression_level: None,
+        reference_sequence: None,
+        tmp_dir: Some(scratch.display().to_string()),
+    };
+
+    turbo_picard_markdup::run(&config).expect("bounded multi-input duplicate marking succeeds");
+
+    assert_eq!(read_flags(&output), vec![99, 147, 99, 147]);
+    assert!(scratch.is_dir());
+    assert!(
+        scratch
+            .read_dir()
+            .expect("scratch directory reads")
+            .next()
+            .is_none()
+    );
 }
 
 #[test]
@@ -952,6 +1221,7 @@ fn keeps_duplicate_positions_separate_by_library() {
         optical_duplicate_pixel_distance: None,
         compression_level: None,
         reference_sequence: None,
+        tmp_dir: None,
     };
 
     turbo_picard_markdup::run(&config).expect("BAM duplicate marking succeeds");
@@ -994,6 +1264,7 @@ fn copies_single_bam_when_no_duplicates_and_no_rewrite_options_are_requested() {
         optical_duplicate_pixel_distance: None,
         compression_level: None,
         reference_sequence: None,
+        tmp_dir: None,
     };
 
     turbo_picard_markdup::run(&config).expect("BAM duplicate marking succeeds");
@@ -1041,6 +1312,7 @@ fn preserves_libraries_from_later_bam_inputs() {
         optical_duplicate_pixel_distance: None,
         compression_level: None,
         reference_sequence: None,
+        tmp_dir: None,
     };
 
     turbo_picard_markdup::run(&config).expect("BAM duplicate marking succeeds");
@@ -1199,6 +1471,41 @@ fn write_mapped_pair_record(
     record
         .push_aux(b"RG", Aux::String("rg1"))
         .expect("RG tag can be written");
+    writer.write(&record).expect("fixture record writes");
+}
+
+#[allow(clippy::too_many_arguments)]
+fn write_mapped_pair_record_with_tags(
+    writer: &mut bam::Writer,
+    qname: &[u8],
+    flag: u16,
+    pos: i64,
+    mate_pos: i64,
+    insert_size: i64,
+    seq: &[u8],
+    qual: &[u8],
+    tags: &[(&[u8], &str)],
+) {
+    let cigar = CigarString(vec![Cigar::Match(
+        u32::try_from(seq.len()).expect("sequence length fits in CIGAR"),
+    )]);
+    let mut record = bam::Record::new();
+    record.set(qname, Some(&cigar), seq, qual);
+    record.set_tid(0);
+    record.set_pos(pos);
+    record.set_mapq(60);
+    record.set_flags(flag);
+    record.set_mtid(0);
+    record.set_mpos(mate_pos);
+    record.set_insert_size(insert_size);
+    record
+        .push_aux(b"RG", Aux::String("rg1"))
+        .expect("RG tag can be written");
+    for (tag, value) in tags {
+        record
+            .push_aux(tag, Aux::String(value))
+            .expect("barcode tag can be written");
+    }
     writer.write(&record).expect("fixture record writes");
 }
 
