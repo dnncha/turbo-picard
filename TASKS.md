@@ -62,6 +62,11 @@ and evidence-backed growth.
 - All nine checked-in WDL starters now pass strict miniwdl 1.15.0 validation;
   the CI Docker job also executes the MarkDuplicates trial with a derived
   no-entrypoint image, while local execution remains explicitly Docker-bound.
+- The fresh read-only public adoption audit at
+  `/private/tmp/turbo-picard-public-adoption-20260814-0617671.json` confirms
+  the main distribution gap: live PyPI/GitHub/GHCR are still `0.1.11`, neither
+  Bioconda package is indexed, and no workflow-owner trial report is verified.
+  Download and maintainer-issue counts remain signals only.
 - The benchmarked candidate runtime at source SHA
   `3c43bca0cc8624008cef6979e0c5b5450a965124` passes all 32 three-repeat
   benchmark parity checks against Picard 3.4.0. The refreshed checked-in assets

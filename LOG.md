@@ -1,5 +1,15 @@
 # Turbo Picard work log
 
+## 2026-08-14 — live public adoption audit refreshed at WDL candidate
+
+- The read-only report at `/private/tmp/turbo-picard-public-adoption-20260814-0617671.json`
+  records PyPI `0.1.11` with 605 without-mirrors downloads in the latest 30
+  days and 40 in the latest 7, GitHub release and container tag `0.1.11`, no
+  indexed Bioconda package, and no `v0.1.12` release state. The sampled open
+  issues and trial-thread comment are maintainer-authored; no workflow-owner
+  trial report is verified. These are distribution and interest signals, not
+  sustained adoption or production evidence. No external state changed.
+
 ## 2026-08-14 — WDL starter smoke added with explicit Docker boundary
 
 - Installed `miniwdl==1.15.0` in an isolated environment and strictly checked
