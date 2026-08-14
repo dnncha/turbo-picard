@@ -102,6 +102,8 @@ class VerifyPyPiPackageTests(unittest.TestCase):
             "wheels-linux-x86_64\nlinux-aarch64:\nBuild Linux ARM64 wheels\n"
             "wheels-linux-aarch64\nmacos-x86_64:\nBuild macOS Intel wheels\n"
             "macos-15-intel\nwheels-macos-x86_64\n"
+            "Smoke-test macOS arm64 wheel\nSmoke-test macOS Intel wheel\n"
+            "verify_pypi_wheel_install_smoke.sh\n"
             "needs: [linux, linux-aarch64, macos, macos-x86_64, sdist]\n"
             "manylinux: 2014\nperl-core\n"
             "apt-get install -y --no-install-recommends perl libclang-dev\n"

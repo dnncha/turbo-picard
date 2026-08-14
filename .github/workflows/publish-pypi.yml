@@ -85,6 +85,9 @@ jobs:
           target: aarch64
           args: --release --locked --compatibility pypi --out dist
 
+      - name: Smoke-test macOS arm64 wheel
+        run: bash tools/verify_pypi_wheel_install_smoke.sh dist/turbo_picard-*.whl
+
       - name: Upload wheel
         uses: actions/upload-artifact@v4
         with:
@@ -103,6 +106,9 @@ jobs:
         with:
           target: x86_64
           args: --release --locked --compatibility pypi --out dist
+
+      - name: Smoke-test macOS Intel wheel
+        run: bash tools/verify_pypi_wheel_install_smoke.sh dist/turbo_picard-*.whl
 
       - name: Upload wheel
         uses: actions/upload-artifact@v4

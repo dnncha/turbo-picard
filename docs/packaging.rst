@@ -107,6 +107,10 @@ and checks the output and metrics rather than stopping at ``--help``.
 It also runs ``tools/verify_mate_barcode_install_smoke.sh`` against the checked
 in mate-specific barcode fixture and fails if the Picard-compatible size-2
 histogram drifts.
+The macOS arm64 and Intel wheel build jobs run the same checks natively through
+``tools/verify_pypi_wheel_install_smoke.sh`` before uploading their artifacts.
+The Linux arm64 job remains cross-build and artifact-validated rather than
+pretending that an x86 runner executed an arm64 binary.
 The publication jobs also run ``tools/verify_markduplicates_guardrails.py`` so
 checked-in MarkDuplicates benchmark provenance, parity status, resource ratios,
 and README disclosures cannot drift independently.

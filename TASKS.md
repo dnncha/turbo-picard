@@ -62,6 +62,11 @@ and evidence-backed growth.
   published channels; neither Bioconda package is indexed, and PR #65922 still
   targets older `0.1.10` metadata. The audit records these as channel-state
   gaps without attempting publication or repair.
+- Closed a PyPI release-workflow coverage gap: macOS arm64 and Intel wheel jobs
+  now run a reusable isolated install, `pip check`, version/doctor/trial/shim,
+  real-data, and mate-barcode smoke before artifact upload. Linux arm64 remains
+  explicitly cross-built and artifact-validated, not falsely runtime-tested on
+  an x86 runner. The current arm64 wheel passed the reusable smoke locally.
 - Re-ran the full current `0.1.12` 32-command suite: all parity checks passed;
   one-repeat geometric mean was 83.27x, the floor was 8.41x, the maximum was
   278.74x, and MarkDuplicates measured 15.99x. This is local regression

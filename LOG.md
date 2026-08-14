@@ -1,5 +1,19 @@
 # Turbo Picard work log
 
+## 2026-08-14 — PyPI workflow smoke-tests native macOS wheels
+
+- Added `tools/verify_pypi_wheel_install_smoke.sh`, a reusable offline wheel
+  check covering isolated installation, `pip check`, version, doctor, trial,
+  compatibility shim, real MarkDuplicates output, and mate-specific barcode
+  histogram behavior.
+- Wired the smoke into the native macOS arm64 and Intel build jobs before wheel
+  upload. Linux arm64 remains explicitly cross-built and artifact-validated;
+  the workflow does not claim to execute an arm64 binary on an x86 runner.
+- Ran the reusable smoke against the current arm64 `0.1.12` candidate wheel;
+  it passed. The workflow change is local and awaits the next owner-controlled
+  tagged release run for native CI evidence; no publication or external state
+  changed.
+
 ## 2026-08-14 — distribution channel audit added
 
 - Extended the read-only public adoption report to schema version 4. It now
