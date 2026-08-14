@@ -23,9 +23,11 @@ and evidence-backed growth.
 
 - The current `0.1.12` candidate is committed locally on the existing `codex/`
   branch; the worktree is clean and the branch is ahead of `origin/main`. The
-  exact current source SHA is retained in the release
-  handoff manifest. The candidate remains a release candidate because neither
-  local nor origin has the matching `v0.1.12` tag.
+  exact current source SHA and arm64 package digests are retained in the
+  release handoff manifest at
+  `/private/tmp/turbo-picard-package-final-current/release-manifest.json`.
+  The candidate remains a release candidate because neither local nor origin
+  has the matching `v0.1.12` tag.
 - Fresh current-HEAD release-candidate evidence passed the five-repeat
   `MarkDuplicates` protocol on the pinned public SNVQ BAM: 26,577 records,
   exact duplicate/tag and normalized-metrics parity, `0.311250` seconds Turbo

@@ -1,5 +1,22 @@
 # Turbo Picard work log
 
+## 2026-08-14 — refreshed exact candidate package handoff after MarkDuplicates change
+
+- Rebuilt the current `0.1.12` arm64 wheel and source distribution after the
+  MarkDuplicates change. `verify_release_artifacts.py`, the isolated wheel
+  install smoke, the installed-command smoke, `verify_release_versions.py`,
+  and `verify_pypi_package.py` all passed.
+- The exact handoff manifest is retained outside the repository at
+  `/private/tmp/turbo-picard-package-final-current/release-manifest.json`.
+  It records the final clean candidate HEAD, the wheel and sdist digests, and
+  the expected missing local/origin `v0.1.12` tags.
+- The first rebuild attempt exhausted local disk while compiling vendored
+  OpenSSL. After checking that no build was active, only the inactive
+  checkout `target/debug` tree, failed OpenSSL build directories, and the
+  packaging temp directories created for this retry were removed; the retry
+  passed with 5.8 GiB free. No source, prior evidence bundle, Conda/Picard
+  environment, or external state was changed.
+
 ## 2026-08-14 — avoid redundant QNAME sorting for single-end external plans
 
 - Changed the bounded external `MarkDuplicates` path to enqueue only paired
