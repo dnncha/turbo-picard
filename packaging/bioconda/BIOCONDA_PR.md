@@ -53,10 +53,10 @@ Current benchmark summary:
 
 - Date: 2026-08-14.
 - Parity: 32/32 PASS.
-- Geometric mean speedup: 87.47x.
-- Median speedup: 100.27x.
-- Slowest saved speedup: 22.17x on SetNmMdAndUqTags.
-- Fastest saved speedup: 261.75x on NormalizeFasta.
+- Geometric mean speedup: 84.52x.
+- Median speedup: 99.56x.
+- Slowest saved speedup: 22.88x on SetNmMdAndUqTags.
+- Fastest saved speedup: 272.12x on NormalizeFasta.
 - Recently promoted benchmarks include IntervalListTools, LiftoverVcf,
   CollectMultipleMetrics, and CollectGcBiasMetrics.
 

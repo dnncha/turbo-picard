@@ -1,5 +1,17 @@
 # Turbo Picard work log
 
+## 2026-08-14 — synchronized release handoff and outreach benchmark facts
+
+- Updated the prepared Bioconda PR body and all local outreach drafts to the
+  current checked-in three-repeat benchmark summary: `84.52x` geometric mean,
+  `99.56x` median, `22.88x` floor, and `272.12x` maximum across `32/32`
+  parity-passing commands.
+- The Bioconda recipe-shape check, release-text check, and 50 focused Bioconda,
+  release-text, and preparation tests passed. With the intended changes
+  committed, the preflight will leave only the owner-controlled release tag and
+  immutable GitHub archive SHA as `WAIT` states; no external PR or post was
+  changed.
+
 ## 2026-08-14 — refreshed current-HEAD public benchmark assets
 
 - Ran the full `tools/bench_suite.py --repeats 3 --skip-build` profile against

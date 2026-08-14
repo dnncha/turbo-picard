@@ -70,6 +70,11 @@ and evidence-backed growth.
   Bioconda package is indexed, and no workflow-owner trial report is verified.
   The report records `605` without-mirrors downloads in 30 days and `40` in 7
   days; download and maintainer-issue counts remain signals only.
+- The local Bioconda PR body and all prepared outreach drafts now match the
+  current checked-in benchmark assets (`84.52x` geometric mean, `99.56x` median,
+  `22.88x` floor, `272.12x` maximum). Recipe shape and release-facing prose
+  pass; the source archive URL/SHA remains intentionally unfilled until the
+  exact `v0.1.12` tag exists.
 - The exact `0.1.12` candidate also has a refreshed redacted public-fixture
   trial packet at `/private/tmp/turbo-picard-shareable-trial-c3db358/`: Picard
   `3.4.0` and Turbo matched `MarkDuplicates` digests exactly at `3.99x` on the
