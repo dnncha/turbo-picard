@@ -27,7 +27,7 @@
   `pip check`, version/doctor/trial checks, real install smoke, and
   mate-specific barcode smoke passed.
 - The exact handoff manifest is retained at
-  `/private/tmp/turbo-picard-package-b4515fb-release-manifest.json`. It records
+  `/private/tmp/turbo-picard-release-manifest-current.json`. It records
   the current clean source SHA, artifact digests, and the expected missing
   local/origin `v0.1.12` tag blockers. The package remains a release candidate;
   production-scale and independent reproduction are unverified.
