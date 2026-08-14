@@ -1,5 +1,17 @@
 # Turbo Picard work log
 
+## 2026-08-14 — guard benchmark claims across release surfaces
+
+- Added `tools/verify_benchmark_claim_surfaces.py` and focused tests, then wired
+  both into CI and `verify_ci_coverage.py`'s required verifier/test coverage.
+  The guard derives the current summary from `benchmark-data.json` and checks
+  the Bioconda PR body, benchmark docs, static site, and all prepared outreach
+  surfaces, preventing a stale benchmark profile from reaching a release or
+  draft post.
+- The verifier, its focused tests, CI coverage check, and `git diff --check`
+  passed. This is local release-readiness work only; no tag, push, publication,
+  PR edit, or outreach occurred.
+
 ## 2026-08-14 — synchronized release handoff and outreach benchmark facts
 
 - Updated the prepared Bioconda PR body and all local outreach drafts to the

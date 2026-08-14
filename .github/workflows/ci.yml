@@ -69,6 +69,7 @@ jobs:
           python3 -m unittest tools/test_verify_parity_docs.py
           python3 -m unittest tools/test_verify_pypi_package.py
           python3 -m unittest tools/test_verify_readme_benchmark_evidence.py
+          python3 -m unittest tools/test_verify_benchmark_claim_surfaces.py
           python3 -m unittest tools/test_verify_readme_links.py
           python3 -m unittest tools/test_verify_real_data_ci_coverage.py
           python3 -m unittest tools/test_verify_real_data_evidence.py
@@ -148,6 +149,7 @@ jobs:
             tools/verify_parity_docs.py \
             tools/verify_pypi_package.py \
             tools/verify_readme_benchmark_evidence.py \
+            tools/verify_benchmark_claim_surfaces.py \
             tools/verify_readme_links.py \
             tools/verify_real_data_ci_coverage.py \
             tools/verify_real_data_evidence.py \
@@ -183,6 +185,7 @@ jobs:
             tools/test_verify_parity_docs.py \
             tools/test_verify_pypi_package.py \
             tools/test_verify_readme_benchmark_evidence.py \
+            tools/test_verify_benchmark_claim_surfaces.py \
             tools/test_verify_readme_links.py \
             tools/test_verify_real_data_ci_coverage.py \
             tools/test_verify_real_data_evidence.py \
@@ -206,6 +209,7 @@ jobs:
           python3 tools/verify_benchmark_suite_coverage.py
           python3 tools/verify_benchmark_thresholds.py
           python3 tools/verify_readme_benchmark_evidence.py
+          python3 tools/verify_benchmark_claim_surfaces.py
           python3 tools/verify_readme_links.py
           python3 tools/verify_real_data_ci_coverage.py
           python3 tools/verify_real_data_evidence.py
