@@ -1,5 +1,14 @@
 # Turbo Picard work log
 
+## 2026-08-14 — production evidence workflow contract statically guarded
+
+- Added `tools/verify_production_evidence_workflow.py` and focused tests. The
+  production validation job now checks that the shared dispatch validator,
+  its tests, path triggers, and validation dependency remain in place before
+  any input download or build. General CI covers the verifier and test module.
+  No production input, tag, package, publication, issue, comment, outreach, or
+  external service state changed.
+
 ## 2026-08-14 — dispatch validator added to general CI coverage
 
 - The new production-evidence dispatch validator test is now run and

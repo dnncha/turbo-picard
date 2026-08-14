@@ -44,6 +44,9 @@ and evidence-backed growth.
 - The dispatch validator's focused test is also covered by the general CI
   unittest and byte-compilation matrix; the repository CI-coverage verifier now
   passes on the exact candidate checkout.
+- The production-evidence workflow itself is statically guarded by
+  `tools/verify_production_evidence_workflow.py`, including the pre-download
+  ordering, manual-dispatch dependency, test coverage, and path triggers.
 - The benchmarked candidate runtime at source SHA
   `3c43bca0cc8624008cef6979e0c5b5450a965124` passes all 32 three-repeat
   benchmark parity checks against Picard 3.4.0. The refreshed checked-in assets

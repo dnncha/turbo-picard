@@ -58,6 +58,7 @@ jobs:
           python3 -m unittest tools/test_build_release_manifest.py
           python3 -m unittest tools/test_validate_production_dispatch.py
           python3 -m unittest tools/test_validate_production_manifest.py
+          python3 -m unittest tools/test_verify_production_evidence_workflow.py
           python3 -m unittest tools/test_verify_benchmark_log_evidence.py
           python3 -m unittest tools/test_verify_benchmark_suite_coverage.py
           python3 -m unittest tools/test_verify_benchmark_thresholds.py
@@ -103,6 +104,7 @@ jobs:
             tools/validate_production_dispatch.py \
             tools/test_validate_production_dispatch.py \
             tools/validate_production_manifest.py \
+            tools/verify_production_evidence_workflow.py \
             tools/bench_buildbamindex.py \
             tools/bench_cleansam.py \
             tools/bench_collectbasedistributionbycycle.py \
@@ -170,6 +172,7 @@ jobs:
             tools/test_build_production_manifest.py \
             tools/test_build_release_manifest.py \
             tools/test_validate_production_manifest.py \
+            tools/test_verify_production_evidence_workflow.py \
             tools/test_verify_benchmark_log_evidence.py \
             tools/test_verify_benchmark_suite_coverage.py \
             tools/test_verify_benchmark_thresholds.py \
@@ -209,6 +212,7 @@ jobs:
           python3 tools/verify_real_data_evidence.py --release-ready
           python3 tools/verify_release_artifacts.py --source-only
           python3 tools/verify_markduplicates_guardrails.py
+          python3 tools/verify_production_evidence_workflow.py
           python3 tools/verify_publish_workflows.py
           python3 tools/verify_release_text_quality.py
           python3 tools/verify_release_versions.py

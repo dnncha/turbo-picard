@@ -11,6 +11,8 @@ on:
       - "tools/test_validate_production_manifest.py"
       - "tools/validate_production_dispatch.py"
       - "tools/test_validate_production_dispatch.py"
+      - "tools/verify_production_evidence_workflow.py"
+      - "tools/test_verify_production_evidence_workflow.py"
       - "docs/production-readiness.rst"
       - "docs/compatibility-contract.rst"
   push:
@@ -24,6 +26,8 @@ on:
       - "tools/test_validate_production_manifest.py"
       - "tools/validate_production_dispatch.py"
       - "tools/test_validate_production_dispatch.py"
+      - "tools/verify_production_evidence_workflow.py"
+      - "tools/test_verify_production_evidence_workflow.py"
       - "docs/production-readiness.rst"
       - "docs/compatibility-contract.rst"
 
@@ -151,10 +155,14 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: "3.11"
+      - name: Verify production evidence workflow contract
+        run: python3 tools/verify_production_evidence_workflow.py
       - name: Run manifest validator tests
         run: python -m unittest discover tools -p 'test_validate_production_manifest.py'
       - name: Run dispatch input validator tests
         run: python -m unittest discover tools -p 'test_validate_production_dispatch.py'
+      - name: Run workflow contract verifier tests
+        run: python -m unittest discover tools -p 'test_verify_production_evidence_workflow.py'
       - name: Validate example JSON syntax
         run: python -m json.tool benchmarks/production/manifest-entry.example.json >/dev/null
 

@@ -66,6 +66,10 @@ requires both `turbo-picard` and Picard in the selected and required tool sets,
 rejects mismatched CRAM/reference or UMI/barcode settings, and requires at
 least five measured repeats. Its focused tests run in the workflow validation
 job, so a future dispatch-input change is reviewed before a large evidence run.
+The same validation job also runs
+`tools/verify_production_evidence_workflow.py`, which checks that the shared
+validator remains before input download/build and that manual measurement still
+depends on the validation job.
 
 Independent reproduction is a separate evidence contract, not a reviewer-name
 checkbox. A manifest may use `status=pass` only when it retains an evidence URL,
