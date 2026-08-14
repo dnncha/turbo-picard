@@ -87,6 +87,11 @@ and evidence-backed growth.
   `267.27x` maximum local speedups. The profile is retained as regression
   evidence only; repeated and production-scale evidence remain the claims
   boundary.
+- A fresh five-repeat, 1,000,000-record high-duplicate MarkDuplicates profile
+  also passed exact parity at `5.39x` median speedup (`1.602s` versus
+  `11.971s`), with per-repeat speedups ranging from `1.84x` to `8.47x`.
+  This is scoped synthetic evidence; the variance and comparator RSS prevent
+  it from supporting a universal or production-scale claim.
 - The benchmarked candidate runtime at source SHA
   `3c43bca0cc8624008cef6979e0c5b5450a965124` passes all 32 three-repeat
   benchmark parity checks against Picard 3.4.0. The refreshed checked-in assets

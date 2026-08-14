@@ -1,5 +1,19 @@
 # Turbo Picard work log
 
+## 2026-08-14 — current high-duplicate MarkDuplicates profile
+
+- Ran the documented five-repeat, 1,000,000-record synthetic BAM profile with
+  duplicate families of 4,096 and `READ_NAME_REGEX=null`. Exact parity passed;
+  the median was `1.602s` Turbo versus `11.971s` Picard (`5.39x`), with
+  observed per-repeat speedups from `1.84x` to `8.47x`.
+- Raw profile JSON is retained at
+  `/private/tmp/turbo-picard-markduplicates-profile-d243566.json`. The maximum
+  wrapper RSS observed in this comparator profile was `1,401,392 KiB`, which
+  includes child-process setup and comparator overhead; it is not a production
+  resource claim. This remains synthetic, single-host release-candidate
+  evidence, not WGS/WES or independent workflow-owner proof. No external state
+  changed.
+
 ## 2026-08-14 — current candidate 32-command parity profile
 
 - Ran the full `tools/bench_suite.py --repeats 1 --skip-build` profile against
