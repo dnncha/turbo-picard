@@ -183,6 +183,24 @@ Picard regex, to exercise bounded optical-family discovery. Record both the
 normal family-size profile and this adversarial profile; the large-family result
 is a scalability guardrail, not a replacement for WGS/WES evidence.
 
+To exercise paired duplicate families and the optical-name graph explicitly,
+use the paired synthetic benchmark. It uses Picard only to prepare a coordinate-
+sorted input with Picard's stricter tie ordering; the timed MarkDuplicates
+commands still run on the same BAM:
+
+.. code-block:: bash
+
+   python3 tools/bench_markduplicates_synthetic.py \
+     --reads 20000 \
+     --duplicate-family-size 1024 \
+     --paired \
+     --input-format bam \
+     --skip-build
+
+This remains synthetic parity and scalability evidence. It does not substitute
+for permissioned WGS/WES data, independent reproduction, or workflow-owner
+approval.
+
 ``CollectGcBiasMetrics`` loads one reference contig at a time via ``.fai`` seek
 for read-time GC windows and precomputes genome-window counts without keeping
 the full reference in memory.
