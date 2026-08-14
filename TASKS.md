@@ -65,10 +65,11 @@ and evidence-backed growth.
   the CI Docker job also executes the MarkDuplicates trial with a derived
   no-entrypoint image, while local execution remains explicitly Docker-bound.
 - The fresh read-only public adoption audit at
-  `/private/tmp/turbo-picard-public-adoption-20260814-0617671.json` confirms
+  `/private/tmp/turbo-picard-public-adoption-20260814-b32aef7.json` confirms
   the main distribution gap: live PyPI/GitHub/GHCR are still `0.1.11`, neither
   Bioconda package is indexed, and no workflow-owner trial report is verified.
-  Download and maintainer-issue counts remain signals only.
+  The report records `605` without-mirrors downloads in 30 days and `40` in 7
+  days; download and maintainer-issue counts remain signals only.
 - The exact `0.1.12` candidate also has a refreshed redacted public-fixture
   trial packet at `/private/tmp/turbo-picard-shareable-trial-c3db358/`: Picard
   `3.4.0` and Turbo matched `MarkDuplicates` digests exactly at `3.99x` on the

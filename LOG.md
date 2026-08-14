@@ -1,5 +1,18 @@
 # Turbo Picard work log
 
+## 2026-08-14 — read-only public adoption audit refreshed at `b32aef7`
+
+- The validated report at
+  `/private/tmp/turbo-picard-public-adoption-20260814-b32aef7.json` records
+  live PyPI/GitHub/GHCR at `0.1.11`, no indexed Bioconda main or shim package,
+  `605` without-mirrors downloads in the latest 30 days and `40` in the latest
+  7 days, and five open maintainer-authored issues.
+- No external-authored issue/comment or workflow-owner trial report is
+  verified. The report keeps downloads, repository counts, and issue activity
+  as distribution/community signals only; production readiness, sustained
+  external usage, and customer demand remain unverified. No external state
+  changed.
+
 ## 2026-08-14 — refreshed exact candidate package handoff after MarkDuplicates change
 
 - Rebuilt the current `0.1.12` arm64 wheel and source distribution after the
