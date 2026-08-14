@@ -41,6 +41,9 @@ and evidence-backed growth.
   GitHub Actions. It fails before input download/build for missing Picard/Turbo
   comparison tools, invalid CRAM/reference or UMI/barcode settings, malformed
   hashes, or fewer than five measured repeats.
+- The dispatch validator's focused test is also covered by the general CI
+  unittest and byte-compilation matrix; the repository CI-coverage verifier now
+  passes on the exact candidate checkout.
 - The benchmarked candidate runtime at source SHA
   `3c43bca0cc8624008cef6979e0c5b5450a965124` passes all 32 three-repeat
   benchmark parity checks against Picard 3.4.0. The refreshed checked-in assets

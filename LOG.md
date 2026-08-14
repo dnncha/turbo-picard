@@ -1,5 +1,13 @@
 # Turbo Picard work log
 
+## 2026-08-14 — dispatch validator added to general CI coverage
+
+- The new production-evidence dispatch validator test is now run and
+  byte-compiled by the general CI workflow, satisfying the repository's
+  `verify_ci_coverage.py` contract. The first post-change audit caught this
+  omission before release handoff; no production input, tag, package,
+  publication, issue, comment, outreach, or external service state changed.
+
 ## 2026-08-14 — production evidence dispatch contract hardened
 
 - Extracted the GitHub Actions production-evidence dispatch checks into the
