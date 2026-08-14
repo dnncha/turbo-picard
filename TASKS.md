@@ -74,6 +74,11 @@ and evidence-backed growth.
 - A 2,000,000-record synthetic `MarkDuplicates` stress pass also matched Picard
   exactly at `1.86x` with `READ_NAME_REGEX=null`; it strengthens scalability
   guardrails only and does not replace production-scale or independent evidence.
+- The bounded external plan now avoids sorting unpaired records in its separate
+  QNAME pairing pass. Focused tests pass, and fresh two-million-record parity
+  reruns pass for family sizes `4` and `4096`; observed single-host timings
+  were `0.85x` and `1.38x` versus Picard respectively, so this remains a
+  scoped optimization rather than a universal performance claim.
 - The benchmarked candidate runtime at source SHA
   `3c43bca0cc8624008cef6979e0c5b5450a965124` passes all 32 three-repeat
   benchmark parity checks against Picard 3.4.0. The refreshed checked-in assets

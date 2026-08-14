@@ -867,12 +867,18 @@ fn try_run_external_plan(
             }
 
             let plan = external_plan_record(ordinal, &record, library_id, config);
-            qname_sorter
-                .push(
-                    plan.qname.clone(),
-                    encode_external_plan_record(&plan, false),
-                )
-                .map_err(MarkDuplicatesError::Operation)?;
+            // The QNAME pass only pairs records.  Do not send unpaired
+            // records through a second external sort: the fragment pass
+            // below already owns their duplicate decisions, and single-end
+            // inputs are common in real pipelines.
+            if duplicate_candidate_is_pair(flag) {
+                qname_sorter
+                    .push(
+                        plan.qname.clone(),
+                        encode_external_plan_record(&plan, false),
+                    )
+                    .map_err(MarkDuplicatesError::Operation)?;
+            }
             fragment_sorter
                 .push(
                     external_fragment_key(&plan),

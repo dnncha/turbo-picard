@@ -1,5 +1,19 @@
 # Turbo Picard work log
 
+## 2026-08-14 — avoid redundant QNAME sorting for single-end external plans
+
+- Changed the bounded external `MarkDuplicates` path to enqueue only paired
+  records in its QNAME pairing sorter. Unpaired records still pass through
+  the fragment duplicate-key sorter and the same ordinal replay, so the
+  duplicate-decision contract is unchanged.
+- Focused Rust tests passed (`57` MarkDuplicates tests across library, BAM,
+  CRAM, and SAM-validation targets). Two million-record synthetic parity
+  reruns passed for both duplicate-family shapes: family `4` measured `15.153s`
+  Turbo versus `12.852s` Picard (`0.85x`), and family `4096` measured `8.374s`
+  versus `11.586s` (`1.38x`). These are single-host stress timings, not a
+  universal speed claim or production-scale evidence. No external state
+  changed.
+
 ## 2026-08-14 — 2M-record synthetic MarkDuplicates stress passes
 
 - Ran `tools/bench_markduplicates_synthetic.py` with 2,000,000 BAM records,
