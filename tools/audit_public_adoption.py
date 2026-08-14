@@ -32,6 +32,11 @@ GITHUB_ISSUES_URL = (
     "https://api.github.com/repos/dnncha/turbo-picard/issues"
     "?state=open&per_page=100"
 )
+GITHUB_TRIAL_COMMENTS_URL = (
+    "https://api.github.com/repos/dnncha/turbo-picard/issues/4/comments"
+    "?per_page=100"
+)
+GITHUB_OWNER_LOGIN = "dnncha"
 TRIAL_REPORT_ISSUE_NUMBER = 4
 TRIAL_REPORT_ISSUE_URL = "https://github.com/dnncha/turbo-picard/issues/4"
 USER_AGENT = "turbo-picard-public-adoption-audit/1"
@@ -321,7 +326,11 @@ def parse_repository(payload: object) -> dict[str, Any]:
     }
 
 
-def parse_open_issues(payload: object) -> dict[str, Any]:
+def parse_open_issues(
+    payload: object,
+    *,
+    maintainer_login: str = GITHUB_OWNER_LOGIN,
+) -> dict[str, Any]:
     if not isinstance(payload, list):
         raise ValueError("GitHub issues response must be a list")
     issues = [item for item in payload if isinstance(item, dict) and "pull_request" not in item]
@@ -335,6 +344,21 @@ def parse_open_issues(payload: object) -> dict[str, Any]:
         for item in issues
         if isinstance(item.get("html_url"), str) and item["html_url"]
     )
+    maintainer_issue_numbers: list[int] = []
+    external_issue_numbers: list[int] = []
+    unknown_issue_author_numbers: list[int] = []
+    for item in issues:
+        number = item.get("number")
+        if not isinstance(number, int) or isinstance(number, bool):
+            continue
+        user = item.get("user")
+        login = user.get("login") if isinstance(user, dict) else None
+        if login == maintainer_login:
+            maintainer_issue_numbers.append(number)
+        elif isinstance(login, str) and login.strip():
+            external_issue_numbers.append(number)
+        else:
+            unknown_issue_author_numbers.append(number)
     trial_issue = next(
         (
             item
@@ -349,6 +373,8 @@ def parse_open_issues(payload: object) -> dict[str, Any]:
             "state": "not_in_open_response",
             "comment_count": None,
             "url": TRIAL_REPORT_ISSUE_URL,
+            "author_provenance": "not_in_open_response",
+            "author_is_maintainer": None,
         }
     else:
         comments = trial_issue.get("comments")
@@ -361,20 +387,69 @@ def parse_open_issues(payload: object) -> dict[str, Any]:
         issue_url = trial_issue.get("html_url")
         if not isinstance(issue_url, str) or not issue_url.strip():
             issue_url = TRIAL_REPORT_ISSUE_URL
+        user = trial_issue.get("user")
+        login = user.get("login") if isinstance(user, dict) else None
+        if login == maintainer_login:
+            author_provenance = "maintainer"
+        elif isinstance(login, str) and login.strip():
+            author_provenance = "external"
+        else:
+            author_provenance = "unknown"
         trial_report_thread = {
             "issue_number": TRIAL_REPORT_ISSUE_NUMBER,
             "state": trial_issue.get("state") or "open",
             "comment_count": comments,
             "url": issue_url,
+            "author_provenance": author_provenance,
+            "author_is_maintainer": author_provenance == "maintainer",
         }
     return {
         "open_issue_count_excluding_pull_requests": len(issues),
         "open_issue_numbers": numbers,
         "open_issue_urls": urls,
+        "maintainer_authored_issue_count": len(maintainer_issue_numbers),
+        "maintainer_authored_issue_numbers": sorted(maintainer_issue_numbers),
+        "external_authored_issue_count": len(external_issue_numbers),
+        "external_authored_issue_numbers": sorted(external_issue_numbers),
+        "unknown_issue_author_count": len(unknown_issue_author_numbers),
+        "unknown_issue_author_numbers": sorted(unknown_issue_author_numbers),
         "pull_requests_excluded": len(payload) - len(issues),
         "response_page_size": len(payload),
         "possibly_truncated": len(payload) >= 100,
         "trial_report_thread": trial_report_thread,
+    }
+
+
+def parse_trial_comments(
+    payload: object,
+    *,
+    maintainer_login: str = GITHUB_OWNER_LOGIN,
+) -> dict[str, Any]:
+    """Count comment-author provenance without retaining public usernames."""
+
+    if not isinstance(payload, list):
+        raise ValueError("GitHub trial comments response must be a list")
+    maintainer_count = 0
+    external_count = 0
+    unknown_count = 0
+    for item in payload:
+        if not isinstance(item, dict):
+            unknown_count += 1
+            continue
+        user = item.get("user")
+        login = user.get("login") if isinstance(user, dict) else None
+        if login == maintainer_login:
+            maintainer_count += 1
+        elif isinstance(login, str) and login.strip():
+            external_count += 1
+        else:
+            unknown_count += 1
+    return {
+        "comment_page_size": len(payload),
+        "comments_possibly_truncated": len(payload) >= 100,
+        "maintainer_comment_count": maintainer_count,
+        "external_comment_count": external_count,
+        "unknown_comment_count": unknown_count,
     }
 
 
@@ -389,7 +464,7 @@ def build_report(
     sources: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     return {
-        "schema_version": 2,
+        "schema_version": 3,
         "observed_at_utc": observed_at_utc,
         "release_state": release_state,
         "package": pypi,
@@ -402,6 +477,7 @@ def build_report(
             "pypistats_overall_without_mirrors": PYPISTATS_OVERALL_URL,
             "github_repository": GITHUB_REPOSITORY_URL,
             "github_open_issues": GITHUB_ISSUES_URL,
+            "github_trial_report_comments": GITHUB_TRIAL_COMMENTS_URL,
         },
         "interpretation": {
             "download_counts_are_distribution_signals": True,
@@ -411,6 +487,7 @@ def build_report(
             "production_readiness_verified": False,
             "workflow_owner_trial_reports_verified": False,
             "trial_report_comments_are_community_signals": True,
+            "community_provenance_is_recorded": True,
             "release_source_ready_verified": release_state["release_source_ready"],
             "public_package_matches_source_verified": bool(
                 pypi.get("version_matches_workspace")
@@ -467,6 +544,15 @@ def collect_report(
             retry_delay=retry_delay,
         )
     )
+    trial_comments = parse_trial_comments(
+        fetcher(
+            GITHUB_TRIAL_COMMENTS_URL,
+            timeout=timeout,
+            retries=retries,
+            retry_delay=retry_delay,
+        )
+    )
+    issues["trial_report_thread"].update(trial_comments)
     release_state = collect_release_state(root)
     return build_report(
         observed_at_utc=observed_at_utc or utc_timestamp(),

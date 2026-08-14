@@ -131,6 +131,7 @@ class AuditPublicAdoptionTests(unittest.TestCase):
                     "html_url": "https://github.com/dnncha/turbo-picard/issues/4",
                     "state": "open",
                     "comments": 2,
+                    "user": {"login": "dnncha"},
                 },
                 {
                     "number": 20,
@@ -143,6 +144,22 @@ class AuditPublicAdoptionTests(unittest.TestCase):
         self.assertEqual(result["open_issue_numbers"], [4])
         self.assertEqual(result["pull_requests_excluded"], 1)
         self.assertEqual(result["trial_report_thread"]["comment_count"], 2)
+        self.assertEqual(result["maintainer_authored_issue_numbers"], [4])
+        self.assertEqual(result["external_authored_issue_count"], 0)
+        self.assertEqual(result["trial_report_thread"]["author_provenance"], "maintainer")
+
+    def test_parse_trial_comments_separates_maintainer_and_external_authors(self) -> None:
+        result = audit_public_adoption.parse_trial_comments(
+            [
+                {"user": {"login": "dnncha"}},
+                {"user": {"login": "workflow-owner"}},
+                {"user": None},
+            ]
+        )
+        self.assertEqual(result["maintainer_comment_count"], 1)
+        self.assertEqual(result["external_comment_count"], 1)
+        self.assertEqual(result["unknown_comment_count"], 1)
+        self.assertFalse(result["comments_possibly_truncated"])
 
     def test_parse_open_issues_records_missing_trial_thread_without_claiming_activity(self) -> None:
         result = audit_public_adoption.parse_open_issues(
@@ -197,7 +214,11 @@ class AuditPublicAdoptionTests(unittest.TestCase):
                         "html_url": "https://github.com/dnncha/turbo-picard/issues/4",
                         "state": "open",
                         "comments": 1,
+                        "user": {"login": "dnncha"},
                     }
+                ],
+                audit_public_adoption.GITHUB_TRIAL_COMMENTS_URL: [
+                    {"user": {"login": "dnncha"}}
                 ],
             }
 
@@ -214,11 +235,17 @@ class AuditPublicAdoptionTests(unittest.TestCase):
             self.assertEqual(report["downloads"]["downloads_total"], 3)
             self.assertEqual(report["community"]["open_issue_numbers"], [4])
             self.assertEqual(report["community"]["trial_report_thread"]["comment_count"], 1)
-            self.assertEqual(report["schema_version"], 2)
+            self.assertEqual(report["schema_version"], 3)
             self.assertIn("release_state", report)
             self.assertFalse(report["interpretation"]["release_source_ready_verified"])
             self.assertFalse(report["interpretation"]["sustained_external_usage_verified"])
             self.assertFalse(report["interpretation"]["workflow_owner_trial_reports_verified"])
+            self.assertTrue(report["interpretation"]["community_provenance_is_recorded"])
+            self.assertEqual(report["community"]["external_authored_issue_count"], 0)
+            self.assertEqual(
+                report["community"]["trial_report_thread"]["external_comment_count"],
+                0,
+            )
 
 
 if __name__ == "__main__":

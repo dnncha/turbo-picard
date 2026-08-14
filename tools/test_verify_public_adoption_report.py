@@ -16,7 +16,7 @@ SPEC.loader.exec_module(verify_public_adoption_report)
 
 def valid_report() -> dict[str, object]:
     return {
-        "schema_version": 2,
+        "schema_version": 3,
         "observed_at_utc": "2026-08-14T00:00:00Z",
         "release_state": {
             "workspace_version": "0.1.12",
@@ -36,6 +36,33 @@ def valid_report() -> dict[str, object]:
             "version_matches_workspace": True,
             "long_description_matches_workspace": True,
         },
+        "community": {
+            "open_issue_count_excluding_pull_requests": 1,
+            "open_issue_numbers": [4],
+            "open_issue_urls": ["https://github.com/dnncha/turbo-picard/issues/4"],
+            "maintainer_authored_issue_count": 1,
+            "maintainer_authored_issue_numbers": [4],
+            "external_authored_issue_count": 0,
+            "external_authored_issue_numbers": [],
+            "unknown_issue_author_count": 0,
+            "unknown_issue_author_numbers": [],
+            "pull_requests_excluded": 0,
+            "response_page_size": 1,
+            "possibly_truncated": False,
+            "trial_report_thread": {
+                "issue_number": 4,
+                "state": "open",
+                "comment_count": 1,
+                "url": "https://github.com/dnncha/turbo-picard/issues/4",
+                "author_provenance": "maintainer",
+                "author_is_maintainer": True,
+                "comment_page_size": 1,
+                "comments_possibly_truncated": False,
+                "maintainer_comment_count": 1,
+                "external_comment_count": 0,
+                "unknown_comment_count": 0,
+            },
+        },
         "interpretation": {
             "download_counts_are_distribution_signals": True,
             "repository_counts_are_public_interest_signals": True,
@@ -44,6 +71,7 @@ def valid_report() -> dict[str, object]:
             "production_readiness_verified": False,
             "workflow_owner_trial_reports_verified": False,
             "trial_report_comments_are_community_signals": True,
+            "community_provenance_is_recorded": True,
             "release_source_ready_verified": True,
             "public_package_matches_source_verified": True,
         },
@@ -58,7 +86,7 @@ class VerifyPublicAdoptionReportTests(unittest.TestCase):
         payload = valid_report()
         payload["schema_version"] = 1
         self.assertIn(
-            "report schema_version must be 2",
+            "report schema_version must be 3",
             verify_public_adoption_report.collect_errors(payload),
         )
 

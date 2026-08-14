@@ -111,10 +111,14 @@ URLs and explicitly marks sustained external usage, customer demand, and
 production readiness as unverified. Download and repository counters are
 distribution and interest signals, not user telemetry or a substitute for
 reviewed workflow-owner trials.
-The community section also records the comment count on the public trial-report
-thread as a low-level activity signal. It deliberately does not count comments
-as workflow-owner trial reports; ``workflow_owner_trial_reports_verified`` stays
-false until a human reviews the reports and confirms their provenance.
+The community section also records the public trial-report thread's comment
+count and the observed author provenance for open issues and trial comments.
+Maintainer, external, and unknown authors are counted separately without
+retaining public usernames. It deliberately does not count comments as
+workflow-owner trial reports; ``workflow_owner_trial_reports_verified`` stays
+false until a human reviews the reports and confirms their workflow context.
+An empty external-author count is only an observation about the sampled public
+API response, not evidence that no private or unreported trials exist.
 The repository also has a quiet weekly and manual
 ``.github/workflows/public-adoption-audit.yml`` job that stores the JSON report
 as a short-lived GitHub Actions artifact; it has read-only repository

@@ -11,7 +11,7 @@ import sys
 from typing import Any
 
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 HEX40 = re.compile(r"^[0-9a-f]{40}$")
 SEMVER = re.compile(r"^\d+\.\d+\.\d+$")
 
@@ -53,6 +53,67 @@ def collect_errors(payload: object) -> list[str]:
         if not isinstance(package.get(key), bool):
             errors.append(f"package {key} must be boolean")
 
+    community = _mapping(report.get("community"), "community", errors)
+    for key in (
+        "open_issue_count_excluding_pull_requests",
+        "pull_requests_excluded",
+        "response_page_size",
+        "maintainer_authored_issue_count",
+        "external_authored_issue_count",
+        "unknown_issue_author_count",
+    ):
+        value = community.get(key)
+        if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+            errors.append(f"community {key} must be a non-negative integer")
+    for key in (
+        "open_issue_numbers",
+        "maintainer_authored_issue_numbers",
+        "external_authored_issue_numbers",
+        "unknown_issue_author_numbers",
+    ):
+        value = community.get(key)
+        if not isinstance(value, list) or not all(
+            isinstance(item, int) and not isinstance(item, bool) for item in value
+        ):
+            errors.append(f"community {key} must be a list of integers")
+    if not isinstance(community.get("possibly_truncated"), bool):
+        errors.append("community possibly_truncated must be boolean")
+    trial_thread = _mapping(community.get("trial_report_thread"), "community trial_report_thread", errors)
+    if not isinstance(trial_thread.get("issue_number"), int) or isinstance(
+        trial_thread.get("issue_number"), bool
+    ):
+        errors.append("community trial_report_thread issue_number must be an integer")
+    if not isinstance(trial_thread.get("state"), str) or not trial_thread["state"].strip():
+        errors.append("community trial_report_thread state must be non-empty text")
+    if not isinstance(trial_thread.get("url"), str) or not trial_thread["url"].strip():
+        errors.append("community trial_report_thread url must be non-empty text")
+    comment_count = trial_thread.get("comment_count")
+    if comment_count is not None and (
+        not isinstance(comment_count, int) or isinstance(comment_count, bool) or comment_count < 0
+    ):
+        errors.append("community trial_report_thread comment_count must be a non-negative integer or null")
+    for key in (
+        "comment_page_size",
+        "maintainer_comment_count",
+        "external_comment_count",
+        "unknown_comment_count",
+    ):
+        value = trial_thread.get(key)
+        if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+            errors.append(f"community trial_report_thread {key} must be a non-negative integer")
+    if not isinstance(trial_thread.get("comments_possibly_truncated"), bool):
+        errors.append("community trial_report_thread comments_possibly_truncated must be boolean")
+    if trial_thread.get("author_provenance") not in {
+        "maintainer",
+        "external",
+        "unknown",
+        "not_in_open_response",
+    }:
+        errors.append("community trial_report_thread author_provenance is invalid")
+    author_is_maintainer = trial_thread.get("author_is_maintainer")
+    if author_is_maintainer is not None and not isinstance(author_is_maintainer, bool):
+        errors.append("community trial_report_thread author_is_maintainer must be boolean or null")
+
     interpretation = _mapping(report.get("interpretation"), "interpretation", errors)
     for key in (
         "download_counts_are_distribution_signals",
@@ -62,6 +123,7 @@ def collect_errors(payload: object) -> list[str]:
         "production_readiness_verified",
         "workflow_owner_trial_reports_verified",
         "trial_report_comments_are_community_signals",
+        "community_provenance_is_recorded",
         "release_source_ready_verified",
         "public_package_matches_source_verified",
     ):
@@ -77,6 +139,8 @@ def collect_errors(payload: object) -> list[str]:
             errors.append(f"interpretation {key} must remain false")
     if interpretation.get("trial_report_comments_are_community_signals") is not True:
         errors.append("interpretation trial_report_comments_are_community_signals must remain true")
+    if interpretation.get("community_provenance_is_recorded") is not True:
+        errors.append("interpretation community_provenance_is_recorded must remain true")
     return errors
 
 

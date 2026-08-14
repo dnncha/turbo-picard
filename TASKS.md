@@ -50,10 +50,13 @@ and evidence-backed growth.
   605 without-mirrors downloads in the latest 30 days and 40 in the latest 7;
   `v0.1.12` is not locally or remotely tagged. This is an explicit publication
   boundary, not a claim of adoption or production readiness.
-- The read-only adoption audit now records the public trial thread's comment
-  count as a community-activity signal while keeping
-  `workflow_owner_trial_reports_verified=false`; comments are not treated as
-  workflow adoption without human provenance review.
+- The read-only adoption audit now records public issue and trial-comment
+  author provenance without retaining usernames. The 2026-08-14 refresh found
+  all five open issues and the one public trial-thread comment maintainer-
+  authored, with zero externally authored issues or comments in the sampled
+  GitHub API responses. `workflow_owner_trial_reports_verified=false` remains
+  correct: public maintainer activity is not workflow-owner adoption evidence,
+  and an empty external count does not rule out private or unreported trials.
 - Re-ran the full current `0.1.12` 32-command suite: all parity checks passed;
   one-repeat geometric mean was 83.27x, the floor was 8.41x, the maximum was
   278.74x, and MarkDuplicates measured 15.99x. This is local regression

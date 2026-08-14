@@ -1,5 +1,21 @@
 # Turbo Picard work log
 
+## 2026-08-14 — public adoption audit records author provenance
+
+- Extended the read-only public adoption report to schema version 3. It now
+  separates maintainer, external, and unknown authors for open issues and the
+  public trial-report thread's comments, without retaining public usernames;
+  the validator and focused tests enforce the new shape and safety boundary.
+- Refreshed the report at `2026-08-14T05:52:19Z`: all five sampled open issues
+  and the one trial-thread comment were maintainer-authored, with zero
+  externally authored issues or comments observed. `workflow_owner_trial_reports_verified`
+  remains false because this is public maintainer activity, not a workflow-owner
+  trial report.
+- PyPI remains `0.1.11` with 605 without-mirrors downloads in the latest 30
+  days and 40 in the latest 7 days; `0.1.12` remains untagged locally and on
+  `origin`. This was read-only; no issue, comment, outreach, publication, or
+  external-service mutation occurred.
+
 ## 2026-08-14 — outreach bundle corrected for Bioconda state
 
 - A read-only check of Bioconda PR #65922 found it open for older `0.1.10`
