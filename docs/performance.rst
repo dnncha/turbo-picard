@@ -13,18 +13,20 @@ shows a ``6.86x`` floor speedup, ``24.94x`` geometric mean speedup, and
 ``94.36x`` top speedup against Picard 3.4.0. Those are saved-fixture results,
 not whole-genome guarantees.
 
-For a single BAM, an explicit-reference CRAM, or multiple alignment inputs that
-are already globally coordinate-ordered, the native path builds a disk-backed
-two-pass duplicate plan and replays the original alignment files for final
-output. The bounded path includes ``BARCODE_TAG`` and
+For duplicate marking, a single BAM or explicit-reference CRAM is first
+record-count checked. Inputs with at most 100,000 records use the compact
+two-pass plan to avoid unnecessary sort-file overhead; larger inputs use the
+disk-backed plan and replay the original alignment files for final output.
+Multiple alignment inputs that are already globally coordinate-ordered use the
+disk-backed plan as well. The bounded path includes ``BARCODE_TAG`` and
 ``READ_ONE_BARCODE_TAG``/``READ_TWO_BARCODE_TAG`` grouping, Picard-compatible
 optical-family discovery with the default or a validated three-capture-group
 ``READ_NAME_REGEX``, and ``REMOVE_SEQUENCING_DUPLICATES``. Explicit
 ``READ_NAME_REGEX=null`` disables optical discovery and retains Picard's
 no-optical metrics behavior. Duplicate-set tagging (``DS``/``DI``) is carried
 through bounded replay for paired duplicate families. Multiple streams that are
-not already globally coordinate-ordered also fall back to the compact path so
-the existing output-order contract is preserved. A local adversarial
+not already globally coordinate-ordered fall back to the existing in-memory
+multi-input path so the output-order contract is preserved. A local adversarial
 300,000-read run with duplicate families of 4,096 records passed the synthetic
 Picard parity comparator and measured ``75,038,720`` bytes of peak RSS for the
 external plan versus ``110,592,000`` bytes for the compact path on the same

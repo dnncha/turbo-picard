@@ -1,5 +1,25 @@
 # Turbo Picard work log
 
+## 2026-08-14 — small MarkDuplicates inputs avoid unnecessary sort overhead
+
+- The saved three-repeat full suite identified `MarkDuplicates` as the local
+  floor at 12.41x on its 50,000-record duplicate-family fixture. The native
+  path was correctly falling back from the no-duplicate shortcut to the
+  disk-backed planner, but that planner was unnecessary for small single-BAM
+  inputs.
+- Added a record-count preflight and a 100,000-record ceiling for the existing
+  compact single-input two-pass plan. Inputs above the ceiling, multiple
+  inputs, and unsorted fallbacks retain the external or existing bounded path;
+  no large-file memory claim was widened.
+- The focused MarkDuplicates suite passed 24 unit, 28 BAM, 2 CRAM, and 3 SAM
+  validation tests. The current three-repeat 32-command suite passed all
+  parity checks with an 84.45x geometric mean, an 18.40x floor, and a 245.33x
+  maximum; MarkDuplicates measured 31.66x. A separate 1,000,000-record probe
+  passed parity and bypassed the compact ceiling.
+- These are local release-candidate measurements, not production-scale or
+  independent-reproduction evidence. No tag, package, container, Bioconda
+  update, issue, comment, outreach, or external service state changed.
+
 ## 2026-08-14 — published container tag is runtime-smoke-tested
 
 - Extended the guarded container workflow to pull the exact version tag after

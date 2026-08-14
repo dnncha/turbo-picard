@@ -21,6 +21,7 @@ use turbo_picard_core::markdup_config::MarkDuplicatesConfig;
 const DUPLICATE_FLAG: u16 = 0x400;
 const UNMAPPED_FLAG: u16 = 0x4;
 const UNCOMPUTED_QUALITY_SCORE: u64 = u64::MAX;
+const COMPACT_MARKDUP_MAX_RECORDS: usize = 100_000;
 type LibraryId = u32;
 type BarcodeId = NonZeroU32;
 
@@ -484,6 +485,9 @@ fn run_hts_container(
     config: &MarkDuplicatesConfig,
 ) -> Result<MarkDuplicatesSummary, MarkDuplicatesError> {
     if let Some(summary) = try_run_single_bam_no_duplicate_fast_path(config)? {
+        return Ok(summary);
+    }
+    if let Some(summary) = try_run_small_single_bam_compact_plan(config)? {
         return Ok(summary);
     }
     if let Some(summary) = try_run_external_plan(config)? {
@@ -1864,6 +1868,24 @@ fn write_compact_plan_records(
         ));
     }
     Ok(())
+}
+
+fn try_run_small_single_bam_compact_plan(
+    config: &MarkDuplicatesConfig,
+) -> Result<Option<MarkDuplicatesSummary>, MarkDuplicatesError> {
+    if config.inputs.len() != 1 {
+        return Ok(None);
+    }
+
+    let mut reader = open_markdup_reader(config, &config.inputs[0])?;
+    for (record_index, result) in reader.records().enumerate() {
+        result?;
+        if record_index >= COMPACT_MARKDUP_MAX_RECORDS {
+            return Ok(None);
+        }
+    }
+
+    try_run_single_bam_compact_plan(config)
 }
 
 fn copy_duplicate_set_member_tags(

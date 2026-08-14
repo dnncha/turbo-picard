@@ -10,6 +10,9 @@ Highlights:
   CRAM, globally coordinate-ordered multiple inputs, primary and mate-specific
   barcode grouping, optical-family parsing, `REMOVE_SEQUENCING_DUPLICATES`,
   and DS/DI duplicate-set tags.
+- Added a record-count-bounded compact plan for small single-BAM/CRAM
+  `MarkDuplicates` inputs, while retaining the external plan for larger and
+  multi-input shapes.
 - Added workflow-owner trial reporting, redacted shareable comparison reports,
   adoption-signal auditing, and fail-closed release and evidence validators.
 - Hardened PyPI and container publication checks so artifacts are built and

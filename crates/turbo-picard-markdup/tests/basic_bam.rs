@@ -27,7 +27,7 @@ fn marks_duplicate_records_in_bam() {
         add_pg_tag_to_reads: true,
         tag_duplicate_set_members: false,
         duplicate_scoring_strategy: None,
-        // Explicit no-optical mode exercises the disk-backed two-pass plan.
+        // The small single-BAM planner keeps this no-optical fixture in memory.
         read_name_regex: Some("null".to_string()),
         tagging_policy: None,
         barcode_tag: None,
@@ -44,14 +44,7 @@ fn marks_duplicate_records_in_bam() {
 
     let flags = read_flags(&output);
     assert_eq!(flags, vec![0, 1024, 0]);
-    assert!(scratch.is_dir());
-    assert!(
-        scratch
-            .read_dir()
-            .expect("scratch directory reads")
-            .next()
-            .is_none()
-    );
+    assert!(!scratch.exists());
 }
 
 #[test]
@@ -77,7 +70,7 @@ fn marks_duplicate_pairs_and_reports_paired_metrics() {
         add_pg_tag_to_reads: true,
         tag_duplicate_set_members: false,
         duplicate_scoring_strategy: None,
-        // Explicit no-optical mode exercises the disk-backed two-pass plan.
+        // The small single-BAM planner keeps this no-optical fixture in memory.
         read_name_regex: Some("null".to_string()),
         tagging_policy: None,
         barcode_tag: None,
@@ -668,14 +661,7 @@ fn separates_duplicate_groups_by_barcode_tag() {
     turbo_picard_markdup::run(&config).expect("BAM duplicate marking succeeds");
 
     assert_eq!(read_flags(&output), vec![0, 1024, 0, 0]);
-    assert!(scratch.is_dir());
-    assert!(
-        scratch
-            .read_dir()
-            .expect("scratch directory reads")
-            .next()
-            .is_none()
-    );
+    assert!(!scratch.exists());
     let metrics_text = std::fs::read_to_string(&metrics).expect("metrics file exists");
     assert!(!metrics_text.contains("## HISTOGRAM"));
 }
@@ -719,14 +705,7 @@ fn separates_duplicate_groups_by_read_one_and_read_two_barcode_tags() {
     turbo_picard_markdup::run(&config).expect("BAM duplicate marking succeeds");
 
     assert_eq!(read_flags(&output), vec![99, 1123, 99, 147, 1171, 147]);
-    assert!(scratch.is_dir());
-    assert!(
-        scratch
-            .read_dir()
-            .expect("scratch directory reads")
-            .next()
-            .is_none()
-    );
+    assert!(!scratch.exists());
     let metrics_text = std::fs::read_to_string(&metrics).expect("metrics file exists");
     assert!(
         metrics_text
@@ -741,7 +720,7 @@ fn separates_duplicate_groups_by_read_one_and_read_two_barcode_tags() {
 }
 
 #[test]
-fn respects_mate_specific_barcode_tags_in_external_plan() {
+fn respects_mate_specific_barcode_tags() {
     let tempdir = tempfile::tempdir().expect("tempdir exists");
     let input = tempdir.path().join("input.bam");
     let output = tempdir.path().join("output.bam");
@@ -815,14 +794,7 @@ fn respects_mate_specific_barcode_tags_in_external_plan() {
     turbo_picard_markdup::run(&config).expect("BAM duplicate marking succeeds");
 
     assert_eq!(read_flags(&output), vec![99, 1123, 99, 147, 1171, 147]);
-    assert!(scratch.is_dir());
-    assert!(
-        scratch
-            .read_dir()
-            .expect("scratch directory reads")
-            .next()
-            .is_none()
-    );
+    assert!(!scratch.exists());
 }
 
 #[test]

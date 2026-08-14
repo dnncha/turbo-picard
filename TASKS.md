@@ -26,6 +26,14 @@ and evidence-backed growth.
   exact current source SHA is retained in the release
   handoff manifest. The candidate remains a release candidate because neither
   local nor origin has the matching `v0.1.12` tag.
+- Measured the next MarkDuplicates adoption optimization on the candidate
+  source: single BAM/CRAM inputs up to 100,000 records now use a bounded
+  compact plan after an exact count preflight, while larger and multi-input
+  shapes retain the external or existing bounded path. The current three-
+  repeat 32-command suite passed 32/32 parity with an 84.45x geometric mean,
+  an 18.40x floor, a 245.33x maximum, and 31.66x for MarkDuplicates. This is
+  local release-candidate evidence only; production-scale and independent
+  reproduction gates remain open.
 - The post-`0.1.11` corrections are now a locally consistent `0.1.12` release
   candidate: Cargo, PyPI metadata, citation, bio.tools, both Bioconda recipes,
   release archive instructions, and the source-release marker align. The
