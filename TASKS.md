@@ -26,6 +26,12 @@ and evidence-backed growth.
   exact current source SHA is retained in the release
   handoff manifest. The candidate remains a release candidate because neither
   local nor origin has the matching `v0.1.12` tag.
+- Fresh current-HEAD release-candidate evidence passed the five-repeat
+  `MarkDuplicates` protocol on the pinned public SNVQ BAM: 26,577 records,
+  exact duplicate/tag and normalized-metrics parity, `0.311250` seconds Turbo
+  median versus `1.551860` seconds Picard, and median peak RSS of `37,765,120`
+  versus `1,018,560,512` bytes. The retained manifest leaves independent
+  reproduction `not_run` and does not claim production-scale readiness.
 - The next measured candidate optimization reduces reference-cache overhead in
   `SetNmMdAndUqTags`: five focused repeats moved from 18.84x to 20.94x with
   exact parity, while the exact-commit three-repeat 32-command suite remained

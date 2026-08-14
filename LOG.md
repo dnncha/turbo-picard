@@ -1,5 +1,22 @@
 # Turbo Picard work log
 
+## 2026-08-14 — current candidate passes fresh public SNVQ MarkDuplicates evidence
+
+- Re-ran the auditable five-repeat `MarkDuplicates` competitor protocol from
+  exact HEAD `5192ad1430d8ffda5fa027d00f1d6582e98a9108` against the pinned public
+  Picard SNVQ BAM (`26,577` records, `9,451,956` bytes), with Picard 3.4.0 and
+  the current Turbo Picard binary both required and complete.
+- Ordered duplicate flags/tags, alignment identity, and normalized Picard
+  `DuplicationMetrics` all passed exact parity. Turbo Picard measured a median
+  wall time of `0.311250` seconds versus Picard `1.551860` seconds; median
+  peak RSS was `37,765,120` versus `1,018,560,512` bytes.
+- The validated release-candidate manifest and raw report are retained at
+  `/private/tmp/turbo-picard-production-current-5192ad1/`. Independent
+  reproduction remains explicitly `not_run`; this public fixture is not
+  production-scale WGS/WES evidence.
+- No tag, push, package, container, Bioconda update, issue, comment, outreach,
+  or external service state changed.
+
 ## 2026-08-14 — reference-window slices reduce tag-calculation overhead
 
 - A five-repeat focused baseline for reference-backed `SetNmMdAndUqTags`
