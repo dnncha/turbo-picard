@@ -49,6 +49,12 @@ and evidence-backed growth.
 - The reusable PyPI wheel-install smoke now exercises the same
   `CollectHsMetrics` metrics and sidecar contract through the installed wheel,
   closing the distribution-artifact gap for this newly native command.
+- The real-data comparator now has a fail-closed WES/capture trial path for
+  `CollectHsMetrics`: it requires a reference plus explicit bait and target
+  interval-lists, records both interval SHA-256 values, accepts bounded metric
+  options, and compares the stable metrics/histogram plus exact per-target and
+  per-base sidecars. The checked-in tiny capture fixture passed Picard 3.4.0
+  parity locally; this is command-level smoke evidence, not WES-scale proof.
 - The same install smoke caught and closed a stale top-level help omission;
   fresh non-shim and optional-shim release installs now pass end to end.
 - The production-scale evidence dispatch path now shares a tested

@@ -57,11 +57,28 @@ def parse_args() -> argparse.Namespace:
         ],
     )
     parser.add_argument(
+        "--bait-interval-list",
+        type=Path,
+        help="Pinned bait interval-list required when auditing CollectHsMetrics.",
+    )
+    parser.add_argument(
+        "--target-interval-list",
+        type=Path,
+        help="Pinned target interval-list required when auditing CollectHsMetrics.",
+    )
+    parser.add_argument(
         "--markduplicates-arg",
         action="append",
         default=[],
         metavar="KEY=VALUE",
         help="Additional MarkDuplicates KEY=VALUE argument, repeatable",
+    )
+    parser.add_argument(
+        "--collecthsmetrics-arg",
+        action="append",
+        default=[],
+        metavar="KEY=VALUE",
+        help="Additional CollectHsMetrics KEY=VALUE argument, repeatable",
     )
     parser.add_argument(
         "--picard-command",
@@ -111,10 +128,16 @@ def main() -> int:
     ]
     for argument in args.markduplicates_arg:
         compare_args.extend(["--markduplicates-arg", argument])
+    for argument in args.collecthsmetrics_arg:
+        compare_args.extend(["--collecthsmetrics-arg", argument])
     if args.skip_build:
         compare_args.append("--skip-build")
     if args.reference_fasta is not None:
         compare_args.extend(["--reference-fasta", str(args.reference_fasta)])
+    if args.bait_interval_list is not None:
+        compare_args.extend(["--bait-interval-list", str(args.bait_interval_list)])
+    if args.target_interval_list is not None:
+        compare_args.extend(["--target-interval-list", str(args.target_interval_list)])
     completed = subprocess.run(compare_args, cwd=ROOT, check=False)
     if completed.returncode != 0:
         return completed.returncode

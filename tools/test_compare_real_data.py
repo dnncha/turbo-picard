@@ -78,6 +78,70 @@ class CompareRealDataTests(unittest.TestCase):
             with self.assertRaises(Exception):
                 compare_real_data.parse_markduplicates_arg(argument)
 
+    def test_collecthsmetrics_argument_parser_reserves_comparator_paths(self):
+        self.assertEqual(
+            compare_real_data.parse_collecthsmetrics_arg(
+                "MINIMUM_MAPPING_QUALITY=20"
+            ),
+            "MINIMUM_MAPPING_QUALITY=20",
+        )
+        for argument in (
+            "I=input.bam",
+            "O=metrics.txt",
+            "R=reference.fa",
+            "BAIT_INTERVALS=baits.interval_list",
+            "PER_TARGET_COVERAGE=coverage.txt",
+            "broken",
+        ):
+            with self.assertRaises(Exception):
+                compare_real_data.parse_collecthsmetrics_arg(argument)
+
+    def test_collecthsmetrics_digest_includes_sidecars(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            metrics = Path(tmp) / "metrics.txt"
+            per_target = Path(tmp) / "per-target.txt"
+            per_base = Path(tmp) / "per-base.txt"
+            metrics.write_text("# generated\nA\tB\n1\t2\n", encoding="utf-8")
+            per_target.write_text("target\tcoverage\n", encoding="utf-8")
+            per_base.write_text("base\tcoverage\n", encoding="utf-8")
+
+            first = compare_real_data.digest_hsmetrics_outputs(
+                metrics, per_target, per_base, "turbo-picard"
+            )
+            metrics.write_text("# another header\nA\tB\n1\t2\n", encoding="utf-8")
+            second = compare_real_data.digest_hsmetrics_outputs(
+                metrics, per_target, per_base, "Picard"
+            )
+            self.assertEqual(first, second)
+
+            per_base.write_text("base\tother-coverage\n", encoding="utf-8")
+            third = compare_real_data.digest_hsmetrics_outputs(
+                metrics, per_target, per_base, "Picard"
+            )
+            self.assertNotEqual(first, third)
+
+    def test_collecthsmetrics_request_requires_reference_and_intervals(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            args = SimpleNamespace(
+                commands=["CollectHsMetrics"],
+                reference_fasta=None,
+                bait_interval_list=None,
+                target_interval_list=None,
+            )
+            with self.assertRaisesRegex(
+                SystemExit, "CollectHsMetrics requires --reference-fasta"
+            ):
+                compare_real_data.validate_collecthsmetrics_request(args)
+
+            reference = root / "reference.fa"
+            reference.write_bytes(b">chr1\nACGT\n")
+            args.reference_fasta = reference
+            with self.assertRaisesRegex(
+                SystemExit, "CollectHsMetrics requires --bait-interval-list"
+            ):
+                compare_real_data.validate_collecthsmetrics_request(args)
+
     def test_sam_record_digest_ignores_headers(self):
         with tempfile.TemporaryDirectory() as tmp:
             first = Path(tmp) / "first.sam"
@@ -782,6 +846,60 @@ class CompareRealDataTests(unittest.TestCase):
                 ["picard"],
                 ["STOP_AFTER=100"],
                 None,
+            )
+
+    def test_compare_command_supports_collect_hs_metrics_inputs_and_options(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            work_root = Path(tmp)
+            input_bam = work_root / "input.bam"
+            reference = work_root / "reference.fa"
+            bait = work_root / "baits.interval_list"
+            target = work_root / "targets.interval_list"
+            for path in (input_bam, reference, bait, target):
+                path.write_bytes(b"fixture")
+            expected = compare_real_data.CommandEvidence(
+                command="CollectHsMetrics",
+                status="PASS",
+                turbo_seconds=1.0,
+                picard_seconds=2.0,
+                speedup=2.0,
+                comparison="stable HsMetrics digest plus per-target/per-base sidecar digests",
+                turbo_artifact="turbo.metrics.txt",
+                picard_artifact="picard.metrics.txt",
+                turbo_digest="abc",
+                picard_digest="abc",
+            )
+
+            with mock.patch.object(
+                compare_real_data,
+                "compare_hs_metrics",
+                return_value=expected,
+            ) as mocked:
+                observed = compare_real_data.compare_command(
+                    "CollectHsMetrics",
+                    input_bam,
+                    work_root,
+                    ["turbo-picard"],
+                    ["picard"],
+                    None,
+                    reference,
+                    input_bam,
+                    [],
+                    bait,
+                    target,
+                    ["MINIMUM_MAPPING_QUALITY=20"],
+                )
+
+            self.assertEqual(observed, expected)
+            mocked.assert_called_once_with(
+                input_bam,
+                work_root / "CollectHsMetrics",
+                ["turbo-picard"],
+                ["picard"],
+                reference,
+                bait,
+                target,
+                ["MINIMUM_MAPPING_QUALITY=20"],
             )
 
     def test_compare_command_passes_explicit_markduplicates_options(self):

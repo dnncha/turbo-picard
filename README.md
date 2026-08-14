@@ -152,8 +152,9 @@ Saved benchmark run:
 - Raw log: `docs/site/assets/bench-suite-output.txt`
 - benchmark exceptions: `AccelerationStatus`, `doctor`, `explain`, and `trial`
   are utility commands, not Picard workload comparisons. `CollectHsMetrics`
-  has separate ALL_READS and sidecar parity coverage; representative
-  capture-data performance evidence is still pending.
+  has separate ALL_READS and sidecar parity coverage, plus a real-data
+  comparator path for pinned WES/capture intervals; representative capture-data
+  performance evidence is still pending.
 
 | Command | Speedup | Parity |
 | --- | ---: | :--- |

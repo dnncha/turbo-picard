@@ -47,6 +47,35 @@ the optional shareable report omits command arguments and local data. Advanced
 ``UmiAwareMarkDuplicatesWithMateCigar`` normalization remains an upstream
 fallback until a separate parity-tested native implementation exists.
 
+WES and capture metrics
+~~~~~~~~~~~~~~~~~~~~~~~~
+
+For an exome or targeted-capture workflow, run the metrics collector beside
+Picard with the exact bait and target interval-lists used by that workflow:
+
+.. code-block:: bash
+
+   python3 tools/compare_real_data.py \
+     --input-bam /data/representative-wes.bam \
+     --reference-fasta /refs/hg38.fa \
+     --bait-interval-list /refs/capture.baits.interval_list \
+     --target-interval-list /refs/capture.targets.interval_list \
+     --output-dir turbo-picard-wes-trial/evidence \
+     --commands CollectHsMetrics \
+     --collecthsmetrics-arg MINIMUM_MAPPING_QUALITY=20 \
+     --collecthsmetrics-arg MINIMUM_BASE_QUALITY=20 \
+     --picard-command "mamba run -p /opt/conda/envs/picard picard" \
+     --turbo-picard-command ./target/release/picard \
+     --shareable-report turbo-picard-wes-trial/evidence/shareable-trial-report.md \
+     --skip-build
+
+The comparator records the bait and target interval-list hashes, compares the
+stable HsMetrics tables and histogram, and requires exact per-target and
+per-base coverage sidecars. This is a command-level parity trial for the
+documented ALL_READS scope; it is not a WES-scale performance result or proof
+that every capture design is equivalent. Keep upstream Picard available for
+options outside the native scope in :doc:`commands`.
+
 WDL / Cromwell
 ~~~~~~~~~~~~~~
 

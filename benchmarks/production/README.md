@@ -33,6 +33,26 @@ For `production_scale` and `independent_reproduction` manifests, the profile
 is mandatory and the measured input must have positive byte and read counts;
 the validators reject empty or unscoped evidence before it can be promoted.
 
+For the `wes_capture` parity trial, use the real-data comparator with the
+workflow's pinned bait and target interval-lists:
+
+    python3 tools/compare_real_data.py \
+      --input-bam /data/representative-wes.bam \
+      --reference-fasta /refs/hg38.fa \
+      --bait-interval-list /refs/capture.baits.interval_list \
+      --target-interval-list /refs/capture.targets.interval_list \
+      --output-dir benchmarks/real-data/wes-capture/evidence \
+      --commands CollectHsMetrics \
+      --picard-command 'mamba run -p /opt/conda/envs/picard picard' \
+      --turbo-picard-command ./target/release/picard \
+      --skip-build
+
+That command records interval-list provenance and compares the stable
+HsMetrics table/histogram plus exact per-target and per-base sidecars. It is a
+bounded parity trial, not production-scale WES performance evidence; retain
+the upstream Picard path until representative five-repeat resource evidence
+and independent review exist.
+
 Run quick regression evidence with:
 
     python3 tools/bench_suite.py --repeats 5 --skip-build \

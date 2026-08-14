@@ -134,6 +134,7 @@ def parse_args() -> argparse.Namespace:
             "CleanSam",
             "CollectQualityYieldMetrics",
             "CollectAlignmentSummaryMetrics",
+            "CollectHsMetrics",
             "MarkDuplicates",
             "AddOrReplaceReadGroups",
             "BuildBamIndex",
@@ -156,6 +157,22 @@ def parse_args() -> argparse.Namespace:
         help="Commands to compare on the real BAM.",
     )
     parser.add_argument(
+        "--bait-interval-list",
+        type=Path,
+        help=(
+            "BAIT interval-list required for CollectHsMetrics; provide the same "
+            "pinned capture design used by the workflow."
+        ),
+    )
+    parser.add_argument(
+        "--target-interval-list",
+        type=Path,
+        help=(
+            "TARGET interval-list required for CollectHsMetrics; provide the same "
+            "pinned capture design used by the workflow."
+        ),
+    )
+    parser.add_argument(
         "--markduplicates-arg",
         dest="markduplicates_args",
         action="append",
@@ -165,6 +182,18 @@ def parse_args() -> argparse.Namespace:
         help=(
             "Additional MarkDuplicates KEY=VALUE argument, repeatable; "
             "I/O/M are reserved by the comparator"
+        ),
+    )
+    parser.add_argument(
+        "--collecthsmetrics-arg",
+        dest="collecthsmetrics_args",
+        action="append",
+        default=[],
+        type=parse_collecthsmetrics_arg,
+        metavar="KEY=VALUE",
+        help=(
+            "Additional CollectHsMetrics KEY=VALUE argument, repeatable; "
+            "input, output, reference, interval, and sidecar paths are reserved"
         ),
     )
     parser.add_argument(
@@ -231,6 +260,8 @@ def main() -> int:
     if merge_input.suffix.lower() == ".cram" and args.reference_fasta is None:
         raise SystemExit("CRAM merge input requires --reference-fasta")
 
+    validate_collecthsmetrics_request(args)
+
     validate_manifest_request(args)
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
@@ -261,6 +292,9 @@ def main() -> int:
                     args.reference_fasta,
                     merge_input,
                     args.markduplicates_args,
+                    args.bait_interval_list,
+                    args.target_interval_list,
+                    args.collecthsmetrics_args,
                 )
             )
     finally:
@@ -279,9 +313,15 @@ def main() -> int:
         "turbo_picard_command": " ".join(turbo_prefix),
         "turbo_picard_version": capture_version([*turbo_prefix, "--version"]),
         "markduplicates_args": args.markduplicates_args,
+        "collecthsmetrics_args": args.collecthsmetrics_args,
         "commands": [command_evidence_dict(row) for row in evidence],
         "parity": "PASS" if all(row.status == "PASS" for row in evidence) else "FAIL",
     }
+    if "CollectHsMetrics" in args.commands:
+        summary["collecthsmetrics_inputs"] = collecthsmetrics_input_metadata(
+            args.bait_interval_list,
+            args.target_interval_list,
+        )
     json_path = args.output_dir / "real-data-comparison.json"
     json_path.write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     markdown_path = args.output_dir / "real-data-comparison.md"
@@ -413,6 +453,48 @@ def parse_markduplicates_arg(value: str) -> str:
     return value
 
 
+def parse_collecthsmetrics_arg(value: str) -> str:
+    key, separator, argument_value = value.partition("=")
+    if not separator or not key or not argument_value:
+        raise argparse.ArgumentTypeError("CollectHsMetrics arguments must be KEY=VALUE")
+    if key.upper() in {
+        "I",
+        "INPUT",
+        "O",
+        "OUTPUT",
+        "R",
+        "REFERENCE_SEQUENCE",
+        "BAIT",
+        "BAIT_INTERVALS",
+        "TARGET",
+        "TARGET_INTERVALS",
+        "PER_TARGET_COVERAGE",
+        "PER_BASE_COVERAGE",
+    }:
+        raise argparse.ArgumentTypeError(
+            "CollectHsMetrics input, output, reference, interval, and sidecar "
+            "paths are owned by the comparator"
+        )
+    return value
+
+
+def validate_collecthsmetrics_request(args: argparse.Namespace) -> None:
+    if "CollectHsMetrics" not in args.commands:
+        return
+    if args.reference_fasta is None:
+        raise SystemExit("CollectHsMetrics requires --reference-fasta")
+    if not args.reference_fasta.exists():
+        raise SystemExit(f"missing reference FASTA: {args.reference_fasta}")
+    for label, path in (
+        ("--bait-interval-list", args.bait_interval_list),
+        ("--target-interval-list", args.target_interval_list),
+    ):
+        if path is None:
+            raise SystemExit(f"CollectHsMetrics requires {label}")
+        if not path.exists():
+            raise SystemExit(f"missing {label}: {path}")
+
+
 def default_picard_prefix(conda_prefix: str) -> list[str]:
     for name in ("mamba", "micromamba"):
         runner = shutil.which(name)
@@ -483,8 +565,12 @@ def compare_command(
     reference_fasta: Path | None,
     merge_input_bam: Path,
     markduplicates_args: list[str] | None = None,
+    bait_interval_list: Path | None = None,
+    target_interval_list: Path | None = None,
+    collecthsmetrics_args: list[str] | None = None,
 ) -> CommandEvidence:
     markduplicates_args = markduplicates_args or []
+    collecthsmetrics_args = collecthsmetrics_args or []
     workdir = work_root / command
     workdir.mkdir(parents=True)
     if command == "ViewSam":
@@ -513,6 +599,17 @@ def compare_command(
             picard_prefix,
             ["M={metrics}", *markduplicates_args],
             reference_fasta,
+        )
+    if command == "CollectHsMetrics":
+        return compare_hs_metrics(
+            input_bam,
+            workdir,
+            turbo_prefix,
+            picard_prefix,
+            reference_fasta,
+            bait_interval_list,
+            target_interval_list,
+            collecthsmetrics_args,
         )
     if command == "AddOrReplaceReadGroups":
         return compare_add_or_replace_read_groups(
@@ -615,6 +712,104 @@ def compare_viewsam(
     turbo_digest = digest_sam_records(turbo_out)
     picard_digest = digest_sam_records(picard_out)
     return evidence("ViewSam", turbo_seconds, picard_seconds, "SAM record digest", turbo_out, picard_out, turbo_digest, picard_digest)
+
+
+def compare_hs_metrics(
+    input_bam: Path,
+    workdir: Path,
+    turbo_prefix: list[str],
+    picard_prefix: list[str],
+    reference_fasta: Path | None,
+    bait_interval_list: Path | None,
+    target_interval_list: Path | None,
+    extra: list[str],
+) -> CommandEvidence:
+    command = "CollectHsMetrics"
+    reference = require_reference_fasta(reference_fasta, command)
+    if bait_interval_list is None or target_interval_list is None:
+        raise SystemExit(
+            "CollectHsMetrics requires --bait-interval-list and "
+            "--target-interval-list"
+        )
+    for label, path in (
+        ("bait interval-list", bait_interval_list),
+        ("target interval-list", target_interval_list),
+    ):
+        if not path.exists():
+            raise SystemExit(f"missing {label}: {path}")
+
+    turbo_metrics = workdir / "turbo.metrics.txt"
+    picard_metrics = workdir / "picard.metrics.txt"
+    turbo_per_target = workdir / "turbo.per-target.txt"
+    picard_per_target = workdir / "picard.per-target.txt"
+    turbo_per_base = workdir / "turbo.per-base.txt"
+    picard_per_base = workdir / "picard.per-base.txt"
+
+    reference_args = alignment_io_args(input_bam, reference)
+    if input_bam.suffix.lower() != ".cram":
+        reference_args.append(f"R={reference}")
+    turbo_common = [
+        command,
+        *reference_args,
+        f"BAIT={bait_interval_list}",
+        f"TARGET={target_interval_list}",
+        "BAIT_SET_NAME=capture-audit",
+        "SAMPLE_SIZE=0",
+        "VALIDATION_STRINGENCY=SILENT",
+        "QUIET=true",
+        *extra,
+    ]
+    picard_common = [
+        command,
+        *reference_args,
+        f"BAIT_INTERVALS={bait_interval_list}",
+        f"TARGET_INTERVALS={target_interval_list}",
+        "BAIT_SET_NAME=capture-audit",
+        "SAMPLE_SIZE=0",
+        "VALIDATION_STRINGENCY=SILENT",
+        "QUIET=true",
+        *extra,
+    ]
+    turbo_seconds = run(
+        [
+            *turbo_prefix,
+            *turbo_common,
+            f"O={turbo_metrics}",
+            f"PER_TARGET_COVERAGE={turbo_per_target}",
+            f"PER_BASE_COVERAGE={turbo_per_base}",
+        ]
+    )
+    picard_seconds = run(
+        [
+            *picard_prefix,
+            *picard_common,
+            f"O={picard_metrics}",
+            f"PER_TARGET_COVERAGE={picard_per_target}",
+            f"PER_BASE_COVERAGE={picard_per_base}",
+        ]
+    )
+    turbo_digest = digest_hsmetrics_outputs(
+        turbo_metrics,
+        turbo_per_target,
+        turbo_per_base,
+        "turbo-picard",
+    )
+    picard_digest = digest_hsmetrics_outputs(
+        picard_metrics,
+        picard_per_target,
+        picard_per_base,
+        "Picard",
+    )
+    return evidence(
+        command,
+        turbo_seconds,
+        picard_seconds,
+        "stable HsMetrics digest plus per-target/per-base sidecar digests",
+        turbo_metrics,
+        picard_metrics,
+        turbo_digest,
+        picard_digest,
+    )
 
 
 def compare_wgs_metrics(
@@ -1696,6 +1891,28 @@ def input_metadata(
     return metadata
 
 
+def collecthsmetrics_input_metadata(
+    bait_interval_list: Path | None,
+    target_interval_list: Path | None,
+) -> dict[str, dict[str, str | int]]:
+    if bait_interval_list is None or target_interval_list is None:
+        raise SystemExit(
+            "CollectHsMetrics evidence requires bait and target interval-list metadata"
+        )
+    return {
+        "bait_interval_list": {
+            "path": relative_to_root(bait_interval_list),
+            "size_bytes": bait_interval_list.stat().st_size,
+            "sha256": digest_file(bait_interval_list),
+        },
+        "target_interval_list": {
+            "path": relative_to_root(target_interval_list),
+            "size_bytes": target_interval_list.stat().st_size,
+            "sha256": digest_file(target_interval_list),
+        },
+    }
+
+
 def relative_to_root(path: Path) -> str:
     try:
         return str(path.resolve().relative_to(ROOT.resolve()))
@@ -2022,6 +2239,34 @@ def digest_stable_text_or_missing(path: Path, label: str) -> str:
     return digest_stable_text(path)
 
 
+def digest_hsmetrics_outputs(
+    metrics: Path,
+    per_target: Path,
+    per_base: Path,
+    tool_label: str,
+) -> str:
+    """Digest the stable metrics table and exact coverage sidecars."""
+
+    def exact_or_missing(path: Path, label: str) -> str:
+        if not path.exists():
+            return f"missing:{label}:{path.name}"
+        return digest_file(path)
+
+    return ";".join(
+        [
+            "metrics="
+            + digest_stable_text_or_missing(
+                metrics,
+                f"{tool_label} CollectHsMetrics metrics",
+            ),
+            "per-target="
+            + exact_or_missing(per_target, f"{tool_label} per-target coverage"),
+            "per-base="
+            + exact_or_missing(per_base, f"{tool_label} per-base coverage"),
+        ]
+    )
+
+
 def digest_validate_sam_summary(path: Path, exit_code: int) -> str:
     digest = hashlib.sha256()
     digest.update(f"exit={exit_code}\n".encode("ascii"))
@@ -2253,6 +2498,10 @@ def comparison_detail_lines(rows: list[dict]) -> list[str]:
     ):
         details.append(
             "- `stable metrics digest` compares non-comment, non-blank metrics rows so generated headers do not affect parity."
+        )
+    if "stable HsMetrics digest plus per-target/per-base sidecar digests" in comparisons:
+        details.append(
+            "- `stable HsMetrics digest plus per-target/per-base sidecar digests` compares the non-comment HsMetrics tables and histogram, then requires exact per-target and per-base coverage sidecar bytes."
         )
     if "duplicate-marking semantic digest plus stable metrics digest" in comparisons:
         details.append(

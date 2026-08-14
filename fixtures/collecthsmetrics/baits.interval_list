@@ -1,0 +1,4 @@
+@HD	VN:1.6	SO:coordinate
+@SQ	SN:chr1	LN:1000
+chr1	1	35	+	bait-1
+chr1	40	70	+	bait-2

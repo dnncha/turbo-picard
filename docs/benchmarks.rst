@@ -71,7 +71,7 @@ Benchmark exemption: ``AccelerationStatus`` — status/preflight command with no
 Benchmark exemption: ``doctor`` — status/preflight command with no Picard data-processing runtime to benchmark.
 Benchmark exemption: ``explain`` — status/preflight command with no Picard data-processing runtime to benchmark.
 Benchmark exemption: ``trial`` — status/preflight command with no Picard data-processing runtime to benchmark.
-Benchmark exemption: ``CollectHsMetrics`` — ALL_READS metrics and sidecar parity are guarded separately; public performance benchmark awaits representative capture data.
+Benchmark exemption: ``CollectHsMetrics`` — ALL_READS metrics and sidecar parity are guarded separately; public performance benchmark awaits representative capture data. The real-data comparator now supports pinned WES/capture interval-lists for command-level parity trials.
 
 Genome-scale evidence
 ---------------------

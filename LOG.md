@@ -1,5 +1,25 @@
 # Turbo Picard work log
 
+## 2026-08-14 — add executable WES/capture CollectHsMetrics trial path
+
+- Extended `tools/compare_real_data.py` and its audit wrapper with a bounded
+  `CollectHsMetrics` comparison that requires an explicit reference, bait
+  interval-list, and target interval-list before any expensive work starts.
+  Comparator-owned I/O, reference, interval, and sidecar paths cannot be
+  overridden through extra options.
+- The evidence JSON records both interval-list paths, sizes, and SHA-256
+  values. Parity compares the stable HsMetrics tables and histogram while
+  requiring exact per-target and per-base sidecar bytes; the shareable report
+  remains free of private paths and raw data.
+- Added a reusable tiny bait/target fixture and adoption/production benchmark
+  documentation. The local fixture passed the comparator against Picard 3.4.0
+  with `CollectHsMetrics: PASS` and both coverage sidecars matching. The
+  observed timing is fixture smoke evidence only and is not a WES-scale
+  performance claim.
+- Focused comparator tests (66), Python compilation, and `git diff --check`
+  passed. No tag, push, publication, provider change, or external
+  communication occurred.
+
 ## 2026-08-14 — re-audit public distribution and candidate lineage
 
 - A fresh read-only public adoption audit observed PyPI `0.1.11`, container
