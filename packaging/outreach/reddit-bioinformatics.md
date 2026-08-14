@@ -32,7 +32,7 @@ pipeline. Pick a real input, run both tools, compare the outputs you care about,
 and only switch that command if the comparison is boring.
 
 The repo has parity and benchmark checks against Picard 3.4.0. Current numbers:
-32 checked commands, 84.94x geometric mean speedup, and 248.00x top speedup. The
+32 checked commands, 87.47x geometric mean speedup, and 261.75x top speedup. The
 `MarkDuplicates` benchmark also shows much lower memory use than Picard on the
 same input.
 

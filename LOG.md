@@ -2,19 +2,22 @@
 
 ## 2026-08-14 — refreshed parity-backed benchmark assets from current HEAD
 
-- Ran the exact current committed `50f68cc845eb990535b3a70b2339c8fd61580820`
-  binary through the three-repeat 32-command suite against Picard 3.4.0. All
-  32 parity checks passed; the refreshed public source log and generated site
-  assets now report an `84.94x` geometric mean, `101.93x` median, `22.29x`
-  floor on `SetNmMdAndUqTags`, and `248.00x` maximum on `NormalizeFasta`.
+- Ran the exact candidate runtime at committed source SHA
+  `3c43bca0cc8624008cef6979e0c5b5450a965124` through the three-repeat
+  32-command suite against Picard 3.4.0. All 32 parity checks passed; the
+  refreshed public source log and generated site assets now report an `87.47x`
+  geometric mean, `100.27x` median, `22.17x` floor on `SetNmMdAndUqTags`, and
+  `261.75x` maximum on `NormalizeFasta`.
 - The focused five-repeat `FastqToSam` baseline also passed parity at a
   `22.31x` median on 100,000 paired reads. Source inspection found no safe,
   material optimization worth forcing at this scale, so no speculative code
   change was made.
 - Updated the README, documentation, release notes, prepared outreach copy,
   Bioconda draft, paper, and site summary to point at the refreshed raw log.
-  These remain local release-candidate evidence; no tag, push, package,
-  publication, issue, comment, outreach, or external service state changed.
+  The final sync is documentation/evidence-only relative to that runtime
+  source. These remain local release-candidate evidence; no tag, push,
+  package, publication, issue, comment, outreach, or external service state
+  changed.
 
 ## 2026-08-14 — Bioconda release archive rehearsal passes in isolation
 

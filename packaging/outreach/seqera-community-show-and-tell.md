@@ -33,7 +33,7 @@ slow command on one representative input, then compare the BAM/SAM/metrics files
 against upstream Picard before changing anything larger.
 
 The repo currently has benchmark and parity checks for 32 commands against
-Picard 3.4.0. In that suite the geometric mean speedup is 84.94x, with a 248.00x
+Picard 3.4.0. In that suite the geometric mean speedup is 87.47x, with a 261.75x
 top speedup. The `MarkDuplicates` run in the repo also shows lower memory use
 than Picard on the same input.
 

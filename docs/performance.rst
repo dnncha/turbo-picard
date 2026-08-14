@@ -9,8 +9,8 @@ work to a GPU just because one is present.
 They also explain the scalability story. Faster wall time matters, but so does
 the ability to fan out many Picard-shaped tasks without paying Picard-scale JVM
 startup and memory costs on every shard. The saved benchmark suite currently
-shows a ``22.29x`` floor speedup, ``84.94x`` geometric mean speedup, and
-``248.00x`` top speedup against Picard 3.4.0. Those are saved-fixture results,
+shows a ``22.17x`` floor speedup, ``87.47x`` geometric mean speedup, and
+``261.75x`` top speedup against Picard 3.4.0. Those are saved-fixture results,
 not whole-genome guarantees.
 
 For duplicate marking, a single BAM or explicit-reference CRAM is first

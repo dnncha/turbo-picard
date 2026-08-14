@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1280" height="1398" viewBox="0 0 1280 1398" role="img" aria-labelledby="title desc">
   <title id="title">Same Picard checks. Less waiting.</title>
-  <desc id="desc">Bar chart showing 32 Picard-compatible commands with parity passing and speedups from 22.29x to 248.00x.</desc>
+  <desc id="desc">Bar chart showing 32 Picard-compatible commands with parity passing and speedups from 22.17x to 261.75x.</desc>
   <defs>
     <linearGradient id="bg" x1="0" x2="1" y1="0" y2="1">
       <stop offset="0" stop-color="#071013"/>
@@ -24,135 +24,135 @@
   <rect width="1280" height="1398" rx="28" fill="url(#bg)"/>
   <path d="M1035 62 C1125 94 1165 154 1200 252" fill="none" stroke="#36d7c9" stroke-width="2" opacity="0.34" filter="url(#softGlow)"/>
   <text x="56" y="54" class="title">Same Picard checks. Less waiting.</text>
-  <text x="56" y="82" class="sub">32/32 parity checks passing, from 22.29x to 248.00x in the saved benchmark suite.</text>
-  <line x1="374.0" y1="92" x2="374.0" y2="1350" class="grid"/><text x="374.0" y="1376" text-anchor="middle" class="tick">20x</text><line x1="438.0" y1="92" x2="438.0" y2="1350" class="grid"/><text x="438.0" y="1376" text-anchor="middle" class="tick">40x</text><line x1="502.0" y1="92" x2="502.0" y2="1350" class="grid"/><text x="502.0" y="1376" text-anchor="middle" class="tick">60x</text><line x1="566.0" y1="92" x2="566.0" y2="1350" class="grid"/><text x="566.0" y="1376" text-anchor="middle" class="tick">80x</text><line x1="630.0" y1="92" x2="630.0" y2="1350" class="grid"/><text x="630.0" y="1376" text-anchor="middle" class="tick">100x</text><line x1="694.0" y1="92" x2="694.0" y2="1350" class="grid"/><text x="694.0" y="1376" text-anchor="middle" class="tick">120x</text><line x1="758.0" y1="92" x2="758.0" y2="1350" class="grid"/><text x="758.0" y="1376" text-anchor="middle" class="tick">140x</text><line x1="822.0" y1="92" x2="822.0" y2="1350" class="grid"/><text x="822.0" y="1376" text-anchor="middle" class="tick">160x</text><line x1="886.0" y1="92" x2="886.0" y2="1350" class="grid"/><text x="886.0" y="1376" text-anchor="middle" class="tick">180x</text><line x1="950.0" y1="92" x2="950.0" y2="1350" class="grid"/><text x="950.0" y="1376" text-anchor="middle" class="tick">200x</text><line x1="1014.0" y1="92" x2="1014.0" y2="1350" class="grid"/><text x="1014.0" y="1376" text-anchor="middle" class="tick">220x</text><line x1="1078.0" y1="92" x2="1078.0" y2="1350" class="grid"/><text x="1078.0" y="1376" text-anchor="middle" class="tick">240x</text>
+  <text x="56" y="82" class="sub">32/32 parity checks passing, from 22.17x to 261.75x in the saved benchmark suite.</text>
+  <line x1="370.4" y1="92" x2="370.4" y2="1350" class="grid"/><text x="370.4" y="1376" text-anchor="middle" class="tick">20x</text><line x1="430.8" y1="92" x2="430.8" y2="1350" class="grid"/><text x="430.8" y="1376" text-anchor="middle" class="tick">40x</text><line x1="491.1" y1="92" x2="491.1" y2="1350" class="grid"/><text x="491.1" y="1376" text-anchor="middle" class="tick">60x</text><line x1="551.5" y1="92" x2="551.5" y2="1350" class="grid"/><text x="551.5" y="1376" text-anchor="middle" class="tick">80x</text><line x1="611.9" y1="92" x2="611.9" y2="1350" class="grid"/><text x="611.9" y="1376" text-anchor="middle" class="tick">100x</text><line x1="672.3" y1="92" x2="672.3" y2="1350" class="grid"/><text x="672.3" y="1376" text-anchor="middle" class="tick">120x</text><line x1="732.6" y1="92" x2="732.6" y2="1350" class="grid"/><text x="732.6" y="1376" text-anchor="middle" class="tick">140x</text><line x1="793.0" y1="92" x2="793.0" y2="1350" class="grid"/><text x="793.0" y="1376" text-anchor="middle" class="tick">160x</text><line x1="853.4" y1="92" x2="853.4" y2="1350" class="grid"/><text x="853.4" y="1376" text-anchor="middle" class="tick">180x</text><line x1="913.8" y1="92" x2="913.8" y2="1350" class="grid"/><text x="913.8" y="1376" text-anchor="middle" class="tick">200x</text><line x1="974.2" y1="92" x2="974.2" y2="1350" class="grid"/><text x="974.2" y="1376" text-anchor="middle" class="tick">220x</text><line x1="1034.5" y1="92" x2="1034.5" y2="1350" class="grid"/><text x="1034.5" y="1376" text-anchor="middle" class="tick">240x</text><line x1="1094.9" y1="92" x2="1094.9" y2="1350" class="grid"/><text x="1094.9" y="1376" text-anchor="middle" class="tick">260x</text>
   
   <text x="292" y="132" text-anchor="end" class="label">NormalizeFasta</text>
   <rect x="310" y="110" width="800" height="24" rx="6" class="track"/>
-  <rect x="310" y="110" width="793.6" height="24" rx="6" fill="#36d7c9"/>
-  <text x="1115.6" y="128" class="value">248.00x</text>
-  <text x="292" y="170" text-anchor="end" class="label">BuildBamIndex</text>
+  <rect x="310" y="110" width="790.2" height="24" rx="6" fill="#36d7c9"/>
+  <text x="1112.2" y="128" class="value">261.75x</text>
+  <text x="292" y="170" text-anchor="end" class="label">UpdateVcfSequenceDictionary</text>
   <rect x="310" y="148" width="800" height="24" rx="6" class="track"/>
-  <rect x="310" y="148" width="750.8" height="24" rx="6" fill="#36d7c9"/>
-  <text x="1072.8" y="166" class="value">234.64x</text>
-  <text x="292" y="208" text-anchor="end" class="label">UpdateVcfSequenceDictionary</text>
+  <rect x="310" y="148" width="723.2" height="24" rx="6" fill="#36d7c9"/>
+  <text x="1045.2" y="166" class="value">239.57x</text>
+  <text x="292" y="208" text-anchor="end" class="label">BuildBamIndex</text>
   <rect x="310" y="186" width="800" height="24" rx="6" class="track"/>
-  <rect x="310" y="186" width="634.2" height="24" rx="6" fill="#36d7c9"/>
-  <text x="956.2" y="204" class="value">198.19x</text>
-  <text x="292" y="246" text-anchor="end" class="label">CreateSequenceDictionary</text>
+  <rect x="310" y="186" width="678.9" height="24" rx="6" fill="#36d7c9"/>
+  <text x="1000.9" y="204" class="value">224.90x</text>
+  <text x="292" y="246" text-anchor="end" class="label">ReplaceSamHeader</text>
   <rect x="310" y="224" width="800" height="24" rx="6" class="track"/>
-  <rect x="310" y="224" width="578.2" height="24" rx="6" fill="#36d7c9"/>
-  <text x="900.2" y="242" class="value">180.69x</text>
+  <rect x="310" y="224" width="621.5" height="24" rx="6" fill="#36d7c9"/>
+  <text x="943.5" y="242" class="value">205.88x</text>
   <text x="292" y="284" text-anchor="end" class="label">CollectGcBiasMetrics</text>
   <rect x="310" y="262" width="800" height="24" rx="6" class="track"/>
-  <rect x="310" y="262" width="533.1" height="24" rx="6" fill="#36d7c9"/>
-  <text x="855.1" y="280" class="value">166.58x</text>
-  <text x="292" y="322" text-anchor="end" class="label">GatherVcfs</text>
+  <rect x="310" y="262" width="554.7" height="24" rx="6" fill="#36d7c9"/>
+  <text x="876.7" y="280" class="value">183.75x</text>
+  <text x="292" y="322" text-anchor="end" class="label">CreateSequenceDictionary</text>
   <rect x="310" y="300" width="800" height="24" rx="6" class="track"/>
-  <rect x="310" y="300" width="467.7" height="24" rx="6" fill="#36d7c9"/>
-  <text x="789.7" y="318" class="value">146.17x</text>
-  <text x="292" y="360" text-anchor="end" class="label">CollectMultipleMetrics</text>
+  <rect x="310" y="300" width="486.2" height="24" rx="6" fill="#36d7c9"/>
+  <text x="808.2" y="318" class="value">161.06x</text>
+  <text x="292" y="360" text-anchor="end" class="label">GatherVcfs</text>
   <rect x="310" y="338" width="800" height="24" rx="6" class="track"/>
-  <rect x="310" y="338" width="402.8" height="24" rx="6" fill="#36d7c9"/>
-  <text x="724.8" y="356" class="value">125.87x</text>
-  <text x="292" y="398" text-anchor="end" class="label">CollectInsertSizeMetrics</text>
+  <rect x="310" y="338" width="395.5" height="24" rx="6" fill="#36d7c9"/>
+  <text x="717.5" y="356" class="value">131.01x</text>
+  <text x="292" y="398" text-anchor="end" class="label">CleanSam</text>
   <rect x="310" y="376" width="800" height="24" rx="6" class="track"/>
-  <rect x="310" y="376" width="399.4" height="24" rx="6" fill="#36d7c9"/>
-  <text x="721.4" y="394" class="value">124.81x</text>
-  <text x="292" y="436" text-anchor="end" class="label">CleanSam</text>
+  <rect x="310" y="376" width="382.2" height="24" rx="6" fill="#36d7c9"/>
+  <text x="704.2" y="394" class="value">126.59x</text>
+  <text x="292" y="436" text-anchor="end" class="label">AddOrReplaceReadGroups</text>
   <rect x="310" y="414" width="800" height="24" rx="6" class="track"/>
-  <rect x="310" y="414" width="396.0" height="24" rx="6" fill="#36d7c9"/>
-  <text x="718.0" y="432" class="value">123.76x</text>
-  <text x="292" y="474" text-anchor="end" class="label">AddOrReplaceReadGroups</text>
+  <rect x="310" y="414" width="372.7" height="24" rx="6" fill="#36d7c9"/>
+  <text x="694.7" y="432" class="value">123.47x</text>
+  <text x="292" y="474" text-anchor="end" class="label">CollectMultipleMetrics</text>
   <rect x="310" y="452" width="800" height="24" rx="6" class="track"/>
-  <rect x="310" y="452" width="361.5" height="24" rx="6" fill="#36d7c9"/>
-  <text x="683.5" y="470" class="value">112.96x</text>
-  <text x="292" y="512" text-anchor="end" class="label">ReplaceSamHeader</text>
+  <rect x="310" y="452" width="358.1" height="24" rx="6" fill="#36d7c9"/>
+  <text x="680.1" y="470" class="value">118.62x</text>
+  <text x="292" y="512" text-anchor="end" class="label">CollectInsertSizeMetrics</text>
   <rect x="310" y="490" width="800" height="24" rx="6" class="track"/>
-  <rect x="310" y="490" width="360.3" height="24" rx="6" fill="#36d7c9"/>
-  <text x="682.3" y="508" class="value">112.60x</text>
+  <rect x="310" y="490" width="350.9" height="24" rx="6" fill="#36d7c9"/>
+  <text x="672.9" y="508" class="value">116.25x</text>
   <text x="292" y="550" text-anchor="end" class="label">LiftoverVcf</text>
   <rect x="310" y="528" width="800" height="24" rx="6" class="track"/>
-  <rect x="310" y="528" width="346.7" height="24" rx="6" fill="#36d7c9"/>
-  <text x="668.7" y="546" class="value">108.34x</text>
-  <text x="292" y="588" text-anchor="end" class="label">MeanQualityByCycle</text>
+  <rect x="310" y="528" width="347.3" height="24" rx="6" fill="#36d7c9"/>
+  <text x="669.3" y="546" class="value">115.03x</text>
+  <text x="292" y="588" text-anchor="end" class="label">MergeVcfs</text>
   <rect x="310" y="566" width="800" height="24" rx="6" class="track"/>
-  <rect x="310" y="566" width="344.6" height="24" rx="6" fill="#36d7c9"/>
-  <text x="666.6" y="584" class="value">107.68x</text>
+  <rect x="310" y="566" width="333.7" height="24" rx="6" fill="#36d7c9"/>
+  <text x="655.7" y="584" class="value">110.53x</text>
   <text x="292" y="626" text-anchor="end" class="label">QualityScoreDistribution</text>
   <rect x="310" y="604" width="800" height="24" rx="6" class="track"/>
-  <rect x="310" y="604" width="342.1" height="24" rx="6" fill="#36d7c9"/>
-  <text x="664.1" y="622" class="value">106.92x</text>
-  <text x="292" y="664" text-anchor="end" class="label">MergeVcfs</text>
+  <rect x="310" y="604" width="317.4" height="24" rx="6" fill="#36d7c9"/>
+  <text x="639.4" y="622" class="value">105.14x</text>
+  <text x="292" y="664" text-anchor="end" class="label">MeanQualityByCycle</text>
   <rect x="310" y="642" width="800" height="24" rx="6" class="track"/>
-  <rect x="310" y="642" width="331.2" height="24" rx="6" fill="#36d7c9"/>
-  <text x="653.2" y="660" class="value">103.50x</text>
-  <text x="292" y="702" text-anchor="end" class="label">ValidateSamFile</text>
+  <rect x="310" y="642" width="316.6" height="24" rx="6" fill="#36d7c9"/>
+  <text x="638.6" y="660" class="value">104.88x</text>
+  <text x="292" y="702" text-anchor="end" class="label">CollectQualityYieldMetrics</text>
   <rect x="310" y="680" width="800" height="24" rx="6" class="track"/>
-  <rect x="310" y="680" width="326.2" height="24" rx="6" fill="#36d7c9"/>
-  <text x="648.2" y="698" class="value">101.93x</text>
-  <text x="292" y="740" text-anchor="end" class="label">CollectBaseDistributionByCycle</text>
+  <rect x="310" y="680" width="302.7" height="24" rx="6" fill="#36d7c9"/>
+  <text x="624.7" y="698" class="value">100.27x</text>
+  <text x="292" y="740" text-anchor="end" class="label">ValidateSamFile</text>
   <rect x="310" y="718" width="800" height="24" rx="6" class="track"/>
-  <rect x="310" y="718" width="321.3" height="24" rx="6" fill="#36d7c9"/>
-  <text x="643.3" y="736" class="value">100.41x</text>
-  <text x="292" y="778" text-anchor="end" class="label">CollectQualityYieldMetrics</text>
+  <rect x="310" y="718" width="294.6" height="24" rx="6" fill="#36d7c9"/>
+  <text x="616.6" y="736" class="value">97.57x</text>
+  <text x="292" y="778" text-anchor="end" class="label">IntervalListTools</text>
   <rect x="310" y="756" width="800" height="24" rx="6" class="track"/>
-  <rect x="310" y="756" width="317.1" height="24" rx="6" fill="#36d7c9"/>
-  <text x="639.1" y="774" class="value">99.08x</text>
-  <text x="292" y="816" text-anchor="end" class="label">IntervalListTools</text>
+  <rect x="310" y="756" width="291.9" height="24" rx="6" fill="#36d7c9"/>
+  <text x="613.9" y="774" class="value">96.69x</text>
+  <text x="292" y="816" text-anchor="end" class="label">CollectBaseDistributionByCycle</text>
   <rect x="310" y="794" width="800" height="24" rx="6" class="track"/>
-  <rect x="310" y="794" width="316.6" height="24" rx="6" fill="#36d7c9"/>
-  <text x="638.6" y="812" class="value">98.93x</text>
-  <text x="292" y="854" text-anchor="end" class="label">CollectAlignmentSummaryMetrics</text>
+  <rect x="310" y="794" width="286.0" height="24" rx="6" fill="#36d7c9"/>
+  <text x="608.0" y="812" class="value">94.74x</text>
+  <text x="292" y="854" text-anchor="end" class="label">SortVcf</text>
   <rect x="310" y="832" width="800" height="24" rx="6" class="track"/>
-  <rect x="310" y="832" width="263.9" height="24" rx="6" fill="#36d7c9"/>
-  <text x="585.9" y="850" class="value">82.46x</text>
+  <rect x="310" y="832" width="248.2" height="24" rx="6" fill="#36d7c9"/>
+  <text x="570.2" y="850" class="value">82.23x</text>
   <text x="292" y="892" text-anchor="end" class="label">BedToIntervalList</text>
   <rect x="310" y="870" width="800" height="24" rx="6" class="track"/>
-  <rect x="310" y="870" width="259.6" height="24" rx="6" fill="#36d7c9"/>
-  <text x="581.6" y="888" class="value">81.13x</text>
-  <text x="292" y="930" text-anchor="end" class="label">SortVcf</text>
+  <rect x="310" y="870" width="240.6" height="24" rx="6" fill="#36d7c9"/>
+  <text x="562.6" y="888" class="value">79.70x</text>
+  <text x="292" y="930" text-anchor="end" class="label">ViewSam</text>
   <rect x="310" y="908" width="800" height="24" rx="6" class="track"/>
-  <rect x="310" y="908" width="257.7" height="24" rx="6" fill="#36d7c9"/>
-  <text x="579.7" y="926" class="value">80.53x</text>
-  <text x="292" y="968" text-anchor="end" class="label">ViewSam</text>
+  <rect x="310" y="908" width="237.6" height="24" rx="6" fill="#36d7c9"/>
+  <text x="559.6" y="926" class="value">78.72x</text>
+  <text x="292" y="968" text-anchor="end" class="label">CollectAlignmentSummaryMetrics</text>
   <rect x="310" y="946" width="800" height="24" rx="6" class="track"/>
-  <rect x="310" y="946" width="256.7" height="24" rx="6" fill="#36d7c9"/>
-  <text x="578.7" y="964" class="value">80.22x</text>
-  <text x="292" y="1006" text-anchor="end" class="label">SamToFastq</text>
+  <rect x="310" y="946" width="236.2" height="24" rx="6" fill="#36d7c9"/>
+  <text x="558.2" y="964" class="value">78.25x</text>
+  <text x="292" y="1006" text-anchor="end" class="label">SortSam</text>
   <rect x="310" y="984" width="800" height="24" rx="6" class="track"/>
-  <rect x="310" y="984" width="213.0" height="24" rx="6" fill="#36d7c9"/>
-  <text x="535.0" y="1002" class="value">66.56x</text>
-  <text x="292" y="1044" text-anchor="end" class="label">SortSam</text>
+  <rect x="310" y="984" width="202.2" height="24" rx="6" fill="#36d7c9"/>
+  <text x="524.2" y="1002" class="value">66.98x</text>
+  <text x="292" y="1044" text-anchor="end" class="label">SamToFastq</text>
   <rect x="310" y="1022" width="800" height="24" rx="6" class="track"/>
-  <rect x="310" y="1022" width="197.8" height="24" rx="6" fill="#36d7c9"/>
-  <text x="519.8" y="1040" class="value">61.82x</text>
+  <rect x="310" y="1022" width="199.6" height="24" rx="6" fill="#36d7c9"/>
+  <text x="521.6" y="1040" class="value">66.11x</text>
   <text x="292" y="1082" text-anchor="end" class="label">CollectWgsMetrics</text>
   <rect x="310" y="1060" width="800" height="24" rx="6" class="track"/>
-  <rect x="310" y="1060" width="162.5" height="24" rx="6" fill="#36d7c9"/>
-  <text x="484.5" y="1078" class="value">50.79x</text>
+  <rect x="310" y="1060" width="155.6" height="24" rx="6" fill="#36d7c9"/>
+  <text x="477.6" y="1078" class="value">51.54x</text>
   <text x="292" y="1120" text-anchor="end" class="label">MergeSamFiles</text>
   <rect x="310" y="1098" width="800" height="24" rx="6" class="track"/>
-  <rect x="310" y="1098" width="104.8" height="24" rx="6" fill="#36d7c9"/>
-  <text x="426.8" y="1116" class="value">32.74x</text>
+  <rect x="310" y="1098" width="117.3" height="24" rx="6" fill="#36d7c9"/>
+  <text x="439.3" y="1116" class="value">38.84x</text>
   <text x="292" y="1158" text-anchor="end" class="label">FixMateInformation</text>
   <rect x="310" y="1136" width="800" height="24" rx="6" class="track"/>
-  <rect x="310" y="1136" width="100.8" height="24" rx="6" fill="#36d7c9"/>
-  <text x="422.8" y="1154" class="value">31.51x</text>
+  <rect x="310" y="1136" width="94.4" height="24" rx="6" fill="#36d7c9"/>
+  <text x="416.4" y="1154" class="value">31.27x</text>
   <text x="292" y="1196" text-anchor="end" class="label">MarkDuplicates</text>
   <rect x="310" y="1174" width="800" height="24" rx="6" class="track"/>
-  <rect x="310" y="1174" width="89.0" height="24" rx="6" fill="#36d7c9"/>
-  <text x="411.0" y="1192" class="value">27.82x</text>
+  <rect x="310" y="1174" width="92.0" height="24" rx="6" fill="#36d7c9"/>
+  <text x="414.0" y="1192" class="value">30.46x</text>
   <text x="292" y="1234" text-anchor="end" class="label">FastqToSam</text>
   <rect x="310" y="1212" width="800" height="24" rx="6" class="track"/>
-  <rect x="310" y="1212" width="77.2" height="24" rx="6" fill="#36d7c9"/>
-  <text x="399.2" y="1230" class="value">24.12x</text>
+  <rect x="310" y="1212" width="76.2" height="24" rx="6" fill="#36d7c9"/>
+  <text x="398.2" y="1230" class="value">25.23x</text>
   <text x="292" y="1272" text-anchor="end" class="label">RevertSam</text>
   <rect x="310" y="1250" width="800" height="24" rx="6" class="track"/>
-  <rect x="310" y="1250" width="76.1" height="24" rx="6" fill="#36d7c9"/>
-  <text x="398.1" y="1268" class="value">23.77x</text>
+  <rect x="310" y="1250" width="71.5" height="24" rx="6" fill="#36d7c9"/>
+  <text x="393.5" y="1268" class="value">23.69x</text>
   <text x="292" y="1310" text-anchor="end" class="label">SetNmMdAndUqTags</text>
   <rect x="310" y="1288" width="800" height="24" rx="6" class="track"/>
-  <rect x="310" y="1288" width="71.3" height="24" rx="6" fill="#36d7c9"/>
-  <text x="393.3" y="1306" class="value">22.29x</text>
+  <rect x="310" y="1288" width="66.9" height="24" rx="6" fill="#36d7c9"/>
+  <text x="388.9" y="1306" class="value">22.17x</text>
 </svg>

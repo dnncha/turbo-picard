@@ -24,7 +24,7 @@ turbo-picard MarkDuplicates I=input.bam O=marked.bam M=metrics.txt
 ```
 
 The repo has parity and benchmark checks against Picard 3.4.0. Current numbers:
-32 checked commands, 84.94x geometric mean speedup, and 248.00x top speedup. The
+32 checked commands, 87.47x geometric mean speedup, and 261.75x top speedup. The
 parity docs are here:
 
 https://turbo-picard.readthedocs.io/en/latest/parity.html

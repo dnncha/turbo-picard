@@ -128,12 +128,12 @@ can create a reviewed, privacy-conscious starting point for that report.
 
 The saved public benchmark suite compares native `turbo-picard` commands against
 Picard 3.4.0 and checks stable outputs before reporting speed. Current saved
-results report `32/32` parity checks passing, with `248.00x` top speedup:
-`NormalizeFasta`, `22.29x` floor speedup: `SetNmMdAndUqTags`, `101.93x`
-median speedup, and `84.94x` geometric mean speedup.
+results report `32/32` parity checks passing, with `261.75x` top speedup:
+`NormalizeFasta`, `22.17x` floor speedup: `SetNmMdAndUqTags`, `100.27x`
+median speedup, and `87.47x` geometric mean speedup.
 
-Summary: `32/32 PASS`; `248.00x` top speedup: `NormalizeFasta`;
-`22.29x` floor speedup: `SetNmMdAndUqTags`; `101.93x` median speedup; `84.94x`
+Summary: `32/32 PASS`; `261.75x` top speedup: `NormalizeFasta`;
+`22.17x` floor speedup: `SetNmMdAndUqTags`; `100.27x` median speedup; `87.47x`
 geometric mean speedup.
 
 Benchmark details, scope notes, real-data evidence, and reproduction commands
@@ -155,38 +155,38 @@ Saved benchmark run:
 
 | Command | Speedup | Parity |
 | --- | ---: | :--- |
-| NormalizeFasta | 248.00x | PASS |
-| BuildBamIndex | 234.64x | PASS |
-| UpdateVcfSequenceDictionary | 198.19x | PASS |
-| CreateSequenceDictionary | 180.69x | PASS |
-| CollectGcBiasMetrics | 166.58x | PASS |
-| GatherVcfs | 146.17x | PASS |
-| CollectMultipleMetrics | 125.87x | PASS |
-| CollectInsertSizeMetrics | 124.81x | PASS |
-| CleanSam | 123.76x | PASS |
-| AddOrReplaceReadGroups | 112.96x | PASS |
-| ReplaceSamHeader | 112.60x | PASS |
-| LiftoverVcf | 108.34x | PASS |
-| MeanQualityByCycle | 107.68x | PASS |
-| QualityScoreDistribution | 106.92x | PASS |
-| MergeVcfs | 103.50x | PASS |
-| ValidateSamFile | 101.93x | PASS |
-| CollectBaseDistributionByCycle | 100.41x | PASS |
-| CollectQualityYieldMetrics | 99.08x | PASS |
-| IntervalListTools | 98.93x | PASS |
-| CollectAlignmentSummaryMetrics | 82.46x | PASS |
-| BedToIntervalList | 81.13x | PASS |
-| SortVcf | 80.53x | PASS |
-| ViewSam | 80.22x | PASS |
-| SamToFastq | 66.56x | PASS |
-| SortSam | 61.82x | PASS |
-| CollectWgsMetrics | 50.79x | PASS |
-| MergeSamFiles | 32.74x | PASS |
-| FixMateInformation | 31.51x | PASS |
-| MarkDuplicates | 27.82x | PASS |
-| FastqToSam | 24.12x | PASS |
-| RevertSam | 23.77x | PASS |
-| SetNmMdAndUqTags | 22.29x | PASS |
+| NormalizeFasta | 261.75x | PASS |
+| UpdateVcfSequenceDictionary | 239.57x | PASS |
+| BuildBamIndex | 224.90x | PASS |
+| ReplaceSamHeader | 205.88x | PASS |
+| CollectGcBiasMetrics | 183.75x | PASS |
+| CreateSequenceDictionary | 161.06x | PASS |
+| GatherVcfs | 131.01x | PASS |
+| CleanSam | 126.59x | PASS |
+| AddOrReplaceReadGroups | 123.47x | PASS |
+| CollectMultipleMetrics | 118.62x | PASS |
+| CollectInsertSizeMetrics | 116.25x | PASS |
+| LiftoverVcf | 115.03x | PASS |
+| MergeVcfs | 110.53x | PASS |
+| QualityScoreDistribution | 105.14x | PASS |
+| MeanQualityByCycle | 104.88x | PASS |
+| CollectQualityYieldMetrics | 100.27x | PASS |
+| ValidateSamFile | 97.57x | PASS |
+| IntervalListTools | 96.69x | PASS |
+| CollectBaseDistributionByCycle | 94.74x | PASS |
+| SortVcf | 82.23x | PASS |
+| BedToIntervalList | 79.70x | PASS |
+| ViewSam | 78.72x | PASS |
+| CollectAlignmentSummaryMetrics | 78.25x | PASS |
+| SortSam | 66.98x | PASS |
+| SamToFastq | 66.11x | PASS |
+| CollectWgsMetrics | 51.54x | PASS |
+| MergeSamFiles | 38.84x | PASS |
+| FixMateInformation | 31.27x | PASS |
+| MarkDuplicates | 30.46x | PASS |
+| FastqToSam | 25.23x | PASS |
+| RevertSam | 23.69x | PASS |
+| SetNmMdAndUqTags | 22.17x | PASS |
 
 Release evidence checks:
 

@@ -5,204 +5,204 @@
   "summary": {
     "command_count": 32,
     "parity_pass_count": 32,
-    "top_speedup": 248.0,
+    "top_speedup": 261.75,
     "top_command": "NormalizeFasta",
-    "floor_speedup": 22.29,
+    "floor_speedup": 22.17,
     "floor_command": "SetNmMdAndUqTags",
-    "median_speedup": 101.93,
-    "geometric_mean_speedup": 84.94
+    "median_speedup": 100.27,
+    "geometric_mean_speedup": 87.47
   },
   "benchmarks": [
     {
       "rank": 1,
       "command": "NormalizeFasta",
-      "speedup": 248.0,
+      "speedup": 261.75,
       "parity": "PASS"
     },
     {
       "rank": 2,
-      "command": "BuildBamIndex",
-      "speedup": 234.64,
+      "command": "UpdateVcfSequenceDictionary",
+      "speedup": 239.57,
       "parity": "PASS"
     },
     {
       "rank": 3,
-      "command": "UpdateVcfSequenceDictionary",
-      "speedup": 198.19,
+      "command": "BuildBamIndex",
+      "speedup": 224.9,
       "parity": "PASS"
     },
     {
       "rank": 4,
-      "command": "CreateSequenceDictionary",
-      "speedup": 180.69,
+      "command": "ReplaceSamHeader",
+      "speedup": 205.88,
       "parity": "PASS"
     },
     {
       "rank": 5,
       "command": "CollectGcBiasMetrics",
-      "speedup": 166.58,
+      "speedup": 183.75,
       "parity": "PASS"
     },
     {
       "rank": 6,
-      "command": "GatherVcfs",
-      "speedup": 146.17,
+      "command": "CreateSequenceDictionary",
+      "speedup": 161.06,
       "parity": "PASS"
     },
     {
       "rank": 7,
-      "command": "CollectMultipleMetrics",
-      "speedup": 125.87,
+      "command": "GatherVcfs",
+      "speedup": 131.01,
       "parity": "PASS"
     },
     {
       "rank": 8,
-      "command": "CollectInsertSizeMetrics",
-      "speedup": 124.81,
+      "command": "CleanSam",
+      "speedup": 126.59,
       "parity": "PASS"
     },
     {
       "rank": 9,
-      "command": "CleanSam",
-      "speedup": 123.76,
+      "command": "AddOrReplaceReadGroups",
+      "speedup": 123.47,
       "parity": "PASS"
     },
     {
       "rank": 10,
-      "command": "AddOrReplaceReadGroups",
-      "speedup": 112.96,
+      "command": "CollectMultipleMetrics",
+      "speedup": 118.62,
       "parity": "PASS"
     },
     {
       "rank": 11,
-      "command": "ReplaceSamHeader",
-      "speedup": 112.6,
+      "command": "CollectInsertSizeMetrics",
+      "speedup": 116.25,
       "parity": "PASS"
     },
     {
       "rank": 12,
       "command": "LiftoverVcf",
-      "speedup": 108.34,
+      "speedup": 115.03,
       "parity": "PASS"
     },
     {
       "rank": 13,
-      "command": "MeanQualityByCycle",
-      "speedup": 107.68,
+      "command": "MergeVcfs",
+      "speedup": 110.53,
       "parity": "PASS"
     },
     {
       "rank": 14,
       "command": "QualityScoreDistribution",
-      "speedup": 106.92,
+      "speedup": 105.14,
       "parity": "PASS"
     },
     {
       "rank": 15,
-      "command": "MergeVcfs",
-      "speedup": 103.5,
+      "command": "MeanQualityByCycle",
+      "speedup": 104.88,
       "parity": "PASS"
     },
     {
       "rank": 16,
-      "command": "ValidateSamFile",
-      "speedup": 101.93,
+      "command": "CollectQualityYieldMetrics",
+      "speedup": 100.27,
       "parity": "PASS"
     },
     {
       "rank": 17,
-      "command": "CollectBaseDistributionByCycle",
-      "speedup": 100.41,
+      "command": "ValidateSamFile",
+      "speedup": 97.57,
       "parity": "PASS"
     },
     {
       "rank": 18,
-      "command": "CollectQualityYieldMetrics",
-      "speedup": 99.08,
+      "command": "IntervalListTools",
+      "speedup": 96.69,
       "parity": "PASS"
     },
     {
       "rank": 19,
-      "command": "IntervalListTools",
-      "speedup": 98.93,
+      "command": "CollectBaseDistributionByCycle",
+      "speedup": 94.74,
       "parity": "PASS"
     },
     {
       "rank": 20,
-      "command": "CollectAlignmentSummaryMetrics",
-      "speedup": 82.46,
+      "command": "SortVcf",
+      "speedup": 82.23,
       "parity": "PASS"
     },
     {
       "rank": 21,
       "command": "BedToIntervalList",
-      "speedup": 81.13,
+      "speedup": 79.7,
       "parity": "PASS"
     },
     {
       "rank": 22,
-      "command": "SortVcf",
-      "speedup": 80.53,
+      "command": "ViewSam",
+      "speedup": 78.72,
       "parity": "PASS"
     },
     {
       "rank": 23,
-      "command": "ViewSam",
-      "speedup": 80.22,
+      "command": "CollectAlignmentSummaryMetrics",
+      "speedup": 78.25,
       "parity": "PASS"
     },
     {
       "rank": 24,
-      "command": "SamToFastq",
-      "speedup": 66.56,
+      "command": "SortSam",
+      "speedup": 66.98,
       "parity": "PASS"
     },
     {
       "rank": 25,
-      "command": "SortSam",
-      "speedup": 61.82,
+      "command": "SamToFastq",
+      "speedup": 66.11,
       "parity": "PASS"
     },
     {
       "rank": 26,
       "command": "CollectWgsMetrics",
-      "speedup": 50.79,
+      "speedup": 51.54,
       "parity": "PASS"
     },
     {
       "rank": 27,
       "command": "MergeSamFiles",
-      "speedup": 32.74,
+      "speedup": 38.84,
       "parity": "PASS"
     },
     {
       "rank": 28,
       "command": "FixMateInformation",
-      "speedup": 31.51,
+      "speedup": 31.27,
       "parity": "PASS"
     },
     {
       "rank": 29,
       "command": "MarkDuplicates",
-      "speedup": 27.82,
+      "speedup": 30.46,
       "parity": "PASS"
     },
     {
       "rank": 30,
       "command": "FastqToSam",
-      "speedup": 24.12,
+      "speedup": 25.23,
       "parity": "PASS"
     },
     {
       "rank": 31,
       "command": "RevertSam",
-      "speedup": 23.77,
+      "speedup": 23.69,
       "parity": "PASS"
     },
     {
       "rank": 32,
       "command": "SetNmMdAndUqTags",
-      "speedup": 22.29,
+      "speedup": 22.17,
       "parity": "PASS"
     }
   ],

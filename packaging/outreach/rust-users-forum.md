@@ -27,7 +27,7 @@ turbo-picard MarkDuplicates I=input.bam O=marked.bam M=metrics.txt
 
 The repo includes parity fixtures, real-data checks, and benchmark verification
 scripts. The current benchmark table covers 32 commands against Picard 3.4.0,
-with an 84.94x geometric mean speedup and 248.00x top speedup.
+with an 87.47x geometric mean speedup and 261.75x top speedup.
 
 The Rust side is a workspace with CLI/core crates plus a dedicated
 `MarkDuplicates` crate. HTS file I/O uses `rust-htslib`.

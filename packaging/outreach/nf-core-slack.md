@@ -15,7 +15,7 @@ change. The commands I would expect to be most relevant are `MarkDuplicates`,
 `BuildBamIndex`.
 
 The repo has parity and benchmark checks against Picard 3.4.0. Current numbers:
-32 checked commands, 84.94x geometric mean speedup, 248.00x top speedup.
+32 checked commands, 87.47x geometric mean speedup, 261.75x top speedup.
 
 Evaluation notes and workflow examples:
 

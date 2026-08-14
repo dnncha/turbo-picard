@@ -6,7 +6,7 @@ which is also ignored.
 
 The current saved public benchmark story is straightforward: every one of the
 32 benchmarked, parity-checked commands is faster than Picard 3.4.0, with a
-`22.29x` floor speedup, an `84.94x` geometric mean speedup, and a `248.00x` top
+`22.17x` floor speedup, an `87.47x` geometric mean speedup, and a `261.75x` top
 speedup. The checked `MarkDuplicates` measurements are fixture-specific: the
 saved copy-path run reports median RSS of about `1.2 GB` for Picard and about
 `8.7 MB` for `turbo-picard`, while the newer adversarial bounded-plan run is

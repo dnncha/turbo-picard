@@ -36,13 +36,13 @@ and evidence-backed growth.
   `MarkDuplicates` trial shape and fallback-only behavior. The production-
   readiness golden surface now keeps `CollectHsMetrics` explicitly delegated
   until native bait/target accounting and parity evidence exist.
-- The current committed `50f68cc845eb990535b3a70b2339c8fd61580820` binary passes
-  all 32 three-repeat benchmark parity checks against Picard 3.4.0. The
-  refreshed checked-in assets report an `84.94x` geometric mean, `101.93x`
-  median, `22.29x` floor on `SetNmMdAndUqTags`, and `248.00x` maximum on
-  `NormalizeFasta`. A focused `FastqToSam` five-repeat baseline passes parity at
-  `22.31x` median on 100,000 paired reads; no speculative source change was
-  justified.
+- The benchmarked candidate runtime at source SHA
+  `3c43bca0cc8624008cef6979e0c5b5450a965124` passes all 32 three-repeat
+  benchmark parity checks against Picard 3.4.0. The refreshed checked-in assets
+  report an `87.47x` geometric mean, `100.27x` median, `22.17x` floor on
+  `SetNmMdAndUqTags`, and `261.75x` maximum on `NormalizeFasta`. A focused
+  `FastqToSam` five-repeat baseline passes parity at `22.31x` median on 100,000
+  paired reads; no speculative source change was justified.
 - An isolated exact-commit Bioconda archive rehearsal passes: the local archive
   was accepted by `prepare_bioconda_release.py`, both recipes passed the
   release-ready verifier, and source/version/link checks passed. The live

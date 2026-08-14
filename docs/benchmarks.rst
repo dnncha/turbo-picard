@@ -5,8 +5,8 @@ Benchmarks are useful only when they are reproducible and tied to parity. The
 repository benchmark suite is designed to report speed while keeping command
 coverage and Picard-compatible behavior visible.
 
-The current saved suite records ``22.29x`` as its slowest saved speedup,
-``84.94x`` as its geometric mean speedup, and ``248.00x`` as its top speedup for
+The current saved suite records ``22.17x`` as its slowest saved speedup,
+``87.47x`` as its geometric mean speedup, and ``261.75x`` as its top speedup for
 the documented command, option, input, and machine scopes. The companion
 ``MarkDuplicates`` fixture records median RSS of about ``1.2 GB`` for Picard
 3.4.0 and ``8.7 MB`` for ``turbo-picard``. These are reproducible fixture
