@@ -67,6 +67,10 @@ and evidence-backed growth.
   the main distribution gap: live PyPI/GitHub/GHCR are still `0.1.11`, neither
   Bioconda package is indexed, and no workflow-owner trial report is verified.
   Download and maintainer-issue counts remain signals only.
+- The exact `0.1.12` candidate also has a refreshed redacted public-fixture
+  trial packet at `/private/tmp/turbo-picard-shareable-trial-c3db358/`: Picard
+  `3.4.0` and Turbo matched `MarkDuplicates` digests exactly at `3.99x` on the
+  checked-in SNVQ BAM. It remains command-level release-candidate evidence.
 - The benchmarked candidate runtime at source SHA
   `3c43bca0cc8624008cef6979e0c5b5450a965124` passes all 32 three-repeat
   benchmark parity checks against Picard 3.4.0. The refreshed checked-in assets

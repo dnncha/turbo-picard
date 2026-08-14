@@ -1,5 +1,16 @@
 # Turbo Picard work log
 
+## 2026-08-14 — current candidate shareable public trial passes
+
+- Re-ran the redacted one-command trial against the checked-in public SNVQ BAM
+  using the exact current `0.1.12` binary and Picard `3.4.0`. `MarkDuplicates`
+  passed the semantic and normalized-metrics digest comparison exactly:
+  `0.608s` Turbo versus `2.423s` Picard (`3.99x`). The shareable report is
+  retained at `/private/tmp/turbo-picard-shareable-trial-c3db358/`; it omits
+  local paths, input hashes, command arguments, and raw artifacts. This is a
+  current candidate trial packet, not workflow-owner adoption, production
+  scale, or independent reproduction evidence. No external state changed.
+
 ## 2026-08-14 — live public adoption audit refreshed at WDL candidate
 
 - The read-only report at `/private/tmp/turbo-picard-public-adoption-20260814-0617671.json`
