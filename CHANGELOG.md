@@ -13,6 +13,9 @@ Highlights:
 - Added a record-count-bounded compact plan for small single-BAM/CRAM
   `MarkDuplicates` inputs, while retaining the external plan for larger and
   multi-input shapes.
+- Added bounded reference-window slices to `SetNmMdAndUqTags` so ordinary
+  in-window CIGAR segments avoid repeated per-base cache checks; oversized and
+  window-crossing segments retain the existing fallback.
 - Added workflow-owner trial reporting, redacted shareable comparison reports,
   adoption-signal auditing, and fail-closed release and evidence validators.
 - Hardened PyPI and container publication checks so artifacts are built and
@@ -24,8 +27,9 @@ Highlights:
 
 Evidence boundaries:
 
-- The current 32-command local suite is 32/32 parity-pass, with a one-repeat
-  geometric-mean speedup of 83.27x, an 8.41x floor, and a 278.74x maximum.
+- The current three-repeat 32-command local suite is 32/32 parity-pass, with a
+  geometric-mean speedup of 81.35x, an 18.93x floor on `FastqToSam`, and a
+  264.26x maximum.
 - The refreshed 1M synthetic and reference-backed CRAM MarkDuplicates
   guardrails pass exact parity. These are fixture-level evidence only; they do
   not establish 30x WGS production readiness, universal replacement, or

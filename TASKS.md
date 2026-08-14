@@ -26,6 +26,12 @@ and evidence-backed growth.
   exact current source SHA is retained in the release
   handoff manifest. The candidate remains a release candidate because neither
   local nor origin has the matching `v0.1.12` tag.
+- The next measured candidate optimization reduces reference-cache overhead in
+  `SetNmMdAndUqTags`: five focused repeats moved from 18.84x to 20.94x with
+  exact parity, while the three-repeat 32-command suite remained 32/32 parity
+  with an 81.35x geometric mean. In-window segments use bounded borrowed
+  slices; oversized and window-crossing segments retain the prior fallback.
+  This remains local release-candidate evidence only.
 - Measured the next MarkDuplicates adoption optimization on the candidate
   source: single BAM/CRAM inputs up to 100,000 records now use a bounded
   compact plan after an exact count preflight, while larger and multi-input

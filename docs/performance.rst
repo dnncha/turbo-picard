@@ -131,6 +131,12 @@ active collectors are available. Override with ``TURBO_PICARD_CMM_THREADS=N`` or
 set ``TURBO_PICARD_CMM_THREADS=auto`` to force the built-in policy. SAM inputs
 still use per-program passes so the existing SAM-text fast paths stay available.
 
+``SetNmMdAndUqTags`` obtains one borrowed reference slice per CIGAR operation
+when the segment fits the active 4 MiB reference window. Oversized or
+window-crossing segments retain the bounded per-base fallback. This removes
+repeated cache-bound checks from the ordinary reference-backed path without
+loading more reference sequence into memory.
+
 Profiling benchmark runs
 ------------------------
 

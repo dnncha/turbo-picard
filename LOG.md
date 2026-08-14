@@ -1,5 +1,23 @@
 # Turbo Picard work log
 
+## 2026-08-14 — reference-window slices reduce tag-calculation overhead
+
+- A five-repeat focused baseline for reference-backed `SetNmMdAndUqTags`
+  measured a 0.097997-second Turbo Picard median versus 1.878222 seconds for
+  Picard, or 18.84x. The same fixture after the change measured 0.088439 versus
+  1.875441 seconds, or 20.94x, with exact parity on every repeat.
+- Ordinary match, equal, diff, and deletion CIGAR operations now borrow a
+  reference slice when it fits the active bounded 4 MiB window. Oversized or
+  window-crossing operations retain the existing per-base fallback, so the
+  optimization does not widen reference-memory behavior.
+- The post-change three-repeat 32-command suite passed 32/32 parity with an
+  81.35x geometric mean, an 18.93x floor on `FastqToSam`, and a 264.26x
+  maximum. The focused CLI unit and integration suites passed 58 and 220
+  tests, and strict workspace Clippy passed.
+- These are local release-candidate measurements, not production-scale or
+  independent-reproduction evidence. No tag, package, container, Bioconda
+  update, issue, comment, outreach, or external service state changed.
+
 ## 2026-08-14 — small MarkDuplicates inputs avoid unnecessary sort overhead
 
 - The saved three-repeat full suite identified `MarkDuplicates` as the local

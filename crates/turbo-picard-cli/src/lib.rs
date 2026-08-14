@@ -19166,6 +19166,31 @@ impl ReferenceWindowCache {
             .ok_or_else(|| "SetNmMdAndUqTags alignment extends beyond reference".to_string())
     }
 
+    fn range(&mut self, tid: usize, start: usize, length: usize) -> Result<Option<&[u8]>, String> {
+        if length == 0 {
+            return Ok(Some(&[]));
+        }
+        let end = start
+            .checked_add(length)
+            .ok_or_else(|| "SetNmMdAndUqTags alignment extends beyond reference".to_string())?;
+        if length > Self::WINDOW_SIZE {
+            return Ok(None);
+        }
+        if self.active_tid != Some(tid)
+            || start < self.active_start
+            || end > self.active_start.saturating_add(self.active_sequence.len())
+        {
+            self.load_window(tid, start)?;
+        }
+        if start < self.active_start
+            || end > self.active_start.saturating_add(self.active_sequence.len())
+        {
+            return Ok(None);
+        }
+        let offset = start - self.active_start;
+        Ok(self.active_sequence.get(offset..offset + length))
+    }
+
     fn load_window(&mut self, tid: usize, position: usize) -> Result<(), String> {
         let contig = self
             .target_names
@@ -19227,21 +19252,41 @@ fn set_nm_md_uq_tags(
     for cigar in &record.cigar() {
         match *cigar {
             Cigar::Match(length) | Cigar::Equal(length) | Cigar::Diff(length) => {
-                for _ in 0..length {
-                    if read_offset >= read_bases.len() {
-                        return Err("SetNmMdAndUqTags read sequence shorter than CIGAR".to_string());
+                let length = length as usize;
+                let read_end = read_offset.checked_add(length).ok_or_else(|| {
+                    "SetNmMdAndUqTags read sequence shorter than CIGAR".to_string()
+                })?;
+                if read_end > read_bases.len() {
+                    return Err("SetNmMdAndUqTags read sequence shorter than CIGAR".to_string());
+                }
+                if let Some(reference_bases) = reference.range(tid, ref_offset, length)? {
+                    for (offset, ref_base) in reference_bases.iter().copied().enumerate() {
+                        consume_reference_base(
+                            read_bases[read_offset + offset],
+                            ref_base,
+                            qualities.get(read_offset + offset).copied().unwrap_or(0),
+                            &mut md,
+                            &mut matches,
+                            &mut nm,
+                            &mut uq,
+                        );
                     }
+                    read_offset = read_end;
+                    ref_offset += length;
+                    continue;
+                }
+                for _ in 0..length {
                     let read_base = read_bases[read_offset];
                     let ref_base = reference.base(tid, ref_offset)?;
-                    if dna_bases_equal(read_base, ref_base) {
-                        matches += 1;
-                    } else {
-                        push_usize_decimal(&mut md, matches);
-                        md.push(ref_base as char);
-                        matches = 0;
-                        nm += 1;
-                        uq += qualities.get(read_offset).copied().unwrap_or(0) as i32;
-                    }
+                    consume_reference_base(
+                        read_base,
+                        ref_base,
+                        qualities.get(read_offset).copied().unwrap_or(0),
+                        &mut md,
+                        &mut matches,
+                        &mut nm,
+                        &mut uq,
+                    );
                     read_offset += 1;
                     ref_offset += 1;
                 }
@@ -19251,13 +19296,19 @@ fn set_nm_md_uq_tags(
                 nm += length as i32;
             }
             Cigar::Del(length) => {
+                let length = length as usize;
                 push_usize_decimal(&mut md, matches);
                 md.push('^');
                 matches = 0;
-                for _ in 0..length {
-                    let ref_base = reference.base(tid, ref_offset)?;
-                    md.push(ref_base as char);
-                    ref_offset += 1;
+                if let Some(reference_bases) = reference.range(tid, ref_offset, length)? {
+                    md.extend(reference_bases.iter().map(|base| *base as char));
+                    ref_offset += length;
+                } else {
+                    for _ in 0..length {
+                        let ref_base = reference.base(tid, ref_offset)?;
+                        md.push(ref_base as char);
+                        ref_offset += 1;
+                    }
                 }
                 nm += length as i32;
             }
@@ -19296,6 +19347,27 @@ fn set_nm_md_uq_tags(
             .map_err(|error| error.to_string())?;
     }
     Ok(())
+}
+
+#[inline]
+fn consume_reference_base(
+    read_base: u8,
+    ref_base: u8,
+    quality: u8,
+    md: &mut String,
+    matches: &mut usize,
+    nm: &mut i32,
+    uq: &mut i32,
+) {
+    if dna_bases_equal(read_base, ref_base) {
+        *matches += 1;
+    } else {
+        push_usize_decimal(md, *matches);
+        md.push(ref_base as char);
+        *matches = 0;
+        *nm += 1;
+        *uq += quality as i32;
+    }
 }
 
 fn dna_bases_equal(read_base: u8, ref_base: u8) -> bool {
