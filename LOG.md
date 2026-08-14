@@ -1,5 +1,20 @@
 # Turbo Picard work log
 
+## 2026-08-14 — production-evidence path smoke-tested end to end
+
+- Ran the pinned competitor benchmark and manifest adapter on the public Picard
+  SNVQ BAM using the current `f790814` release binary and Picard `3.4.0`.
+  Five repeats completed with the required-tool gate passing and exact ordered
+  duplicate/metrics parity across 26,577 records.
+- Built and validated a `release_candidate` production-evidence manifest with
+  profile `cohort_batch`, read count, source citation, resource measurements,
+  and `independent_reproduction.status=not_run`. The bundle is retained at
+  `/private/tmp/turbo-picard-production-smoke-f790814/evidence/`.
+- This proves the evidence plumbing and bounded public-fixture protocol, not
+  production-scale WGS/WES readiness or independent reproduction. No workflow
+  dispatch, tag, push, publication, outreach, or external-service mutation
+  occurred.
+
 ## 2026-08-14 — production-evidence bootstrap uses current actions
 
 - Updated the manual production-evidence workflow's validation job from
