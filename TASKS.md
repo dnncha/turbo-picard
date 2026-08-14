@@ -32,6 +32,10 @@ and evidence-backed growth.
   median versus `1.551860` seconds Picard, and median peak RSS of `37,765,120`
   versus `1,018,560,512` bytes. The retained manifest leaves independent
   reproduction `not_run` and does not claim production-scale readiness.
+- The copy-paste trial contract passes on current HEAD, including the native
+  `MarkDuplicates` trial shape and fallback-only behavior. The production-
+  readiness golden surface now keeps `CollectHsMetrics` explicitly delegated
+  until native bait/target accounting and parity evidence exist.
 - The next measured candidate optimization reduces reference-cache overhead in
   `SetNmMdAndUqTags`: five focused repeats moved from 18.84x to 20.94x with
   exact parity, while the exact-commit three-repeat 32-command suite remained

@@ -63,8 +63,9 @@ Prioritise evidence and compatibility for:
 -  AddOrReplaceReadGroups, BuildBamIndex, ValidateSamFile,
    SetNmMdAndUqTags and CreateSequenceDictionary.
 -  CollectMultipleMetrics, CollectAlignmentSummaryMetrics,
-   CollectInsertSizeMetrics, CollectWgsMetrics, CollectGcBiasMetrics and
-   native CollectHsMetrics.
+   CollectInsertSizeMetrics, CollectWgsMetrics and CollectGcBiasMetrics.
+   ``CollectHsMetrics`` remains delegated until native bait/target accounting
+   and matching parity evidence exist.
 -  GatherVcfs, SortVcf, MergeVcfs, LiftoverVcf and
    UpdateVcfSequenceDictionary.
 

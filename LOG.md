@@ -1,5 +1,20 @@
 # Turbo Picard work log
 
+## 2026-08-14 — current trial and release boundary rechecked
+
+- Refreshed origin refs: `origin/main` remains
+  `6c99885798654a43728dd80c12cc51dfa931e9fd`, the candidate is 17 commits
+  ahead, and neither local nor origin has `v0.1.12`. The Bioconda preflight
+  passes its repository, evidence, version, prose, and recipe-shape checks and
+  waits only for the post-tag immutable archive metadata step.
+- The current copy-paste adoption contract passed
+  `./tools/verify_basic_trial_parity.sh`, covering the native `MarkDuplicates`
+  trial output and fallback-only contract. No package, tag, issue, comment,
+  outreach, or external service state changed.
+- Clarified the production-readiness golden surface so `CollectHsMetrics` is
+  explicitly delegated until its native bait/target accounting and parity
+  evidence exist; the command matrix already records that status.
+
 ## 2026-08-14 — current candidate passes fresh public SNVQ MarkDuplicates evidence
 
 - Re-ran the auditable five-repeat `MarkDuplicates` competitor protocol from
