@@ -52,6 +52,10 @@ and evidence-backed growth.
   `TURBO_PICARD_MARKDUPLICATES` all pass under Nextflow 26.04.6 and nf-test
   0.9.5. This strengthens workflow wiring evidence only; external nf-core
   review, production-scale parity, and independent reproduction remain open.
+- The shipped Snakemake `mark_duplicates` starter also ran successfully on the
+  checked-in BAM fixture after pinning `PuLP==2.7.0` for Snakemake 7.32.4. The
+  compatibility note is now in the adoption docs; this run exposed and closed
+  an actual environment friction point without claiming production readiness.
 - The benchmarked candidate runtime at source SHA
   `3c43bca0cc8624008cef6979e0c5b5450a965124` passes all 32 three-repeat
   benchmark parity checks against Picard 3.4.0. The refreshed checked-in assets

@@ -155,6 +155,18 @@ That directory also includes short walkthroughs for ``WDL / Cromwell``,
 starter path quickly.
 If the right first substitution is still unclear, start with
 ``choose-your-first-command.md`` in that same directory.
+If a Python 3.9 environment resolves Snakemake 7.32.4, pin ``PuLP==2.7.0``
+for the trial environment. That Snakemake release calls the legacy
+``pulp.list_solvers`` API, which is not available in PuLP 3.x. Use the newest
+compatible pair available to the workflow environment when possible; this
+pin keeps the documented Snakemake 7.32.4 starter reproducible.
+
+.. code-block:: bash
+
+   python3 -m venv .venv-snakemake-trial
+   . .venv-snakemake-trial/bin/activate
+   python3 -m pip install "snakemake==7.32.4" "PuLP==2.7.0"
+
 For the smallest reviewable trial shape, it also includes
 ``one-command-trial.md`` plus tiny ``trial.wdl`` and ``trial.nf`` workflows
 that show a single-command evaluation flow.

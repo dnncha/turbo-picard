@@ -1,5 +1,16 @@
 # Turbo Picard work log
 
+## 2026-08-14 — Snakemake starter runs after compatibility pin
+
+- Installed Snakemake `7.32.4` in an isolated ARM64 environment and ran the
+  shipped `mark_duplicates` rule against the checked-in basic BAM fixture. The
+  first attempt exposed a real adoption issue: Snakemake 7.32.4 calls
+  `pulp.list_solvers`, while the resolved PuLP `3.3.1` only exposes the renamed
+  API. Pinning `PuLP==2.7.0` made the run pass, with both BAM and metrics output
+  materialized and valid output SAM inspection. Raw output is retained in the
+  temporary Snakemake evidence bundle. The result is workflow-wiring evidence,
+  not production-scale parity or independent review.
+
 ## 2026-08-14 — nf-core process integration passes locally
 
 - Built the exact `10057ef5f6d8bf25719442e2765e5270c0a7edb9` release binary and

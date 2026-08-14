@@ -9,6 +9,23 @@ Start here:
   copyable starter rules for `SortSam`, `MarkDuplicates`, `SamToFastq`,
   `FastqToSam`, or `FixMateInformation`
 
+Environment compatibility
+--------------------------
+
+If a Python 3.9 environment resolves Snakemake 7.32.4, pair it with a 2.x
+PuLP release. Snakemake 7.32.4 calls the legacy `pulp.list_solvers` API, which
+is not present in PuLP 3.x:
+
+```bash
+python3 -m venv .venv-snakemake-trial
+. .venv-snakemake-trial/bin/activate
+python3 -m pip install "snakemake==7.32.4" "PuLP==2.7.0"
+snakemake --version
+```
+
+Use the newest Snakemake/PuLP pair supported by the workflow environment when
+available; keep the explicit pin above for the Snakemake 7.32.4 trial shape.
+
 Recommended next command after that:
 
 - `SortSam` if the workflow repeatedly rewrites order
