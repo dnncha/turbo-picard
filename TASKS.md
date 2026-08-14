@@ -21,6 +21,11 @@ and evidence-backed growth.
 
 ## Current verified direction
 
+- The current `0.1.12` candidate is committed locally on the existing `codex/`
+  branch; the worktree is clean and the branch is one commit ahead of
+  `origin/main`. The exact current source SHA is retained in the release
+  handoff manifest. The candidate remains a release candidate because neither
+  local nor origin has the matching `v0.1.12` tag.
 - The post-`0.1.11` corrections are now a locally consistent `0.1.12` release
   candidate: Cargo, PyPI metadata, citation, bio.tools, both Bioconda recipes,
   release archive instructions, and the source-release marker align. The

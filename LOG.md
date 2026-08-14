@@ -1,5 +1,23 @@
 # Turbo Picard work log
 
+## 2026-08-14 — clean local release-candidate handoff
+
+- Committed the complete current candidate changeset as
+  `5d968a3ead1ad8350f60e9ff9ab937f5f65353a2`
+  (`Prepare Turbo Picard 0.1.12 release candidate`) on the existing
+  `codex/turbo-picard-bioconda-0-1-11` branch.
+- The worktree is clean and the branch is one local commit ahead of
+  `origin/main`. The release handoff manifest at
+  `/private/tmp/turbo-picard-release-manifest-0.1.12-commit-5d968a3.json`
+  records the candidate artifacts, 32/32 parity benchmark, and only the
+  missing local and origin `v0.1.12` tags as source blockers.
+- The post-commit read-only adoption audit still observes PyPI `0.1.11`,
+  605 downloads in the latest 30 days and 40 in the latest 7 days, and no
+  verified workflow-owner trial reports. These remain distribution signals,
+  not adoption or production proof.
+- No tag, push, package publication, container publication, Bioconda update,
+  issue, comment, outreach, or external service mutation occurred.
+
 ## 2026-08-14 — comparison helper no longer requires host samtools
 
 - The real-data comparison helper failed on a clean host when `samtools` was
