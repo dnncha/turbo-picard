@@ -9,6 +9,8 @@ on:
       - "tools/validate_production_manifest.py"
       - "tools/test_build_production_manifest.py"
       - "tools/test_validate_production_manifest.py"
+      - "tools/validate_production_dispatch.py"
+      - "tools/test_validate_production_dispatch.py"
       - "docs/production-readiness.rst"
       - "docs/compatibility-contract.rst"
   push:
@@ -20,6 +22,8 @@ on:
       - "tools/validate_production_manifest.py"
       - "tools/test_build_production_manifest.py"
       - "tools/test_validate_production_manifest.py"
+      - "tools/validate_production_dispatch.py"
+      - "tools/test_validate_production_dispatch.py"
       - "docs/production-readiness.rst"
       - "docs/compatibility-contract.rst"
 
@@ -149,6 +153,8 @@ jobs:
           python-version: "3.11"
       - name: Run manifest validator tests
         run: python -m unittest discover tools -p 'test_validate_production_manifest.py'
+      - name: Run dispatch input validator tests
+        run: python -m unittest discover tools -p 'test_validate_production_dispatch.py'
       - name: Validate example JSON syntax
         run: python -m json.tool benchmarks/production/manifest-entry.example.json >/dev/null
 
@@ -205,66 +211,27 @@ jobs:
       - name: Validate dispatch inputs
         shell: bash -el {0}
         run: |
-          python3 - <<'PY'
-          import os
-          import re
-
-          sha256 = os.environ["INPUT_SHA256"]
-          if not re.fullmatch(r"[0-9a-fA-F]{64}", sha256):
-              raise SystemExit("INPUT_SHA256 must be a 64-character hexadecimal SHA-256")
-          input_format = os.environ["INPUT_FORMAT"].upper()
-          if input_format not in {"BAM", "CRAM"}:
-              raise SystemExit("INPUT_FORMAT must be BAM or CRAM")
-          if not os.environ["INPUT_URL"].startswith("https://"):
-              raise SystemExit("INPUT_URL must use https://")
-          reference_url = os.environ["REFERENCE_URL"].strip()
-          reference_sha256 = os.environ["REFERENCE_SHA256"].strip()
-          if input_format == "CRAM":
-              if not reference_url.startswith("https://"):
-                  raise SystemExit("CRAM evidence requires an HTTPS REFERENCE_URL")
-              if not re.fullmatch(r"[0-9a-fA-F]{64}", reference_sha256):
-                  raise SystemExit("CRAM evidence requires a 64-character REFERENCE_SHA256")
-          elif reference_url or reference_sha256:
-              raise SystemExit("reference URL and hash are only valid for CRAM input")
-          if not re.fullmatch(r"[A-Za-z0-9_.-]+", os.environ["DATASET_ID"]):
-              raise SystemExit("DATASET_ID may contain only letters, digits, '.', '_' and '-'")
-          if not os.environ["SOURCE_REVISION"].strip():
-              raise SystemExit("SOURCE_REVISION must be non-empty")
-          if not re.fullmatch(r"[a-z0-9_.-]+(?:,[a-z0-9_.-]+)*", os.environ["TOOLS"]):
-              raise SystemExit("TOOLS contains an invalid preset list")
-          if not re.fullmatch(r"[a-z0-9_.-]+(?:,[a-z0-9_.-]+)*", os.environ["REQUIRE_TOOLS"]):
-              raise SystemExit("REQUIRE_TOOLS contains an invalid preset list")
-          if not os.environ["READ_NAME_REGEX"].strip():
-              raise SystemExit("READ_NAME_REGEX must be non-empty; use null or default explicitly")
-          allowed_profiles = {
-              "wgs_30x", "wes_capture", "rna_seq", "umi_panel",
-              "cram_reference", "multi_library", "cohort_batch",
-          }
-          profile = os.environ["PROFILE"]
-          if profile not in allowed_profiles:
-              raise SystemExit("PROFILE is not a supported production evidence profile")
-          tag_values = {
-              "BARCODE_TAG": os.environ["BARCODE_TAG"].strip(),
-              "READ_ONE_BARCODE_TAG": os.environ["READ_ONE_BARCODE_TAG"].strip(),
-              "READ_TWO_BARCODE_TAG": os.environ["READ_TWO_BARCODE_TAG"].strip(),
-          }
-          for name, value in tag_values.items():
-              if value and not re.fullmatch(r"[A-Za-z0-9]{2}", value):
-                  raise SystemExit(f"{name} must be a two-character SAM tag")
-          if profile == "umi_panel" and not any(tag_values.values()):
-              raise SystemExit("umi_panel requires BARCODE_TAG or mate-specific barcode tags")
-          if profile == "cram_reference" and input_format != "CRAM":
-              raise SystemExit("cram_reference requires CRAM input")
-          if os.environ["TAG_DUPLICATE_SET_MEMBERS"] not in {"true", "false"}:
-              raise SystemExit("TAG_DUPLICATE_SET_MEMBERS must be true or false")
-          repeats = int(os.environ["REPEATS"])
-          warmups = int(os.environ["WARMUPS"])
-          threads = int(os.environ["THREADS"])
-          if repeats < 5 or warmups < 0 or threads < 1:
-              raise SystemExit("REPEATS must be at least 5; WARMUPS non-negative; THREADS positive")
-          if not os.environ["SCOPE_CAVEAT"].strip():
-              raise SystemExit("SCOPE_CAVEAT must be non-empty")
-          PY
+          python3 tools/validate_production_dispatch.py \
+            --dataset-id "$DATASET_ID" \
+            --input-url "$INPUT_URL" \
+            --input-format "$INPUT_FORMAT" \
+            --input-sha256 "$INPUT_SHA256" \
+            --reference-url "$REFERENCE_URL" \
+            --reference-sha256 "$REFERENCE_SHA256" \
+            --source-revision "$SOURCE_REVISION" \
+            --scope-caveat "$SCOPE_CAVEAT" \
+            --tier "$TIER" \
+            --tools "$TOOLS" \
+            --require-tools "$REQUIRE_TOOLS" \
+            --repeats "$REPEATS" \
+            --warmups "$WARMUPS" \
+            --threads "$THREADS" \
+            --read-name-regex "$READ_NAME_REGEX" \
+            --profile "$PROFILE" \
+            --tag-duplicate-set-members "$TAG_DUPLICATE_SET_MEMBERS" \
+            --barcode-tag "$BARCODE_TAG" \
+            --read-one-barcode-tag "$READ_ONE_BARCODE_TAG" \
+            --read-two-barcode-tag "$READ_TWO_BARCODE_TAG"
 
       - name: Download and hash input
         id: input

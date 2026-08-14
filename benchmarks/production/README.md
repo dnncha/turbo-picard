@@ -60,6 +60,13 @@ for UMI-panel evidence. The selected profile and options are retained in the
 raw report and manifest; `umi_panel` and `cram_reference` fail closed when their
 required inputs are absent.
 
+The dispatch form runs the same local contract as
+`tools/validate_production_dispatch.py` before downloading the input. It
+requires both `turbo-picard` and Picard in the selected and required tool sets,
+rejects mismatched CRAM/reference or UMI/barcode settings, and requires at
+least five measured repeats. Its focused tests run in the workflow validation
+job, so a future dispatch-input change is reviewed before a large evidence run.
+
 Independent reproduction is a separate evidence contract, not a reviewer-name
 checkbox. A manifest may use `status=pass` only when it retains an evidence URL,
 reviewer, independent host profile, and matching SHA-256 values for the

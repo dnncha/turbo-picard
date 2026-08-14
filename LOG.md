@@ -1,5 +1,18 @@
 # Turbo Picard work log
 
+## 2026-08-14 — production evidence dispatch contract hardened
+
+- Extracted the GitHub Actions production-evidence dispatch checks into the
+  tested `tools/validate_production_dispatch.py` contract. It now fails before
+  download/build when the Picard/Turbo comparison pair is not selected and
+  required, when required tools are not a subset of selected tools, or when
+  CRAM/reference, UMI/barcode, hash, repeat, or resource controls are invalid.
+- The workflow validation job runs the new focused test module, and the manual
+  measurement job reuses the same validator before downloading a pinned input.
+  The production runbook documents the shared contract. No production input,
+  tag, package, publication, issue, comment, outreach, or external service
+  state changed.
+
 ## 2026-08-14 — refreshed parity-backed benchmark assets from current HEAD
 
 - Ran the exact candidate runtime at committed source SHA
