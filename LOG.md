@@ -1,16 +1,20 @@
 # Turbo Picard work log
 
-## 2026-08-14 — current optical-heavy MarkDuplicates profile
+## 2026-08-14 — corrected synthetic optical-path scope
 
-- Ran the documented three-repeat, 300,000-record synthetic BAM profile with
-  duplicate families of 4,096 and the default optical-name parser. Exact
-  parity passed; the median was `0.432s` Turbo versus `3.517s` Picard
-  (`7.54x`), with per-run speedups from `6.93x` to `11.28x`.
-- Raw profile JSON is retained at
-  `/private/tmp/turbo-picard-markduplicates-optical-fe14aee.json`. The result
-  strengthens optical-path regression evidence only; it does not prove
-  production-scale WGS/WES behavior, independent reproduction, or workflow
-  owner adoption. No external state changed.
+- Audited the earlier default-regex synthetic profile and found that its
+  generator emitted unpaired records. That run passed parity, but it did not
+  exercise the paired optical-duplicate graph; the retained profile at
+  `/private/tmp/turbo-picard-markduplicates-optical-fe14aee.json` is therefore
+  regex-configured fragment evidence, not optical-heavy evidence.
+- Added an explicit `--paired` mode to the synthetic benchmark generator and
+  used Picard only for untimed coordinate sorting, because its comparator has
+  stricter tie ordering for this synthetic paired shape. A 5,000-template
+  harness smoke passed exact parity, followed by a 20,000-template,
+  40,000-record, family-1,024 default-optical run at `0.179s` Turbo versus
+  `39.161s` Picard (`218.68x`) with exact parity. This is genuine synthetic
+  paired/optical-path evidence, still not production-scale or independent
+  workflow-owner proof. No external state changed.
 
 ## 2026-08-14 — current high-duplicate MarkDuplicates profile
 
