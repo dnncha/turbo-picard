@@ -28,11 +28,11 @@ class BenchmarkManifestTests(unittest.TestCase):
         self.assertEqual(data["summary"]["command_count"], 32)
         self.assertEqual(data["summary"]["parity_pass_count"], 32)
         self.assertEqual(data["summary"]["top_command"], "NormalizeFasta")
-        self.assertEqual(data["summary"]["top_speedup"], 261.75)
+        self.assertEqual(data["summary"]["top_speedup"], 272.12)
         self.assertEqual(data["summary"]["floor_command"], "SetNmMdAndUqTags")
-        self.assertEqual(data["summary"]["floor_speedup"], 22.17)
-        self.assertEqual(data["summary"]["median_speedup"], 100.27)
-        self.assertEqual(data["summary"]["geometric_mean_speedup"], 87.47)
+        self.assertEqual(data["summary"]["floor_speedup"], 22.88)
+        self.assertEqual(data["summary"]["median_speedup"], 99.56)
+        self.assertEqual(data["summary"]["geometric_mean_speedup"], 84.52)
 
         ranks = [row["rank"] for row in data["benchmarks"]]
         speedups = [row["speedup"] for row in data["benchmarks"]]

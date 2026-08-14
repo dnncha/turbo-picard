@@ -11,6 +11,9 @@
 - The verifier, its focused tests, CI coverage check, and `git diff --check`
   passed. This is local release-readiness work only; no tag, push, publication,
   PR edit, or outreach occurred.
+- The first full tooling-suite run caught the remaining hard-coded old summary
+  in `tools/test_render_benchmark_assets.py`; after updating it, all `430`
+  tooling tests passed with one existing skip.
 
 ## 2026-08-14 — synchronized release handoff and outreach benchmark facts
 

@@ -79,6 +79,9 @@ and evidence-backed growth.
   benchmark docs, static site, and outreach drafts, with focused tests and
   required CI coverage. Future evidence refreshes now fail closed if those
   outward-facing surfaces drift from `benchmark-data.json`.
+- The full local Python tooling suite initially caught and then cleared one
+  stale benchmark expectation in the renderer test; the final run passes all
+  `430` tests with one existing skip.
 - The exact `0.1.12` candidate also has a refreshed redacted public-fixture
   trial packet at `/private/tmp/turbo-picard-shareable-trial-c3db358/`: Picard
   `3.4.0` and Turbo matched `MarkDuplicates` digests exactly at `3.99x` on the
