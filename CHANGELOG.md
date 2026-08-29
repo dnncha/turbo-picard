@@ -1,8 +1,9 @@
 # Changelog
 
-## 0.1.12 — release candidate
+## 0.1.12 — 2026-08-30
 
-This is a local release candidate. It is not tagged or published yet.
+This is the release source for `v0.1.12`. Tag, package, container, and
+downstream-provider verification remain separate release gates.
 
 Highlights:
 

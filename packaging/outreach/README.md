@@ -38,7 +38,7 @@ Ground rules:
 Current facts to keep consistent:
 
 - Live package: `turbo-picard` 0.1.11
-- Current repo release candidate: 0.1.12
+- Prepared release source: 0.1.12
 - Install: `python3 -m pip install turbo-picard`
 - Current PyPI files: Linux x86_64 wheel, macOS Apple Silicon wheel, and source distribution
 - Bioconda is not yet a current `0.1.12` install path: the existing open PR
