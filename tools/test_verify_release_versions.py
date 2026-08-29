@@ -257,6 +257,34 @@ keywords:
             verify_release_versions.collect_errors(root),
         )
 
+    def test_rejects_stale_container_image_version(self) -> None:
+        root = self.make_tree()
+        write(
+            root,
+            "README.md",
+            "CITATION.cff input SHA-256; ghcr.io/dnncha/turbo-picard:0.0.9\n",
+        )
+
+        self.assertIn(
+            "README.md container image version 0.0.9 must match workspace 0.1.0 unless explicitly marked published",
+            verify_release_versions.collect_errors(root),
+        )
+
+    def test_allows_older_container_image_when_explicitly_published(self) -> None:
+        root = self.make_tree()
+        write(
+            root,
+            "README.md",
+            "CITATION.cff input SHA-256; published release image "
+            "ghcr.io/dnncha/turbo-picard:0.0.9\n",
+        )
+
+        errors = verify_release_versions.collect_errors(root)
+        self.assertNotIn(
+            "README.md container image version 0.0.9",
+            errors,
+        )
+
     def test_rejects_stale_internal_dependency_version(self) -> None:
         root = self.make_tree()
         write(

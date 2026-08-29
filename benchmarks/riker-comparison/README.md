@@ -65,8 +65,10 @@ Profiles benchmarked:
 | `wgs-only` | `CollectWgsMetrics` | `riker wgs` |
 | `wgs-bundle` | `CollectMultipleMetrics` + `CollectGcBiasMetrics` + `CollectWgsMetrics` | `riker multi --tools wgs alignment basic isize gcbias` |
 
-Hybcap (`CollectHsMetrics` vs `riker hybcap`) can run today through upstream
-Picard delegation; a native `CollectHsMetrics` fast path is still planned.
+Hybcap (`CollectHsMetrics` vs `riker hybcap`) can run through the native
+core-metrics and sidecar path for the documented ALL_READS scope, with
+upstream Picard fallback retained for unsupported advanced options. No
+WES-scale performance claim is implied by this smoke surface.
 
 ## Environment overrides
 

@@ -38,12 +38,15 @@ Ground rules:
 Current facts to keep consistent:
 
 - Live package: `turbo-picard` 0.1.11
-- Current repo release: 0.1.11
+- Current repo release candidate: 0.1.12
 - Install: `python3 -m pip install turbo-picard`
 - Current PyPI files: Linux x86_64 wheel, macOS Apple Silicon wheel, and source distribution
-- Bioconda recipe PR: open; packages pending Bioconda review and publication
+- Bioconda is not yet a current `0.1.12` install path: the existing open PR
+  #65922 covers older `0.1.10` metadata. Use PyPI `0.1.11` or the published
+  container until the exact `0.1.12` tag, archive, review, and publication are
+  complete.
 - Trial helper: `turbo-picard trial <PicardCommand> ...`
-- Benchmark evidence in the repo reports 32/32 parity-checked commands, 24.94x
-  geometric mean speedup, and 94.36x top speedup versus Picard 3.4.0
+- Benchmark evidence in the repo reports 32/32 parity-checked commands, 84.52x
+  geometric mean speedup, and 272.12x top speedup versus Picard 3.4.0
 - Recommended first commands: `MarkDuplicates`, `SortSam`, `SamToFastq`,
   `FastqToSam`, `FixMateInformation`, `BuildBamIndex`, and metrics commands

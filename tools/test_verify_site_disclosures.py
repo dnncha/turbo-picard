@@ -95,6 +95,28 @@ class SiteDisclosureTests(unittest.TestCase):
             verify_site_disclosures.validate_site_disclosures(html, version="0.1.2"),
         )
 
+    def test_site_disclosure_rejects_stale_bioconda_submission_claim(self) -> None:
+        html = """
+<head>
+  <meta name="description" content="selected Picard commands with fallback for unsupported commands">
+</head>
+<section>
+  <h2>Current boundaries</h2>
+  <p>turbo-picard is not a full Picard suite yet.</p>
+  <p>Chart outputs are lightweight PDF summaries; metrics text is the parity target.</p>
+  <p>Switch only the commands where the evidence supports the change.</p>
+  <p>The benchmark threshold gate is python3 tools/verify_benchmark_thresholds.py with 5.00x floor speedup, 20.00x geometric mean speedup, and 50.00x top speedup.</p>
+  <p>The software citation lives in CITATION.cff. Cite the archived turbo-picard release and cite benchmark inputs separately with SHA-256.</p>
+  <p>Bioconda release v0.1.2 uses python3 tools/bioconda_release_preflight.py and bioconda-utils lint recipes config.yml --packages turbo-picard turbo-picard-picard-shim.</p>
+  <p>A v0.1.2 submission has not been opened.</p>
+</section>
+"""
+
+        self.assertIn(
+            "site contains stale Bioconda submission status",
+            verify_site_disclosures.validate_site_disclosures(html, version="0.1.2"),
+        )
+
     def test_site_disclosure_requires_citation_boundary(self) -> None:
         html = """
 <head>

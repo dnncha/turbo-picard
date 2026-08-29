@@ -6,14 +6,94 @@ use std::io::{Read, Write};
 use std::os::unix::fs::PermissionsExt;
 
 #[test]
-fn collecthsmetrics_help_exposes_scaffold_surface() {
+fn collecthsmetrics_help_exposes_native_core_surface() {
     let mut cmd = Command::cargo_bin("turbo-picard").expect("binary exists");
     cmd.args(["CollectHsMetrics", "--help"])
         .assert()
         .success()
+        .stdout(predicate::str::contains("Native core options"))
         .stdout(predicate::str::contains(
-            "Native bait/target accumulation is not implemented yet",
+            "core ALL_READS hybrid-capture metrics",
+        ))
+        .stdout(predicate::str::contains(
+            "PER_TARGET_COVERAGE and PER_BASE_COVERAGE sidecar reports",
         ));
+}
+
+#[test]
+fn top_level_help_lists_collecthsmetrics() {
+    Command::cargo_bin("turbo-picard")
+        .expect("binary exists")
+        .arg("--help")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "CollectHsMetrics   Writes hybrid-capture metrics and coverage sidecars",
+        ));
+}
+
+#[test]
+fn collecthsmetrics_writes_native_core_metrics() {
+    let tempdir = tempfile::tempdir().expect("tempdir exists");
+    let input = tempdir.path().join("input.sam");
+    let reference = tempdir.path().join("reference.fa");
+    let intervals = tempdir.path().join("targets.interval_list");
+    let output = tempdir.path().join("hs_metrics.txt");
+    let per_target = tempdir.path().join("per-target.txt");
+    let per_base = tempdir.path().join("per-base.txt");
+    fs::write(&reference, ">chr1\nACGTACGTACGT\n").expect("reference is written");
+    fs::write(
+        &input,
+        concat!(
+            "@HD\tVN:1.6\tSO:coordinate\n",
+            "@SQ\tSN:chr1\tLN:12\n",
+            "read-a\t0\tchr1\t1\t60\t4M\t*\t0\t0\tACGT\tFFFF\n",
+        ),
+    )
+    .expect("input fixture is written");
+    fs::write(
+        &intervals,
+        concat!(
+            "@HD\tVN:1.6\tSO:coordinate\n",
+            "@SQ\tSN:chr1\tLN:12\n",
+            "chr1\t1\t4\t+\ttarget\n",
+        ),
+    )
+    .expect("interval fixture is written");
+
+    Command::cargo_bin("picard")
+        .expect("binary exists")
+        .args([
+            "CollectHsMetrics",
+            &format!("I={}", input.display()),
+            &format!("O={}", output.display()),
+            &format!("BAIT={}", intervals.display()),
+            &format!("TARGET={}", intervals.display()),
+            &format!("R={}", reference.display()),
+            &format!("PER_TARGET_COVERAGE={}", per_target.display()),
+            &format!("PER_BASE_COVERAGE={}", per_base.display()),
+            "MINIMUM_MAPPING_QUALITY=0",
+            "SAMPLE_SIZE=0",
+            "VALIDATION_STRINGENCY=SILENT",
+            "QUIET=true",
+        ])
+        .assert()
+        .success();
+
+    let metrics = fs::read_to_string(&output).expect("metrics output exists");
+    assert!(metrics.contains("## METRICS CLASS\tpicard.analysis.directed.HsMetrics\n"));
+    assert!(metrics.contains("targets\t4\t1\t4\t0\t0\t1\t0\t1\t1\t1\t1\t3\t"));
+    assert!(metrics.contains(
+        "coverage_or_base_quality\thigh_quality_coverage_count\tunfiltered_baseq_count\n"
+    ));
+    assert_eq!(
+        fs::read_to_string(&per_target).expect("per-target output exists"),
+        "chrom\tstart\tend\tlength\tname\t%gc\tmean_coverage\tnormalized_coverage\tmin_normalized_coverage\tmax_normalized_coverage\tmin_coverage\tmax_coverage\tpct_0x\tread_count\nchr1\t1\t4\t4\ttarget\t0.5\t1\t1\t1\t1\t1\t1\t0\t1\n"
+    );
+    assert_eq!(
+        fs::read_to_string(&per_base).expect("per-base output exists"),
+        "chrom\tpos\ttarget\tcoverage\nchr1\t1\ttarget\t1\nchr1\t2\ttarget\t1\nchr1\t3\ttarget\t1\nchr1\t4\ttarget\t1\n"
+    );
 }
 
 #[test]
@@ -86,6 +166,56 @@ fn doctor_reports_runtime_and_fallback_state() {
             "fallback_command={}",
             fallback.display()
         )));
+}
+
+#[test]
+fn capabilities_json_exposes_agent_selection_contract() {
+    let mut cmd = Command::cargo_bin("turbo-picard").expect("binary exists");
+    cmd.args(["capabilities", "--json"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"schema_version\": 1"))
+        .stdout(predicate::str::contains("\"tool\": \"turbo-picard\""))
+        .stdout(predicate::str::contains(
+            "\"install_command\": \"python3 -m pip install turbo-picard\"",
+        ))
+        .stdout(predicate::str::contains("\"name\": \"MarkDuplicates\""))
+        .stdout(predicate::str::contains(
+            "\"trial_fit\": \"recommended-first-trial\"",
+        ))
+        .stdout(predicate::str::contains(
+            "\"geometric_mean_speedup\": 84.52",
+        ))
+        .stdout(predicate::str::contains("\"parity\": \"32/32 PASS\""))
+        .stdout(predicate::str::contains(
+            "\"name\": \"capabilities\",\n      \"status\": \"native\",\n      \"trial_fit\": \"not-a-workload\"",
+        ));
+}
+
+#[test]
+fn capabilities_text_lists_native_and_fallback_decisions() {
+    let mut cmd = Command::cargo_bin("turbo-picard").expect("binary exists");
+    cmd.arg("capabilities")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("tool=turbo-picard"))
+        .stdout(predicate::str::contains(
+            "command=MarkDuplicates status=partial-native trial_fit=recommended-first-trial",
+        ))
+        .stdout(predicate::str::contains(
+            "command=EstimateLibraryComplexity status=fallback-only trial_fit=fallback-only",
+        ));
+}
+
+#[test]
+fn capabilities_rejects_positional_arguments() {
+    let mut cmd = Command::cargo_bin("turbo-picard").expect("binary exists");
+    cmd.args(["capabilities", "MarkDuplicates"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "unexpected capabilities argument: MarkDuplicates",
+        ));
 }
 
 #[test]

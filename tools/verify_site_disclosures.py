@@ -82,6 +82,8 @@ def validate_site_disclosures(html: str, *, version: str | None = None) -> list[
         or "bioconda-utils lint recipes config.yml --packages turbo-picard turbo-picard-picard-shim" not in text
     ):
         errors.append("site missing Bioconda release/lint disclosure")
+    if "submission has not been opened" in text:
+        errors.append("site contains stale Bioconda submission status")
     return errors
 
 

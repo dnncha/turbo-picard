@@ -38,12 +38,34 @@ def conda_runner():
     raise SystemExit("mamba or micromamba is required to benchmark against Picard")
 
 
-def write_sam(path, reads, duplicate_family_size):
+def write_sam(path, reads, duplicate_family_size, paired=False):
     sequence = "ACGT" * 25
     qualities = "F" * len(sequence)
     with open(path, "w", encoding="utf-8") as handle:
         handle.write("@HD\tVN:1.6\tSO:coordinate\n")
         handle.write(f"@SQ\tSN:chr1\tLN:{reads + 1000}\n")
+        if paired:
+            handle.write("@RG\tID:rg1\tLB:lib1\tSM:sample1\n")
+            for group_start in range(0, reads, duplicate_family_size):
+                family_end = min(group_start + duplicate_family_size, reads)
+                group = group_start // duplicate_family_size
+                pos = 1 + group * 2
+                mate_pos = pos + 100
+                for index in range(group_start, family_end):
+                    member = index - group_start
+                    name = f"INST:RUN:FLOW:1:{group + 1}:{member % 101}:{member // 101}"
+                    handle.write(
+                        f"{name}\t99\tchr1\t{pos}\t60\t100M\t=\t{mate_pos}\t100\t"
+                        f"{sequence}\t{qualities}\tRG:Z:rg1\n"
+                    )
+                for index in range(group_start, family_end):
+                    member = index - group_start
+                    name = f"INST:RUN:FLOW:1:{group + 1}:{member % 101}:{member // 101}"
+                    handle.write(
+                        f"{name}\t147\tchr1\t{mate_pos}\t60\t100M\t=\t{pos}\t-100\t"
+                        f"{sequence}\t{qualities}\tRG:Z:rg1\n"
+                    )
+            return
         for index in range(reads):
             group = index // duplicate_family_size
             pos = 1 + group * 2
@@ -63,13 +85,25 @@ def main():
         "--duplicate-family-size",
         type=int,
         default=4,
-        help="records sharing a duplicate key; use 1024+ to stress large families",
+        help="records (or paired templates) sharing a duplicate key; use 1024+ to stress large families",
+    )
+    parser.add_argument(
+        "--paired",
+        action="store_true",
+        help="synthesize paired records so duplicate-pair and optical paths are exercised",
     )
     parser.add_argument(
         "--input-format",
         choices=("bam", "sam"),
         default="bam",
         help="benchmark input format; BAM exercises the production native path",
+    )
+    parser.add_argument(
+        "--read-name-regex",
+        help=(
+            "pass READ_NAME_REGEX to MarkDuplicates; use null for the bounded "
+            "no-optical plan or omit it to exercise bounded default optical discovery"
+        ),
     )
     parser.add_argument(
         "--conda-prefix",
@@ -99,19 +133,39 @@ def main():
         picard_out = workdir / "picard.sam"
         turbo_metrics = workdir / "turbo.metrics.txt"
         picard_metrics = workdir / "picard.metrics.txt"
-        write_sam(input_sam, args.reads, args.duplicate_family_size)
+        write_sam(input_sam, args.reads, args.duplicate_family_size, paired=args.paired)
         benchmark_input = input_sam
         if args.input_format == "bam":
-            run(
-                [
-                    str(turbo),
-                    "SortSam",
-                    f"I={input_sam}",
-                    f"O={input_bam}",
-                    "SORT_ORDER=coordinate",
-                    "QUIET=true",
-                ]
-            )
+            if args.paired:
+                # Picard's coordinate comparator has stricter tie ordering
+                # than the native sorter.  Use it only to prepare this
+                # paired synthetic input; MarkDuplicates timings still cover
+                # the native and Picard implementations on the same BAM.
+                run(
+                    [
+                        runner,
+                        "run",
+                        "-p",
+                        args.conda_prefix,
+                        "picard",
+                        "SortSam",
+                        f"I={input_sam}",
+                        f"O={input_bam}",
+                        "SORT_ORDER=coordinate",
+                        "QUIET=true",
+                    ]
+                )
+            else:
+                run(
+                    [
+                        str(turbo),
+                        "SortSam",
+                        f"I={input_sam}",
+                        f"O={input_bam}",
+                        "SORT_ORDER=coordinate",
+                        "QUIET=true",
+                    ]
+                )
             benchmark_input = input_bam
 
         common = [
@@ -120,6 +174,8 @@ def main():
             "VALIDATION_STRINGENCY=SILENT",
             "QUIET=true",
         ]
+        if args.read_name_regex is not None:
+            common.append(f"READ_NAME_REGEX={args.read_name_regex}")
         turbo_time = run([str(turbo), *common, f"O={turbo_out}", f"M={turbo_metrics}"])
         picard_time = run(
             [
@@ -156,8 +212,11 @@ def main():
         speedup = picard_time / turbo_time if turbo_time > 0 else float("inf")
         print("command=MarkDuplicates")
         print(f"reads={args.reads}")
+        print(f"records={args.reads * (2 if args.paired else 1)}")
         print(f"input_format={args.input_format}")
+        print(f"paired={args.paired}")
         print(f"duplicate_family_size={args.duplicate_family_size}")
+        print(f"read_name_regex={args.read_name_regex or '<default>'}")
         print(f"turbo_seconds={turbo_time:.6f}")
         print(f"picard_seconds={picard_time:.6f}")
         print(f"speedup={speedup:.2f}x")

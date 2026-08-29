@@ -9,10 +9,47 @@ work to a GPU just because one is present.
 They also explain the scalability story. Faster wall time matters, but so does
 the ability to fan out many Picard-shaped tasks without paying Picard-scale JVM
 startup and memory costs on every shard. The saved benchmark suite currently
-shows a ``6.86x`` floor speedup, ``24.94x`` geometric mean speedup, and
-``94.36x`` top speedup against Picard 3.4.0, while the checked
-``MarkDuplicates`` performance run in this repository dropped median RSS from
-about ``1.2 GB`` to about ``8.7 MB``.
+shows a ``22.88x`` floor speedup, ``84.52x`` geometric mean speedup, and
+``272.12x`` top speedup against Picard 3.4.0. Those are saved-fixture results,
+not whole-genome guarantees.
+
+For duplicate marking, a single BAM or explicit-reference CRAM is first
+record-count checked. Inputs with at most 100,000 records use the compact
+two-pass plan to avoid unnecessary sort-file overhead; larger inputs use the
+disk-backed plan and replay the original alignment files for final output.
+Multiple alignment inputs that are already globally coordinate-ordered use the
+disk-backed plan as well. The bounded path includes ``BARCODE_TAG`` and
+``READ_ONE_BARCODE_TAG``/``READ_TWO_BARCODE_TAG`` grouping, Picard-compatible
+optical-family discovery with the default or a validated three-capture-group
+``READ_NAME_REGEX``, and ``REMOVE_SEQUENCING_DUPLICATES``. Explicit
+``READ_NAME_REGEX=null`` disables optical discovery and retains Picard's
+no-optical metrics behavior. Duplicate-set tagging (``DS``/``DI``) is carried
+through bounded replay for paired duplicate families. Multiple streams that are
+not already globally coordinate-ordered fall back to the existing in-memory
+multi-input path so the output-order contract is preserved. A local adversarial
+300,000-read run with duplicate families of 4,096 records passed the synthetic
+Picard parity comparator and measured ``75,038,720`` bytes of peak RSS for the
+external plan versus ``110,592,000`` bytes for the compact path on the same
+machine, with ``TMP_DIR`` pointed at dedicated scratch space. The external plan
+took ``1.09`` seconds for the Turbo-Picard command in that direct resource run;
+the suite profile remains the comparable timing source for Picard speedups.
+Reproduce the timing profile with:
+
+.. code-block:: bash
+
+   python3 tools/bench_suite.py --only markduplicates --repeats 3 --skip-build \
+     --markduplicates-reads 300000 --markduplicates-family-size 4096 \
+     --profile-output /tmp/turbo-picard-markduplicates-profile.json
+
+   # The suite-level RSS includes comparator child processes. For a
+   # tool-specific reading, wrap target/release/picard MarkDuplicates with
+   # ``/usr/bin/time -l`` on the generated BAM.
+
+This is bounded external planning for one documented option scope, not a claim
+that every MarkDuplicates mode is constant-memory or production-approved.
+Production-scale WGS, WES, UMI, optical-heavy, CRAM, and multi-library evidence
+still belongs in the pinned evidence workflow described in
+:doc:`production-readiness`.
 
 Threading
 ---------
@@ -94,6 +131,12 @@ active collectors are available. Override with ``TURBO_PICARD_CMM_THREADS=N`` or
 set ``TURBO_PICARD_CMM_THREADS=auto`` to force the built-in policy. SAM inputs
 still use per-program passes so the existing SAM-text fast paths stay available.
 
+``SetNmMdAndUqTags`` obtains one borrowed reference slice per CIGAR operation
+when the segment fits the active 4 MiB reference window. Oversized or
+window-crossing segments retain the bounded per-base fallback. This removes
+repeated cache-bound checks from the ordinary reference-backed path without
+loading more reference sequence into memory.
+
 Profiling benchmark runs
 ------------------------
 
@@ -131,11 +174,32 @@ tracking explicitly with:
    python3 tools/bench_suite.py --repeats 5 --skip-build \
      --only markduplicates --markduplicates-reads 1000000 \
      --markduplicates-family-size 4096 \
+     --markduplicates-read-name-regex null \
      --profile-output benchmarks/runs/markduplicates-highdup-profile.json
 
-Record both the normal family-size profile and this adversarial profile; the
-large-family result is a scalability guardrail, not a replacement for WGS/WES
-evidence.
+The explicit ``READ_NAME_REGEX=null`` setting selects the documented bounded
+no-optical variant. Omit the option, or pass a validated three-capture-group
+Picard regex, to exercise bounded optical-family discovery. Record both the
+normal family-size profile and this adversarial profile; the large-family result
+is a scalability guardrail, not a replacement for WGS/WES evidence.
+
+To exercise paired duplicate families and the optical-name graph explicitly,
+use the paired synthetic benchmark. It uses Picard only to prepare a coordinate-
+sorted input with Picard's stricter tie ordering; the timed MarkDuplicates
+commands still run on the same BAM:
+
+.. code-block:: bash
+
+   python3 tools/bench_markduplicates_synthetic.py \
+     --reads 20000 \
+     --duplicate-family-size 1024 \
+     --paired \
+     --input-format bam \
+     --skip-build
+
+This remains synthetic parity and scalability evidence. It does not substitute
+for permissioned WGS/WES data, independent reproduction, or workflow-owner
+approval.
 
 ``CollectGcBiasMetrics`` loads one reference contig at a time via ``.fai`` seek
 for read-time GC windows and precomputes genome-window counts without keeping

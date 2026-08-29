@@ -38,6 +38,7 @@ grep -q '"gatk-na12878-mito"' "${repo_root}/benchmarks/real-data/manifest.json"
 grep -q '"benchmarks"' "${repo_root}/docs/site/assets/benchmark-data.json"
 grep -q '"parity": "32/32 PASS"' "${repo_root}/docs/site/assets/benchmark-data.json"
 grep -q '"geometric_mean_speedup"' "${repo_root}/docs/site/assets/benchmark-data.json"
+python3 "${repo_root}/tools/verify_markduplicates_guardrails.py"
 
 python3 - "${repo_root}" <<'PY'
 import json
@@ -103,6 +104,10 @@ cargo install \
 
 "${install_root}/bin/turbo-picard" --version
 test ! -e "${install_root}/bin/picard"
+TURBO_PICARD_BIN="${install_root}/bin/turbo-picard" \
+  bash "${repo_root}/tools/verify_install_smoke.sh"
+TURBO_PICARD_BIN="${install_root}/bin/turbo-picard" \
+  bash "${repo_root}/tools/verify_mate_barcode_install_smoke.sh"
 
 "${install_root}/bin/turbo-picard" --help > "${tempdir}/turbo-picard-help.txt"
 python3 - "${repo_root}/docs/command-matrix.yml" "${tempdir}/turbo-picard-help.txt" <<'PY'
@@ -411,6 +416,36 @@ test -s "${gc_summary}"
 test -s "${gc_chart}"
 grep -q 'picard.analysis.GcBiasDetailMetrics' "${gc_detail}"
 grep -q 'picard.analysis.GcBiasSummaryMetrics' "${gc_summary}"
+
+hs_intervals="${tempdir}/hs_targets.interval_list"
+cat > "${hs_intervals}" <<'INTERVALS'
+@HD	VN:1.6	SO:coordinate
+@SQ	SN:low	LN:40
+@SQ	SN:high	LN:40
+low	1	20	+	low-target
+high	1	20	+	high-target
+INTERVALS
+hs_metrics="${tempdir}/hs_metrics.txt"
+hs_per_target="${tempdir}/hs_per_target.txt"
+hs_per_base="${tempdir}/hs_per_base.txt"
+"${install_root}/bin/turbo-picard" CollectHsMetrics \
+  "I=${gc_input}" \
+  "O=${hs_metrics}" \
+  "BAIT=${hs_intervals}" \
+  "TARGET=${hs_intervals}" \
+  "R=${gc_reference}" \
+  "PER_TARGET_COVERAGE=${hs_per_target}" \
+  "PER_BASE_COVERAGE=${hs_per_base}" \
+  SAMPLE_SIZE=0 \
+  VALIDATION_STRINGENCY=SILENT \
+  QUIET=true
+
+test -s "${hs_metrics}"
+test -s "${hs_per_target}"
+test -s "${hs_per_base}"
+grep -q 'picard.analysis.directed.HsMetrics' "${hs_metrics}"
+grep -q $'chrom\tstart\tend\tlength\tname\t%gc' "${hs_per_target}"
+grep -q $'chrom\tpos\ttarget\tcoverage' "${hs_per_base}"
 
 paired_input="${tempdir}/paired.sam"
 cat > "${paired_input}" <<'SAM'

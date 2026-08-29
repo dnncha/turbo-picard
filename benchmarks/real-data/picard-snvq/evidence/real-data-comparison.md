@@ -6,15 +6,15 @@ Input size: `9451956` bytes
 Input source: `https://github.com/broadinstitute/picard/blob/fc0b08410d38a10afd08e467dab74bf5e2e71310/testdata/picard/sam/snvq_metrics_test.bam`
 Input source commit: `fc0b08410d38a10afd08e467dab74bf5e2e71310`
 Picard: `Version:3.4.0`
-turbo-picard: `picard 0.1.0`
+turbo-picard: `picard 0.1.12`
 
 | Command | Status | Comparison | turbo-picard | Picard | Speedup |
 | --- | --- | --- | ---: | ---: | ---: |
-| ViewSam | PASS | SAM record digest | 0.230s | 1.432s | 6.23x |
-| CleanSam | PASS | post-command SAM record digest | 1.045s | 1.650s | 1.58x |
-| CollectQualityYieldMetrics | PASS | stable metrics digest | 0.095s | 0.681s | 7.14x |
-| CollectAlignmentSummaryMetrics | PASS | stable metrics digest | 0.097s | 0.730s | 7.55x |
-| MarkDuplicates | PASS | duplicate-marking semantic digest plus stable metrics digest | 0.577s | 1.996s | 3.46x |
+| ViewSam | PASS | SAM record digest | 0.256s | 1.052s | 4.10x |
+| CleanSam | PASS | post-command SAM record digest | 0.272s | 1.332s | 4.89x |
+| CollectQualityYieldMetrics | PASS | stable metrics digest | 0.026s | 0.448s | 17.51x |
+| CollectAlignmentSummaryMetrics | PASS | stable metrics digest | 0.027s | 0.492s | 18.02x |
+| MarkDuplicates | PASS | duplicate-marking semantic digest plus stable metrics digest | 0.306s | 1.909s | 6.24x |
 
 A PASS means the command-specific stable digest matched Picard on this input. Keep the JSON file with the raw digests when sharing results.
 

@@ -5,12 +5,13 @@ ignored by git. Large generated input BAMs should go under `benchmarks/inputs/`,
 which is also ignored.
 
 The current saved public benchmark story is straightforward: every one of the
-32 benchmarked, parity-checked commands is faster than Picard 3.4.0, with an
-`8.55x` floor speedup, a `26.74x` geometric mean speedup, and an `84.46x` top
-speedup. The checked `MarkDuplicates` performance run also cut median RSS from
-about `1.2 GB` to about `8.7 MB`, which is why the project can honestly claim
-to be more scalable in pipeline fanout, not just quicker in isolated command
-timings.
+32 benchmarked, parity-checked commands is faster than Picard 3.4.0, with a
+`22.88x` floor speedup, an `84.52x` geometric mean speedup, and a `272.12x` top
+speedup. The checked `MarkDuplicates` measurements are fixture-specific: the
+saved copy-path run reports median RSS of about `1.2 GB` for Picard and about
+`8.7 MB` for `turbo-picard`, while the newer adversarial bounded-plan run is
+documented separately in `docs/performance.rst`. Neither result is a capacity
+or production-scale guarantee for another workflow.
 
 ## Public Real-Data Smoke
 

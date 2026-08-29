@@ -660,9 +660,9 @@
           </div>
           <div class="proof-strip" aria-label="Benchmark summary">
             <div class="proof"><strong>32/32</strong><span>benchmark parity checks passing</span></div>
-            <div class="proof"><strong>24.94x</strong><span>geometric mean speedup in the saved suite</span></div>
-            <div class="proof"><strong>6.86x+</strong><span>speedup even at the slow end of the saved suite</span></div>
-            <div class="proof"><strong>36</strong><span>native or partial-native commands documented in the matrix</span></div>
+            <div class="proof"><strong>84.52x</strong><span>geometric mean speedup in the saved suite</span></div>
+            <div class="proof"><strong>22.88x+</strong><span>speedup even at the slow end of the saved suite</span></div>
+            <div class="proof"><strong>38</strong><span>native or partial-native commands documented in the matrix</span></div>
           </div>
         </div>
       </section>
@@ -683,7 +683,7 @@
               <h3>Measured against Picard</h3>
               <p>
               The saved suite records fixture-specific timings against Picard 3.4.0 after
-              parity checks pass, with a 6.86x floor and 24.94x geometric mean speedup.
+              parity checks pass, with a 22.88x floor and 84.52x geometric mean speedup.
               </p>
             </article>
             <article class="tile">
@@ -715,13 +715,16 @@
               comparison passes. The values describe the saved commands, inputs, options, and
               machine profile; they are not a prediction for another workflow. The checked
               MarkDuplicates fixture also reports wall time and RSS for that same scoped comparison.
-              The current asset was saved on <code>2026-06-13</code> from
+              The current asset was saved on <code>2026-08-14</code> from
               <code>python3 tools/bench_suite.py --repeats 3 --skip-build</code>; the raw log is
               <code>docs/site/assets/bench-suite-output.txt</code>.
-              Benchmark note: <code>AccelerationStatus</code>, <code>doctor</code>,
-              <code>explain</code>, and <code>trial</code> appear under benchmark exceptions
+              Benchmark note: <code>AccelerationStatus</code>, <code>capabilities</code>,
+              <code>doctor</code>, <code>explain</code>, and <code>trial</code> appear under benchmark exceptions
               because they are status/preflight commands with no Picard
-              data-processing runtime to benchmark.
+              data-processing runtime to benchmark. <code>CollectHsMetrics</code> has
+              separate ALL_READS and sidecar parity coverage plus a real-data
+              comparator path for pinned WES/capture intervals; its benchmark remains
+              deferred until representative capture data is available.
               Every native or partly native data-processing command in the matrix has a
               public speedup claim. Chart-producing commands compare metrics text; the PDF plots
               are sidecars, not a pixel-for-pixel Picard claim.
@@ -732,9 +735,9 @@
           </div>
           <div class="benchmark-highlights" aria-label="Benchmark highlights">
             <div class="benchmark-highlight"><b>32/32 PASS</b><span>All 32 commands in the saved benchmark suite passed parity checks.</span></div>
-            <div class="benchmark-highlight"><b>24.94x</b><span>Geometric mean speedup across the current 32-command suite.</span></div>
-            <div class="benchmark-highlight"><b>94.36x</b><span>UpdateVcfSequenceDictionary is the current top saved speedup.</span></div>
-            <div class="benchmark-highlight"><b>6.86x floor</b><span>Slowest saved speedup in the documented fixture suite.</span></div>
+            <div class="benchmark-highlight"><b>84.52x</b><span>Geometric mean speedup across the current 32-command suite.</span></div>
+            <div class="benchmark-highlight"><b>272.12x</b><span>NormalizeFasta is the current top saved speedup.</span></div>
+            <div class="benchmark-highlight"><b>22.88x floor</b><span>SetNmMdAndUqTags is the slowest saved speedup in the documented fixture suite.</span></div>
             <div class="benchmark-highlight"><b>Command scope</b><span>Check native and delegated paths before changing a workflow task.</span></div>
             <div class="benchmark-highlight"><b>Rebuildable</b><span>The chart is rendered from benchmark-data.json with rank and summary stats.</span></div>
           </div>
@@ -1202,13 +1205,15 @@ picard RevertSam I=aligned.bam O=unmapped.bam</pre>
             <article class="tile">
               <h3>Bioconda path</h3>
               <p>
-                Release <code>v0.1.11</code> includes prepared recipes for
-                <code>turbo-picard</code> plus the optional
+                The published <code>v0.1.11</code> release includes the previous
+                recipe state. The current <code>v0.1.12</code> release candidate
+                includes prepared recipes for <code>turbo-picard</code> plus the optional
                 <code>turbo-picard-picard-shim</code>. The existing
                 <a href="https://github.com/bioconda/bioconda-recipes/pull/65922">Bioconda recipe PR</a>
-                is for <code>v0.1.10</code>; a <code>v0.1.11</code> submission has not
-                been opened. Use PyPI or the container image until Bioconda accepts a
-                version-specific PR and publishes the packages. The main package keeps the
+                is still for <code>v0.1.10</code>; the <code>v0.1.12</code> recipe files are
+                prepared locally, but that version-specific submission is still pending
+                review and publication. Use PyPI or the published container image until
+                Bioconda accepts the release and publishes the packages. The main package keeps the
                 <code>turbo-picard</code> command separate; the shim installs
                 <code>picard</code> only for environments that want that command name. Release checks include
                 <code>python3 tools/bioconda_release_preflight.py</code> and

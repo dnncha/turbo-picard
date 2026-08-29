@@ -46,12 +46,19 @@ jobs:
           python3 -m unittest tools/test_bench_markduplicates_synthetic.py
           python3 -m unittest tools/test_bioconda_release_preflight.py
           python3 -m unittest tools/test_audit_real_data.py
+          python3 -m unittest tools/test_audit_public_adoption.py
+          python3 -m unittest tools/test_verify_public_adoption_report.py
+          python3 -m unittest tools/test_verify_publish_workflows.py
           python3 -m unittest tools/test_parity_compare.py
           python3 -m unittest tools/test_compare_real_data.py
           python3 -m unittest tools/test_prepare_bioconda_release.py
           python3 -m unittest tools/test_render_benchmark_assets.py
           python3 -m unittest tools/test_update_real_data_manifest.py
+          python3 -m unittest tools/test_build_production_manifest.py
+          python3 -m unittest tools/test_build_release_manifest.py
+          python3 -m unittest tools/test_validate_production_dispatch.py
           python3 -m unittest tools/test_validate_production_manifest.py
+          python3 -m unittest tools/test_verify_production_evidence_workflow.py
           python3 -m unittest tools/test_verify_benchmark_log_evidence.py
           python3 -m unittest tools/test_verify_benchmark_suite_coverage.py
           python3 -m unittest tools/test_verify_benchmark_thresholds.py
@@ -62,29 +69,43 @@ jobs:
           python3 -m unittest tools/test_verify_parity_docs.py
           python3 -m unittest tools/test_verify_pypi_package.py
           python3 -m unittest tools/test_verify_readme_benchmark_evidence.py
+          python3 -m unittest tools/test_verify_benchmark_claim_surfaces.py
           python3 -m unittest tools/test_verify_readme_links.py
           python3 -m unittest tools/test_verify_real_data_ci_coverage.py
           python3 -m unittest tools/test_verify_real_data_evidence.py
+          python3 -m unittest tools/test_verify_release_artifacts.py
+          python3 -m unittest tools/test_verify_markduplicates_guardrails.py
           python3 -m unittest tools/test_verify_release_text_quality.py
           python3 -m unittest tools/test_verify_release_versions.py
           python3 -m unittest tools/test_verify_site_disclosures.py
           python3 -m unittest tools/test_verify_site_benchmark_evidence.py
           python3 -m unittest tools/test_verify_site_links.py
           python3 -m unittest tools/test_verify_workflow_starters.py
+          python3 tools/verify_public_adoption_report.py --help >/dev/null
           python3 -m py_compile \
             tools/parity_compare.py \
             tools/bench_markduplicates_competitors.py \
             tools/compare_markduplicates.py \
             tools/bioconda_release_preflight.py \
             tools/audit_real_data.py \
+            tools/audit_public_adoption.py \
+            tools/verify_public_adoption_report.py \
             tools/compare_real_data.py \
+            tools/verify_publish_workflows.py \
             tools/prepare_bioconda_release.py \
             tools/bench_addorreplacereadgroups.py \
             tools/bench_alignmentmetrics.py \
             tools/bench_bedtointervallist.py \
             tools/bench_markduplicates.py \
             tools/bench_markduplicates_synthetic.py \
+            tools/build_production_manifest.py \
+            tools/build_release_manifest.py \
+            tools/verify_markduplicates_guardrails.py \
+            tools/test_verify_markduplicates_guardrails.py \
+            tools/validate_production_dispatch.py \
+            tools/test_validate_production_dispatch.py \
             tools/validate_production_manifest.py \
+            tools/verify_production_evidence_workflow.py \
             tools/bench_buildbamindex.py \
             tools/bench_cleansam.py \
             tools/bench_collectbasedistributionbycycle.py \
@@ -128,9 +149,11 @@ jobs:
             tools/verify_parity_docs.py \
             tools/verify_pypi_package.py \
             tools/verify_readme_benchmark_evidence.py \
+            tools/verify_benchmark_claim_surfaces.py \
             tools/verify_readme_links.py \
             tools/verify_real_data_ci_coverage.py \
             tools/verify_real_data_evidence.py \
+            tools/verify_release_artifacts.py \
             tools/verify_release_text_quality.py \
             tools/verify_release_versions.py \
             tools/verify_site_disclosures.py \
@@ -141,11 +164,17 @@ jobs:
             tools/test_bench_markduplicates_competitors.py \
             tools/test_bench_markduplicates_synthetic.py \
             tools/test_bioconda_release_preflight.py \
+            tools/test_audit_public_adoption.py \
+            tools/test_verify_public_adoption_report.py \
             tools/test_compare_real_data.py \
+            tools/test_verify_publish_workflows.py \
             tools/test_prepare_bioconda_release.py \
             tools/test_render_benchmark_assets.py \
             tools/test_update_real_data_manifest.py \
+            tools/test_build_production_manifest.py \
+            tools/test_build_release_manifest.py \
             tools/test_validate_production_manifest.py \
+            tools/test_verify_production_evidence_workflow.py \
             tools/test_verify_benchmark_log_evidence.py \
             tools/test_verify_benchmark_suite_coverage.py \
             tools/test_verify_benchmark_thresholds.py \
@@ -156,9 +185,11 @@ jobs:
             tools/test_verify_parity_docs.py \
             tools/test_verify_pypi_package.py \
             tools/test_verify_readme_benchmark_evidence.py \
+            tools/test_verify_benchmark_claim_surfaces.py \
             tools/test_verify_readme_links.py \
             tools/test_verify_real_data_ci_coverage.py \
             tools/test_verify_real_data_evidence.py \
+            tools/test_verify_release_artifacts.py \
             tools/test_verify_release_text_quality.py \
             tools/test_verify_release_versions.py \
             tools/test_verify_site_disclosures.py \
@@ -178,10 +209,15 @@ jobs:
           python3 tools/verify_benchmark_suite_coverage.py
           python3 tools/verify_benchmark_thresholds.py
           python3 tools/verify_readme_benchmark_evidence.py
+          python3 tools/verify_benchmark_claim_surfaces.py
           python3 tools/verify_readme_links.py
           python3 tools/verify_real_data_ci_coverage.py
           python3 tools/verify_real_data_evidence.py
           python3 tools/verify_real_data_evidence.py --release-ready
+          python3 tools/verify_release_artifacts.py --source-only
+          python3 tools/verify_markduplicates_guardrails.py
+          python3 tools/verify_production_evidence_workflow.py
+          python3 tools/verify_publish_workflows.py
           python3 tools/verify_release_text_quality.py
           python3 tools/verify_release_versions.py
           set +e
@@ -219,6 +255,25 @@ jobs:
         run: docker build -t turbo-picard:ci .
       - name: Smoke container entrypoint
         run: docker run --rm turbo-picard:ci MarkDuplicates --help
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.9"
+
+      - name: Install pinned miniwdl trial runtime
+        run: python3 -m pip install "miniwdl==1.15.0"
+
+      - name: Build WDL runtime image
+        run: |
+          docker build -t turbo-picard-wdl:ci -f - . <<'EOF'
+          FROM turbo-picard:ci
+          ENTRYPOINT []
+          EOF
+
+      - name: Test WDL starters
+        env:
+          TURBO_PICARD_WDL_IMAGE: turbo-picard-wdl:ci
+        run: bash tools/verify_wdl_starters.sh
 
   nf-core-process:
     name: nf-core process candidate
@@ -260,6 +315,35 @@ jobs:
             java -jar "$RUNNER_TEMP/nf-test.jar" \
             test packaging/nf-core/tests/main.nf.test
 
+  snakemake-starter:
+    name: Snakemake starter
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.9"
+
+      - name: Install native dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang libclang-dev make pkg-config
+
+      - name: Build turbo-picard executable
+        run: cargo build --release --locked -p turbo-picard-cli --bin turbo-picard
+
+      - name: Install pinned Snakemake trial runtime
+        run: python3 -m pip install "snakemake==7.32.4" "PuLP==2.7.0"
+
+      - name: Test Snakemake starter
+        env:
+          TURBO_PICARD_BIN: ${{ github.workspace }}/target/release/turbo-picard
+        run: bash tools/verify_snakemake_starter.sh
+
   picard-parity:
     name: Picard parity
     runs-on: ubuntu-latest
@@ -280,7 +364,7 @@ jobs:
           create-args: >-
             -c conda-forge
             -c bioconda
-            picard
+            picard=3.4.0
             samtools
 
       - name: Test workspace
@@ -289,6 +373,7 @@ jobs:
       - name: Verify Picard parity
         run: |
           ./tools/verify_basic_accelerationstatus_parity.sh
+          ./tools/verify_basic_capabilities_parity.sh
           ./tools/verify_basic_doctor_parity.sh
           ./tools/verify_basic_explain_parity.sh
           ./tools/verify_basic_trial_parity.sh
@@ -310,6 +395,7 @@ jobs:
           TURBO_PICARD_CONDA_PREFIX="${MAMBA_ROOT_PREFIX}/envs/turbo-picard-ci" ./tools/verify_basic_alignmentmetrics_parity.sh
           TURBO_PICARD_CONDA_PREFIX="${MAMBA_ROOT_PREFIX}/envs/turbo-picard-ci" ./tools/verify_basic_collectbasedistributionbycycle_parity.sh
           TURBO_PICARD_CONDA_PREFIX="${MAMBA_ROOT_PREFIX}/envs/turbo-picard-ci" ./tools/verify_basic_collectgcbiasmetrics_parity.sh
+          TURBO_PICARD_CONDA_PREFIX="${MAMBA_ROOT_PREFIX}/envs/turbo-picard-ci" ./tools/verify_basic_collecthsmetrics_parity.sh
 
           TURBO_PICARD_CONDA_PREFIX="${MAMBA_ROOT_PREFIX}/envs/turbo-picard-ci" ./tools/verify_basic_qualityyield_parity.sh
           TURBO_PICARD_CONDA_PREFIX="${MAMBA_ROOT_PREFIX}/envs/turbo-picard-ci" ./tools/verify_basic_collectwgsmetrics_parity.sh

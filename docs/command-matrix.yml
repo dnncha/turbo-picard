@@ -60,6 +60,11 @@ commands:
     status: fallback-only
     native_scope: "Delegated to upstream Picard 3.4.0. turbo-picard runs the native accelerated implementation when one exists; otherwise it transparently forwards to upstream Picard when fallback is configured or auto-discovered."
     fallback_scope: Transparent upstream Picard 3.4.0 delegation. No native fast path yet.
+  - name: capabilities
+    status: native
+    parity_script: tools/verify_basic_capabilities_parity.sh
+    native_scope: "turbo-picard utility command that emits the complete schema-versioned native/fallback decision surface and embeds the checked-in parity-gated benchmark evidence for coding agents, workflow managers, and CI policies."
+    fallback_scope: This is not an upstream Picard command and does not delegate to fallback.
   - name: CheckDuplicateMarking
     status: fallback-only
     native_scope: "Delegated to upstream Picard 3.4.0. turbo-picard runs the native accelerated implementation when one exists; otherwise it transparently forwards to upstream Picard when fallback is configured or auto-discovered."
@@ -113,9 +118,10 @@ commands:
     native_scope: "Delegated to upstream Picard 3.4.0. turbo-picard runs the native accelerated implementation when one exists; otherwise it transparently forwards to upstream Picard when fallback is configured or auto-discovered."
     fallback_scope: Transparent upstream Picard 3.4.0 delegation. No native fast path yet.
   - name: CollectHsMetrics
-    status: fallback-only
-    native_scope: "Delegated to upstream Picard 3.4.0. turbo-picard runs the native accelerated implementation when one exists; otherwise it transparently forwards to upstream Picard when fallback is configured or auto-discovered."
-    fallback_scope: Transparent upstream Picard 3.4.0 delegation. No native fast path yet.
+    status: partial-native
+    parity_script: tools/verify_basic_collecthsmetrics_parity.sh
+    native_scope: "Core ALL_READS hybrid-capture metrics, Picard-shaped histogram, PER_TARGET_COVERAGE, and PER_BASE_COVERAGE for reference-backed coordinate-sorted SAM/BAM/CRAM inputs, including unique bait/target territory, on/near/off-bait accounting, duplicate/adapter/mapQ/baseQ/overlap filter fractions, target coverage thresholds, GC dropout, and bounded theoretical het-sensitivity sampling."
+    fallback_scope: "Non-ALL_READS accumulation levels and unsupported advanced options should use upstream Picard."
   - name: CollectIlluminaBasecallingMetrics
     status: fallback-only
     native_scope: "Delegated to upstream Picard 3.4.0. turbo-picard runs the native accelerated implementation when one exists; otherwise it transparently forwards to upstream Picard when fallback is configured or auto-discovered."
@@ -371,7 +377,7 @@ commands:
   - name: MarkDuplicates
     status: partial-native
     parity_script: tools/verify_basic_picard_parity.sh
-    native_scope: "SAM/BAM/CRAM duplicate marking/removal with REFERENCE_SEQUENCE, metrics, barcode grouping, optical duplicate tagging, sidecars, multi-BAM input, and release-candidate real-data parity."
+    native_scope: "SAM/BAM/CRAM duplicate marking/removal with REFERENCE_SEQUENCE, metrics, barcode grouping, optical duplicate tagging, sidecars, multi-BAM input, and release-candidate real-data parity. Single-BAM, explicit-reference single-CRAM, or already globally coordinate-ordered multi-input runs use a bounded disk-backed two-pass plan, including BARCODE_TAG, READ_ONE_BARCODE_TAG/READ_TWO_BARCODE_TAG, default or validated three-capture-group READ_NAME_REGEX optical-family discovery, REMOVE_SEQUENCING_DUPLICATES, and paired duplicate-set DS/DI tagging; explicit READ_NAME_REGEX=null selects the no-optical variant."
     fallback_scope: Unsupported Picard MarkDuplicates options should use upstream Picard.
   - name: MarkDuplicatesWithMateCigar
     status: fallback-only

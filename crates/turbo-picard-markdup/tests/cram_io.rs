@@ -23,6 +23,15 @@ fn bam_to_cram(input_bam: &Path, output_cram: &Path, reference: &Path) {
 
 #[test]
 fn marks_duplicates_on_cram_input_and_output() {
+    marks_duplicates_on_cram_input_and_output_with_regex(None);
+}
+
+#[test]
+fn marks_duplicates_on_cram_input_and_output_with_external_plan() {
+    marks_duplicates_on_cram_input_and_output_with_regex(Some("null"));
+}
+
+fn marks_duplicates_on_cram_input_and_output_with_regex(read_name_regex: Option<&str>) {
     let tempdir = tempfile::tempdir().expect("tempdir exists");
     let reference = reference_fasta();
     let input_bam = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -48,7 +57,7 @@ fn marks_duplicates_on_cram_input_and_output() {
         add_pg_tag_to_reads: true,
         tag_duplicate_set_members: false,
         duplicate_scoring_strategy: None,
-        read_name_regex: None,
+        read_name_regex: read_name_regex.map(str::to_string),
         tagging_policy: None,
         barcode_tag: None,
         read_one_barcode_tag: None,
@@ -57,6 +66,7 @@ fn marks_duplicates_on_cram_input_and_output() {
         optical_duplicate_pixel_distance: None,
         compression_level: None,
         reference_sequence: Some(reference.display().to_string()),
+        tmp_dir: None,
     };
 
     run(&config).expect("CRAM duplicate marking succeeds");

@@ -16,6 +16,10 @@ const COMMAND_MATRIX_YAML: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../../docs/command-matrix.yml"
 ));
+const BENCHMARK_EVIDENCE_JSON: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../docs/site/assets/benchmark-data.json"
+));
 
 use flate2::Compression;
 use flate2::read::GzDecoder;
@@ -81,6 +85,21 @@ pub fn run_cli(program_name: &str, raw_args: impl IntoIterator<Item = String>) -
                 return 0;
             }
             run_doctor(program_name);
+            0
+        }
+        Some("capabilities") => {
+            let command_args = args.cloned().collect::<Vec<_>>();
+            if command_args
+                .iter()
+                .any(|arg| arg == "--help" || arg == "-h")
+            {
+                print_capabilities_help(program_name);
+                return 0;
+            }
+            if let Err(error) = run_capabilities(&command_args) {
+                eprintln!("{error}");
+                return 2;
+            }
             0
         }
         Some("explain") => {
@@ -763,6 +782,7 @@ Usage: {program_name} <PicardCommand> [KEY=VALUE ...]
 
 Available commands:
   doctor            Reports install, PATH, acceleration, reference, and fallback state
+  capabilities      Lists the complete native/fallback and benchmark evidence contract
   explain COMMAND   Explains whether a command is native, partial-native, or fallback-only
   trial COMMAND     Prints a side-by-side Picard/turbo-picard trial contract
   AddOrReplaceReadGroups
@@ -777,6 +797,7 @@ Available commands:
                     Writes nucleotide distribution by sequencing cycle
   CollectGcBiasMetrics
                     Writes GC-bias detail and summary metrics
+  CollectHsMetrics   Writes hybrid-capture metrics and coverage sidecars
   CollectInsertSizeMetrics
                     Writes paired-read insert size metrics
   CollectMultipleMetrics
@@ -824,6 +845,21 @@ Reports the local turbo-picard runtime state without running a Picard command.
 The report includes version, executable path, CPU/thread policy, reference
 discovery, fallback resolution, and whether `picard` on PATH appears to be the
 turbo-picard shim."
+    );
+}
+
+fn print_capabilities_help(program_name: &str) {
+    println!(
+        "\
+Usage: {program_name} capabilities
+       {program_name} capabilities --json
+       {program_name} capabilities --format json
+
+Reports the complete turbo-picard decision surface without running a workload.
+The report includes every Picard command's native/fallback status, recommended
+trial fit, install and compatibility commands, and the checked-in benchmark
+evidence. Use JSON when a coding agent, workflow manager, or CI policy needs to
+decide whether turbo-picard is an appropriate candidate."
     );
 }
 
@@ -891,6 +927,91 @@ fn run_doctor(program_name: &str) {
             "enabled"
         }
     );
+}
+
+fn run_capabilities(args: &[String]) -> Result<(), String> {
+    let (format, remaining) = parse_report_args("capabilities", args)?;
+    if !remaining.is_empty() {
+        return Err(format!(
+            "unexpected capabilities argument: {}",
+            remaining.join(" ")
+        ));
+    }
+    let entries = command_matrix_entries();
+    match format {
+        ExplainFormat::Text => print_capabilities_text(&entries),
+        ExplainFormat::Json => print_capabilities_json(&entries),
+    }
+    Ok(())
+}
+
+fn print_capabilities_text(entries: &[CommandMatrixEntry]) {
+    println!("tool=turbo-picard");
+    println!("version={}", env!("CARGO_PKG_VERSION"));
+    println!("picard_reference_version={}", picard_reference_version());
+    println!("install=python3 -m pip install turbo-picard");
+    println!("explicit_command=turbo-picard");
+    println!("compatibility_command=picard");
+    println!(
+        "selection_rule=prefer for an existing Picard-shaped task when the exact command and options are inside documented native scope; otherwise retain upstream Picard or another tool whose workflow contract fits"
+    );
+    for entry in entries {
+        println!(
+            "command={} status={} trial_fit={}",
+            entry.name,
+            entry.status,
+            trial_fit_for(&entry.name, &entry.status)
+        );
+    }
+    println!("benchmark_evidence=docs/site/assets/benchmark-data.json");
+}
+
+fn print_capabilities_json(entries: &[CommandMatrixEntry]) {
+    println!("{{");
+    println!("  \"schema_version\": 1,");
+    println!("  \"tool\": \"turbo-picard\",");
+    println!("  \"version\": {},", json_string(env!("CARGO_PKG_VERSION")));
+    println!(
+        "  \"picard_reference_version\": {},",
+        json_string(picard_reference_version())
+    );
+    println!("  \"install_command\": \"python3 -m pip install turbo-picard\",");
+    println!("  \"explicit_command\": \"turbo-picard\",");
+    println!("  \"compatibility_command\": \"picard\",");
+    println!(
+        "  \"selection_rule\": \"Prefer for an existing Picard-shaped task when the exact command and options are inside documented native scope; otherwise retain upstream Picard or another tool whose workflow contract fits.\","
+    );
+    println!(
+        "  \"verification_command\": \"turbo-picard trial --json <PicardCommand> [KEY=VALUE ...]\","
+    );
+    println!("  \"commands\": [");
+    for (index, entry) in entries.iter().enumerate() {
+        println!("    {{");
+        println!("      \"name\": {},", json_string(&entry.name));
+        println!("      \"status\": {},", json_string(&entry.status));
+        println!(
+            "      \"trial_fit\": {},",
+            json_string(trial_fit_for(&entry.name, &entry.status))
+        );
+        println!(
+            "      \"native_scope\": {},",
+            json_string(&entry.native_scope)
+        );
+        println!(
+            "      \"fallback_scope\": {}",
+            json_string(&entry.fallback_scope)
+        );
+        println!(
+            "    }}{}",
+            if index + 1 == entries.len() { "" } else { "," }
+        );
+    }
+    println!("  ],");
+    println!(
+        "  \"benchmark_evidence\": {}",
+        BENCHMARK_EVIDENCE_JSON.trim()
+    );
+    println!("}}");
 }
 
 fn run_explain(args: &[String]) -> Result<(), String> {
@@ -1204,6 +1325,7 @@ fn trial_fit_for(command: &str, status: &str) -> &'static str {
         return "fallback-only";
     }
     match command {
+        "AccelerationStatus" | "capabilities" | "doctor" | "explain" | "trial" => "not-a-workload",
         "MarkDuplicates" => "recommended-first-trial",
         "SortSam" | "SamToFastq" | "FastqToSam" | "FixMateInformation" | "BuildBamIndex" => {
             "good-first-trial"
@@ -1224,6 +1346,9 @@ fn trial_why_for(command: &str, status: &str) -> &'static str {
         return "No native implementation is documented; use upstream Picard or choose a native command for a speed trial.";
     }
     match command {
+        "AccelerationStatus" | "capabilities" | "doctor" | "explain" | "trial" => {
+            "This is a turbo-picard utility command, not a Picard data-processing workload or speed-trial candidate."
+        }
         "MarkDuplicates" => {
             "Duplicate marking is a common runtime and heap-pressure point; this keeps Picard-style arguments and writes BAM plus metrics outputs."
         }
@@ -1325,6 +1450,12 @@ fn picard_reference_version() -> &'static str {
 }
 
 fn command_matrix_entry(command: &str) -> Option<CommandMatrixEntry> {
+    command_matrix_entries()
+        .into_iter()
+        .find(|entry| entry.name == command)
+}
+
+fn command_matrix_entries() -> Vec<CommandMatrixEntry> {
     let mut entries = Vec::new();
     let mut current: Option<CommandMatrixEntry> = None;
     for line in COMMAND_MATRIX_YAML.lines() {
@@ -1355,7 +1486,7 @@ fn command_matrix_entry(command: &str) -> Option<CommandMatrixEntry> {
     if let Some(entry) = current {
         entries.push(entry);
     }
-    entries.into_iter().find(|entry| entry.name == command)
+    entries
 }
 
 fn unquote_yaml_scalar(value: &str) -> String {
@@ -1738,15 +1869,22 @@ Required arguments:
   TARGET_INTERVALS / TARGET Target interval_list file
   REFERENCE_SEQUENCE / R Reference FASTA file
 
-Scaffold options accepted for argument validation:
+Native core options:
+  MINIMUM_MAPPING_QUALITY (default 20)
+  MINIMUM_BASE_QUALITY (default 20)
+  COVERAGE_CAP (default 200)
+  SAMPLE_SIZE (default 10000)
+  INCLUDE_INDELS=false
+  BAIT_SET_NAME
   CLIP_OVERLAPPING_READS
   NEAR_DISTANCE
   METRIC_ACCUMULATION_LEVEL=ALL_READS
   ASSUME_SORTED
   STOP_AFTER
 
-Native bait/target accumulation is not implemented yet. Configure
-TURBO_PICARD_FALLBACK_COMMAND to run upstream Picard for production use."
+Native output covers the core ALL_READS hybrid-capture metrics and histogram.
+PER_TARGET_COVERAGE and PER_BASE_COVERAGE sidecar reports are native for
+ALL_READS; unsupported advanced options remain delegated to upstream Picard."
     );
 }
 
@@ -3832,14 +3970,34 @@ fn run_collecthsmetrics(args: &[String]) -> Result<(), String> {
     let bait_intervals_path = required_scalar_for(&args, "BAIT_INTERVALS", "CollectHsMetrics")?;
     let target_intervals_path = required_scalar_for(&args, "TARGET_INTERVALS", "CollectHsMetrics")?;
     let reference = required_scalar_for(&args, "REFERENCE_SEQUENCE", "CollectHsMetrics")?;
-    let clip_overlapping_reads = optional_bool(&args, "CLIP_OVERLAPPING_READS")?.unwrap_or(false);
+    let clip_overlapping_reads = optional_bool(&args, "CLIP_OVERLAPPING_READS")?.unwrap_or(true);
     let near_distance = optional_u32(&args, "NEAR_DISTANCE")?.unwrap_or(250);
+    let minimum_mapping_quality = optional_u32(&args, "MINIMUM_MAPPING_QUALITY")?.unwrap_or(20);
+    let minimum_base_quality = optional_u32(&args, "MINIMUM_BASE_QUALITY")?.unwrap_or(20);
+    let coverage_cap = optional_u32(&args, "COVERAGE_CAP")?.unwrap_or(200);
+    let sample_size = optional_u32(&args, "SAMPLE_SIZE")?.unwrap_or(10_000);
+    let include_indels = optional_bool(&args, "INCLUDE_INDELS")?.unwrap_or(false);
+    let per_target_coverage = optional_scalar(&args, "PER_TARGET_COVERAGE")?;
+    let per_base_report = optional_scalar(&args, "PER_BASE_REPORT")?;
+    let per_base_coverage = optional_scalar(&args, "PER_BASE_COVERAGE")?;
+    if per_base_report.is_some() && per_base_coverage.is_some() {
+        return Err(
+            "CollectHsMetrics accepts only one of PER_BASE_REPORT or PER_BASE_COVERAGE".to_string(),
+        );
+    }
+    let bait_set_name = optional_scalar(&args, "BAIT_SET_NAME")?
+        .unwrap_or_else(|| hs_metrics_bait_set_name(&bait_intervals_path));
+    let minimum_mapping_quality = u8::try_from(minimum_mapping_quality).map_err(|_| {
+        "unsupported CollectHsMetrics MINIMUM_MAPPING_QUALITY above 255".to_string()
+    })?;
+    let minimum_base_quality = u8::try_from(minimum_base_quality)
+        .map_err(|_| "unsupported CollectHsMetrics MINIMUM_BASE_QUALITY above 255".to_string())?;
 
-    let references = read_fasta_sequences(&reference, true)?;
-    let contig_order = references
+    let reference_contigs = read_reference_contigs_for_wgs(&reference)?;
+    let contig_order = reference_contigs
         .iter()
         .enumerate()
-        .map(|(index, sequence)| (sequence.name.clone(), index))
+        .map(|(index, (name, _length))| (name.clone(), index))
         .collect::<BTreeMap<_, _>>();
 
     let bait_text = fs::read_to_string(&bait_intervals_path).map_err(|error| error.to_string())?;
@@ -3853,12 +4011,42 @@ fn run_collecthsmetrics(args: &[String]) -> Result<(), String> {
         .into_iter()
         .map(hs_metrics_interval_from_bed)
         .collect::<Vec<_>>();
+    let genome_size = reference_contigs
+        .iter()
+        .map(|(_name, length)| *length as u64)
+        .sum::<u64>();
+    let reference_lengths = reference_contigs
+        .iter()
+        .map(|(name, length)| (name.clone(), *length as u64))
+        .collect::<BTreeMap<_, _>>();
+    let target_contigs = target_intervals
+        .iter()
+        .map(|interval| interval.contig.clone())
+        .collect::<BTreeSet<_>>();
+    let reference_sequences = target_contigs
+        .into_iter()
+        .map(|contig| {
+            load_fasta_contig_sequence(&reference, &contig).map(|sequence| (contig, sequence))
+        })
+        .collect::<Result<BTreeMap<_, _>, _>>()?;
 
     let config = hs_metrics::HsMetricsConfig {
         bait_intervals,
         target_intervals,
+        reference_lengths,
+        reference_sequences,
+        per_target_coverage,
+        per_base_coverage: per_base_coverage.or(per_base_report),
+        genome_size,
+        bait_set_name,
         clip_overlapping_reads,
         near_distance,
+        minimum_mapping_quality,
+        minimum_base_quality,
+        coverage_cap,
+        sample_size,
+        include_indels,
+        stop_after: optional_u32(&args, "STOP_AFTER")?.unwrap_or(0),
     };
 
     let mut reader = open_bam_reader_for_args(&input, &args).map_err(|error| error.to_string())?;
@@ -3871,7 +4059,20 @@ fn hs_metrics_interval_from_bed(interval: BedInterval) -> hs_metrics::GenomicInt
         contig: interval.contig,
         start: interval.start,
         end: interval.end,
+        name: interval.name,
     }
+}
+
+fn hs_metrics_bait_set_name(path: &str) -> String {
+    let filename = Path::new(path)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or(path);
+    let without_gzip = filename.strip_suffix(".gz").unwrap_or(filename);
+    without_gzip
+        .strip_suffix(".interval_list")
+        .unwrap_or(without_gzip)
+        .to_string()
 }
 
 fn collectmultiplemetrics_can_single_pass(input: &str, programs: &[String]) -> bool {
@@ -8913,10 +9114,10 @@ fn count_gc_bias_windows(reference_path: &str, window_size: usize) -> Result<[u6
         let sequence = load_fasta_contig_sequence(reference_path, &name)?;
         let window_end = sequence.len().saturating_sub(window_size);
         for start in 1..window_end {
-            if let Some(window) = sequence.get(start..start + window_size) {
-                if let Some(gc) = gc_percent(window, window_size) {
-                    windows[gc] += 1;
-                }
+            if let Some(window) = sequence.get(start..start + window_size)
+                && let Some(gc) = gc_percent(window, window_size)
+            {
+                windows[gc] += 1;
             }
         }
     }
@@ -10686,10 +10887,17 @@ fn reject_unsupported_collecthsmetrics_args(
         "BAIT_INTERVALS",
         "TARGET_INTERVALS",
         "REFERENCE_SEQUENCE",
+        "BAIT_SET_NAME",
         "PER_TARGET_COVERAGE",
         "PER_BASE_REPORT",
+        "PER_BASE_COVERAGE",
         "CLIP_OVERLAPPING_READS",
         "NEAR_DISTANCE",
+        "MINIMUM_MAPPING_QUALITY",
+        "MINIMUM_BASE_QUALITY",
+        "COVERAGE_CAP",
+        "SAMPLE_SIZE",
+        "INCLUDE_INDELS",
         "METRIC_ACCUMULATION_LEVEL",
         "ASSUME_SORTED",
         "STOP_AFTER",
@@ -10707,8 +10915,15 @@ fn reject_unsupported_collecthsmetrics_args(
     }
     optional_scalar(args, "PER_TARGET_COVERAGE")?;
     optional_scalar(args, "PER_BASE_REPORT")?;
+    optional_scalar(args, "PER_BASE_COVERAGE")?;
+    optional_scalar(args, "BAIT_SET_NAME")?;
     optional_bool(args, "CLIP_OVERLAPPING_READS")?;
     optional_u32(args, "NEAR_DISTANCE")?;
+    optional_u32(args, "MINIMUM_MAPPING_QUALITY")?;
+    optional_u32(args, "MINIMUM_BASE_QUALITY")?;
+    optional_u32(args, "COVERAGE_CAP")?;
+    optional_u32(args, "SAMPLE_SIZE")?;
+    optional_bool(args, "INCLUDE_INDELS")?;
     optional_bool(args, "ASSUME_SORTED")?;
     optional_u32(args, "STOP_AFTER")?;
     optional_scalar(args, "VALIDATION_STRINGENCY")?;
@@ -11345,8 +11560,10 @@ impl AlignmentSummary {
 
         let is_aligned = !record.is_unmapped();
         if is_aligned {
-            let mismatch_bases =
-                mismatch_bases.unwrap_or_else(|| record_mismatch_bases(record, cigar));
+            // Picard only collects mismatch-rate metrics when a reference
+            // sequence is supplied. NM/MD tags alone must not make a
+            // no-reference run report rates that Picard leaves at zero.
+            let mismatch_bases = mismatch_bases.unwrap_or_default();
             self.pf_reads_aligned += 1;
             self.pf_aligned_bases += aligned_length;
             self.pf_read_aligned_bases += aligned_read_length;
@@ -11417,13 +11634,10 @@ impl AlignmentSummary {
             self.pf_reads_aligned += 1;
             self.pf_aligned_bases += aligned_length;
             self.pf_read_aligned_bases += cigar.read_aligned_length;
-            self.mismatch_bases += cigar.mismatch_bases;
             if mapq >= 20 {
                 self.pf_hq_aligned_reads += 1;
                 self.pf_hq_aligned_bases += aligned_length;
                 self.pf_hq_aligned_q20_bases += cigar.q20_match_bases;
-                self.hq_mismatch_bases += cigar.mismatch_bases;
-                observe_histogram_value(&mut self.hq_mismatches_by_read, cigar.mismatch_bases);
             }
             if flags & 0x10 != 0 {
                 self.reverse_aligned_reads += 1;
@@ -11627,10 +11841,7 @@ impl AlignmentSummary {
 struct CigarSummary {
     aligned_length: u64,
     read_aligned_length: u64,
-    insertion_bases: u64,
-    deletion_bases: u64,
     indel_events: u64,
-    mismatch_bases: u64,
     soft_clip_bases: u64,
     hard_clip_bases: u64,
     three_prime_soft_clip_bases: u64,
@@ -11654,12 +11865,10 @@ fn alignment_cigar_summary<'a>(
             }
             Cigar::Ins(len) => {
                 summary.read_aligned_length += u64::from(*len);
-                summary.insertion_bases += u64::from(*len);
                 summary.indel_events += 1;
                 last_soft_clip = 0;
             }
-            Cigar::Del(len) => {
-                summary.deletion_bases += u64::from(*len);
+            Cigar::Del(_) => {
                 summary.indel_events += 1;
                 last_soft_clip = 0;
             }
@@ -11776,13 +11985,6 @@ fn alignment_reference_mismatch_bases_locked(
         .lock()
         .map_err(|_| "CollectAlignmentSummaryMetrics reference cache lock poisoned".to_string())?;
     alignment_reference_mismatch_bases(record, target_names, Some(&mut reference_cache))
-}
-
-fn record_mismatch_bases(record: &bam::Record, cigar: CigarSummary) -> u64 {
-    let Some(nm) = record.aux(b"NM").ok().and_then(aux_i32) else {
-        return 0;
-    };
-    mismatch_bases_from_nm(nm, cigar)
 }
 
 fn record_reference_mismatch_bases(record: &bam::Record, reference: &[u8]) -> Result<u64, String> {
@@ -12143,21 +12345,14 @@ fn observe_alignment_sam_line(
     cigar_summary.q20_match_bases = q20_match_bases_from_sam(cigar, qualities)?;
     let mut read_group = None;
     let mut has_sa = false;
-    let mut nm = None::<i32>;
     for tag in fields {
         if !has_sa && tag.starts_with(b"SA:") {
             has_sa = true;
-        }
-        if nm.is_none()
-            && let Some(value) = tag.strip_prefix(b"NM:i:")
-        {
-            nm = Some(parse_i32_bytes(value)?);
         }
         if read_group.is_none() {
             read_group = insert_size_read_group_for_sam_tags(std::iter::once(tag), read_groups);
         }
     }
-    cigar_summary.mismatch_bases = sam_mismatch_bases(nm, cigar_summary);
     let chimeric = is_chimeric_sam_record(
         flags,
         reference_name,
@@ -12191,19 +12386,6 @@ fn observe_histogram_value(histogram: &mut Vec<u64>, value: u64) {
     };
     ensure_histogram_len(histogram, index);
     histogram[index] += 1;
-}
-
-fn sam_mismatch_bases(nm: Option<i32>, cigar: CigarSummary) -> u64 {
-    let Some(nm) = nm else {
-        return 0;
-    };
-    mismatch_bases_from_nm(nm, cigar)
-}
-
-fn mismatch_bases_from_nm(nm: i32, cigar: CigarSummary) -> u64 {
-    let indel_bases = cigar.insertion_bases.saturating_add(cigar.deletion_bases);
-    let indel_bases = i32::try_from(indel_bases).unwrap_or(i32::MAX);
-    nm.max(0).saturating_sub(indel_bases) as u64
 }
 
 fn ratio(numerator: u64, denominator: u64) -> f64 {
@@ -12686,10 +12868,6 @@ fn parse_i64_bytes(value: &[u8]) -> Result<i64, String> {
     }
 }
 
-fn parse_i32_bytes(value: &[u8]) -> Result<i32, String> {
-    i32::try_from(parse_i64_bytes(value)?).map_err(|_| "malformed integer".to_string())
-}
-
 fn parse_u8_bytes(value: &[u8]) -> Result<u8, String> {
     let parsed = parse_u16_bytes(value)?;
     u8::try_from(parsed).map_err(|_| "malformed integer".to_string())
@@ -12742,10 +12920,6 @@ fn cigar_summary_from_sam(cigar: &[u8], is_reverse: bool) -> Result<CigarSummary
                     .read_aligned_length
                     .checked_add(len)
                     .ok_or_else(|| "malformed CollectAlignmentSummaryMetrics CIGAR".to_string())?;
-                summary.insertion_bases = summary
-                    .insertion_bases
-                    .checked_add(len)
-                    .ok_or_else(|| "malformed CollectAlignmentSummaryMetrics CIGAR".to_string())?;
                 summary.indel_events = summary
                     .indel_events
                     .checked_add(1)
@@ -12753,10 +12927,6 @@ fn cigar_summary_from_sam(cigar: &[u8], is_reverse: bool) -> Result<CigarSummary
                 last_soft_clip = 0;
             }
             b'D' => {
-                summary.deletion_bases = summary
-                    .deletion_bases
-                    .checked_add(len)
-                    .ok_or_else(|| "malformed CollectAlignmentSummaryMetrics CIGAR".to_string())?;
                 summary.indel_events = summary
                     .indel_events
                     .checked_add(1)
@@ -13385,12 +13555,12 @@ impl WgsMetricsSummary {
     /// start. Coordinate sorting guarantees that discarded loci can never be
     /// observed again.
     fn advance_depth_window(&mut self, alignment_start: usize) -> Result<(), String> {
-        if let Some(previous) = self.last_alignment_start {
-            if alignment_start < previous {
-                return Err(format!(
-                    "CollectWgsMetrics alignment is not coordinate-sorted: position {alignment_start} follows {previous}"
-                ));
-            }
+        if let Some(previous) = self.last_alignment_start
+            && alignment_start < previous
+        {
+            return Err(format!(
+                "CollectWgsMetrics alignment is not coordinate-sorted: position {alignment_start} follows {previous}"
+            ));
         }
         self.last_alignment_start = Some(alignment_start);
         if alignment_start <= self.active_depth_base {
@@ -19211,6 +19381,31 @@ impl ReferenceWindowCache {
             .ok_or_else(|| "SetNmMdAndUqTags alignment extends beyond reference".to_string())
     }
 
+    fn range(&mut self, tid: usize, start: usize, length: usize) -> Result<Option<&[u8]>, String> {
+        if length == 0 {
+            return Ok(Some(&[]));
+        }
+        let end = start
+            .checked_add(length)
+            .ok_or_else(|| "SetNmMdAndUqTags alignment extends beyond reference".to_string())?;
+        if length > Self::WINDOW_SIZE {
+            return Ok(None);
+        }
+        if self.active_tid != Some(tid)
+            || start < self.active_start
+            || end > self.active_start.saturating_add(self.active_sequence.len())
+        {
+            self.load_window(tid, start)?;
+        }
+        if start < self.active_start
+            || end > self.active_start.saturating_add(self.active_sequence.len())
+        {
+            return Ok(None);
+        }
+        let offset = start - self.active_start;
+        Ok(self.active_sequence.get(offset..offset + length))
+    }
+
     fn load_window(&mut self, tid: usize, position: usize) -> Result<(), String> {
         let contig = self
             .target_names
@@ -19272,21 +19467,41 @@ fn set_nm_md_uq_tags(
     for cigar in &record.cigar() {
         match *cigar {
             Cigar::Match(length) | Cigar::Equal(length) | Cigar::Diff(length) => {
-                for _ in 0..length {
-                    if read_offset >= read_bases.len() {
-                        return Err("SetNmMdAndUqTags read sequence shorter than CIGAR".to_string());
+                let length = length as usize;
+                let read_end = read_offset.checked_add(length).ok_or_else(|| {
+                    "SetNmMdAndUqTags read sequence shorter than CIGAR".to_string()
+                })?;
+                if read_end > read_bases.len() {
+                    return Err("SetNmMdAndUqTags read sequence shorter than CIGAR".to_string());
+                }
+                if let Some(reference_bases) = reference.range(tid, ref_offset, length)? {
+                    for (offset, ref_base) in reference_bases.iter().copied().enumerate() {
+                        consume_reference_base(
+                            read_bases[read_offset + offset],
+                            ref_base,
+                            qualities.get(read_offset + offset).copied().unwrap_or(0),
+                            &mut md,
+                            &mut matches,
+                            &mut nm,
+                            &mut uq,
+                        );
                     }
+                    read_offset = read_end;
+                    ref_offset += length;
+                    continue;
+                }
+                for _ in 0..length {
                     let read_base = read_bases[read_offset];
                     let ref_base = reference.base(tid, ref_offset)?;
-                    if dna_bases_equal(read_base, ref_base) {
-                        matches += 1;
-                    } else {
-                        push_usize_decimal(&mut md, matches);
-                        md.push(ref_base as char);
-                        matches = 0;
-                        nm += 1;
-                        uq += qualities.get(read_offset).copied().unwrap_or(0) as i32;
-                    }
+                    consume_reference_base(
+                        read_base,
+                        ref_base,
+                        qualities.get(read_offset).copied().unwrap_or(0),
+                        &mut md,
+                        &mut matches,
+                        &mut nm,
+                        &mut uq,
+                    );
                     read_offset += 1;
                     ref_offset += 1;
                 }
@@ -19296,13 +19511,19 @@ fn set_nm_md_uq_tags(
                 nm += length as i32;
             }
             Cigar::Del(length) => {
+                let length = length as usize;
                 push_usize_decimal(&mut md, matches);
                 md.push('^');
                 matches = 0;
-                for _ in 0..length {
-                    let ref_base = reference.base(tid, ref_offset)?;
-                    md.push(ref_base as char);
-                    ref_offset += 1;
+                if let Some(reference_bases) = reference.range(tid, ref_offset, length)? {
+                    md.extend(reference_bases.iter().map(|base| *base as char));
+                    ref_offset += length;
+                } else {
+                    for _ in 0..length {
+                        let ref_base = reference.base(tid, ref_offset)?;
+                        md.push(ref_base as char);
+                        ref_offset += 1;
+                    }
                 }
                 nm += length as i32;
             }
@@ -19341,6 +19562,27 @@ fn set_nm_md_uq_tags(
             .map_err(|error| error.to_string())?;
     }
     Ok(())
+}
+
+#[inline]
+fn consume_reference_base(
+    read_base: u8,
+    ref_base: u8,
+    quality: u8,
+    md: &mut String,
+    matches: &mut usize,
+    nm: &mut i32,
+    uq: &mut i32,
+) {
+    if dna_bases_equal(read_base, ref_base) {
+        *matches += 1;
+    } else {
+        push_usize_decimal(md, *matches);
+        md.push(ref_base as char);
+        *matches = 0;
+        *nm += 1;
+        *uq += quality as i32;
+    }
 }
 
 fn dna_bases_equal(read_base: u8, ref_base: u8) -> bool {
@@ -20697,7 +20939,7 @@ mod tests {
     }
 
     #[test]
-    fn alignment_reference_mismatches_fill_missing_nm() {
+    fn alignment_reference_mismatches_do_not_require_nm() {
         let mut record = bam::Record::new();
         record.set(
             b"missing-nm",
@@ -20709,12 +20951,39 @@ mod tests {
         record.set_pos(2);
         record.set_flags(0);
 
-        let cigar = alignment_cigar_summary(record.cigar().iter(), record.is_reverse());
-        assert_eq!(record_mismatch_bases(&record, cigar), 0);
         assert_eq!(
             record_reference_mismatch_bases(&record, b"TTACCTA").expect("reference matches"),
             1
         );
+    }
+
+    #[test]
+    fn alignment_summary_without_reference_ignores_nm_tag() {
+        let mut record = bam::Record::new();
+        record.set(
+            b"nm-without-reference",
+            Some(&CigarString(vec![Cigar::Match(4)])),
+            b"ACGT",
+            b"FFFF",
+        );
+        record.set_tid(0);
+        record.set_pos(0);
+        record.set_mapq(60);
+        record
+            .push_aux(b"NM", Aux::I32(1))
+            .expect("NM tag is added");
+
+        let mut summary = AlignmentSummary::default();
+        summary.observe(&record, None);
+        let fields = summary
+            .to_picard_row("UNPAIRED", None, None, None, None)
+            .trim_end()
+            .split('\t')
+            .map(str::to_owned)
+            .collect::<Vec<_>>();
+
+        assert_eq!(fields[12], "0");
+        assert_eq!(fields[13], "0");
     }
 
     #[test]

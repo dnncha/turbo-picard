@@ -57,11 +57,43 @@ def git_tag_status(root: Path = ROOT) -> tuple[str, list[str]]:
     if local_status != 0:
         return "WAIT", [f"local tag {tag} does not exist yet"]
 
-    remote_status, remote_lines = run_check(["git", "ls-remote", "--tags", "origin", tag], root)
+    local_commit_status, local_commit_lines = run_check(
+        ["git", "rev-list", "-n", "1", tag], root
+    )
+    if local_commit_status != 0 or not local_commit_lines:
+        return "FAIL", [f"could not resolve local tag {tag} commit"]
+    local_commit = local_commit_lines[0].split()[0]
+
+    head_status, head_lines = run_check(["git", "rev-parse", "HEAD"], root)
+    if head_status != 0 or not head_lines:
+        return "FAIL", ["could not resolve current HEAD commit"]
+    head_commit = head_lines[0].split()[0]
+    if head_commit != local_commit:
+        return "WAIT", [
+            f"current HEAD {head_commit} differs from {tag} commit {local_commit}",
+            f"bump the workspace version for a new release or check out {tag} before packaging",
+        ]
+
+    remote_status, remote_lines = run_check(
+        ["git", "ls-remote", "--tags", "origin", f"{tag}*"], root
+    )
     if remote_status != 0:
         return "WAIT", [f"could not confirm origin tag {tag}"] + remote_lines
     if not remote_lines:
         return "WAIT", [f"origin tag {tag} does not exist yet"]
+
+    remote_commit = None
+    for line in remote_lines:
+        parts = line.split()
+        if len(parts) == 2 and parts[1] == f"refs/tags/{tag}^{{}}":
+            remote_commit = parts[0]
+            break
+    if remote_commit is None:
+        remote_commit = remote_lines[0].split()[0]
+    if remote_commit != local_commit:
+        return "WAIT", [
+            f"origin tag {tag} commit {remote_commit} differs from local tag commit {local_commit}",
+        ]
     return "OK", [tag]
 
 

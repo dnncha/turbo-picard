@@ -84,7 +84,8 @@ class VerifyPyPiPackageTests(unittest.TestCase):
             "PyPI\nhttps://pypi.org/project/turbo-picard/\n"
             "python3 -m maturin build --release --compatibility pypi --out dist\n"
             "python3 -m twine check dist/*\nTrusted Publishing\n"
-            ".github/workflows/publish-pypi.yml\npicard\n",
+            ".github/workflows/publish-pypi.yml\n"
+            "build_release_manifest.py\npicard\n",
             encoding="utf-8",
         )
         (root / "docs" / "quickstart.rst").write_text(
@@ -95,9 +96,14 @@ class VerifyPyPiPackageTests(unittest.TestCase):
         (root / ".github" / "workflows").mkdir(parents=True)
         (root / ".github" / "workflows" / "publish-pypi.yml").write_text(
             "release:\nworkflow_dispatch:\nBuild Linux wheels\n"
+            "Validate publishing ref\nexpected_ref=\"v$(python3 - <<'PY'\n"
+            'test "${GITHUB_REF_TYPE}" = "tag"\n'
+            'test "${GITHUB_REF_NAME}" = "${expected_ref}"\n'
             "wheels-linux-x86_64\nlinux-aarch64:\nBuild Linux ARM64 wheels\n"
             "wheels-linux-aarch64\nmacos-x86_64:\nBuild macOS Intel wheels\n"
             "macos-15-intel\nwheels-macos-x86_64\n"
+            "Smoke-test macOS arm64 wheel\nSmoke-test macOS Intel wheel\n"
+            "verify_pypi_wheel_install_smoke.sh\n"
             "needs: [linux, linux-aarch64, macos, macos-x86_64, sdist]\n"
             "manylinux: 2014\nperl-core\n"
             "apt-get install -y --no-install-recommends perl libclang-dev\n"
@@ -107,7 +113,26 @@ class VerifyPyPiPackageTests(unittest.TestCase):
             "llvm-toolset-7.0-clang-devel\nLIBCLANG_PATH\n"
             "PyO3/maturin-action@v1\n"
             "--compatibility pypi\npypa/gh-action-pypi-publish@release/v1\n"
-            "skip-existing: true\nid-token: write\nenvironment: pypi\n",
+            "skip-existing: true\nid-token: write\nenvironment: pypi\n"
+            "validate:\nValidate distributions\n"
+            "python3 tools/verify_release_artifacts.py --dist dist\n"
+            "Build release handoff manifest\n"
+            "python3 tools/build_release_manifest.py\n"
+            "Upload release handoff manifest\n"
+            "turbo-picard-release-manifest\n"
+            "Smoke-test Linux x86_64 wheel\n"
+            "python3 -m venv\n"
+            "dist/turbo_picard-*-manylinux_2_17_x86_64*.whl\n"
+            "-m pip install --no-deps\n"
+            "turbo-picard\" --version\n"
+            "turbo-picard\" doctor\n"
+            "turbo-picard\" trial MarkDuplicates I=input.bam O=marked.bam M=metrics.txt\n"
+            "picard\" --version\n"
+            "bash tools/verify_install_smoke.sh\n"
+            "needs: [linux, linux-aarch64, macos, macos-x86_64, sdist, validate]\n"
+            "Verify live PyPI metadata\n"
+            "verify_pypi_package.py --live\n"
+            "--retries 12 --retry-delay 5\n",
             encoding="utf-8",
         )
 
@@ -141,6 +166,37 @@ class VerifyPyPiPackageTests(unittest.TestCase):
                 "packaging docs missing maturin build command",
                 verify_pypi_package.collect_errors(root),
             )
+
+    def test_live_metadata_matches_release_source(self) -> None:
+        readme = "# turbo-picard\n\nInstall it.\n"
+        payload = {
+            "info": {
+                "name": "turbo-picard",
+                "version": "0.1.1",
+                "description_content_type": "text/markdown",
+                "description": readme,
+            }
+        }
+        self.assertEqual(
+            verify_pypi_package.validate_live_metadata(payload, "0.1.1", readme), []
+        )
+
+    def test_live_metadata_reports_stale_description_and_version(self) -> None:
+        payload = {
+            "info": {
+                "name": "turbo-picard",
+                "version": "0.1.0",
+                "description_content_type": "text/markdown",
+                "description": "old README\n",
+            }
+        }
+        errors = verify_pypi_package.validate_live_metadata(
+            payload, "0.1.1", "new README\n"
+        )
+        self.assertIn("live PyPI version 0.1.0 must be 0.1.1", errors)
+        self.assertIn(
+            "live PyPI long description must match the checked-out README.md", errors
+        )
 
 
 if __name__ == "__main__":

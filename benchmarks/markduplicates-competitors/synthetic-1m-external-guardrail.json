@@ -1,0 +1,48 @@
+{
+  "schema_version": 1,
+  "claim_status": "evidence_only",
+  "dataset": {
+    "id": "synthetic-1m-duplicate-family-4096",
+    "format": "BAM",
+    "records": 1000000,
+    "duplicate_family_size": 4096,
+    "input_bytes": 3364954,
+    "input_sha256": "4711229e4b846aa215a2e0ad1e4e1ae8b5f297bfe2c7c62ae80d82bd4f6909ae",
+    "source": "local synthetic fixture generated with tools/bench_markduplicates_synthetic.py write_sam() and target/release/picard SortSam",
+    "publicly_retrievable": false
+  },
+  "protocol": {
+    "runner": "tools/bench_markduplicates_competitors.py",
+    "threads": 1,
+    "warmups": 1,
+    "repeats": 5,
+    "read_name_regex": "null",
+    "external_sort_window": {
+      "max_records_in_ram": 500000,
+      "max_bytes_in_ram": 268435456
+    },
+    "parity": "PASS",
+    "turbo_picard_version": "picard 0.1.12",
+    "turbo_picard_source_commit": "6c99885798654a43728dd80c12cc51dfa931e9fd",
+    "turbo_picard_worktree": "dirty; binary includes local uncommitted changes",
+    "turbo_picard_binary_sha256": "a527a8a967ac17785ed46a7e5110373ec1bd7676897c99d637e1901acffe7a69",
+    "picard_version": "Version:3.4.0"
+  },
+  "median": {
+    "turbo_picard_wall_seconds": 0.531262,
+    "turbo_picard_p95_wall_seconds": 0.552017,
+    "turbo_picard_peak_rss_bytes": 237420544,
+    "turbo_picard_peak_temporary_disk_bytes": 0,
+    "picard_wall_seconds": 1.860894,
+    "picard_p95_wall_seconds": 1.975404,
+    "picard_peak_rss_bytes": 1160527872,
+    "picard_peak_temporary_disk_bytes": 0,
+    "picard_to_turbo_wall_ratio": 3.502782,
+    "picard_to_turbo_peak_rss_ratio": 4.888068
+  },
+  "interpretation": [
+    "The bounded external plan used about 4.9x less peak RSS than Picard on this fixture.",
+    "Turbo Picard was about 3.5x faster by median wall time on this fixture.",
+    "This is a synthetic scalability guardrail, not WGS, WES, UMI, optical-heavy, CRAM, multi-library, or independent-reproduction evidence."
+  ]
+}

@@ -22,9 +22,11 @@ BENCHMARK_DATA = ROOT / "docs" / "site" / "assets" / "benchmark-data.json"
 BENCHMARK_DOCS = ROOT / "docs" / "benchmarks.rst"
 BENCHMARK_EXEMPTIONS: dict[str, str] = {
     "AccelerationStatus": "status/preflight command with no Picard data-processing runtime to benchmark",
+    "capabilities": "discovery/preflight command with no Picard data-processing runtime to benchmark",
     "doctor": "status/preflight command with no Picard data-processing runtime to benchmark",
     "explain": "status/preflight command with no Picard data-processing runtime to benchmark",
     "trial": "status/preflight command with no Picard data-processing runtime to benchmark",
+    "CollectHsMetrics": "ALL_READS metrics and sidecar parity are guarded separately; public performance benchmark awaits representative capture data",
 }
 
 

@@ -3,6 +3,8 @@ set -euo pipefail
 
 turbo-picard --version
 turbo-picard AccelerationStatus
+# Keep the agent-facing capability contract executable in the installed package.
+turbo-picard capabilities --json
 turbo-picard doctor --help
 turbo-picard explain --help
 turbo-picard trial --help
@@ -10,6 +12,7 @@ turbo-picard MarkDuplicates --help
 turbo-picard SortSam --help
 turbo-picard CleanSam --help
 turbo-picard ViewSam --help
+turbo-picard CollectHsMetrics --help
 
 cat > input.sam <<'SAM'
 @HD	VN:1.6	SO:coordinate

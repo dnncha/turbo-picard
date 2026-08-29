@@ -1089,7 +1089,7 @@ dependencies = [
 
 [[package]]
 name = "turbo-picard-cli"
-version = "0.1.11"
+version = "0.1.12"
 dependencies = [
  "assert_cmd",
  "crossbeam-channel",
@@ -1106,17 +1106,19 @@ dependencies = [
 
 [[package]]
 name = "turbo-picard-core"
-version = "0.1.11"
+version = "0.1.12"
 dependencies = [
+ "regex",
  "rust-htslib",
  "thiserror 2.0.18",
 ]
 
 [[package]]
 name = "turbo-picard-markdup"
-version = "0.1.11"
+version = "0.1.12"
 dependencies = [
  "md5",
+ "regex",
  "rust-htslib",
  "rustc-hash 2.1.2",
  "tempfile",

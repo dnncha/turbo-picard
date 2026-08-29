@@ -57,9 +57,11 @@ python3 tools/verify_benchmark_thresholds.py
 python3 tools/verify_real_data_evidence.py --release-ready
 benchmark exceptions
 AccelerationStatus
+capabilities
 doctor
 explain
 trial
+CollectHsMetrics
 IntervalListTools
 LiftoverVcf
 https://turbo-picard.readthedocs.io/en/latest/adoption.html
@@ -125,6 +127,45 @@ SHA-256
         self.assertIn("missing README benchmark date", errors)
         self.assertIn("missing README benchmark source command", errors)
         self.assertIn("missing README raw benchmark artifact path", errors)
+
+    def test_benchmarks_readme_claims_match_benchmark_manifest(self) -> None:
+        data = {
+            "summary": {
+                "floor_speedup": 5.67,
+                "geometric_mean_speedup": 8.36,
+                "top_speedup": 12.34,
+            }
+        }
+        benchmarks_readme = """
+The saved run reports a `5.67x` floor speedup, an `8.36x` geometric mean speedup,
+and a `12.34x` top speedup. This is fixture-specific evidence, not a capacity
+or production-scale guarantee.
+"""
+
+        errors = verify_readme_benchmark_evidence.validate_benchmarks_readme_evidence(
+            benchmarks_readme, data
+        )
+
+        self.assertEqual(errors, [])
+
+    def test_benchmarks_readme_claim_mismatches_are_reported(self) -> None:
+        data = {
+            "summary": {
+                "floor_speedup": 5.67,
+                "geometric_mean_speedup": 8.36,
+                "top_speedup": 12.34,
+            }
+        }
+
+        errors = verify_readme_benchmark_evidence.validate_benchmarks_readme_evidence(
+            "8.55x floor speedup", data
+        )
+
+        self.assertIn("missing benchmarks README floor-speedup claim", errors)
+        self.assertIn("missing benchmarks README geometric-mean claim", errors)
+        self.assertIn("missing benchmarks README top-speedup claim", errors)
+        self.assertIn("missing benchmarks README fixture-specific evidence caveat", errors)
+        self.assertIn("missing benchmarks README capacity caveat", errors)
 
 
 if __name__ == "__main__":

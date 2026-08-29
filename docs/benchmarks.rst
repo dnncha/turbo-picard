@@ -5,8 +5,8 @@ Benchmarks are useful only when they are reproducible and tied to parity. The
 repository benchmark suite is designed to report speed while keeping command
 coverage and Picard-compatible behavior visible.
 
-The current saved suite records ``6.86x`` as its slowest saved speedup,
-``24.94x`` as its geometric mean speedup, and ``94.36x`` as its top speedup for
+The current saved suite records ``22.88x`` as its slowest saved speedup,
+``84.52x`` as its geometric mean speedup, and ``272.12x`` as its top speedup for
 the documented command, option, input, and machine scopes. The companion
 ``MarkDuplicates`` fixture records median RSS of about ``1.2 GB`` for Picard
 3.4.0 and ``8.7 MB`` for ``turbo-picard``. These are reproducible fixture
@@ -60,7 +60,7 @@ different parts of the system.
 
 The public benchmark suite currently reports 32 command speedups, covering the
 native or partly native data-processing commands in the matrix.
-``AccelerationStatus``, ``doctor``, ``explain``, and ``trial`` are exempt
+``AccelerationStatus``, ``capabilities``, ``doctor``, ``explain``, and ``trial`` are exempt
 because they are status/preflight commands with no Picard data-processing
 runtime to benchmark.
 Two benchmark scopes are deliberately narrow: ``CollectMultipleMetrics`` is benchmarked with
@@ -68,9 +68,11 @@ Two benchmark scopes are deliberately narrow: ``CollectMultipleMetrics`` is benc
 use the chart-output disclosure below.
 
 Benchmark exemption: ``AccelerationStatus`` — status/preflight command with no Picard data-processing runtime to benchmark.
+Benchmark exemption: ``capabilities`` — discovery/preflight command with no Picard data-processing runtime to benchmark.
 Benchmark exemption: ``doctor`` — status/preflight command with no Picard data-processing runtime to benchmark.
 Benchmark exemption: ``explain`` — status/preflight command with no Picard data-processing runtime to benchmark.
 Benchmark exemption: ``trial`` — status/preflight command with no Picard data-processing runtime to benchmark.
+Benchmark exemption: ``CollectHsMetrics`` — ALL_READS metrics and sidecar parity are guarded separately; public performance benchmark awaits representative capture data. The real-data comparator now supports pinned WES/capture interval-lists for command-level parity trials.
 
 Genome-scale evidence
 ---------------------

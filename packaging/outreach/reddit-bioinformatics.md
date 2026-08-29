@@ -32,7 +32,7 @@ pipeline. Pick a real input, run both tools, compare the outputs you care about,
 and only switch that command if the comparison is boring.
 
 The repo has parity and benchmark checks against Picard 3.4.0. Current numbers:
-32 checked commands, 24.94x geometric mean speedup, and 94.36x top speedup. The
+32 checked commands, 84.52x geometric mean speedup, and 272.12x top speedup. The
 `MarkDuplicates` benchmark also shows much lower memory use than Picard on the
 same input.
 
@@ -43,8 +43,9 @@ python3 -m pip install turbo-picard
 ```
 
 PyPI has Linux x86_64 and macOS Apple Silicon wheels plus a source tarball. The
-Bioconda recipe PR is open; packages will be available after review and
-publication.
+existing Bioconda PR (#65922) covers older `0.1.10` metadata, so Bioconda is not
+yet a current `0.1.12` install path. Use the published PyPI package or
+container until the new candidate is tagged, reviewed, and published.
 
 Docs:
 

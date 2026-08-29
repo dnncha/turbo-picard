@@ -54,9 +54,9 @@ Faster implementations are useful only if they reduce queue time and compute
 cost without changing the analysis record. `turbo-picard` addresses this by
 targeting Picard-compatible commands rather than requiring a new interface. Its
 release evidence ties every public speed claim to parity checks:
-the latest saved benchmark suite, run on 2026-06-13, reports 32/32 benchmarked
-commands passing parity, with a geometric mean speedup of 24.94x and a slowest
-saved speedup of 6.86x. These results are specific to the checked command set
+the latest saved benchmark suite, run on 2026-08-14, reports 32/32 benchmarked
+commands passing parity, with a geometric mean speedup of 87.47x and a slowest
+saved speedup of 22.17x. These results are specific to the checked command set
 and benchmark environment.
 
 # State of the field

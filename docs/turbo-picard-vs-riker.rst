@@ -77,9 +77,11 @@ Output review
    two tools with related metrics have interchangeable contracts.
 
 Current turbo-picard limits
-   ``CollectHsMetrics`` and ``CollectSamErrorMetrics`` delegate to upstream
-   Picard. Metrics chart sidecars are lightweight PDFs rather than
-   Picard-equivalent rendered charts. See :doc:`fallback` and :doc:`commands`.
+   ``CollectHsMetrics`` has a native core ALL_READS metrics, histogram,
+   per-target, and per-base path, while unsupported advanced options delegate
+   to upstream Picard. ``CollectSamErrorMetrics`` remains delegated.
+   Metrics chart sidecars are lightweight PDFs rather than Picard-equivalent
+   rendered charts. See :doc:`fallback` and :doc:`commands`.
 
 How to benchmark them fairly
 ----------------------------
@@ -105,6 +107,6 @@ Fair comparison rules:
 * keep output parity checks separate from speed checks;
 * publish wall time, peak RSS, and the exact tool versions together.
 
-For capture or exome QC, use upstream Picard fallback for
-``CollectHsMetrics`` until native support is documented for the exact required
-scope.
+For capture or exome QC, use the native ``CollectHsMetrics`` path for the
+documented ALL_READS metrics and sidecar scope and retain upstream Picard
+fallback for the options listed in the command matrix.

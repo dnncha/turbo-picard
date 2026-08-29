@@ -26,6 +26,10 @@ class BiocondaReleasePreflightTests(unittest.TestCase):
                 return 0, []
             if command[:4] == ["git", "show-ref", "--verify", "--quiet"]:
                 return 0, []
+            if command[:4] == ["git", "rev-list", "-n", "1"]:
+                return 0, ["abc123"]
+            if command[:2] == ["git", "rev-parse"]:
+                return 0, ["abc123"]
             if command[:4] == ["git", "ls-remote", "--tags", "origin"]:
                 return 0, ["abc123\trefs/tags/v0.1.0"]
             if command[-1] == "--release-ready" and command[1].endswith("verify_bioconda_recipes.py"):
@@ -50,6 +54,10 @@ class BiocondaReleasePreflightTests(unittest.TestCase):
                 return 0, []
             if command[:4] == ["git", "show-ref", "--verify", "--quiet"]:
                 return 0, []
+            if command[:4] == ["git", "rev-list", "-n", "1"]:
+                return 0, ["abc123"]
+            if command[:2] == ["git", "rev-parse"]:
+                return 0, ["abc123"]
             if command[:4] == ["git", "ls-remote", "--tags", "origin"]:
                 return 0, ["abc123\trefs/tags/v0.1.0"]
             if command[-1] == "--release-ready" and command[1].endswith("verify_bioconda_recipes.py"):
@@ -68,6 +76,10 @@ class BiocondaReleasePreflightTests(unittest.TestCase):
 
     def test_reports_success_when_all_checks_pass(self) -> None:
         def fake_run(command: list[str], root: Path):
+            if command[:4] == ["git", "rev-list", "-n", "1"]:
+                return 0, ["abc123"]
+            if command[:2] == ["git", "rev-parse"]:
+                return 0, ["abc123"]
             if command[:4] == ["git", "ls-remote", "--tags", "origin"]:
                 return 0, ["abc123\trefs/tags/v0.1.0"]
             return 0, []
@@ -88,6 +100,10 @@ class BiocondaReleasePreflightTests(unittest.TestCase):
                 return 0, [" M README.md", "?? CITATION.cff"]
             if command[:4] == ["git", "show-ref", "--verify", "--quiet"]:
                 return 0, []
+            if command[:4] == ["git", "rev-list", "-n", "1"]:
+                return 0, ["abc123"]
+            if command[:2] == ["git", "rev-parse"]:
+                return 0, ["abc123"]
             if command[:4] == ["git", "ls-remote", "--tags", "origin"]:
                 return 0, ["abc123\trefs/tags/v0.1.0"]
             return 0, []
@@ -109,6 +125,10 @@ class BiocondaReleasePreflightTests(unittest.TestCase):
                 return 128, ["not a git repository"]
             if command[:4] == ["git", "show-ref", "--verify", "--quiet"]:
                 return 0, []
+            if command[:4] == ["git", "rev-list", "-n", "1"]:
+                return 0, ["abc123"]
+            if command[:2] == ["git", "rev-parse"]:
+                return 0, ["abc123"]
             if command[:4] == ["git", "ls-remote", "--tags", "origin"]:
                 return 0, ["abc123\trefs/tags/v0.1.0"]
             return 0, []
@@ -147,6 +167,10 @@ class BiocondaReleasePreflightTests(unittest.TestCase):
                 return 0, []
             if command[:4] == ["git", "show-ref", "--verify", "--quiet"]:
                 return 0, []
+            if command[:4] == ["git", "rev-list", "-n", "1"]:
+                return 0, ["abc123"]
+            if command[:2] == ["git", "rev-parse"]:
+                return 0, ["abc123"]
             if command[:4] == ["git", "ls-remote", "--tags", "origin"]:
                 return 0, []
             return 0, []
@@ -159,6 +183,25 @@ class BiocondaReleasePreflightTests(unittest.TestCase):
 
         self.assertEqual(status, 1)
         self.assertIn("origin tag v0.1.0 does not exist yet", report)
+
+    def test_reports_current_head_mismatch(self) -> None:
+        def fake_run(command: list[str], root: Path):
+            if command[:4] == ["git", "show-ref", "--verify", "--quiet"]:
+                return 0, []
+            if command[:4] == ["git", "rev-list", "-n", "1"]:
+                return 0, ["tag-commit"]
+            if command[:2] == ["git", "rev-parse"]:
+                return 0, ["head-commit"]
+            return 0, []
+
+        with (
+            mock.patch.object(bioconda_release_preflight, "run_check", fake_run),
+            mock.patch.object(bioconda_release_preflight, "workspace_version", return_value="0.1.0"),
+        ):
+            status, lines = bioconda_release_preflight.git_tag_status(Path("/tmp/repo"))
+
+        self.assertEqual(status, "WAIT")
+        self.assertIn("current HEAD head-commit differs from v0.1.0 commit tag-commit", lines)
 
 
 if __name__ == "__main__":

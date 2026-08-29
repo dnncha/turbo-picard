@@ -17,6 +17,19 @@ Snakemake, or shell pipelines. Start with one representative command, compare
 the outputs your downstream workflow consumes, and keep upstream Picard for
 commands or options outside the documented native scope.
 
+For coding agents and workflow generators, inspect the complete decision
+surface in one call:
+
+```bash
+turbo-picard capabilities --json
+```
+
+The schema-versioned response contains every Picard command's native/fallback
+status and trial fit together with the checked-in parity-gated benchmark
+evidence. Use `turbo-picard trial --json <PicardCommand> ...` for the exact task
+being considered. See the [agentic-coder guide](docs/agentic-coders.rst) for the
+selection rule and safe substitution pattern.
+
 ## Quick Start
 
 Install from PyPI:
@@ -97,6 +110,7 @@ The full docs are on Read the Docs:
 Useful starting points:
 
 - [Quickstart](https://turbo-picard.readthedocs.io/en/latest/quickstart.html)
+- [Agentic coder guide](https://turbo-picard.readthedocs.io/en/latest/agentic-coders.html)
 - [Is this for you?](https://turbo-picard.readthedocs.io/en/latest/is-this-for-you.html)
 - [Choose your first command](https://turbo-picard.readthedocs.io/en/latest/first-command.html)
 - [Evaluation playbook](https://turbo-picard.readthedocs.io/en/latest/evaluation-playbook.html)
@@ -116,17 +130,24 @@ The smallest trial shape is
 Migration patterns that usually keep the surrounding workflow stable include
 per-read-group `SamToFastq`, sequential-shard `FastqToSam`, and
 mate-repair boundaries around `FixMateInformation`.
+If you run a real one-command evaluation, share the result through the
+[trial report issue form](https://github.com/dnncha/turbo-picard/issues/new?template=trial-report.yml);
+successful matches, mismatches, and adoption blockers are all useful evidence.
+If GitHub does not offer new-issue creation, add the same redacted report as a
+comment on the [public trial report thread](https://github.com/dnncha/turbo-picard/issues/4).
+From a repository checkout, `tools/compare_real_data.py --shareable-report`
+can create a reviewed, privacy-conscious starting point for that report.
 
 ## Benchmarks
 
 The saved public benchmark suite compares native `turbo-picard` commands against
 Picard 3.4.0 and checks stable outputs before reporting speed. Current saved
-results report `32/32` parity checks passing, with `94.36x` top speedup:
-`UpdateVcfSequenceDictionary`, `6.86x` floor speedup: `RevertSam`, `26.72x`
-median speedup, and `24.94x` geometric mean speedup.
+results report `32/32` parity checks passing, with `272.12x` top speedup:
+`NormalizeFasta`, `22.88x` floor speedup: `SetNmMdAndUqTags`, `99.56x`
+median speedup, and `84.52x` geometric mean speedup.
 
-Summary: `32/32 PASS`; `94.36x` top speedup: `UpdateVcfSequenceDictionary`;
-`6.86x` floor speedup: `RevertSam`; `26.72x` median speedup; `24.94x`
+Summary: `32/32 PASS`; `272.12x` top speedup: `NormalizeFasta`;
+`22.88x` floor speedup: `SetNmMdAndUqTags`; `99.56x` median speedup; `84.52x`
 geometric mean speedup.
 
 Benchmark details, scope notes, real-data evidence, and reproduction commands
@@ -140,46 +161,49 @@ lightweight PDF summaries, not Picard-equivalent rendered plots.
 
 Saved benchmark run:
 
-- Date: `2026-06-13`
+- Date: `2026-08-14`
 - Command: `python3 tools/bench_suite.py --repeats 3 --skip-build`
 - Raw log: `docs/site/assets/bench-suite-output.txt`
-- benchmark exceptions: `AccelerationStatus`, `doctor`, `explain`, and `trial`
-  are utility commands, not Picard workload comparisons.
+- benchmark exceptions: `AccelerationStatus`, `capabilities`, `doctor`,
+  `explain`, and `trial` are utility commands, not Picard workload
+  comparisons. `CollectHsMetrics` has separate ALL_READS and sidecar parity
+  coverage, plus a real-data comparator path for pinned WES/capture intervals;
+  representative capture-data performance evidence is still pending.
 
 | Command | Speedup | Parity |
 | --- | ---: | :--- |
-| UpdateVcfSequenceDictionary | 94.36x | PASS |
-| BuildBamIndex | 69.26x | PASS |
-| NormalizeFasta | 67.11x | PASS |
-| GatherVcfs | 53.80x | PASS |
-| CreateSequenceDictionary | 47.83x | PASS |
-| MergeVcfs | 47.23x | PASS |
-| CollectInsertSizeMetrics | 40.66x | PASS |
-| MeanQualityByCycle | 36.74x | PASS |
-| QualityScoreDistribution | 34.04x | PASS |
-| CollectBaseDistributionByCycle | 33.08x | PASS |
-| SamToFastq | 29.06x | PASS |
-| CollectMultipleMetrics | 28.39x | PASS |
-| IntervalListTools | 27.89x | PASS |
-| CollectGcBiasMetrics | 27.72x | PASS |
-| ValidateSamFile | 27.62x | PASS |
-| SortSam | 26.72x | PASS |
-| SortVcf | 25.67x | PASS |
-| CollectAlignmentSummaryMetrics | 25.63x | PASS |
-| AddOrReplaceReadGroups | 24.48x | PASS |
-| CleanSam | 21.61x | PASS |
-| ViewSam | 21.11x | PASS |
-| BedToIntervalList | 19.89x | PASS |
-| MarkDuplicates | 17.68x | PASS |
-| CollectQualityYieldMetrics | 17.58x | PASS |
-| MergeSamFiles | 17.16x | PASS |
-| CollectWgsMetrics | 15.42x | PASS |
-| ReplaceSamHeader | 14.20x | PASS |
-| LiftoverVcf | 14.17x | PASS |
-| FixMateInformation | 10.35x | PASS |
-| SetNmMdAndUqTags | 9.34x | PASS |
-| FastqToSam | 7.40x | PASS |
-| RevertSam | 6.86x | PASS |
+| NormalizeFasta | 272.12x | PASS |
+| BuildBamIndex | 243.53x | PASS |
+| UpdateVcfSequenceDictionary | 207.52x | PASS |
+| CollectGcBiasMetrics | 196.45x | PASS |
+| CreateSequenceDictionary | 152.62x | PASS |
+| GatherVcfs | 130.70x | PASS |
+| LiftoverVcf | 127.28x | PASS |
+| CollectMultipleMetrics | 122.66x | PASS |
+| CollectInsertSizeMetrics | 117.34x | PASS |
+| CleanSam | 115.42x | PASS |
+| MergeVcfs | 112.13x | PASS |
+| MeanQualityByCycle | 108.66x | PASS |
+| CollectQualityYieldMetrics | 108.64x | PASS |
+| QualityScoreDistribution | 107.17x | PASS |
+| ReplaceSamHeader | 101.84x | PASS |
+| ValidateSamFile | 99.56x | PASS |
+| IntervalListTools | 99.46x | PASS |
+| CollectBaseDistributionByCycle | 98.01x | PASS |
+| SortVcf | 89.01x | PASS |
+| CollectAlignmentSummaryMetrics | 83.49x | PASS |
+| BedToIntervalList | 79.78x | PASS |
+| ViewSam | 79.58x | PASS |
+| AddOrReplaceReadGroups | 77.78x | PASS |
+| SamToFastq | 77.74x | PASS |
+| CollectWgsMetrics | 50.81x | PASS |
+| MergeSamFiles | 35.49x | PASS |
+| SortSam | 35.15x | PASS |
+| FixMateInformation | 31.98x | PASS |
+| FastqToSam | 31.29x | PASS |
+| MarkDuplicates | 28.70x | PASS |
+| RevertSam | 24.19x | PASS |
+| SetNmMdAndUqTags | 22.88x | PASS |
 
 Release evidence checks:
 
@@ -206,8 +230,13 @@ A command-level speedup is not a universal replacement claim. Keep upstream Pica
 
 ## Packaging Status
 
-The live PyPI release is `0.1.11`. It publishes Linux x86_64 and macOS Apple
-Silicon wheels plus a source distribution.
+The latest published PyPI release is `0.1.11`. It publishes Linux x86_64 and
+macOS Apple Silicon wheels plus a source distribution. The current source
+release is `0.1.12`; it remains a release candidate until the matching tag,
+package, container, and evidence checks pass.
+
+Read the [release notes](CHANGELOG.md) for the candidate scope and evidence
+boundaries.
 
 The submitted [Bioconda recipe PR](https://github.com/bioconda/bioconda-recipes/pull/65922)
 covers the main package and an optional shim. Use PyPI or the container image

@@ -38,9 +38,13 @@ as Python wheel scripts:
 
    python3 -m pip install turbo-picard
 
-The live PyPI release is ``0.1.11``. It publishes Linux x86_64 and macOS Apple
-Silicon wheels plus a source distribution. For Linux clusters and shared
+The latest published PyPI release is ``0.1.11``. It publishes Linux x86_64 and
+macOS Apple Silicon wheels plus a source distribution. The current source
+release is ``0.1.12`` and remains a release candidate until the matching tag,
+package, container, and evidence checks pass. For Linux clusters and shared
 environments, Bioconda is the cleaner target once the recipe is accepted.
+The candidate scope and evidence boundaries are summarized in
+``CHANGELOG.md``.
 
 The current wheel exposes both commands from the CLI crate:
 
@@ -66,13 +70,54 @@ To build and inspect the package locally:
 
 For publication, prefer PyPI Trusted Publishing from the GitHub release
 workflow rather than storing a long-lived PyPI token in repository secrets.
-Only publish after the wheel check, command smoke tests, parity checks, and
-release metadata verifiers pass on the exact commit being released.
+Only publish after the wheel check, command smoke tests, parity checks, release
+metadata verifiers, and the built-artifact check pass on the exact commit being
+released. The artifact check compares every wheel and source distribution with
+the checked-out version and README, including the container version shown in
+the public install path, and checks that each wheel's embedded executable
+matches its platform tag.
 
 The publishing workflow is ``.github/workflows/publish-pypi.yml``. On PyPI,
 configure a trusted publisher for project ``turbo-picard`` with owner
 ``dnncha``, repository ``turbo-picard``, workflow
 ``publish-pypi.yml``, and environment ``pypi``.
+
+After validating the distributions, create the privacy-conscious release
+handoff manifest. It records artifact filenames, byte sizes, SHA-256 digests,
+source/tag state, and optional local benchmark summaries without recording
+local filesystem paths:
+
+.. code-block:: bash
+
+   python3 tools/build_release_manifest.py \
+     --dist dist \
+     --benchmark-profile /path/to/bench-profile.json \
+     --output turbo-picard-release-manifest.json
+
+The publish workflow runs
+``python3 tools/verify_release_artifacts.py --dist dist`` after downloading all
+architecture artifacts and before the PyPI upload. This keeps package metadata
+and install instructions aligned when a release tag is cut from a different
+commit than the latest documentation update.
+It also installs the Linux x86_64 wheel in a clean virtual environment and runs
+``--version``, ``doctor``, the read-only ``trial`` contract, and the ``picard``
+compatibility shim before publishing. The final step runs the self-contained
+``tools/verify_install_smoke.sh`` fixture, which marks a duplicate SAM record
+and checks the output and metrics rather than stopping at ``--help``.
+It also runs ``tools/verify_mate_barcode_install_smoke.sh`` against the checked
+in mate-specific barcode fixture and fails if the Picard-compatible size-2
+histogram drifts.
+The macOS arm64 and Intel wheel build jobs run the same checks natively through
+``tools/verify_pypi_wheel_install_smoke.sh`` before uploading their artifacts.
+The Linux arm64 job remains cross-build and artifact-validated rather than
+pretending that an x86 runner executed an arm64 binary.
+The publication jobs also run ``tools/verify_markduplicates_guardrails.py`` so
+checked-in MarkDuplicates benchmark provenance, parity status, resource ratios,
+and README disclosures cannot drift independently.
+After upload, the workflow retries a live PyPI JSON check and compares the public
+long description with the checked-out ``README.md``. This catches a release that
+uploaded valid wheels but left installation guidance or the container tag stale
+on the package index.
 
 Container image
 ---------------
@@ -88,6 +133,14 @@ without a Conda solve.
 .. code-block:: bash
 
    docker run --rm ghcr.io/dnncha/turbo-picard:0.1.11 --version
+
+The container publication workflow supports manual dispatch for operational
+convenience, but it fails before GHCR login unless the selected ref is the
+exact ``v<workspace-version>`` tag. Branch dispatch cannot publish an image.
+After pushing, it pulls the exact version tag and runs ``--version``, ``doctor``,
+the read-only ``trial`` contract, and a real MarkDuplicates fixture against the
+published image. The local guard is checked by
+``python3 tools/verify_publish_workflows.py``.
 
 The repository root ``Dockerfile`` builds the same runtime shape locally:
 
@@ -127,7 +180,9 @@ and the release-ready verifier passes.
 
 Commit the intended release state before tagging. The preflight command reports
 a dirty worktree as a release wait state so the source archive is not cut from
-the wrong commit.
+the wrong commit. It also compares the current ``HEAD`` with the local and
+remote release-tag commit, and waits if the workspace still carries the old
+version after that tag has moved on.
 
 After cutting a GitHub release for the exact commit being packaged, download the
 GitHub source archive and switch both recipes plus the draft Bioconda PR body to
@@ -137,7 +192,7 @@ the immutable tagged archive:
 
    python3 tools/bioconda_release_preflight.py
    python3 tools/prepare_bioconda_release.py \
-     --archive ~/Downloads/turbo-picard-0.1.11.tar.gz
+     --archive ~/Downloads/turbo-picard-0.1.12.tar.gz
 
 The preflight command summarizes the checks that are already green and calls out
 the expected wait state while the recipes still use ``source.path`` or a source
@@ -151,8 +206,8 @@ version, contains the expected release files, and carries the citation,
 benchmark, and real-data metadata used by the PR body. If the digest was
 computed elsewhere, pass it with ``--sha256`` only when it came from the
 downloaded GitHub source archive. That fallback skips archive filename and
-content validation. For ``0.1.11``, use ``turbo-picard-0.1.11.tar.gz`` or
-GitHub's ``v0.1.11.tar.gz``.
+content validation. For ``0.1.12``, use ``turbo-picard-0.1.12.tar.gz`` or
+GitHub's ``v0.1.12.tar.gz``.
 
 Then run the release checks:
 

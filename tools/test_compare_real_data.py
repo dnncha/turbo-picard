@@ -3,6 +3,7 @@ import unittest
 from pathlib import Path
 import os
 import sys
+from types import SimpleNamespace
 from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -10,6 +11,137 @@ import compare_real_data
 
 
 class CompareRealDataTests(unittest.TestCase):
+    def test_materialize_alignment_sam_uses_selected_view_entrypoint(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            input_bam = Path(tmp) / "input.bam"
+            output_sam = Path(tmp) / "output.sam"
+            input_bam.write_bytes(b"BAM")
+
+            with mock.patch.object(compare_real_data, "run", return_value=0.25) as run_mock:
+                elapsed = compare_real_data.materialize_alignment_sam(
+                    input_bam,
+                    output_sam,
+                    ["turbo-picard"],
+                    None,
+                )
+
+            self.assertEqual(elapsed, 0.25)
+            run_mock.assert_called_once_with(
+                [
+                    "turbo-picard",
+                    "ViewSam",
+                    f"I={input_bam}",
+                    "VALIDATION_STRINGENCY=SILENT",
+                    "QUIET=true",
+                ],
+                stdout=output_sam,
+            )
+
+    def test_materialize_alignment_sam_passes_reference_for_cram(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            input_cram = Path(tmp) / "input.cram"
+            reference = Path(tmp) / "reference.fa"
+            output_sam = Path(tmp) / "output.sam"
+            input_cram.write_bytes(b"CRAM")
+            reference.write_text(">chr1\nACGT\n", encoding="utf-8")
+
+            with mock.patch.object(compare_real_data, "run", return_value=0.5) as run_mock:
+                compare_real_data.materialize_alignment_sam(
+                    input_cram,
+                    output_sam,
+                    ["picard"],
+                    reference,
+                )
+
+            run_mock.assert_called_once_with(
+                [
+                    "picard",
+                    "ViewSam",
+                    f"I={input_cram}",
+                    f"R={reference}",
+                    "VALIDATION_STRINGENCY=SILENT",
+                    "QUIET=true",
+                ],
+                stdout=output_sam,
+            )
+
+    def test_markduplicates_argument_parser_accepts_options_and_regex_braces(self):
+        argument = "READ_NAME_REGEX=(?:[A-Z]+:){4}([0-9]+)"
+        self.assertEqual(compare_real_data.parse_markduplicates_arg(argument), argument)
+        self.assertEqual(
+            compare_real_data.parse_markduplicates_arg("BARCODE_TAG=RX"),
+            "BARCODE_TAG=RX",
+        )
+
+    def test_markduplicates_argument_parser_reserves_io_fields(self):
+        for argument in ("I=input.bam", "O=output.bam", "M=metrics.txt", "broken"):
+            with self.assertRaises(Exception):
+                compare_real_data.parse_markduplicates_arg(argument)
+
+    def test_collecthsmetrics_argument_parser_reserves_comparator_paths(self):
+        self.assertEqual(
+            compare_real_data.parse_collecthsmetrics_arg(
+                "MINIMUM_MAPPING_QUALITY=20"
+            ),
+            "MINIMUM_MAPPING_QUALITY=20",
+        )
+        for argument in (
+            "I=input.bam",
+            "O=metrics.txt",
+            "R=reference.fa",
+            "BAIT_INTERVALS=baits.interval_list",
+            "PER_TARGET_COVERAGE=coverage.txt",
+            "broken",
+        ):
+            with self.assertRaises(Exception):
+                compare_real_data.parse_collecthsmetrics_arg(argument)
+
+    def test_collecthsmetrics_digest_includes_sidecars(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            metrics = Path(tmp) / "metrics.txt"
+            per_target = Path(tmp) / "per-target.txt"
+            per_base = Path(tmp) / "per-base.txt"
+            metrics.write_text("# generated\nA\tB\n1\t2\n", encoding="utf-8")
+            per_target.write_text("target\tcoverage\n", encoding="utf-8")
+            per_base.write_text("base\tcoverage\n", encoding="utf-8")
+
+            first = compare_real_data.digest_hsmetrics_outputs(
+                metrics, per_target, per_base, "turbo-picard"
+            )
+            metrics.write_text("# another header\nA\tB\n1\t2\n", encoding="utf-8")
+            second = compare_real_data.digest_hsmetrics_outputs(
+                metrics, per_target, per_base, "Picard"
+            )
+            self.assertEqual(first, second)
+
+            per_base.write_text("base\tother-coverage\n", encoding="utf-8")
+            third = compare_real_data.digest_hsmetrics_outputs(
+                metrics, per_target, per_base, "Picard"
+            )
+            self.assertNotEqual(first, third)
+
+    def test_collecthsmetrics_request_requires_reference_and_intervals(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            args = SimpleNamespace(
+                commands=["CollectHsMetrics"],
+                reference_fasta=None,
+                bait_interval_list=None,
+                target_interval_list=None,
+            )
+            with self.assertRaisesRegex(
+                SystemExit, "CollectHsMetrics requires --reference-fasta"
+            ):
+                compare_real_data.validate_collecthsmetrics_request(args)
+
+            reference = root / "reference.fa"
+            reference.write_bytes(b">chr1\nACGT\n")
+            args.reference_fasta = reference
+            with self.assertRaisesRegex(
+                SystemExit, "CollectHsMetrics requires --bait-interval-list"
+            ):
+                compare_real_data.validate_collecthsmetrics_request(args)
+
     def test_sam_record_digest_ignores_headers(self):
         with tempfile.TemporaryDirectory() as tmp:
             first = Path(tmp) / "first.sam"
@@ -188,6 +320,17 @@ class CompareRealDataTests(unittest.TestCase):
         with mock.patch.object(compare_real_data.subprocess, "run", return_value=completed):
             self.assertEqual(compare_real_data.capture_version(["picard", "ViewSam", "--version"]), "Version:3.4.0")
 
+    def test_capture_version_extracts_picard_version_after_warnings(self):
+        completed = mock.Mock(
+            returncode=1,
+            stdout="WARNING startup detail\nVersion:3.4.0\n",
+        )
+        with mock.patch.object(compare_real_data.subprocess, "run", return_value=completed):
+            self.assertEqual(
+                compare_real_data.capture_version(["picard", "ViewSam", "--version"]),
+                "Version:3.4.0",
+            )
+
     def test_input_metadata_can_record_source_citation(self):
         with tempfile.TemporaryDirectory() as tmp:
             input_bam = Path(tmp) / "input.bam"
@@ -201,6 +344,59 @@ class CompareRealDataTests(unittest.TestCase):
 
             self.assertEqual(metadata["source_url"], "https://github.com/samtools/htslib/blob/0123456789abcdef0123456789abcdef01234567/test/range.bam")
             self.assertEqual(metadata["source_commit"], "0123456789abcdef0123456789abcdef01234567")
+
+    def test_manifest_request_rejects_invalid_output_before_running_comparison(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            input_bam = Path(tmp) / "input.bam"
+            input_bam.write_bytes(b"bam")
+            args = SimpleNamespace(
+                dataset_id="example",
+                output_dir=Path(tmp) / "evidence",
+                input_source_url="https://github.com/example/repo/blob/0123456789abcdef0123456789abcdef01234567/input.bam",
+                input_source_commit="0123456789abcdef0123456789abcdef01234567",
+                input_bam=input_bam,
+                release_tier="public_smoke",
+                commands=["ViewSam"],
+            )
+
+            with self.assertRaisesRegex(
+                SystemExit,
+                "manifest output directory must be under benchmarks/real-data/<dataset-id>/evidence",
+            ):
+                compare_real_data.validate_manifest_request(args)
+
+    def test_manifest_request_rejects_missing_citation_before_running_comparison(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            input_bam = Path(tmp) / "input.bam"
+            input_bam.write_bytes(b"bam")
+            args = SimpleNamespace(
+                dataset_id="example",
+                output_dir=Path("benchmarks/real-data/example/evidence"),
+                input_source_url=None,
+                input_source_commit=None,
+                input_bam=input_bam,
+                release_tier="public_smoke",
+                commands=["ViewSam"],
+            )
+
+            with self.assertRaisesRegex(
+                SystemExit,
+                "manifest entries require input citation fields",
+            ):
+                compare_real_data.validate_manifest_request(args)
+
+    def test_manifest_request_accepts_valid_release_candidate_shape(self):
+        args = SimpleNamespace(
+            dataset_id="picard-snvq",
+            output_dir=Path("benchmarks/real-data/picard-snvq/evidence"),
+            input_source_url="https://github.com/broadinstitute/picard/blob/fc0b08410d38a10afd08e467dab74bf5e2e71310/testdata/picard/sam/snvq_metrics_test.bam",
+            input_source_commit="fc0b08410d38a10afd08e467dab74bf5e2e71310",
+            input_bam=Path("benchmarks/real-data/picard-snvq/input.bam"),
+            release_tier="release_candidate",
+            commands=sorted(compare_real_data.RELEASE_CANDIDATE_REQUIRED_COMMANDS),
+        )
+
+        compare_real_data.validate_manifest_request(args)
 
     def test_manifest_entry_is_generated_from_passing_evidence(self):
         summary = {
@@ -649,6 +845,113 @@ class CompareRealDataTests(unittest.TestCase):
                 ["turbo-picard"],
                 ["picard"],
                 ["STOP_AFTER=100"],
+                None,
+            )
+
+    def test_compare_command_supports_collect_hs_metrics_inputs_and_options(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            work_root = Path(tmp)
+            input_bam = work_root / "input.bam"
+            reference = work_root / "reference.fa"
+            bait = work_root / "baits.interval_list"
+            target = work_root / "targets.interval_list"
+            for path in (input_bam, reference, bait, target):
+                path.write_bytes(b"fixture")
+            expected = compare_real_data.CommandEvidence(
+                command="CollectHsMetrics",
+                status="PASS",
+                turbo_seconds=1.0,
+                picard_seconds=2.0,
+                speedup=2.0,
+                comparison="stable HsMetrics digest plus per-target/per-base sidecar digests",
+                turbo_artifact="turbo.metrics.txt",
+                picard_artifact="picard.metrics.txt",
+                turbo_digest="abc",
+                picard_digest="abc",
+            )
+
+            with mock.patch.object(
+                compare_real_data,
+                "compare_hs_metrics",
+                return_value=expected,
+            ) as mocked:
+                observed = compare_real_data.compare_command(
+                    "CollectHsMetrics",
+                    input_bam,
+                    work_root,
+                    ["turbo-picard"],
+                    ["picard"],
+                    None,
+                    reference,
+                    input_bam,
+                    [],
+                    bait,
+                    target,
+                    ["MINIMUM_MAPPING_QUALITY=20"],
+                )
+
+            self.assertEqual(observed, expected)
+            mocked.assert_called_once_with(
+                input_bam,
+                work_root / "CollectHsMetrics",
+                ["turbo-picard"],
+                ["picard"],
+                reference,
+                bait,
+                target,
+                ["MINIMUM_MAPPING_QUALITY=20"],
+            )
+
+    def test_compare_command_passes_explicit_markduplicates_options(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            work_root = Path(tmp)
+            input_bam = work_root / "input.bam"
+            input_bam.write_bytes(b"bam")
+            expected = compare_real_data.CommandEvidence(
+                command="MarkDuplicates",
+                status="PASS",
+                turbo_seconds=1.0,
+                picard_seconds=2.0,
+                speedup=2.0,
+                comparison="duplicate-marking semantic digest plus stable metrics digest",
+                turbo_artifact="turbo.bam",
+                picard_artifact="picard.bam",
+                turbo_digest="abc",
+                picard_digest="abc",
+            )
+
+            with mock.patch.object(
+                compare_real_data,
+                "compare_bam_output",
+                return_value=expected,
+            ) as mocked:
+                observed = compare_real_data.compare_command(
+                    "MarkDuplicates",
+                    input_bam,
+                    work_root,
+                    ["turbo-picard"],
+                    ["picard"],
+                    None,
+                    None,
+                    input_bam,
+                    [
+                        "BARCODE_TAG=RX",
+                        "READ_NAME_REGEX=(?:[A-Z]+:){4}([0-9]+)",
+                    ],
+                )
+
+            self.assertEqual(observed, expected)
+            mocked.assert_called_once_with(
+                "MarkDuplicates",
+                input_bam,
+                work_root / "MarkDuplicates",
+                ["turbo-picard"],
+                ["picard"],
+                [
+                    "M={metrics}",
+                    "BARCODE_TAG=RX",
+                    "READ_NAME_REGEX=(?:[A-Z]+:){4}([0-9]+)",
+                ],
                 None,
             )
 
@@ -1211,6 +1514,75 @@ class CompareRealDataTests(unittest.TestCase):
                 compare_real_data.digest_markduplicates_semantics(first),
                 compare_real_data.digest_markduplicates_semantics(second),
             )
+
+    def test_shareable_report_omits_private_paths_hashes_and_arguments(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            report = Path(tmp) / "shareable-trial-report.md"
+            summary = {
+                "parity": "PASS",
+                "turbo_picard_version": "turbo-picard 0.1.11",
+                "picard_version": "Version:3.4.0",
+                "input": {
+                    "path": "/private/clinical/cohort.bam",
+                    "format": "BAM",
+                    "size_bytes": 2 * 1024 * 1024,
+                    "sha256": "private-input-hash",
+                    "source_url": "https://private.example/cohort.bam",
+                    "source_commit": "private-revision",
+                },
+                "commands": [
+                    {
+                        "command": "MarkDuplicates",
+                        "status": "PASS",
+                        "comparison": "duplicate-marking semantic digest",
+                        "turbo_seconds": 1.25,
+                        "picard_seconds": 5.0,
+                        "speedup": 4.0,
+                        "turbo_artifact": "/private/turbo/marked.bam",
+                        "picard_artifact": "/private/picard/marked.bam",
+                    }
+                ],
+            }
+
+            compare_real_data.write_shareable_markdown(report, summary)
+            text = report.read_text(encoding="utf-8")
+
+            self.assertIn("Overall parity: `PASS`", text)
+            self.assertIn("Input shape: `BAM`, about 2.0 MiB", text)
+            self.assertIn("MarkDuplicates", text)
+            self.assertIn("4.00x", text)
+            self.assertNotIn("/private/clinical/cohort.bam", text)
+            self.assertNotIn("private-input-hash", text)
+            self.assertNotIn("private.example", text)
+            self.assertNotIn("private-revision", text)
+            self.assertNotIn("marked.bam", text)
+
+    def test_shareable_report_can_include_explicitly_public_source(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            report = Path(tmp) / "shareable-trial-report.md"
+            summary = {
+                "parity": "PASS",
+                "turbo_picard_version": "turbo-picard 0.1.11",
+                "picard_version": "Version:3.4.0",
+                "input": {
+                    "format": "CRAM",
+                    "size_bytes": 512,
+                    "source_url": "https://example.org/reads/fixture-abc.cram",
+                    "source_commit": "fixture-abc",
+                },
+                "commands": [],
+            }
+
+            compare_real_data.write_shareable_markdown(
+                report,
+                summary,
+                include_public_source=True,
+            )
+            text = report.read_text(encoding="utf-8")
+
+            self.assertIn("https://example.org/reads/fixture-abc.cram", text)
+            self.assertIn("fixture-abc", text)
+            self.assertIn("Input shape: `CRAM`, about 512 bytes", text)
 
 
 if __name__ == "__main__":

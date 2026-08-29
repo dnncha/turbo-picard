@@ -218,6 +218,13 @@ def main():
         default=4,
         help="duplicate-family size for the MarkDuplicates BAM benchmark",
     )
+    parser.add_argument(
+        "--markduplicates-read-name-regex",
+        help=(
+            "pass READ_NAME_REGEX to MarkDuplicates; use null for the bounded "
+            "no-optical plan or omit it to exercise bounded default optical discovery"
+        ),
+    )
     parser.add_argument("--meanqualitybycycle-reads", type=int, default=100_000)
     parser.add_argument("--mergesamfiles-reads", type=int, default=50_000)
     parser.add_argument("--addorreplacereadgroups-reads", type=int, default=100_000)
@@ -284,18 +291,23 @@ def main():
             + ", ".join(sorted(known_labels))
         )
 
+    markduplicates_extra_args = (
+        "--duplicate-family-size",
+        str(args.markduplicates_family_size),
+    )
+    if args.markduplicates_read_name_regex is not None:
+        markduplicates_extra_args += (
+            "--read-name-regex",
+            args.markduplicates_read_name_regex,
+        )
+
     results = [
         run_benchmark(
             label,
             script,
             getattr(args, reads_attr),
             args.repeats,
-            (
-                "--duplicate-family-size",
-                str(args.markduplicates_family_size),
-            )
-            if label == "markduplicates"
-            else (),
+            markduplicates_extra_args if label == "markduplicates" else (),
         )
         for label, script, reads_attr in BENCHMARK_SPECS
         if not selected_labels or label in selected_labels

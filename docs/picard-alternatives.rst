@@ -89,8 +89,8 @@ Measured turbo-picard evidence
 
 The saved public suite compares 32 native ``turbo-picard`` commands with Picard
 3.4.0 and requires each documented parity check to pass before reporting time.
-The current saved results range from ``6.86x`` to ``94.36x`` faster on those
-fixtures, with a ``24.94x`` geometric mean. These are fixture-specific results,
+The current saved results range from ``22.88x`` to ``272.12x`` faster on those
+fixtures, with an ``84.52x`` geometric mean. These are fixture-specific results,
 not a claim that every dataset or option has the same speedup.
 
 For direct QC overlap with riker, the repository contains two small-input smoke

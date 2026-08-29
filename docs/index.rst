@@ -19,7 +19,7 @@ compare the outputs your workflow consumes on representative data, then decide
 whether to use that command.
 
 The saved benchmark suite records ``32/32`` parity-checked command runs, a
-``6.86x`` floor speedup, ``24.94x`` geometric mean speedup, and ``94.36x`` top
+``22.88x`` floor speedup, ``84.52x`` geometric mean speedup, and ``272.12x`` top
 speedup on its documented fixtures. Those results describe the saved commands,
 options, inputs, and machine profile; they are not a prediction for another
 workflow. See :doc:`benchmarks` and :doc:`parity` before using them in an
@@ -50,6 +50,13 @@ Start here
 
       Follow the shortest path from first interest to trial, review, and team
       rollout.
+
+   .. grid-item-card:: Coding agent
+      :link: agentic-coders
+      :link-type: doc
+
+      Make a machine-readable tool decision, preserve the workflow boundary,
+      and emit a reviewable trial contract.
 
    .. grid-item-card:: Use cases
       :link: use-cases
@@ -107,6 +114,7 @@ Start here
    :caption: User Guide
 
    quickstart
+   agentic-coders
    is-this-for-you
    first-command
    evaluation-playbook

@@ -32,6 +32,7 @@ fn sam_config(
         optical_duplicate_pixel_distance: None,
         compression_level: None,
         reference_sequence: None,
+        tmp_dir: None,
     }
 }
 
