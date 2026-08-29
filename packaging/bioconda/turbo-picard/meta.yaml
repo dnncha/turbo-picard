@@ -41,6 +41,7 @@ test:
   commands:
     - turbo-picard --version
     - turbo-picard AccelerationStatus --help
+    - turbo-picard capabilities --help
     - turbo-picard doctor --help
     - turbo-picard explain --help
     - turbo-picard trial --help

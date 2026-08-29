@@ -364,7 +364,7 @@ jobs:
           create-args: >-
             -c conda-forge
             -c bioconda
-            picard
+            picard=3.4.0
             samtools
 
       - name: Test workspace
@@ -373,6 +373,7 @@ jobs:
       - name: Verify Picard parity
         run: |
           ./tools/verify_basic_accelerationstatus_parity.sh
+          ./tools/verify_basic_capabilities_parity.sh
           ./tools/verify_basic_doctor_parity.sh
           ./tools/verify_basic_explain_parity.sh
           ./tools/verify_basic_trial_parity.sh

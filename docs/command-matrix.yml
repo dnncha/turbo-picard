@@ -60,6 +60,11 @@ commands:
     status: fallback-only
     native_scope: "Delegated to upstream Picard 3.4.0. turbo-picard runs the native accelerated implementation when one exists; otherwise it transparently forwards to upstream Picard when fallback is configured or auto-discovered."
     fallback_scope: Transparent upstream Picard 3.4.0 delegation. No native fast path yet.
+  - name: capabilities
+    status: native
+    parity_script: tools/verify_basic_capabilities_parity.sh
+    native_scope: "turbo-picard utility command that emits the complete schema-versioned native/fallback decision surface and embeds the checked-in parity-gated benchmark evidence for coding agents, workflow managers, and CI policies."
+    fallback_scope: This is not an upstream Picard command and does not delegate to fallback.
   - name: CheckDuplicateMarking
     status: fallback-only
     native_scope: "Delegated to upstream Picard 3.4.0. turbo-picard runs the native accelerated implementation when one exists; otherwise it transparently forwards to upstream Picard when fallback is configured or auto-discovered."
