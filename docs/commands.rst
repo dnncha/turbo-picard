@@ -38,6 +38,7 @@ machine-readable matrix below for the exact accelerated versus delegated split.
    picard NormalizeFasta I=reference.fa O=normalized.fa LINE_LENGTH=100
    picard BedToIntervalList I=targets.bed O=targets.interval_list SD=reference.dict
    turbo-picard AccelerationStatus
+   turbo-picard capabilities --json
    turbo-picard doctor
    turbo-picard explain MarkDuplicates I=input.bam O=marked.bam M=metrics.txt
    turbo-picard explain --json MarkDuplicates I=input.bam O=marked.bam M=metrics.txt
@@ -100,10 +101,12 @@ The canonical command matrix lives in ``docs/command-matrix.yml``. It records
 the current status, parity script, native scope, and fallback scope for each
 Picard 3.4.0 command plus turbo-only utilities such as
 ``AccelerationStatus``, ``doctor``, ``explain``, and ``trial``.
+The ``capabilities`` utility combines that matrix with the checked-in benchmark
+evidence in one schema-versioned response for coding agents and CI policies.
 
 Current matrix status summary:
 
-* ``36 accelerated`` commands with native or partial-native Rust implementations
+* ``37 accelerated`` commands with native or partial-native Rust implementations
 * ``89 delegated`` Picard 3.4.0 commands forwarded to upstream Picard
 
 Accelerated command status:
@@ -112,6 +115,7 @@ Accelerated command status:
 * ``AccelerationStatus``: ``native``
 * ``BedToIntervalList``: ``native``
 * ``BuildBamIndex``: ``native``
+* ``capabilities``: ``native``
 * ``CleanSam``: ``partial-native``
 * ``CollectAlignmentSummaryMetrics``: ``partial-native``
 * ``CollectBaseDistributionByCycle``: ``partial-native``

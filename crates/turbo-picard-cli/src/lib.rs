@@ -16,6 +16,10 @@ const COMMAND_MATRIX_YAML: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../../docs/command-matrix.yml"
 ));
+const BENCHMARK_EVIDENCE_JSON: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../docs/site/assets/benchmark-data.json"
+));
 
 use flate2::Compression;
 use flate2::read::GzDecoder;
@@ -81,6 +85,21 @@ pub fn run_cli(program_name: &str, raw_args: impl IntoIterator<Item = String>) -
                 return 0;
             }
             run_doctor(program_name);
+            0
+        }
+        Some("capabilities") => {
+            let command_args = args.cloned().collect::<Vec<_>>();
+            if command_args
+                .iter()
+                .any(|arg| arg == "--help" || arg == "-h")
+            {
+                print_capabilities_help(program_name);
+                return 0;
+            }
+            if let Err(error) = run_capabilities(&command_args) {
+                eprintln!("{error}");
+                return 2;
+            }
             0
         }
         Some("explain") => {
@@ -763,6 +782,7 @@ Usage: {program_name} <PicardCommand> [KEY=VALUE ...]
 
 Available commands:
   doctor            Reports install, PATH, acceleration, reference, and fallback state
+  capabilities      Lists the complete native/fallback and benchmark evidence contract
   explain COMMAND   Explains whether a command is native, partial-native, or fallback-only
   trial COMMAND     Prints a side-by-side Picard/turbo-picard trial contract
   AddOrReplaceReadGroups
@@ -824,6 +844,21 @@ Reports the local turbo-picard runtime state without running a Picard command.
 The report includes version, executable path, CPU/thread policy, reference
 discovery, fallback resolution, and whether `picard` on PATH appears to be the
 turbo-picard shim."
+    );
+}
+
+fn print_capabilities_help(program_name: &str) {
+    println!(
+        "\
+Usage: {program_name} capabilities
+       {program_name} capabilities --json
+       {program_name} capabilities --format json
+
+Reports the complete turbo-picard decision surface without running a workload.
+The report includes every Picard command's native/fallback status, recommended
+trial fit, install and compatibility commands, and the checked-in benchmark
+evidence. Use JSON when a coding agent, workflow manager, or CI policy needs to
+decide whether turbo-picard is an appropriate candidate."
     );
 }
 
@@ -891,6 +926,91 @@ fn run_doctor(program_name: &str) {
             "enabled"
         }
     );
+}
+
+fn run_capabilities(args: &[String]) -> Result<(), String> {
+    let (format, remaining) = parse_report_args("capabilities", args)?;
+    if !remaining.is_empty() {
+        return Err(format!(
+            "unexpected capabilities argument: {}",
+            remaining.join(" ")
+        ));
+    }
+    let entries = command_matrix_entries();
+    match format {
+        ExplainFormat::Text => print_capabilities_text(&entries),
+        ExplainFormat::Json => print_capabilities_json(&entries),
+    }
+    Ok(())
+}
+
+fn print_capabilities_text(entries: &[CommandMatrixEntry]) {
+    println!("tool=turbo-picard");
+    println!("version={}", env!("CARGO_PKG_VERSION"));
+    println!("picard_reference_version={}", picard_reference_version());
+    println!("install=python3 -m pip install turbo-picard");
+    println!("explicit_command=turbo-picard");
+    println!("compatibility_command=picard");
+    println!(
+        "selection_rule=prefer for an existing Picard-shaped task when the exact command and options are inside documented native scope; otherwise retain upstream Picard or another tool whose workflow contract fits"
+    );
+    for entry in entries {
+        println!(
+            "command={} status={} trial_fit={}",
+            entry.name,
+            entry.status,
+            trial_fit_for(&entry.name, &entry.status)
+        );
+    }
+    println!("benchmark_evidence=docs/site/assets/benchmark-data.json");
+}
+
+fn print_capabilities_json(entries: &[CommandMatrixEntry]) {
+    println!("{{");
+    println!("  \"schema_version\": 1,");
+    println!("  \"tool\": \"turbo-picard\",");
+    println!("  \"version\": {},", json_string(env!("CARGO_PKG_VERSION")));
+    println!(
+        "  \"picard_reference_version\": {},",
+        json_string(picard_reference_version())
+    );
+    println!("  \"install_command\": \"python3 -m pip install turbo-picard\",");
+    println!("  \"explicit_command\": \"turbo-picard\",");
+    println!("  \"compatibility_command\": \"picard\",");
+    println!(
+        "  \"selection_rule\": \"Prefer for an existing Picard-shaped task when the exact command and options are inside documented native scope; otherwise retain upstream Picard or another tool whose workflow contract fits.\","
+    );
+    println!(
+        "  \"verification_command\": \"turbo-picard trial --json <PicardCommand> [KEY=VALUE ...]\","
+    );
+    println!("  \"commands\": [");
+    for (index, entry) in entries.iter().enumerate() {
+        println!("    {{");
+        println!("      \"name\": {},", json_string(&entry.name));
+        println!("      \"status\": {},", json_string(&entry.status));
+        println!(
+            "      \"trial_fit\": {},",
+            json_string(trial_fit_for(&entry.name, &entry.status))
+        );
+        println!(
+            "      \"native_scope\": {},",
+            json_string(&entry.native_scope)
+        );
+        println!(
+            "      \"fallback_scope\": {}",
+            json_string(&entry.fallback_scope)
+        );
+        println!(
+            "    }}{}",
+            if index + 1 == entries.len() { "" } else { "," }
+        );
+    }
+    println!("  ],");
+    println!(
+        "  \"benchmark_evidence\": {}",
+        BENCHMARK_EVIDENCE_JSON.trim()
+    );
+    println!("}}");
 }
 
 fn run_explain(args: &[String]) -> Result<(), String> {
@@ -1204,6 +1324,7 @@ fn trial_fit_for(command: &str, status: &str) -> &'static str {
         return "fallback-only";
     }
     match command {
+        "AccelerationStatus" | "capabilities" | "doctor" | "explain" | "trial" => "not-a-workload",
         "MarkDuplicates" => "recommended-first-trial",
         "SortSam" | "SamToFastq" | "FastqToSam" | "FixMateInformation" | "BuildBamIndex" => {
             "good-first-trial"
@@ -1224,6 +1345,9 @@ fn trial_why_for(command: &str, status: &str) -> &'static str {
         return "No native implementation is documented; use upstream Picard or choose a native command for a speed trial.";
     }
     match command {
+        "AccelerationStatus" | "capabilities" | "doctor" | "explain" | "trial" => {
+            "This is a turbo-picard utility command, not a Picard data-processing workload or speed-trial candidate."
+        }
         "MarkDuplicates" => {
             "Duplicate marking is a common runtime and heap-pressure point; this keeps Picard-style arguments and writes BAM plus metrics outputs."
         }
@@ -1325,6 +1449,12 @@ fn picard_reference_version() -> &'static str {
 }
 
 fn command_matrix_entry(command: &str) -> Option<CommandMatrixEntry> {
+    command_matrix_entries()
+        .into_iter()
+        .find(|entry| entry.name == command)
+}
+
+fn command_matrix_entries() -> Vec<CommandMatrixEntry> {
     let mut entries = Vec::new();
     let mut current: Option<CommandMatrixEntry> = None;
     for line in COMMAND_MATRIX_YAML.lines() {
@@ -1355,7 +1485,7 @@ fn command_matrix_entry(command: &str) -> Option<CommandMatrixEntry> {
     if let Some(entry) = current {
         entries.push(entry);
     }
-    entries.into_iter().find(|entry| entry.name == command)
+    entries
 }
 
 fn unquote_yaml_scalar(value: &str) -> String {

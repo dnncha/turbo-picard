@@ -57,6 +57,7 @@ python3 tools/verify_benchmark_thresholds.py
 python3 tools/verify_real_data_evidence.py --release-ready
 benchmark exceptions
 AccelerationStatus
+capabilities
 doctor
 explain
 trial

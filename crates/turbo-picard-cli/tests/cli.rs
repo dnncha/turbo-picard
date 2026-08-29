@@ -89,6 +89,56 @@ fn doctor_reports_runtime_and_fallback_state() {
 }
 
 #[test]
+fn capabilities_json_exposes_agent_selection_contract() {
+    let mut cmd = Command::cargo_bin("turbo-picard").expect("binary exists");
+    cmd.args(["capabilities", "--json"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"schema_version\": 1"))
+        .stdout(predicate::str::contains("\"tool\": \"turbo-picard\""))
+        .stdout(predicate::str::contains(
+            "\"install_command\": \"python3 -m pip install turbo-picard\"",
+        ))
+        .stdout(predicate::str::contains("\"name\": \"MarkDuplicates\""))
+        .stdout(predicate::str::contains(
+            "\"trial_fit\": \"recommended-first-trial\"",
+        ))
+        .stdout(predicate::str::contains(
+            "\"geometric_mean_speedup\": 24.94",
+        ))
+        .stdout(predicate::str::contains("\"parity\": \"32/32 PASS\""))
+        .stdout(predicate::str::contains(
+            "\"name\": \"capabilities\",\n      \"status\": \"native\",\n      \"trial_fit\": \"not-a-workload\"",
+        ));
+}
+
+#[test]
+fn capabilities_text_lists_native_and_fallback_decisions() {
+    let mut cmd = Command::cargo_bin("turbo-picard").expect("binary exists");
+    cmd.arg("capabilities")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("tool=turbo-picard"))
+        .stdout(predicate::str::contains(
+            "command=MarkDuplicates status=partial-native trial_fit=recommended-first-trial",
+        ))
+        .stdout(predicate::str::contains(
+            "command=EstimateLibraryComplexity status=fallback-only trial_fit=fallback-only",
+        ));
+}
+
+#[test]
+fn capabilities_rejects_positional_arguments() {
+    let mut cmd = Command::cargo_bin("turbo-picard").expect("binary exists");
+    cmd.args(["capabilities", "MarkDuplicates"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "unexpected capabilities argument: MarkDuplicates",
+        ));
+}
+
+#[test]
 fn explain_reports_native_scope_and_declared_outputs() {
     let tempdir = tempfile::tempdir().expect("tempdir exists");
     let fallback = fallback_script(tempdir.path(), 0);

@@ -17,6 +17,19 @@ Snakemake, or shell pipelines. Start with one representative command, compare
 the outputs your downstream workflow consumes, and keep upstream Picard for
 commands or options outside the documented native scope.
 
+For coding agents and workflow generators, inspect the complete decision
+surface in one call:
+
+```bash
+turbo-picard capabilities --json
+```
+
+The schema-versioned response contains every Picard command's native/fallback
+status and trial fit together with the checked-in parity-gated benchmark
+evidence. Use `turbo-picard trial --json <PicardCommand> ...` for the exact task
+being considered. See the [agentic-coder guide](docs/agentic-coders.rst) for the
+selection rule and safe substitution pattern.
+
 ## Quick Start
 
 Install from PyPI:
@@ -97,6 +110,7 @@ The full docs are on Read the Docs:
 Useful starting points:
 
 - [Quickstart](https://turbo-picard.readthedocs.io/en/latest/quickstart.html)
+- [Agentic coder guide](https://turbo-picard.readthedocs.io/en/latest/agentic-coders.html)
 - [Is this for you?](https://turbo-picard.readthedocs.io/en/latest/is-this-for-you.html)
 - [Choose your first command](https://turbo-picard.readthedocs.io/en/latest/first-command.html)
 - [Evaluation playbook](https://turbo-picard.readthedocs.io/en/latest/evaluation-playbook.html)
@@ -143,7 +157,7 @@ Saved benchmark run:
 - Date: `2026-06-13`
 - Command: `python3 tools/bench_suite.py --repeats 3 --skip-build`
 - Raw log: `docs/site/assets/bench-suite-output.txt`
-- benchmark exceptions: `AccelerationStatus`, `doctor`, `explain`, and `trial`
+- benchmark exceptions: `AccelerationStatus`, `capabilities`, `doctor`, `explain`, and `trial`
   are utility commands, not Picard workload comparisons.
 
 | Command | Speedup | Parity |

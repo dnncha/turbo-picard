@@ -51,6 +51,13 @@ Start here
       Follow the shortest path from first interest to trial, review, and team
       rollout.
 
+   .. grid-item-card:: Coding agent
+      :link: agentic-coders
+      :link-type: doc
+
+      Make a machine-readable tool decision, preserve the workflow boundary,
+      and emit a reviewable trial contract.
+
    .. grid-item-card:: Use cases
       :link: use-cases
       :link-type: doc
@@ -107,6 +114,7 @@ Start here
    :caption: User Guide
 
    quickstart
+   agentic-coders
    is-this-for-you
    first-command
    evaluation-playbook

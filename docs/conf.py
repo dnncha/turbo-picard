@@ -29,6 +29,7 @@ html_title = "turbo-picard"
 html_baseurl = "https://turbo-picard.readthedocs.io/en/latest/"
 html_logo = None
 html_favicon = None
+html_extra_path = ["llms.txt"]
 
 html_theme_options = {
     "sidebar_hide_name": False,
