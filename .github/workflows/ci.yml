@@ -280,7 +280,7 @@ jobs:
           create-args: >-
             -c conda-forge
             -c bioconda
-            picard
+            picard=3.4.0
             samtools
 
       - name: Test workspace
