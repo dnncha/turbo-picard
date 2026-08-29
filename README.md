@@ -231,9 +231,9 @@ A command-level speedup is not a universal replacement claim. Keep upstream Pica
 ## Packaging Status
 
 The latest provider-verified PyPI release is `0.1.11`. It publishes Linux
-x86_64 and macOS Apple Silicon wheels plus a source distribution. The `0.1.12`
-release source is prepared; the matching tag, package, container, and provider
-checks remain separate release gates.
+x86_64 and macOS Apple Silicon wheels plus a source distribution.
+The current source release is `0.1.12`; the matching tag, package, container,
+and provider checks remain separate release gates.
 
 Read the [release notes](CHANGELOG.md) for the release scope and evidence
 boundaries.
