@@ -38,12 +38,12 @@ as Python wheel scripts:
 
    python3 -m pip install turbo-picard
 
-The latest published PyPI release is ``0.1.11``. It publishes Linux x86_64 and
-macOS Apple Silicon wheels plus a source distribution. The current source
-release is ``0.1.12`` and remains a release candidate until the matching tag,
-package, container, and evidence checks pass. For Linux clusters and shared
-environments, Bioconda is the cleaner target once the recipe is accepted.
-The candidate scope and evidence boundaries are summarized in
+The latest provider-verified PyPI release is ``0.1.11``. It publishes Linux
+x86_64 and macOS Apple Silicon wheels plus a source distribution. The
+``0.1.12`` release source is prepared; the matching tag, package, container,
+and provider checks remain separate release gates. For Linux clusters and
+shared environments, Bioconda is the cleaner target once the recipe is
+accepted. The release scope and evidence boundaries are summarized in
 ``CHANGELOG.md``.
 
 The current wheel exposes both commands from the CLI crate:
