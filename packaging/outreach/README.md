@@ -37,12 +37,11 @@ Ground rules:
 
 Current facts to keep consistent:
 
-- Live package: `turbo-picard` 0.1.11
-- Prepared release source: 0.1.12
+- Live package and release source: `turbo-picard` 0.1.12
 - Install: `python3 -m pip install turbo-picard`
-- Current PyPI files: Linux x86_64 wheel, macOS Apple Silicon wheel, and source distribution
+- Current PyPI files: Linux x86_64 and ARM64 wheels, macOS Intel and Apple Silicon wheels, and source distribution
 - Bioconda is not yet a current `0.1.12` install path: the existing open PR
-  #65922 covers older `0.1.10` metadata. Use PyPI `0.1.11` or the published
+  #65922 covers `0.1.11` metadata. Use PyPI `0.1.12` or the published
   container until the exact `0.1.12` tag, archive, review, and publication are
   complete.
 - Trial helper: `turbo-picard trial <PicardCommand> ...`

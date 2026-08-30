@@ -38,13 +38,12 @@ as Python wheel scripts:
 
    python3 -m pip install turbo-picard
 
-The latest provider-verified PyPI release is ``0.1.11``. It publishes Linux
-x86_64 and macOS Apple Silicon wheels plus a source distribution. The
-``0.1.12`` release source is prepared; the matching tag, package, container,
-and provider checks remain separate release gates. For Linux clusters and
-shared environments, Bioconda is the cleaner target once the recipe is
-accepted. The release scope and evidence boundaries are summarized in
-``CHANGELOG.md``.
+The latest provider-verified PyPI release is ``0.1.12``. It publishes Linux
+x86_64 and ARM64 wheels, macOS Intel and Apple Silicon wheels, and a source
+distribution. The matching GitHub release, PyPI package, and GHCR image have
+passed their provider checks. For Linux clusters and shared environments,
+Bioconda is the cleaner target once the recipe is accepted. The release scope
+and evidence boundaries are summarized in ``CHANGELOG.md``.
 
 The current wheel exposes both commands from the CLI crate:
 
@@ -122,9 +121,9 @@ on the package index.
 Container image
 ---------------
 
-The published ``0.1.11`` image is available at
-``ghcr.io/dnncha/turbo-picard:0.1.11``. It resolves to
-``sha256:a48b0208d47245e050bc941ae84ff510a669e74930cd16bc42b04f8c19f0abec``.
+The published ``0.1.12`` image is available at
+``ghcr.io/dnncha/turbo-picard:0.1.12``. It resolves to
+``sha256:0edcfd38a2ada2b3f83279ff27c0f3e3214312669f16bf305de87de89c681baf``.
 It contains both ``turbo-picard`` and the ``picard`` shim, with
 ``turbo-picard`` as the container entrypoint. Use the release tag or digest for
 side-by-side nf-core profiles or cloud jobs where you want a pinned binary
@@ -132,7 +131,7 @@ without a Conda solve.
 
 .. code-block:: bash
 
-   docker run --rm ghcr.io/dnncha/turbo-picard:0.1.11 --version
+   docker run --rm ghcr.io/dnncha/turbo-picard:0.1.12 --version
 
 The container publication workflow supports manual dispatch for operational
 convenience, but it fails before GHCR login unless the selected ref is the

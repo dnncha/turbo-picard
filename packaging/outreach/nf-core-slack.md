@@ -26,7 +26,7 @@ I am trying to work out which nf-core pipeline/module would make the best first
 real-world test case. Any suggestions?
 
 Packaging note: PyPI has Linux x86_64 and macOS Apple Silicon wheels plus a
-source tarball. The existing Bioconda PR (#65922) covers older `0.1.10`
+source tarball. The existing Bioconda PR (#65922) covers `0.1.11`
 metadata, so it is not yet a current `0.1.12` install path. Use the published
 PyPI package or container until the new candidate is tagged, reviewed, and
 published.

@@ -9,6 +9,7 @@ import sys
 
 ROOT = Path(__file__).resolve().parents[1]
 DOCKER_WORKFLOW = ROOT / ".github" / "workflows" / "publish-docker.yml"
+PYPI_WORKFLOW = ROOT / ".github" / "workflows" / "publish-pypi.yml"
 
 
 def validate_docker_publish_workflow(root: Path = ROOT) -> list[str]:
@@ -52,13 +53,53 @@ def validate_docker_publish_workflow(root: Path = ROOT) -> list[str]:
     return errors
 
 
+def validate_pypi_publish_workflow(root: Path = ROOT) -> list[str]:
+    path = root / ".github" / "workflows" / "publish-pypi.yml"
+    if not path.is_file():
+        return ["PyPI publish workflow is missing"]
+    text = path.read_text(encoding="utf-8")
+    publish_marker = "\n  publish:\n"
+    if publish_marker not in text:
+        return ["PyPI publish workflow is missing its publish job"]
+    publish = text.split(publish_marker, 1)[1]
+    errors: list[str] = []
+    required = (
+        (
+            "- name: Download wheel distributions",
+            "PyPI publish job must download wheel artifacts explicitly",
+        ),
+        (
+            "pattern: wheels-*",
+            "PyPI publish job must restrict wheel downloads to wheels-* artifacts",
+        ),
+        (
+            "- name: Download source distribution",
+            "PyPI publish job must download the source distribution explicitly",
+        ),
+        (
+            "name: sdist",
+            "PyPI publish job must select only the sdist artifact",
+        ),
+        (
+            "pypa/gh-action-pypi-publish@release/v1",
+            "PyPI publish job must use the guarded publishing action",
+        ),
+    )
+    for needle, message in required:
+        if needle not in publish:
+            errors.append(message)
+    if "name: turbo-picard-release-manifest" in publish:
+        errors.append("PyPI publish job must not download the release manifest into dist")
+    return errors
+
+
 def main() -> int:
-    errors = validate_docker_publish_workflow()
+    errors = validate_docker_publish_workflow() + validate_pypi_publish_workflow()
     if errors:
         for error in errors:
             print(error, file=sys.stderr)
         return 1
-    print("Docker publish workflow is fail-closed on the exact release tag")
+    print("Publishing workflows are fail-closed on exact release artifacts")
     return 0
 
 

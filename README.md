@@ -41,7 +41,7 @@ python3 -m pip install turbo-picard
 For a containerized trial, use the published release image:
 
 ```bash
-docker run --rm ghcr.io/dnncha/turbo-picard:0.1.11 --version
+docker run --rm ghcr.io/dnncha/turbo-picard:0.1.12 --version
 ```
 
 Installing from PyPI currently gives you both commands:
@@ -230,10 +230,10 @@ A command-level speedup is not a universal replacement claim. Keep upstream Pica
 
 ## Packaging Status
 
-The latest provider-verified PyPI release is `0.1.11`. It publishes Linux
-x86_64 and macOS Apple Silicon wheels plus a source distribution.
-The current source release is `0.1.12`; the matching tag, package, container,
-and provider checks remain separate release gates.
+The latest provider-verified PyPI release is `0.1.12`. It publishes Linux
+x86_64 and ARM64 wheels, macOS Intel and Apple Silicon wheels, and a source
+distribution. The current source release is `0.1.12`; the matching GitHub
+release, PyPI package, and GHCR image have passed their provider checks.
 
 Read the [release notes](CHANGELOG.md) for the release scope and evidence
 boundaries.
