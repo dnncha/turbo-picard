@@ -224,11 +224,18 @@ jobs:
       id-token: write
 
     steps:
-      - name: Download distributions
+      - name: Download wheel distributions
         uses: actions/download-artifact@v4
         with:
+          pattern: wheels-*
           path: dist
           merge-multiple: true
+
+      - name: Download source distribution
+        uses: actions/download-artifact@v4
+        with:
+          name: sdist
+          path: dist
 
       - name: Publish distributions
         uses: pypa/gh-action-pypi-publish@release/v1

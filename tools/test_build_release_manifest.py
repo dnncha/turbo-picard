@@ -83,7 +83,90 @@ class BuildReleaseManifestTests(unittest.TestCase):
         self.assertEqual(manifest["workspace_version"], "0.1.12")
         self.assertTrue(manifest["source"]["release_source_ready"])
         self.assertEqual(manifest["artifacts"][0]["filename"], "turbo_picard-0.1.12.tar.gz")
+        self.assertEqual(manifest["source"]["ignored_generated_path_count"], 0)
         self.assertNotIn("/private", json.dumps(manifest))
+
+    def test_ignores_generated_distributions_but_not_source_changes(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "Cargo.toml").write_text(
+                '[workspace.package]\nversion = "0.1.12"\n',
+                encoding="utf-8",
+            )
+            dist = root / "dist"
+            dist.mkdir()
+            (dist / "turbo_picard-0.1.12.tar.gz").write_bytes(b"candidate")
+            commit = "b" * 40
+            responses = {
+                ("status", "--porcelain"): (
+                    0,
+                    ["?? dist/turbo_picard-0.1.12.tar.gz", " M README.md"],
+                ),
+                ("rev-parse", "HEAD"): (0, [commit]),
+                ("rev-parse", "--abbrev-ref", "HEAD"): (0, ["main"]),
+                ("rev-list", "-n", "1", "v0.1.12"): (0, [commit]),
+                ("ls-remote", "--tags", "origin", "v0.1.12*"): (
+                    0,
+                    [commit + "\trefs/tags/v0.1.12"],
+                ),
+            }
+
+            def fake_git(args: list[str], _root: Path) -> tuple[int, list[str]]:
+                return responses[tuple(args)]
+
+            manifest = build_release_manifest.build_manifest(
+                root=root,
+                dist=dist,
+                git_runner=fake_git,
+                artifact_validator=lambda _dist, _root: [],
+            )
+
+        self.assertFalse(manifest["source"]["worktree_clean"])
+        self.assertEqual(manifest["source"]["changed_path_count"], 1)
+        self.assertEqual(manifest["source"]["ignored_generated_path_count"], 1)
+        self.assertEqual(
+            manifest["source"]["blockers"],
+            ["worktree has uncommitted changes"],
+        )
+
+    def test_generated_distributions_do_not_dirty_source_state(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "Cargo.toml").write_text(
+                '[workspace.package]\nversion = "0.1.12"\n',
+                encoding="utf-8",
+            )
+            dist = root / "dist"
+            dist.mkdir()
+            commit = "c" * 40
+            responses = {
+                ("status", "--porcelain"): (
+                    0,
+                    ["?? dist/turbo_picard-0.1.12.tar.gz"],
+                ),
+                ("rev-parse", "HEAD"): (0, [commit]),
+                ("rev-parse", "--abbrev-ref", "HEAD"): (0, ["main"]),
+                ("rev-list", "-n", "1", "v0.1.12"): (0, [commit]),
+                ("ls-remote", "--tags", "origin", "v0.1.12*"): (
+                    0,
+                    [commit + "\trefs/tags/v0.1.12"],
+                ),
+            }
+
+            def fake_git(args: list[str], _root: Path) -> tuple[int, list[str]]:
+                return responses[tuple(args)]
+
+            source = build_release_manifest.collect_source_state(
+                root,
+                git_runner=fake_git,
+                ignored_generated_paths=(dist,),
+            )
+
+        self.assertTrue(source["worktree_clean"])
+        self.assertTrue(source["release_source_ready"])
+        self.assertEqual(source["changed_path_count"], 0)
+        self.assertEqual(source["ignored_generated_path_count"], 1)
+        self.assertEqual(source["blockers"], [])
 
 
 if __name__ == "__main__":

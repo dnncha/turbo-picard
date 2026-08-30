@@ -42,12 +42,41 @@ jobs:
 """
 
 
+VALID_PYPI_WORKFLOW = """
+jobs:
+  publish:
+    steps:
+      - name: Download wheel distributions
+        uses: actions/download-artifact@v4
+        with:
+          pattern: wheels-*
+          path: dist
+          merge-multiple: true
+      - name: Download source distribution
+        uses: actions/download-artifact@v4
+        with:
+          name: sdist
+          path: dist
+      - name: Publish distributions
+        uses: pypa/gh-action-pypi-publish@release/v1
+"""
+
+
 class VerifyPublishWorkflowsTests(unittest.TestCase):
     def write_workflow(self, text: str) -> Path:
         temp = tempfile.TemporaryDirectory()
         self.addCleanup(temp.cleanup)
         root = Path(temp.name)
         path = root / ".github" / "workflows" / "publish-docker.yml"
+        path.parent.mkdir(parents=True)
+        path.write_text(text, encoding="utf-8")
+        return root
+
+    def write_pypi_workflow(self, text: str) -> Path:
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        root = Path(temp.name)
+        path = root / ".github" / "workflows" / "publish-pypi.yml"
         path.parent.mkdir(parents=True)
         path.write_text(text, encoding="utf-8")
         return root
@@ -73,6 +102,30 @@ class VerifyPublishWorkflowsTests(unittest.TestCase):
         errors = verify_publish_workflows.validate_docker_publish_workflow(root)
         self.assertIn(
             "Docker tag validation must not be conditional on an already-tagged ref",
+            errors,
+        )
+
+    def test_accepts_explicit_pypi_distribution_artifacts(self) -> None:
+        root = self.write_pypi_workflow(VALID_PYPI_WORKFLOW)
+        self.assertEqual([], verify_publish_workflows.validate_pypi_publish_workflow(root))
+
+    def test_rejects_unrestricted_pypi_artifact_download(self) -> None:
+        root = self.write_pypi_workflow(
+            VALID_PYPI_WORKFLOW.replace("          pattern: wheels-*\n", "")
+        )
+        errors = verify_publish_workflows.validate_pypi_publish_workflow(root)
+        self.assertIn(
+            "PyPI publish job must restrict wheel downloads to wheels-* artifacts",
+            errors,
+        )
+
+    def test_rejects_release_manifest_in_pypi_dist(self) -> None:
+        root = self.write_pypi_workflow(
+            VALID_PYPI_WORKFLOW.replace("          name: sdist\n", "          name: turbo-picard-release-manifest\n")
+        )
+        errors = verify_publish_workflows.validate_pypi_publish_workflow(root)
+        self.assertIn(
+            "PyPI publish job must not download the release manifest into dist",
             errors,
         )
 

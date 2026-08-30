@@ -77,10 +77,29 @@ def collect_source_state(
     root: Path = ROOT,
     *,
     git_runner: GitRunner = run_git,
+    ignored_generated_paths: tuple[Path, ...] = (),
 ) -> dict[str, Any]:
     version = workspace_version(root)
     tag = f"v{version}"
-    status, status_lines = git_runner(["status", "--porcelain"], root)
+    status, raw_status_lines = git_runner(["status", "--porcelain"], root)
+    ignored_prefixes: list[str] = []
+    for path in ignored_generated_paths:
+        try:
+            relative = path.resolve().relative_to(root.resolve())
+        except ValueError:
+            continue
+        ignored_prefixes.append(relative.as_posix().rstrip("/"))
+
+    def is_generated_status(line: str) -> bool:
+        payload = line[3:] if len(line) > 3 else line
+        paths = payload.split(" -> ")
+        return bool(paths) and all(
+            any(path == prefix or path.startswith(f"{prefix}/") for prefix in ignored_prefixes)
+            for path in paths
+        )
+
+    ignored_status_lines = [line for line in raw_status_lines if is_generated_status(line)]
+    status_lines = [line for line in raw_status_lines if not is_generated_status(line)]
     head_status, head_lines = git_runner(["rev-parse", "HEAD"], root)
     branch_status, branch_lines = git_runner(
         ["rev-parse", "--abbrev-ref", "HEAD"], root
@@ -124,6 +143,7 @@ def collect_source_state(
         "head_commit": head,
         "worktree_clean": worktree_clean,
         "changed_path_count": len(status_lines) if status == 0 else None,
+        "ignored_generated_path_count": len(ignored_status_lines) if status == 0 else None,
         "release_tag": tag,
         "local_tag_commit": local_tag_commit,
         "origin_tag_commit": origin_tag_commit,
@@ -237,7 +257,11 @@ def build_manifest(
     artifact_errors = artifact_validator(dist, root)
     if artifact_errors:
         raise ValueError("release artifact validation failed: " + "; ".join(artifact_errors))
-    source = collect_source_state(root, git_runner=git_runner)
+    source = collect_source_state(
+        root,
+        git_runner=git_runner,
+        ignored_generated_paths=(dist,),
+    )
     manifest: dict[str, Any] = {
         "schema_version": 1,
         "observed_at_utc": datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
