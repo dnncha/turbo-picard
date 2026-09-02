@@ -1,0 +1,114 @@
+se,
+        barcode,
+    }
+}
+
+fn fast_single_duplicate_key(record: &FastPairRecord) -> BamDuplicateKey {
+    BamDuplicateKey {
+        library_id: record.library_id,
+        reference_id: record.reference_id,
+        position: record.position,
+        mate_reference_id: record.mate_reference_id,
+        mate_position: record.mate_position,
+        template_length: record.template_length,
+        reverse_strand: false,
+        barcode: record.barcode.clone(),
+    }
+}
+
+struct BamRecordReadState<'a> {
+    records: &'a mut Vec<bam::Record>,
+    read_ends: &'a mut Vec<ReadEndMetadata>,
+    eligible_indices: &'a mut Vec<usize>,
+    barcode_registry: &'a mut BarcodeRegistry,
+    config: &'a MarkDuplicatesConfig,
+    summary: &'a mut MarkDuplicatesSummary,
+    compact_plan: bool,
+}
+
+impl BamRecordReadState<'_> {
+    fn read<R: bam::Read>(
+        &mut self,
+        reader: &mut R,
+        library_lookup: &LibraryLookup,
+        library_registry: &mut LibraryRegistry,
+    ) -> Result<(), MarkDuplicatesError> {
+        for result in reader.records() {
+            let mut record = result?;
+            let flag = record.flags() & !DUPLICATE_FLAG;
+            if record.flags() != flag {
+                record.set_flags(flag);
+            }
+            let library_id = record_library_id(&record, library_lookup);
+            let record_index = self.records.len();
+
+            if flag & UNMAPPED_FLAG != 0 {
+                self.summary.unmapped_records += 1;
+                library_registry.summary_mut(library_id).unmapped_records += 1;
+                self.read_ends.push(ReadEndMetadata {
+                    library_id,
+                    unclipped_position: 0,
+                    quality_score: UNCOMPUTED_QUALITY_SCORE,
+                    barcode_id: None,
+                });
+                self.store_record(record);
+                continue;
+            }
+            if flag & SECONDARY_OR_SUPPLEMENTARY_FLAGS != 0 {
+                self.summary.secondary_or_supplementary_records += 1;
+                library_registry
+                    .summary_mut(library_id)
+                    .secondary_or_supplementary_records += 1;
+                self.read_ends.push(ReadEndMetadata {
+                    library_id,
+                    unclipped_position: 0,
+                    quality_score: UNCOMPUTED_QUALITY_SCORE,
+                    barcode_id: None,
+                });
+                self.store_record(record);
+                continue;
+            }
+
+            if duplicate_candidate_is_pair(flag) {
+                self.summary.paired_records_examined += 1;
+                library_registry
+                    .summary_mut(library_id)
+                    .paired_records_examined += 1;
+                if flag & FIRST_IN_PAIR_FLAG != 0 {
+                    self.summary.read_pairs_examined += 1;
+                    library_registry.summary_mut(library_id).read_pairs_examined += 1;
+                }
+            } else {
+                self.summary.unpaired_reads_examined += 1;
+                library_registry
+                    .summary_mut(library_id)
+                    .unpaired_reads_examined += 1;
+            }
+            let read_end = ReadEndMetadata {
+                library_id,
+                unclipped_position: unclipped_record_position(&record),
+                quality_score: quality_score(&record),
+                barcode_id: self
+                    .barcode_registry
+                    .intern(bam_barcode(&record, self.config))?,
+            };
+            self.eligible_indices.push(record_index);
+            self.read_ends.push(read_end);
+            self.store_record(record);
+        }
+
+        Ok(())
+    }
+
+    fn store_record(&mut self, record: bam::Record) {
+        let stored_record = if self.compact_plan {
+            compact_plan_record(&record)
+        } else {
+            record
+        };
+        self.records.push(stored_record);
+    }
+}
+
+fn compact_plan_record(record: &bam::Record) -> bam::Record {
+    let mut co
