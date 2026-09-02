@@ -1,0 +1,99 @@
+ns)?;
+    for input in &config.inputs {
+        let mut replay_reader = open_markdup_reader(config, input)?;
+        write_external_plan_records(
+            &mut replay_reader,
+            &mut decisions,
+            &mut replay_ordinal,
+            &mut next_duplicate,
+            config,
+            &mut writer,
+        )?;
+    }
+    if replay_ordinal != record_count {
+        return Err(MarkDuplicatesError::Operation(
+            "MarkDuplicates replay record count differs from external plan".to_string(),
+        ));
+    }
+    if next_duplicate.is_some() {
+        return Err(MarkDuplicatesError::Operation(
+            "external MarkDuplicates decision ordinal exceeds replay record count".to_string(),
+        ));
+    }
+    drop(writer);
+
+    finish_markdup_output(config, &library_registry)?;
+    Ok(Some(summary))
+}
+
+fn encode_external_plan_record(record: &ExternalPlanRecord, include_qname: bool) -> Vec<u8> {
+    let mut payload = Vec::with_capacity(80 + record.qname.len());
+    payload.extend_from_slice(&record.ordinal.to_le_bytes());
+    payload.extend_from_slice(&record.library_id.to_le_bytes());
+    payload.extend_from_slice(&record.flags.to_le_bytes());
+    payload.extend_from_slice(&record.reference_id.to_le_bytes());
+    payload.extend_from_slice(&record.position.to_le_bytes());
+    payload.extend_from_slice(&record.mate_reference_id.to_le_bytes());
+    payload.extend_from_slice(&record.mate_position.to_le_bytes());
+    payload.extend_from_slice(&record.template_length.to_le_bytes());
+    payload.extend_from_slice(&record.unclipped_position.to_le_bytes());
+    payload.extend_from_slice(&record.quality_score.to_le_bytes());
+    if include_qname {
+        payload.extend_from_slice(
+            &u32::try_from(record.qname.len())
+                .unwrap_or(u32::MAX)
+                .to_le_bytes(),
+        );
+        payload.extend_from_slice(&record.qname);
+    }
+    encode_external_barcode_values(&mut payload, &record.barcode);
+    encode_external_barcode(&mut payload, record.read_group.as_deref());
+    payload
+}
+
+fn encode_external_barcode_values(payload: &mut Vec<u8>, barcode: &ExternalBarcodeValues) {
+    encode_external_barcode(payload, barcode.primary.as_deref());
+    encode_external_barcode(payload, barcode.read_one.as_deref());
+    encode_external_barcode(payload, barcode.read_two.as_deref());
+}
+
+fn encode_external_barcode(payload: &mut Vec<u8>, barcode: Option<&[u8]>) {
+    match barcode {
+        None => payload.push(0),
+        Some(barcode) => {
+            payload.push(1);
+            payload.extend_from_slice(
+                &u64::try_from(barcode.len())
+                    .unwrap_or(u64::MAX)
+                    .to_le_bytes(),
+            );
+            payload.extend_from_slice(barcode);
+        }
+    }
+}
+
+fn decode_external_plan_record(
+    key: &[u8],
+    payload: &[u8],
+    qname_in_payload: bool,
+) -> Result<ExternalPlanRecord, String> {
+    let mut offset = 0usize;
+    let ordinal = read_external_u64(payload, &mut offset)?;
+    let library_id = read_external_u32(payload, &mut offset)?;
+    let flags = read_external_u16(payload, &mut offset)?;
+    let reference_id = read_external_i32(payload, &mut offset)?;
+    let position = read_external_i64(payload, &mut offset)?;
+    let mate_reference_id = read_external_i32(payload, &mut offset)?;
+    let mate_position = read_external_i64(payload, &mut offset)?;
+    let template_length = read_external_i64(payload, &mut offset)?;
+    let unclipped_position = read_external_i64(payload, &mut offset)?;
+    let quality_score = read_external_u64(payload, &mut offset)?;
+    let qname = if qname_in_payload {
+        let length = usize::try_from(read_external_u32(payload, &mut offset)?)
+            .map_err(|_| "external MarkDuplicates QNAME length is too large".to_string())?;
+        read_external_bytes(payload, &mut offset, length)?.to_vec()
+    } else {
+        key.to_vec()
+    };
+    let barcode = ExternalBarcodeValues {
+        primary: decode_external_barcode(payl

@@ -1,0 +1,115 @@
+oad, &mut offset)?,
+        read_one: decode_external_barcode(payload, &mut offset)?,
+        read_two: decode_external_barcode(payload, &mut offset)?,
+    };
+    let read_group = decode_external_barcode(payload, &mut offset)?;
+    if offset != payload.len() {
+        return Err("external MarkDuplicates record payload has trailing bytes".to_string());
+    }
+    Ok(ExternalPlanRecord {
+        ordinal,
+        library_id,
+        read_group,
+        flags,
+        reference_id,
+        position,
+        mate_reference_id,
+        mate_position,
+        template_length,
+        unclipped_position,
+        quality_score,
+        qname,
+        barcode,
+    })
+}
+
+fn decode_external_barcode(payload: &[u8], offset: &mut usize) -> Result<Option<Vec<u8>>, String> {
+    match read_external_u8(payload, offset)? {
+        0 => Ok(None),
+        1 => {
+            let length = usize::try_from(read_external_u64(payload, offset)?)
+                .map_err(|_| "external MarkDuplicates barcode length is too large".to_string())?;
+            Ok(Some(read_external_bytes(payload, offset, length)?.to_vec()))
+        }
+        _ => Err("external MarkDuplicates barcode marker is invalid".to_string()),
+    }
+}
+
+fn read_external_bytes<'a>(
+    payload: &'a [u8],
+    offset: &mut usize,
+    length: usize,
+) -> Result<&'a [u8], String> {
+    let end = offset
+        .checked_add(length)
+        .ok_or_else(|| "external MarkDuplicates payload length overflow".to_string())?;
+    let bytes = payload
+        .get(*offset..end)
+        .ok_or_else(|| "external MarkDuplicates record payload is truncated".to_string())?;
+    *offset = end;
+    Ok(bytes)
+}
+
+fn read_external_u8(payload: &[u8], offset: &mut usize) -> Result<u8, String> {
+    Ok(*read_external_bytes(payload, offset, 1)?
+        .first()
+        .expect("one byte was requested"))
+}
+
+fn read_external_u16(payload: &[u8], offset: &mut usize) -> Result<u16, String> {
+    let mut bytes = [0_u8; 2];
+    let length = bytes.len();
+    bytes.copy_from_slice(read_external_bytes(payload, offset, length)?);
+    Ok(u16::from_le_bytes(bytes))
+}
+
+fn read_external_u32(payload: &[u8], offset: &mut usize) -> Result<u32, String> {
+    let mut bytes = [0_u8; 4];
+    let length = bytes.len();
+    bytes.copy_from_slice(read_external_bytes(payload, offset, length)?);
+    Ok(u32::from_le_bytes(bytes))
+}
+
+fn read_external_u64(payload: &[u8], offset: &mut usize) -> Result<u64, String> {
+    let mut bytes = [0_u8; 8];
+    let length = bytes.len();
+    bytes.copy_from_slice(read_external_bytes(payload, offset, length)?);
+    Ok(u64::from_le_bytes(bytes))
+}
+
+fn read_external_i32(payload: &[u8], offset: &mut usize) -> Result<i32, String> {
+    let mut bytes = [0_u8; 4];
+    let length = bytes.len();
+    bytes.copy_from_slice(read_external_bytes(payload, offset, length)?);
+    Ok(i32::from_le_bytes(bytes))
+}
+
+fn read_external_i64(payload: &[u8], offset: &mut usize) -> Result<i64, String> {
+    let mut bytes = [0_u8; 8];
+    let length = bytes.len();
+    bytes.copy_from_slice(read_external_bytes(payload, offset, length)?);
+    Ok(i64::from_le_bytes(bytes))
+}
+
+struct ExternalKey<'a> {
+    library_id: LibraryId,
+    reference_id: i32,
+    position: i64,
+    mate_reference_id: i32,
+    mate_position: i64,
+    orientation: u8,
+    reverse_strand: bool,
+    barcode: &'a ExternalBarcodeValues,
+}
+
+fn external_key(key_fields: ExternalKey<'_>) -> Vec<u8> {
+    let mut key = Vec::with_capacity(4 + 4 + 8 + 4 + 8 + 2);
+    key.extend_from_slice(&key_fields.library_id.to_le_bytes());
+    key.extend_from_slice(&key_fields.reference_id.to_le_bytes());
+    key.extend_from_slice(&key_fields.position.to_le_bytes());
+    key.extend_from_slice(&key_fields.mate_reference_id.to_le_bytes());
+    key.extend_from_slice(&key_fields.mate_position.to_le_bytes());
+    key.push(key_fields.orientation);
+    key.push(u8::from(key_fields.reverse_strand));
+    encode_external_barcode(&mut key, key_fields.barcode.primary.as_deref());
+    encode_external_barcode(&m
