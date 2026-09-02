@@ -1,0 +1,20 @@
+name: Assemble lib.rs
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - .cursor-agent/chunks/**
+      - .github/workflows/assemble-lib-rs.yml
+jobs:
+  assemble:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: cursor/markdup-compact-ordinal-replay-1c0b
+      - run: cat .cursor-agent/chunks/c* > crates/turbo-picard-markdup/src/lib.rs
+      - run: wc -c crates/turbo-picard-markdup/src/lib.rs
+      - uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: Route compact MarkDuplicates replay through ordinal decisions
+          branch: cursor/markdup-compact-ordinal-replay-1c0b
