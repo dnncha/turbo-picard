@@ -1,1 +1,1 @@
-__SHELL__:cat /tmp/lib_content_only.rs
+file:///tmp/lib_content_only.rs
