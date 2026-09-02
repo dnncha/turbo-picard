@@ -1,1 +1,1 @@
-@/tmp/cou_mcp.json:content
+file:///workspace/crates/turbo-picard-markdup/src/lib.rs
