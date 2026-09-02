@@ -1,1 +1,1 @@
-@/tmp/lib_content.txt
+PLACEHOLDER_FULL_CONTENT
