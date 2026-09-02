@@ -1,0 +1,119 @@
+header_bytes = header.to_bytes();
+    let header_text = String::from_utf8_lossy(&header_bytes);
+    if header_text
+        .lines()
+        .any(|line| line.starts_with("@PG") && line.contains("ID:MarkDuplicates"))
+    {
+        return;
+    }
+    header.push_record(
+        HeaderRecord::new(b"PG")
+            .push_tag(b"ID", "MarkDuplicates")
+            .push_tag(b"PN", "MarkDuplicates"),
+    );
+}
+
+fn picard_bai_path(output: &str) -> String {
+    Path::new(output)
+        .with_extension("bai")
+        .display()
+        .to_string()
+}
+
+fn write_md5_sidecar(output: &str) -> Result<(), MarkDuplicatesError> {
+    let bytes = fs::read(output)?;
+    let digest = md5::compute(bytes);
+    fs::write(format!("{output}.md5"), format!("{digest:x}"))?;
+    Ok(())
+}
+
+fn duplicate_key(
+    fields: &[String],
+    flag: u16,
+    line_number: usize,
+    config: &MarkDuplicatesConfig,
+) -> Result<DuplicateKey, MarkDuplicatesError> {
+    let reverse_strand = flag & 0x10 != 0;
+    let position = parse_sam_integer(&fields[3], "POS", line_number)? - 1;
+    let mate_position = parse_sam_integer(&fields[7], "MATE_POS", line_number)?;
+    let template_length = parse_sam_integer(&fields[8], "TLEN", line_number)?;
+    Ok(DuplicateKey {
+        reference_name: fields[2].clone(),
+        position: unclipped_five_prime_position(position, &fields[5], reverse_strand, line_number)?,
+        mate_reference_name: fields[6].clone(),
+        mate_position,
+        template_length,
+        reverse_strand,
+        barcode: sam_barcode(fields, config),
+    })
+}
+
+fn parse_sam_integer(
+    value: &str,
+    field_name: &str,
+    line_number: usize,
+) -> Result<i64, MarkDuplicatesError> {
+    value
+        .parse::<i64>()
+        .map_err(|_| MarkDuplicatesError::MalformedSam {
+            line_number,
+            reason: format!("invalid {field_name} value: {value}"),
+        })
+}
+
+fn duplicate_groups(
+    records: &[bam::Record],
+    read_ends: &[ReadEndMetadata],
+    eligible_indices: &[usize],
+) -> HashMap<ReadEndDuplicateKey, Vec<usize>> {
+    // Qnames live in the immutable record buffer for the duration of grouping.
+    // Borrow them instead of allocating a Vec<u8> for every pending mate.
+    let mut paired_by_name = HashMap::<&[u8], usize>::default();
+    let mut duplicate_groups = HashMap::<ReadEndDuplicateKey, Vec<usize>>::default();
+
+    for index in eligible_indices.iter().copied() {
+        let record = &records[index];
+        if duplicate_candidate_is_pair(record.flags()) {
+            if let Some(first_index) = paired_by_name.remove(record.qname()) {
+                let indices = [first_index, index];
+                let barcode_id = indices
+                    .iter()
+                    .find_map(|index| read_ends[*index].barcode_id);
+                let key = pair_duplicate_key(
+                    &records[first_index],
+                    record,
+                    &read_ends[first_index],
+                    &read_ends[index],
+                    barcode_id,
+                );
+                duplicate_groups.entry(key).or_default().extend(indices);
+            } else {
+                paired_by_name.insert(record.qname(), index);
+            }
+        }
+    }
+
+    duplicate_groups
+}
+
+fn mark_fragment_duplicate_groups(
+    records: &mut [bam::Record],
+    read_ends: &mut [ReadEndMetadata],
+    eligible_indices: &[usize],
+    summary: &mut MarkDuplicatesSummary,
+    library_registry: &mut LibraryRegistry,
+) {
+    let mut fragment_groups = HashMap::<ReadEndDuplicateKey, Vec<usize>>::default();
+    for index in eligible_indices.iter().copied() {
+        let key = fragment_duplicate_key(&records[index], &read_ends[index]);
+        fragment_groups.entry(key).or_default().push(index);
+    }
+
+    for group in fragment_groups.values() {
+        if group.len() < 2 || !has_multiple_read_names(group, records) {
+            continue;
+        }
+
+        let contains_complete_pair = group
+            .iter()
+            .any(|index| duplicate_candidate_is_
