@@ -1,0 +1,107 @@
+ords = Vec::new();
+    let mut read_ends = Vec::new();
+    let mut eligible_indices = Vec::new();
+    let mut barcode_registry = BarcodeRegistry::default();
+    let mut summary = MarkDuplicatesSummary {
+        library,
+        unpaired_reads_examined: 0,
+        read_pairs_examined: 0,
+        paired_records_examined: 0,
+        secondary_or_supplementary_records: 0,
+        unpaired_duplicate_records: 0,
+        duplicate_pair_records: 0,
+        read_pair_optical_duplicates: 0,
+        unmapped_records: 0,
+        duplicate_set_histogram: BTreeMap::new(),
+    };
+
+    {
+        let mut read_state = BamRecordReadState {
+            records: &mut records,
+            read_ends: &mut read_ends,
+            eligible_indices: &mut eligible_indices,
+            barcode_registry: &mut barcode_registry,
+            config,
+            summary: &mut summary,
+            compact_plan: false,
+        };
+        read_state.read(&mut reader, &first_library_lookup, &mut library_registry)?;
+        for input in config.inputs.iter().skip(1) {
+            let mut reader = open_markdup_reader(config, input)?;
+            let input_library_lookup = library_lookup(reader.header(), &mut library_registry);
+            read_state.read(&mut reader, &input_library_lookup, &mut library_registry)?;
+        }
+    }
+
+    let optical_duplicate_records = mark_duplicate_plan(
+        &mut records,
+        &mut read_ends,
+        &eligible_indices,
+        &mut summary,
+        &mut library_registry,
+        config,
+    )?;
+
+    {
+        if config.inputs.len() > 1 {
+            let mut marked_records = records
+                .into_iter()
+                .zip(optical_duplicate_records)
+                .collect::<Vec<_>>();
+            marked_records.sort_by(|(left, _), (right, _)| compare_bam_output_order(left, right));
+            write_bam_records(marked_records, config, &mut writer)?;
+        } else {
+            write_bam_records(
+                records.into_iter().zip(optical_duplicate_records),
+                config,
+                &mut writer,
+            )?;
+        }
+    }
+    drop(writer);
+
+    finish_markdup_output(config, &library_registry)?;
+    Ok(summary)
+}
+
+// Keep each bounded sort window large enough to avoid excessive temporary-file
+// churn on ordinary shards while retaining a hard per-sorter memory ceiling.
+// The external path owns two windows during its first pass, so this remains a
+// small fraction of the production-scale memory budget rather than becoming a
+// whole-file retention strategy.
+const EXTERNAL_MARKDUP_MAX_RECORDS_IN_RAM: usize = 500_000;
+const EXTERNAL_MARKDUP_MAX_BYTES_IN_RAM: usize = 256 * 1024 * 1024;
+const DEFAULT_MAX_OPTICAL_DUPLICATE_SET_SIZE: usize = 300_000;
+const EXTERNAL_DECISION_OPTICAL: u8 = 0x01;
+const EXTERNAL_DECISION_DUPLICATE: u8 = 0x02;
+const EXTERNAL_DECISION_SET_MEMBERS: u8 = 0x04;
+const EXTERNAL_DECISION_PAYLOAD_BYTES: usize = 1 + (2 * std::mem::size_of::<i32>());
+const EXTERNAL_DECISION_ABSENT_TAG: i32 = i32::MIN;
+
+struct ExternalDuplicateProcessingConfig<'a> {
+    config: &'a MarkDuplicatesConfig,
+    read_name_parser: &'a ReadNameLocationParser,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ExternalDecision {
+    flags: u8,
+    duplicate_set_size: Option<i32>,
+    duplicate_set_index: Option<i32>,
+}
+
+/// Barcode dimensions retained by the bounded external duplicate-group sort.
+/// The three fields mirror Picard's primary, read-one, and read-two barcode
+/// comparisons while keeping their presence independent for mate-specific
+/// tags.
+#[derive(Debug, Clone)]
+struct ExternalBarcodeValues {
+    primary: Option<Vec<u8>>,
+    read_one: Option<Vec<u8>>,
+    read_two: Option<Vec<u8>>,
+}
+
+/// The fixed-width part of a record plan.  The original alignment payload is
+/// deliberately absent: the second pass reopens the input and only needs the
+/// ordinal plus the duplicate decision.  QNAMEs and barcode values are
+/// retained only in the external sort payloads where they are needed to form
