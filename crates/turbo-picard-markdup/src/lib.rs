@@ -1,1 +1,1 @@
-TOO_LARGE_FOR_INLINE
+@file:/tmp/lib_content_only.rs
