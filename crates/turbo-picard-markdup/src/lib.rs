@@ -1,1 +1,3 @@
-@git:01062899283605f9d2edfa29ab76590bfac19454:crates/turbo-picard-markdup/src/lib.rs
+#![forbid(unsafe_code)]
+
+use regex::Regex;
