@@ -250,4 +250,67 @@ pub fn run(config: &MarkDuplicatesConfig) -> Result<MarkDuplicatesSummary, MarkD
                 add_duplicate_type_tag_to_sam_fields(&mut fields);
             }
             if config.add_pg_tag_to_reads {
-                add_program_group_
+                add_program_group_to_sam_fields(&mut fields);
+            }
+            output.push_str(&fields.join("\t"));
+            output.push('\n');
+        }
+    }
+
+    if config.add_pg_tag_to_reads {
+        add_program_group_to_sam_header(&mut output);
+    }
+    fs::write(&config.output, output)?;
+    fs::write(&config.metrics_file, metrics_text(&summary))?;
+    Ok(summary)
+}
+
+fn try_append_fast_sam_markduplicate_line(
+    line: &str,
+    line_number: usize,
+    seen: &mut HashMap<DuplicateKey, usize>,
+    summary: &mut MarkDuplicatesSummary,
+    output: &mut String,
+    config: &MarkDuplicatesConfig,
+) -> Result<bool, MarkDuplicatesError> {
+    if config.barcode_tag.is_some()
+        || config.read_one_barcode_tag.is_some()
+        || config.read_two_barcode_tag.is_some()
+    {
+        return Ok(false);
+    }
+    let Some(fields) = split_exact_11_sam_fields(line) else {
+        return Ok(false);
+    };
+    let flag = fields[1]
+        .parse::<u16>()
+        .map_err(|_| MarkDuplicatesError::MalformedSam {
+            line_number,
+            reason: format!("invalid FLAG value: {}", fields[1]),
+        })?;
+    if flag & UNMAPPED_FLAG != 0 {
+        summary.unmapped_records += 1;
+        output.push_str(line);
+        output.push('\n');
+        return Ok(true);
+    }
+    if flag & SECONDARY_OR_SUPPLEMENTARY_FLAGS != 0 {
+        summary.secondary_or_supplementary_records += 1;
+        output.push_str(line);
+        output.push('\n');
+        return Ok(true);
+    }
+    let Some(position) = simple_sam_unclipped_position(fields[3], fields[5], flag, line_number)?
+    else {
+        return Ok(false);
+    };
+
+    let mate_position = parse_sam_integer(fields[7], "MATE_POS", line_number)?;
+    let template_length = parse_sam_integer(fields[8], "TLEN", line_number)?;
+    if duplicate_candidate_is_pair(flag) {
+        summary.paired_records_examined += 1;
+        if flag & FIRST_IN_PAIR_FLAG != 0 {
+            summary.read_pairs_examined += 1;
+        }
+    } else {
+        summary.unpaired_reads_e
