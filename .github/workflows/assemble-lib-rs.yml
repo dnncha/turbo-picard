@@ -12,7 +12,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: cursor/markdup-compact-ordinal-replay-1c0b
-      - run: cat .cursor-agent/chunks/c* > crates/turbo-picard-markdup/src/lib.rs
+      - run: cat .cursor-agent/chunks/c{00..36} > crates/turbo-picard-markdup/src/lib.rs
       - run: wc -c crates/turbo-picard-markdup/src/lib.rs
       - uses: stefanzweifel/git-auto-commit-action@v5
         with:
