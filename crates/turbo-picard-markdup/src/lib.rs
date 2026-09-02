@@ -161,4 +161,71 @@ pub fn run(config: &MarkDuplicatesConfig) -> Result<MarkDuplicatesSummary, MarkD
 
     let input = fs::read_to_string(&config.input)?;
     let mut seen = HashMap::<DuplicateKey, usize>::default();
-    let mut ou
+    let mut output = String::with_capacity(input.len());
+    let mut summary = MarkDuplicatesSummary {
+        library: "Unknown Library".to_string(),
+        unpaired_reads_examined: 0,
+        read_pairs_examined: 0,
+        paired_records_examined: 0,
+        secondary_or_supplementary_records: 0,
+        unpaired_duplicate_records: 0,
+        duplicate_pair_records: 0,
+        read_pair_optical_duplicates: 0,
+        unmapped_records: 0,
+        duplicate_set_histogram: BTreeMap::new(),
+    };
+
+    for (line_index, line) in input.lines().enumerate() {
+        let line_number = line_index + 1;
+        if line.starts_with('@') {
+            output.push_str(line);
+            output.push('\n');
+            continue;
+        }
+
+        if try_append_fast_sam_markduplicate_line(
+            line,
+            line_number,
+            &mut seen,
+            &mut summary,
+            &mut output,
+            config,
+        )? {
+            continue;
+        }
+
+        let mut fields = line.split('\t').map(str::to_string).collect::<Vec<_>>();
+        if fields.len() < 11 {
+            return Err(MarkDuplicatesError::MalformedSam {
+                line_number,
+                reason: "expected at least 11 tab-delimited fields".to_string(),
+            });
+        }
+
+        let mut flag = fields[1]
+            .parse::<u16>()
+            .map_err(|_| MarkDuplicatesError::MalformedSam {
+                line_number,
+                reason: format!("invalid FLAG value: {}", fields[1]),
+            })?;
+
+        if flag & UNMAPPED_FLAG != 0 {
+            summary.unmapped_records += 1;
+            output.push_str(line);
+            output.push('\n');
+            continue;
+        }
+        if flag & SECONDARY_OR_SUPPLEMENTARY_FLAGS != 0 {
+            summary.secondary_or_supplementary_records += 1;
+            output.push_str(line);
+            output.push('\n');
+            continue;
+        }
+
+        if duplicate_candidate_is_pair(flag) {
+            summary.paired_records_examined += 1;
+            if flag & FIRST_IN_PAIR_FLAG != 0 {
+                summary.read_pairs_examined += 1;
+            }
+        } else {
+            summary.unpaired_reads_e
