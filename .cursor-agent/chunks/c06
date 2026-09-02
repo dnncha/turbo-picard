@@ -1,0 +1,94 @@
+h = Path::new(input);
+        let is_bam = input_path
+            .extension()
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("bam"));
+        let is_reference_backed_cram = input_path
+            .extension()
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("cram"))
+            && has_explicit_reference;
+        is_bam || is_reference_backed_cram
+    })
+}
+
+fn try_run_external_plan(
+    config: &MarkDuplicatesConfig,
+) -> Result<Option<MarkDuplicatesSummary>, MarkDuplicatesError> {
+    if !supports_external_markdup_plan(config) {
+        return Ok(None);
+    }
+    let read_name_parser = ReadNameLocationParser::from_config(config)?;
+    let processing_config = ExternalDuplicateProcessingConfig {
+        config,
+        read_name_parser: &read_name_parser,
+    };
+
+    let first_input = &config.inputs[0];
+    let reader = open_markdup_reader(config, first_input)?;
+    let mut library_registry = LibraryRegistry::new();
+    let first_library_lookup = library_lookup(reader.header(), &mut library_registry);
+    let library = library_registry
+        .summary(first_library_lookup.first_library_id)
+        .library
+        .clone();
+    let mut header = bam::Header::from_template(reader.header());
+    let mut known_read_groups = read_group_ids(reader.header());
+    for input in config.inputs.iter().skip(1) {
+        let reader = open_markdup_reader(config, input)?;
+        append_missing_read_groups(&mut header, reader.header(), &mut known_read_groups);
+    }
+    if config.add_pg_tag_to_reads {
+        push_markdup_pg_header_if_needed(&mut header);
+    }
+
+    let mut summary = MarkDuplicatesSummary {
+        library,
+        unpaired_reads_examined: 0,
+        read_pairs_examined: 0,
+        paired_records_examined: 0,
+        secondary_or_supplementary_records: 0,
+        unpaired_duplicate_records: 0,
+        duplicate_pair_records: 0,
+        read_pair_optical_duplicates: 0,
+        unmapped_records: 0,
+        duplicate_set_histogram: BTreeMap::new(),
+    };
+    let temporary = external_plan_tempdir(config)?;
+    let mut qname_sorter = external_sorter(temporary.path(), "turbo-picard-markdup-qname")?;
+    let mut fragment_sorter = external_sorter(temporary.path(), "turbo-picard-markdup-fragment")?;
+    let mut record_count = 0_u64;
+    let mut last_output_order = None::<(i32, i64, Vec<u8>, u16)>;
+
+    for input in &config.inputs {
+        let mut reader = open_markdup_reader(config, input)?;
+        let input_library_lookup = library_lookup(reader.header(), &mut library_registry);
+        for result in reader.records() {
+            let mut record = result?;
+            let flag = record.flags() & !DUPLICATE_FLAG;
+            if record.flags() != flag {
+                record.set_flags(flag);
+            }
+            let output_order = (record.tid(), record.pos(), record.qname().to_vec(), flag);
+            if last_output_order
+                .as_ref()
+                .is_some_and(|previous| output_order.cmp(previous) == Ordering::Less)
+            {
+                // The compact multi-input path sorts the final records by
+                // coordinate.  Do not silently change that contract here:
+                // fall back if the input streams are not already globally
+                // ordered, so the bounded path remains deterministic.
+                return Ok(None);
+            }
+            last_output_order = Some(output_order);
+
+            let library_id = record_library_id(&record, &input_library_lookup);
+            let ordinal = record_count;
+            record_count = record_count.checked_add(1).ok_or_else(|| {
+                MarkDuplicatesError::Operation("too many BAM records".to_string())
+            })?;
+
+            if flag & UNMAPPED_FLAG != 0 {
+                summary.unmapped_records += 1;
+                library_registry.summary_mut(library_id).unmapped_records += 1;
+                continue;
+            }
+            if flag & SECONDARY_OR_SUPPLEMENTARY_FLAGS != 0 {
