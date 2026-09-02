@@ -313,4 +313,206 @@ fn try_append_fast_sam_markduplicate_line(
             summary.read_pairs_examined += 1;
         }
     } else {
-        summary.unpaired_reads_e
+        summary.unpaired_reads_examined += 1;
+    }
+
+    let key = DuplicateKey {
+        reference_name: fields[2].to_string(),
+        position,
+        mate_reference_name: fields[6].to_string(),
+        mate_position,
+        template_length,
+        reverse_strand: flag & 0x10 != 0,
+        barcode: None,
+    };
+    let seen_count = seen.entry(key).or_insert(0);
+    let duplicate = *seen_count > 0;
+    *seen_count += 1;
+
+    let mut output_flag = flag;
+    if duplicate {
+        if duplicate_candidate_is_pair(flag) {
+            summary.duplicate_pair_records += 1;
+        } else {
+            summary.unpaired_duplicate_records += 1;
+        }
+        output_flag |= DUPLICATE_FLAG;
+    }
+
+    if duplicate && config.remove_duplicates {
+        return Ok(true);
+    }
+
+    let append_duplicate_type =
+        config.tagging_policy.as_deref() == Some("All") && output_flag & DUPLICATE_FLAG != 0;
+    append_sam_line_with_replaced_flag(
+        output,
+        line,
+        output_flag,
+        append_duplicate_type,
+        config.add_pg_tag_to_reads,
+    );
+    Ok(true)
+}
+
+fn split_exact_11_sam_fields(line: &str) -> Option<[&str; 11]> {
+    let mut fields = [""; 11];
+    let mut parts = line.split('\t');
+    for field in &mut fields {
+        *field = parts.next()?;
+    }
+    if parts.next().is_some() {
+        return None;
+    }
+    Some(fields)
+}
+
+fn simple_sam_unclipped_position(
+    position: &str,
+    cigar: &str,
+    flag: u16,
+    line_number: usize,
+) -> Result<Option<i64>, MarkDuplicatesError> {
+    let position = parse_sam_integer(position, "POS", line_number)? - 1;
+    let mut bytes = cigar.bytes();
+    let Some(first) = bytes.next() else {
+        return Ok(None);
+    };
+    if !first.is_ascii_digit() {
+        return Ok(None);
+    }
+    let mut length = i64::from(first - b'0');
+    for byte in bytes.by_ref() {
+        if byte.is_ascii_digit() {
+            length = length
+                .checked_mul(10)
+                .and_then(|value| value.checked_add(i64::from(byte - b'0')))
+                .filter(|value| *value >= 0)
+                .ok_or_else(|| MarkDuplicatesError::MalformedSam {
+                    line_number,
+                    reason: format!("invalid CIGAR value: {cigar}"),
+                })?;
+            continue;
+        }
+        if length == 0 || !matches!(byte as char, 'M' | 'D' | 'N' | '=' | 'X') {
+            return Ok(None);
+        }
+        if bytes.next().is_some() {
+            return Ok(None);
+        }
+        return if flag & 0x10 != 0 {
+            Ok(Some(position + length - 1))
+        } else {
+            Ok(Some(position))
+        };
+    }
+    Ok(None)
+}
+
+fn append_sam_line_with_replaced_flag(
+    output: &mut String,
+    line: &str,
+    flag: u16,
+    append_duplicate_type: bool,
+    append_program_group: bool,
+) {
+    let Some(first_tab) = line.find('\t') else {
+        output.push_str(line);
+        output.push('\n');
+        return;
+    };
+    let flag_start = first_tab + 1;
+    let Some(flag_width) = line[flag_start..].find('\t') else {
+        output.push_str(line);
+        output.push('\n');
+        return;
+    };
+    let flag_end = flag_start + flag_width;
+    output.push_str(&line[..flag_start]);
+    output.push_str(&flag.to_string());
+    output.push_str(&line[flag_end..]);
+    if append_duplicate_type {
+        output.push_str("\tDT:Z:LB");
+    }
+    if append_program_group {
+        output.push_str("\tPG:Z:MarkDuplicates");
+    }
+    output.push('\n');
+}
+
+fn ensure_sam_input(input: &str) -> Result<(), MarkDuplicatesError> {
+    if Path::new(input)
+        .extension()
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("sam"))
+    {
+        Ok(())
+    } else {
+        Err(MarkDuplicatesError::UnsupportedInputFormat(
+            input.to_string(),
+        ))
+    }
+}
+
+fn markdup_reference(config: &MarkDuplicatesConfig) -> Option<&str> {
+    config.reference_sequence.as_deref()
+}
+
+fn open_markdup_reader(
+    config: &MarkDuplicatesConfig,
+    path: &str,
+) -> Result<bam::Reader, MarkDuplicatesError> {
+    hts_io::open_reader(path, markdup_reference(config)).map_err(MarkDuplicatesError::Operation)
+}
+
+fn open_markdup_writer(
+    config: &MarkDuplicatesConfig,
+    output: &str,
+    header: &bam::Header,
+) -> Result<bam::Writer, MarkDuplicatesError> {
+    let format =
+        hts_io::writer_format_for_output(output).map_err(MarkDuplicatesError::Operation)?;
+    hts_io::open_writer(
+        output,
+        header,
+        format,
+        markdup_reference(config),
+        config.compression_level,
+    )
+    .map_err(MarkDuplicatesError::Operation)
+}
+
+fn run_hts_container(
+    config: &MarkDuplicatesConfig,
+) -> Result<MarkDuplicatesSummary, MarkDuplicatesError> {
+    if let Some(summary) = try_run_single_bam_no_duplicate_fast_path(config)? {
+        return Ok(summary);
+    }
+    if let Some(summary) = try_run_small_single_bam_compact_plan(config)? {
+        return Ok(summary);
+    }
+    if let Some(summary) = try_run_external_plan(config)? {
+        return Ok(summary);
+    }
+    if let Some(summary) = try_run_single_bam_compact_plan(config)? {
+        return Ok(summary);
+    }
+
+    let first_input = &config.inputs[0];
+    let mut reader = open_markdup_reader(config, first_input)?;
+    let mut library_registry = LibraryRegistry::new();
+    let first_library_lookup = library_lookup(reader.header(), &mut library_registry);
+    let library = library_registry
+        .summary(first_library_lookup.first_library_id)
+        .library
+        .clone();
+    let mut header = bam::Header::from_template(reader.header());
+    let mut known_read_groups = read_group_ids(reader.header());
+    for input in config.inputs.iter().skip(1) {
+        let reader = open_markdup_reader(config, input)?;
+        append_missing_read_groups(&mut header, reader.header(), &mut known_read_groups);
+    }
+    if config.add_pg_tag_to_reads {
+        push_markdup_pg_header_if_needed(&mut header);
+    }
+    let mut writer = open_markdup_writer(config, &config.output, &header)?;
+    let mut rec
