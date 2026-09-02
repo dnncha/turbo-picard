@@ -1,0 +1,128 @@
+/// duplicate groups.
+#[derive(Debug, Clone)]
+struct ExternalPlanRecord {
+    ordinal: u64,
+    library_id: LibraryId,
+    read_group: Option<Vec<u8>>,
+    flags: u16,
+    reference_id: i32,
+    position: i64,
+    mate_reference_id: i32,
+    mate_position: i64,
+    template_length: i64,
+    unclipped_position: i64,
+    quality_score: u64,
+    qname: Vec<u8>,
+    barcode: ExternalBarcodeValues,
+}
+
+fn external_plan_record(
+    ordinal: u64,
+    record: &bam::Record,
+    library_id: LibraryId,
+    config: &MarkDuplicatesConfig,
+) -> ExternalPlanRecord {
+    ExternalPlanRecord {
+        ordinal,
+        library_id,
+        read_group: record_read_group(record),
+        flags: record.flags(),
+        reference_id: record.tid(),
+        position: record.pos(),
+        mate_reference_id: record.mtid(),
+        mate_position: record.mpos(),
+        template_length: record.insert_size(),
+        unclipped_position: unclipped_record_position(record),
+        quality_score: quality_score(record),
+        qname: record.qname().to_vec(),
+        barcode: external_barcode_values(record, config),
+    }
+}
+
+fn external_barcode_values(
+    record: &bam::Record,
+    config: &MarkDuplicatesConfig,
+) -> ExternalBarcodeValues {
+    if let Some(tag) = config.barcode_tag.as_deref() {
+        return ExternalBarcodeValues {
+            primary: bam_tag_value(record, tag),
+            read_one: None,
+            read_two: None,
+        };
+    }
+
+    let paired = record.flags() & PAIRED_FLAG != 0;
+    let first_in_pair = record.flags() & FIRST_IN_PAIR_FLAG != 0;
+    ExternalBarcodeValues {
+        primary: None,
+        read_one: (!paired || first_in_pair)
+            .then_some(config.read_one_barcode_tag.as_deref())
+            .flatten()
+            .and_then(|tag| bam_tag_value(record, tag)),
+        read_two: (paired && !first_in_pair)
+            .then_some(config.read_two_barcode_tag.as_deref())
+            .flatten()
+            .and_then(|tag| bam_tag_value(record, tag)),
+    }
+}
+
+fn paired_external_barcode_values(
+    first: &ExternalPlanRecord,
+    second: &ExternalPlanRecord,
+) -> ExternalBarcodeValues {
+    let primary = if first.flags & FIRST_IN_PAIR_FLAG != 0 {
+        first.barcode.primary.clone()
+    } else if second.flags & FIRST_IN_PAIR_FLAG != 0 {
+        second.barcode.primary.clone()
+    } else {
+        first
+            .barcode
+            .primary
+            .clone()
+            .or_else(|| second.barcode.primary.clone())
+    };
+    ExternalBarcodeValues {
+        primary,
+        read_one: first
+            .barcode
+            .read_one
+            .clone()
+            .or_else(|| second.barcode.read_one.clone()),
+        read_two: first
+            .barcode
+            .read_two
+            .clone()
+            .or_else(|| second.barcode.read_two.clone()),
+    }
+}
+
+fn external_sorter(tmp_dir: &Path, prefix: &str) -> Result<ExternalSorter, MarkDuplicatesError> {
+    let mut sort_config = ExternalSortConfig::new(tmp_dir);
+    sort_config.max_records_in_ram = EXTERNAL_MARKDUP_MAX_RECORDS_IN_RAM;
+    sort_config.max_bytes_in_ram = EXTERNAL_MARKDUP_MAX_BYTES_IN_RAM;
+    sort_config.prefix = prefix.to_string();
+    ExternalSorter::new(sort_config).map_err(MarkDuplicatesError::Operation)
+}
+
+fn external_plan_tempdir(config: &MarkDuplicatesConfig) -> Result<TempDir, MarkDuplicatesError> {
+    let Some(tmp_dir) = config.tmp_dir.as_deref() else {
+        return Ok(tempdir()?);
+    };
+    let tmp_dir = Path::new(tmp_dir);
+    fs::create_dir_all(tmp_dir)?;
+    TempDirBuilder::new()
+        .prefix("turbo-picard-markdup-")
+        .tempdir_in(tmp_dir)
+        .map_err(MarkDuplicatesError::Io)
+}
+
+fn supports_external_markdup_plan(config: &MarkDuplicatesConfig) -> bool {
+    if config.inputs.is_empty() {
+        return false;
+    }
+    let has_explicit_reference = config
+        .reference_sequence
+        .as_deref()
+        .is_some_and(|reference| !reference.trim().is_empty());
+    config.inputs.iter().all(|input| {
+        let input_pat
