@@ -622,3 +622,536 @@ struct ExternalBarcodeValues {
 /// deliberately absent: the second pass reopens the input and only needs the
 /// ordinal plus the duplicate decision.  QNAMEs and barcode values are
 /// retained only in the external sort payloads where they are needed to form
+/// duplicate groups.
+#[derive(Debug, Clone)]
+struct ExternalPlanRecord {
+    ordinal: u64,
+    library_id: LibraryId,
+    read_group: Option<Vec<u8>>,
+    flags: u16,
+    reference_id: i32,
+    position: i64,
+    mate_reference_id: i32,
+    mate_position: i64,
+    template_length: i64,
+    unclipped_position: i64,
+    quality_score: u64,
+    qname: Vec<u8>,
+    barcode: ExternalBarcodeValues,
+}
+
+fn external_plan_record(
+    ordinal: u64,
+    record: &bam::Record,
+    library_id: LibraryId,
+    config: &MarkDuplicatesConfig,
+) -> ExternalPlanRecord {
+    ExternalPlanRecord {
+        ordinal,
+        library_id,
+        read_group: record_read_group(record),
+        flags: record.flags(),
+        reference_id: record.tid(),
+        position: record.pos(),
+        mate_reference_id: record.mtid(),
+        mate_position: record.mpos(),
+        template_length: record.insert_size(),
+        unclipped_position: unclipped_record_position(record),
+        quality_score: quality_score(record),
+        qname: record.qname().to_vec(),
+        barcode: external_barcode_values(record, config),
+    }
+}
+
+fn external_barcode_values(
+    record: &bam::Record,
+    config: &MarkDuplicatesConfig,
+) -> ExternalBarcodeValues {
+    if let Some(tag) = config.barcode_tag.as_deref() {
+        return ExternalBarcodeValues {
+            primary: bam_tag_value(record, tag),
+            read_one: None,
+            read_two: None,
+        };
+    }
+
+    let paired = record.flags() & PAIRED_FLAG != 0;
+    let first_in_pair = record.flags() & FIRST_IN_PAIR_FLAG != 0;
+    ExternalBarcodeValues {
+        primary: None,
+        read_one: (!paired || first_in_pair)
+            .then_some(config.read_one_barcode_tag.as_deref())
+            .flatten()
+            .and_then(|tag| bam_tag_value(record, tag)),
+        read_two: (paired && !first_in_pair)
+            .then_some(config.read_two_barcode_tag.as_deref())
+            .flatten()
+            .and_then(|tag| bam_tag_value(record, tag)),
+    }
+}
+
+fn paired_external_barcode_values(
+    first: &ExternalPlanRecord,
+    second: &ExternalPlanRecord,
+) -> ExternalBarcodeValues {
+    let primary = if first.flags & FIRST_IN_PAIR_FLAG != 0 {
+        first.barcode.primary.clone()
+    } else if second.flags & FIRST_IN_PAIR_FLAG != 0 {
+        second.barcode.primary.clone()
+    } else {
+        first
+            .barcode
+            .primary
+            .clone()
+            .or_else(|| second.barcode.primary.clone())
+    };
+    ExternalBarcodeValues {
+        primary,
+        read_one: first
+            .barcode
+            .read_one
+            .clone()
+            .or_else(|| second.barcode.read_one.clone()),
+        read_two: first
+            .barcode
+            .read_two
+            .clone()
+            .or_else(|| second.barcode.read_two.clone()),
+    }
+}
+
+fn external_sorter(tmp_dir: &Path, prefix: &str) -> Result<ExternalSorter, MarkDuplicatesError> {
+    let mut sort_config = ExternalSortConfig::new(tmp_dir);
+    sort_config.max_records_in_ram = EXTERNAL_MARKDUP_MAX_RECORDS_IN_RAM;
+    sort_config.max_bytes_in_ram = EXTERNAL_MARKDUP_MAX_BYTES_IN_RAM;
+    sort_config.prefix = prefix.to_string();
+    ExternalSorter::new(sort_config).map_err(MarkDuplicatesError::Operation)
+}
+
+fn external_plan_tempdir(config: &MarkDuplicatesConfig) -> Result<TempDir, MarkDuplicatesError> {
+    let Some(tmp_dir) = config.tmp_dir.as_deref() else {
+        return Ok(tempdir()?);
+    };
+    let tmp_dir = Path::new(tmp_dir);
+    fs::create_dir_all(tmp_dir)?;
+    TempDirBuilder::new()
+        .prefix("turbo-picard-markdup-")
+        .tempdir_in(tmp_dir)
+        .map_err(MarkDuplicatesError::Io)
+}
+
+fn supports_external_markdup_plan(config: &MarkDuplicatesConfig) -> bool {
+    if config.inputs.is_empty() {
+        return false;
+    }
+    let has_explicit_reference = config
+        .reference_sequence
+        .as_deref()
+        .is_some_and(|reference| !reference.trim().is_empty());
+    config.inputs.iter().all(|input| {
+        let input_path = Path::new(input);
+        let is_bam = input_path
+            .extension()
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("bam"));
+        let is_reference_backed_cram = input_path
+            .extension()
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("cram"))
+            && has_explicit_reference;
+        is_bam || is_reference_backed_cram
+    })
+}
+
+fn try_run_external_plan(
+    config: &MarkDuplicatesConfig,
+) -> Result<Option<MarkDuplicatesSummary>, MarkDuplicatesError> {
+    if !supports_external_markdup_plan(config) {
+        return Ok(None);
+    }
+    let read_name_parser = ReadNameLocationParser::from_config(config)?;
+    let processing_config = ExternalDuplicateProcessingConfig {
+        config,
+        read_name_parser: &read_name_parser,
+    };
+
+    let first_input = &config.inputs[0];
+    let reader = open_markdup_reader(config, first_input)?;
+    let mut library_registry = LibraryRegistry::new();
+    let first_library_lookup = library_lookup(reader.header(), &mut library_registry);
+    let library = library_registry
+        .summary(first_library_lookup.first_library_id)
+        .library
+        .clone();
+    let mut header = bam::Header::from_template(reader.header());
+    let mut known_read_groups = read_group_ids(reader.header());
+    for input in config.inputs.iter().skip(1) {
+        let reader = open_markdup_reader(config, input)?;
+        append_missing_read_groups(&mut header, reader.header(), &mut known_read_groups);
+    }
+    if config.add_pg_tag_to_reads {
+        push_markdup_pg_header_if_needed(&mut header);
+    }
+
+    let mut summary = MarkDuplicatesSummary {
+        library,
+        unpaired_reads_examined: 0,
+        read_pairs_examined: 0,
+        paired_records_examined: 0,
+        secondary_or_supplementary_records: 0,
+        unpaired_duplicate_records: 0,
+        duplicate_pair_records: 0,
+        read_pair_optical_duplicates: 0,
+        unmapped_records: 0,
+        duplicate_set_histogram: BTreeMap::new(),
+    };
+    let temporary = external_plan_tempdir(config)?;
+    let mut qname_sorter = external_sorter(temporary.path(), "turbo-picard-markdup-qname")?;
+    let mut fragment_sorter = external_sorter(temporary.path(), "turbo-picard-markdup-fragment")?;
+    let mut record_count = 0_u64;
+    let mut last_output_order = None::<(i32, i64, Vec<u8>, u16)>;
+
+    for input in &config.inputs {
+        let mut reader = open_markdup_reader(config, input)?;
+        let input_library_lookup = library_lookup(reader.header(), &mut library_registry);
+        for result in reader.records() {
+            let mut record = result?;
+            let flag = record.flags() & !DUPLICATE_FLAG;
+            if record.flags() != flag {
+                record.set_flags(flag);
+            }
+            let output_order = (record.tid(), record.pos(), record.qname().to_vec(), flag);
+            if last_output_order
+                .as_ref()
+                .is_some_and(|previous| output_order.cmp(previous) == Ordering::Less)
+            {
+                // The compact multi-input path sorts the final records by
+                // coordinate.  Do not silently change that contract here:
+                // fall back if the input streams are not already globally
+                // ordered, so the bounded path remains deterministic.
+                return Ok(None);
+            }
+            last_output_order = Some(output_order);
+
+            let library_id = record_library_id(&record, &input_library_lookup);
+            let ordinal = record_count;
+            record_count = record_count.checked_add(1).ok_or_else(|| {
+                MarkDuplicatesError::Operation("too many BAM records".to_string())
+            })?;
+
+            if flag & UNMAPPED_FLAG != 0 {
+                summary.unmapped_records += 1;
+                library_registry.summary_mut(library_id).unmapped_records += 1;
+                continue;
+            }
+            if flag & SECONDARY_OR_SUPPLEMENTARY_FLAGS != 0 {
+                summary.secondary_or_supplementary_records += 1;
+                library_registry
+                    .summary_mut(library_id)
+                    .secondary_or_supplementary_records += 1;
+                continue;
+            }
+
+            if duplicate_candidate_is_pair(flag) {
+                summary.paired_records_examined += 1;
+                library_registry
+                    .summary_mut(library_id)
+                    .paired_records_examined += 1;
+                if flag & FIRST_IN_PAIR_FLAG != 0 {
+                    summary.read_pairs_examined += 1;
+                    library_registry.summary_mut(library_id).read_pairs_examined += 1;
+                }
+            } else {
+                summary.unpaired_reads_examined += 1;
+                library_registry
+                    .summary_mut(library_id)
+                    .unpaired_reads_examined += 1;
+            }
+
+            let plan = external_plan_record(ordinal, &record, library_id, config);
+            // The QNAME pass only pairs records.  Do not send unpaired
+            // records through a second external sort: the fragment pass
+            // below already owns their duplicate decisions, and single-end
+            // inputs are common in real pipelines.
+            if duplicate_candidate_is_pair(flag) {
+                qname_sorter
+                    .push(
+                        plan.qname.clone(),
+                        encode_external_plan_record(&plan, false),
+                    )
+                    .map_err(MarkDuplicatesError::Operation)?;
+            }
+            fragment_sorter
+                .push(
+                    external_fragment_key(&plan),
+                    encode_external_plan_record(&plan, true),
+                )
+                .map_err(MarkDuplicatesError::Operation)?;
+        }
+    }
+
+    let mut pair_sorter = external_sorter(temporary.path(), "turbo-picard-markdup-pair")?;
+    let mut decision_sorter = external_sorter(temporary.path(), "turbo-picard-markdup-decisions")?;
+    let mut pending_pair = None::<ExternalPlanRecord>;
+    qname_sorter
+        .finish_into(|item| {
+            if pending_pair
+                .as_ref()
+                .is_some_and(|pending| pending.qname.as_slice() != item.key.as_slice())
+            {
+                pending_pair = None;
+            }
+            let plan = decode_external_plan_record(&item.key, &item.payload, false)?;
+            if !duplicate_candidate_is_pair(plan.flags) {
+                return Ok(());
+            }
+            if let Some(first) = pending_pair.take() {
+                if first.qname == plan.qname {
+                    let key = external_pair_key(&first, &plan);
+                    pair_sorter.push(key.clone(), encode_external_plan_record(&first, true))?;
+                    pair_sorter.push(key, encode_external_plan_record(&plan, true))?;
+                } else {
+                    pending_pair = Some(plan);
+                }
+            } else {
+                pending_pair = Some(plan);
+            }
+            Ok(())
+        })
+        .map_err(MarkDuplicatesError::Operation)?;
+
+    process_external_duplicate_groups(
+        pair_sorter,
+        &mut decision_sorter,
+        &mut summary,
+        &mut library_registry,
+        true,
+        tracks_duplicate_set_histogram(config),
+        &processing_config,
+    )?;
+    process_external_duplicate_groups(
+        fragment_sorter,
+        &mut decision_sorter,
+        &mut summary,
+        &mut library_registry,
+        false,
+        tracks_duplicate_set_histogram(config),
+        &processing_config,
+    )?;
+    let decision_path = temporary.path().join("duplicate-ordinals.bin");
+    write_external_duplicate_ordinals(decision_sorter, &decision_path)?;
+
+    let mut writer = open_markdup_writer(config, &config.output, &header)?;
+    let mut decisions = File::open(&decision_path)?;
+    let mut replay_ordinal = 0_u64;
+    let mut next_duplicate = read_external_duplicate_decision(&mut decisions)?;
+    for input in &config.inputs {
+        let mut replay_reader = open_markdup_reader(config, input)?;
+        write_external_plan_records(
+            &mut replay_reader,
+            &mut decisions,
+            &mut replay_ordinal,
+            &mut next_duplicate,
+            config,
+            &mut writer,
+        )?;
+    }
+    if replay_ordinal != record_count {
+        return Err(MarkDuplicatesError::Operation(
+            "MarkDuplicates replay record count differs from external plan".to_string(),
+        ));
+    }
+    if next_duplicate.is_some() {
+        return Err(MarkDuplicatesError::Operation(
+            "external MarkDuplicates decision ordinal exceeds replay record count".to_string(),
+        ));
+    }
+    drop(writer);
+
+    finish_markdup_output(config, &library_registry)?;
+    Ok(Some(summary))
+}
+
+fn encode_external_plan_record(record: &ExternalPlanRecord, include_qname: bool) -> Vec<u8> {
+    let mut payload = Vec::with_capacity(80 + record.qname.len());
+    payload.extend_from_slice(&record.ordinal.to_le_bytes());
+    payload.extend_from_slice(&record.library_id.to_le_bytes());
+    payload.extend_from_slice(&record.flags.to_le_bytes());
+    payload.extend_from_slice(&record.reference_id.to_le_bytes());
+    payload.extend_from_slice(&record.position.to_le_bytes());
+    payload.extend_from_slice(&record.mate_reference_id.to_le_bytes());
+    payload.extend_from_slice(&record.mate_position.to_le_bytes());
+    payload.extend_from_slice(&record.template_length.to_le_bytes());
+    payload.extend_from_slice(&record.unclipped_position.to_le_bytes());
+    payload.extend_from_slice(&record.quality_score.to_le_bytes());
+    if include_qname {
+        payload.extend_from_slice(
+            &u32::try_from(record.qname.len())
+                .unwrap_or(u32::MAX)
+                .to_le_bytes(),
+        );
+        payload.extend_from_slice(&record.qname);
+    }
+    encode_external_barcode_values(&mut payload, &record.barcode);
+    encode_external_barcode(&mut payload, record.read_group.as_deref());
+    payload
+}
+
+fn encode_external_barcode_values(payload: &mut Vec<u8>, barcode: &ExternalBarcodeValues) {
+    encode_external_barcode(payload, barcode.primary.as_deref());
+    encode_external_barcode(payload, barcode.read_one.as_deref());
+    encode_external_barcode(payload, barcode.read_two.as_deref());
+}
+
+fn encode_external_barcode(payload: &mut Vec<u8>, barcode: Option<&[u8]>) {
+    match barcode {
+        None => payload.push(0),
+        Some(barcode) => {
+            payload.push(1);
+            payload.extend_from_slice(
+                &u64::try_from(barcode.len())
+                    .unwrap_or(u64::MAX)
+                    .to_le_bytes(),
+            );
+            payload.extend_from_slice(barcode);
+        }
+    }
+}
+
+fn decode_external_plan_record(
+    key: &[u8],
+    payload: &[u8],
+    qname_in_payload: bool,
+) -> Result<ExternalPlanRecord, String> {
+    let mut offset = 0usize;
+    let ordinal = read_external_u64(payload, &mut offset)?;
+    let library_id = read_external_u32(payload, &mut offset)?;
+    let flags = read_external_u16(payload, &mut offset)?;
+    let reference_id = read_external_i32(payload, &mut offset)?;
+    let position = read_external_i64(payload, &mut offset)?;
+    let mate_reference_id = read_external_i32(payload, &mut offset)?;
+    let mate_position = read_external_i64(payload, &mut offset)?;
+    let template_length = read_external_i64(payload, &mut offset)?;
+    let unclipped_position = read_external_i64(payload, &mut offset)?;
+    let quality_score = read_external_u64(payload, &mut offset)?;
+    let qname = if qname_in_payload {
+        let length = usize::try_from(read_external_u32(payload, &mut offset)?)
+            .map_err(|_| "external MarkDuplicates QNAME length is too large".to_string())?;
+        read_external_bytes(payload, &mut offset, length)?.to_vec()
+    } else {
+        key.to_vec()
+    };
+    let barcode = ExternalBarcodeValues {
+        primary: decode_external_barcode(payload, &mut offset)?,
+        read_one: decode_external_barcode(payload, &mut offset)?,
+        read_two: decode_external_barcode(payload, &mut offset)?,
+    };
+    let read_group = decode_external_barcode(payload, &mut offset)?;
+    if offset != payload.len() {
+        return Err("external MarkDuplicates record payload has trailing bytes".to_string());
+    }
+    Ok(ExternalPlanRecord {
+        ordinal,
+        library_id,
+        read_group,
+        flags,
+        reference_id,
+        position,
+        mate_reference_id,
+        mate_position,
+        template_length,
+        unclipped_position,
+        quality_score,
+        qname,
+        barcode,
+    })
+}
+
+fn decode_external_barcode(payload: &[u8], offset: &mut usize) -> Result<Option<Vec<u8>>, String> {
+    match read_external_u8(payload, offset)? {
+        0 => Ok(None),
+        1 => {
+            let length = usize::try_from(read_external_u64(payload, offset)?)
+                .map_err(|_| "external MarkDuplicates barcode length is too large".to_string())?;
+            Ok(Some(read_external_bytes(payload, offset, length)?.to_vec()))
+        }
+        _ => Err("external MarkDuplicates barcode marker is invalid".to_string()),
+    }
+}
+
+fn read_external_bytes<'a>(
+    payload: &'a [u8],
+    offset: &mut usize,
+    length: usize,
+) -> Result<&'a [u8], String> {
+    let end = offset
+        .checked_add(length)
+        .ok_or_else(|| "external MarkDuplicates payload length overflow".to_string())?;
+    let bytes = payload
+        .get(*offset..end)
+        .ok_or_else(|| "external MarkDuplicates record payload is truncated".to_string())?;
+    *offset = end;
+    Ok(bytes)
+}
+
+fn read_external_u8(payload: &[u8], offset: &mut usize) -> Result<u8, String> {
+    Ok(*read_external_bytes(payload, offset, 1)?
+        .first()
+        .expect("one byte was requested"))
+}
+
+fn read_external_u16(payload: &[u8], offset: &mut usize) -> Result<u16, String> {
+    let mut bytes = [0_u8; 2];
+    let length = bytes.len();
+    bytes.copy_from_slice(read_external_bytes(payload, offset, length)?);
+    Ok(u16::from_le_bytes(bytes))
+}
+
+fn read_external_u32(payload: &[u8], offset: &mut usize) -> Result<u32, String> {
+    let mut bytes = [0_u8; 4];
+    let length = bytes.len();
+    bytes.copy_from_slice(read_external_bytes(payload, offset, length)?);
+    Ok(u32::from_le_bytes(bytes))
+}
+
+fn read_external_u64(payload: &[u8], offset: &mut usize) -> Result<u64, String> {
+    let mut bytes = [0_u8; 8];
+    let length = bytes.len();
+    bytes.copy_from_slice(read_external_bytes(payload, offset, length)?);
+    Ok(u64::from_le_bytes(bytes))
+}
+
+fn read_external_i32(payload: &[u8], offset: &mut usize) -> Result<i32, String> {
+    let mut bytes = [0_u8; 4];
+    let length = bytes.len();
+    bytes.copy_from_slice(read_external_bytes(payload, offset, length)?);
+    Ok(i32::from_le_bytes(bytes))
+}
+
+fn read_external_i64(payload: &[u8], offset: &mut usize) -> Result<i64, String> {
+    let mut bytes = [0_u8; 8];
+    let length = bytes.len();
+    bytes.copy_from_slice(read_external_bytes(payload, offset, length)?);
+    Ok(i64::from_le_bytes(bytes))
+}
+
+struct ExternalKey<'a> {
+    library_id: LibraryId,
+    reference_id: i32,
+    position: i64,
+    mate_reference_id: i32,
+    mate_position: i64,
+    orientation: u8,
+    reverse_strand: bool,
+    barcode: &'a ExternalBarcodeValues,
+}
+
+fn external_key(key_fields: ExternalKey<'_>) -> Vec<u8> {
+    let mut key = Vec::with_capacity(4 + 4 + 8 + 4 + 8 + 2);
+    key.extend_from_slice(&key_fields.library_id.to_le_bytes());
+    key.extend_from_slice(&key_fields.reference_id.to_le_bytes());
+    key.extend_from_slice(&key_fields.position.to_le_bytes());
+    key.extend_from_slice(&key_fields.mate_reference_id.to_le_bytes());
+    key.extend_from_slice(&key_fields.mate_position.to_le_bytes());
+    key.push(key_fields.orientation);
+    key.push(u8::from(key_fields.reverse_strand));
+    encode_external_barcode(&mut key, key_fields.barcode.primary.as_deref());
+    encode_external_barcode(&m
