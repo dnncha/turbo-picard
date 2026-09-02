@@ -1,1 +1,1 @@
-@/workspace/agent-tools/upload_args_for_mcp.json
+PLACEHOLDER_WILL_REPLACE
