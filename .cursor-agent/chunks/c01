@@ -1,0 +1,122 @@
+           .ok()
+            .and_then(|value| value.checked_add(1))
+            .and_then(BarcodeId::new)
+            .ok_or_else(|| {
+                MarkDuplicatesError::Operation(
+                    "more than 4,294,967,294 distinct molecular barcodes are not supported"
+                        .to_string(),
+                )
+            })?;
+        self.by_value.insert(barcode, id);
+        Ok(Some(id))
+    }
+}
+
+pub fn run(config: &MarkDuplicatesConfig) -> Result<MarkDuplicatesSummary, MarkDuplicatesError> {
+    if config
+        .inputs
+        .iter()
+        .all(|input| hts_io::is_hts_container_input(input))
+    {
+        return run_hts_container(config);
+    }
+
+    if config.inputs.len() > 1 {
+        return Err(MarkDuplicatesError::UnsupportedInputFormat(
+            config.inputs.join(","),
+        ));
+    }
+    ensure_sam_input(&config.input)?;
+
+    let input = fs::read_to_string(&config.input)?;
+    let mut seen = HashMap::<DuplicateKey, usize>::default();
+    let mut output = String::with_capacity(input.len());
+    let mut summary = MarkDuplicatesSummary {
+        library: "Unknown Library".to_string(),
+        unpaired_reads_examined: 0,
+        read_pairs_examined: 0,
+        paired_records_examined: 0,
+        secondary_or_supplementary_records: 0,
+        unpaired_duplicate_records: 0,
+        duplicate_pair_records: 0,
+        read_pair_optical_duplicates: 0,
+        unmapped_records: 0,
+        duplicate_set_histogram: BTreeMap::new(),
+    };
+
+    for (line_index, line) in input.lines().enumerate() {
+        let line_number = line_index + 1;
+        if line.starts_with('@') {
+            output.push_str(line);
+            output.push('\n');
+            continue;
+        }
+
+        if try_append_fast_sam_markduplicate_line(
+            line,
+            line_number,
+            &mut seen,
+            &mut summary,
+            &mut output,
+            config,
+        )? {
+            continue;
+        }
+
+        let mut fields = line.split('\t').map(str::to_string).collect::<Vec<_>>();
+        if fields.len() < 11 {
+            return Err(MarkDuplicatesError::MalformedSam {
+                line_number,
+                reason: "expected at least 11 tab-delimited fields".to_string(),
+            });
+        }
+
+        let mut flag = fields[1]
+            .parse::<u16>()
+            .map_err(|_| MarkDuplicatesError::MalformedSam {
+                line_number,
+                reason: format!("invalid FLAG value: {}", fields[1]),
+            })?;
+
+        if flag & UNMAPPED_FLAG != 0 {
+            summary.unmapped_records += 1;
+            output.push_str(line);
+            output.push('\n');
+            continue;
+        }
+        if flag & SECONDARY_OR_SUPPLEMENTARY_FLAGS != 0 {
+            summary.secondary_or_supplementary_records += 1;
+            output.push_str(line);
+            output.push('\n');
+            continue;
+        }
+
+        if duplicate_candidate_is_pair(flag) {
+            summary.paired_records_examined += 1;
+            if flag & FIRST_IN_PAIR_FLAG != 0 {
+                summary.read_pairs_examined += 1;
+            }
+        } else {
+            summary.unpaired_reads_examined += 1;
+        }
+        let key = duplicate_key(&fields, flag, line_number, config)?;
+        let seen_count = seen.entry(key).or_insert(0);
+        let duplicate = *seen_count > 0;
+        *seen_count += 1;
+
+        if duplicate {
+            if duplicate_candidate_is_pair(flag) {
+                summary.duplicate_pair_records += 1;
+            } else {
+                summary.unpaired_duplicate_records += 1;
+            }
+            flag |= DUPLICATE_FLAG;
+            fields[1] = flag.to_string();
+        }
+
+        if !(duplicate && config.remove_duplicates) {
+            if config.tagging_policy.as_deref() == Some("All") && flag & DUPLICATE_FLAG != 0 {
+                add_duplicate_type_tag_to_sam_fields(&mut fields);
+            }
+            if config.add_pg_tag_to_reads {
+                add_program_group_
