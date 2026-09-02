@@ -5,6 +5,7 @@ on:
     paths:
       - .cursor-agent/chunks/**
       - .github/workflows/assemble-lib-rs.yml
+      - .github/scripts/assemble_lib_rs.py
 permissions:
   contents: write
 jobs:
@@ -15,10 +16,7 @@ jobs:
         with:
           ref: cursor/markdup-compact-ordinal-replay-1c0b
           token: ${{ secrets.GITHUB_TOKEN }}
-      - run: |
-          for i in $(seq -w 0 36); do
-            cat ".cursor-agent/chunks/c${i}"
-          done > crates/turbo-picard-markdup/src/lib.rs
+      - run: python3 .github/scripts/assemble_lib_rs.py
       - run: wc -c crates/turbo-picard-markdup/src/lib.rs
       - uses: stefanzweifel/git-auto-commit-action@v5
         with:
