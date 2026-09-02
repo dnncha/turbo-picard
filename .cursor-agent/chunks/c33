@@ -1,0 +1,104 @@
+tadata> {
+        records
+            .iter()
+            .map(|record| ReadEndMetadata {
+                library_id: 0,
+                unclipped_position: unclipped_record_position(record),
+                quality_score: quality_score(record),
+                barcode_id: None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn best_duplicate_representative_index_aggregates_score_by_read_name() {
+        let records = [
+            record_with_name_and_qualities(b"dup-a", &[20], 0),
+            record_with_name_and_qualities(b"dup-a", &[15], 0),
+            record_with_name_and_qualities(b"dup-b", &[35], 0),
+            record_with_name_and_qualities(b"dup-c", &[5], 0),
+        ];
+
+        let mut read_ends = read_ends_for_records(&records);
+        let representative_index =
+            best_duplicate_representative_index(&[0, 1, 2, 3], &records, &mut read_ends);
+        assert_eq!(representative_index, 0);
+    }
+
+    #[test]
+    fn best_duplicate_representative_index_tie_keeps_first_seen_index() {
+        let records = [
+            record_with_name_and_qualities(b"dup-a", &[20], 0),
+            record_with_name_and_qualities(b"dup-b", &[10], 0),
+            record_with_name_and_qualities(b"dup-c", &[10], 0),
+        ];
+
+        let mut read_ends = read_ends_for_records(&records);
+        let representative_index =
+            best_duplicate_representative_index(&[0, 1, 2], &records, &mut read_ends);
+        assert_eq!(representative_index, 0);
+    }
+
+    #[test]
+    fn barcode_registry_interns_equal_values_without_collisions() {
+        let mut registry = BarcodeRegistry::default();
+        let first = registry
+            .intern(Some(b"ACGT".to_vec()))
+            .expect("first barcode");
+        let equal = registry
+            .intern(Some(b"ACGT".to_vec()))
+            .expect("equal barcode");
+        let distinct = registry
+            .intern(Some(b"TGCA".to_vec()))
+            .expect("distinct barcode");
+
+        assert_eq!(first, equal);
+        assert_ne!(first, distinct);
+        assert_eq!(registry.by_value.len(), 2);
+        assert_eq!(registry.intern(None).expect("missing barcode"), None);
+    }
+
+    #[test]
+    fn read_end_metadata_stays_compact() {
+        assert!(std::mem::size_of::<ReadEndMetadata>() <= 24);
+        assert!(std::mem::size_of::<ReadEndDuplicateKey>() <= 40);
+    }
+
+    #[test]
+    fn external_plan_payload_round_trips_qname_and_duplicate_metadata() {
+        let record = record_with_name_and_qualities(b"read-17", &[20, 30], 0x41);
+        let config = sam_markdup_config();
+        let plan = external_plan_record(17, &record, 3, &config);
+
+        let qname_payload = encode_external_plan_record(&plan, false);
+        let qname_round_trip =
+            decode_external_plan_record(plan.qname.as_slice(), &qname_payload, false)
+                .expect("qname-sort payload decodes");
+        assert_eq!(qname_round_trip.ordinal, 17);
+        assert_eq!(qname_round_trip.library_id, 3);
+        assert_eq!(qname_round_trip.flags, 0x41);
+        assert_eq!(qname_round_trip.qname, b"read-17");
+
+        let member_payload = encode_external_plan_record(&plan, true);
+        let member_round_trip =
+            decode_external_plan_record(b"duplicate-key", &member_payload, true)
+                .expect("duplicate-member payload decodes");
+        assert_eq!(member_round_trip.qname, b"read-17");
+        assert_eq!(
+            member_round_trip.unclipped_position,
+            plan.unclipped_position
+        );
+        assert_eq!(member_round_trip.quality_score, plan.quality_score);
+    }
+
+    #[test]
+    fn external_decision_payload_round_trips_duplicate_set_metadata() {
+        let decision = ExternalDecision {
+            flags: EXTERNAL_DECISION_DUPLICATE
+                | EXTERNAL_DECISION_OPTICAL
+                | EXTERNAL_DECISION_SET_MEMBERS,
+            duplicate_set_size: Some(7),
+            duplicate_set_index: Some(42),
+        };
+
+        let encoded = encode_external_decision_pa
