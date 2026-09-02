@@ -1,0 +1,126 @@
+      reverse_strand,
+        barcode: barcode.clone(),
+    }
+}
+
+fn fragment_duplicate_key(record: &bam::Record, read_end: &ReadEndMetadata) -> ReadEndDuplicateKey {
+    let reverse_strand = record.flags() & 0x10 != 0;
+    ReadEndDuplicateKey {
+        library_id: read_end.library_id,
+        reference_id: record.tid(),
+        position: read_end.unclipped_position,
+        mate_reference_id: -1,
+        mate_position: -1,
+        orientation: 0,
+        reverse_strand,
+        barcode_id: read_end.barcode_id,
+    }
+}
+
+fn pair_duplicate_key(
+    first: &bam::Record,
+    second: &bam::Record,
+    first_read_end: &ReadEndMetadata,
+    second_read_end: &ReadEndMetadata,
+    barcode_id: Option<BarcodeId>,
+) -> ReadEndDuplicateKey {
+    let first_position = first_read_end.unclipped_position;
+    let second_position = second_read_end.unclipped_position;
+    let (left, right) = if (first.tid(), first_position) <= (second.tid(), second_position) {
+        ((first, first_read_end), (second, second_read_end))
+    } else {
+        ((second, second_read_end), (first, first_read_end))
+    };
+
+    ReadEndDuplicateKey {
+        library_id: first_read_end.library_id,
+        reference_id: left.0.tid(),
+        position: left.1.unclipped_position,
+        mate_reference_id: right.0.tid(),
+        mate_position: right.1.unclipped_position,
+        orientation: pair_orientation_code(left.0, right.0),
+        reverse_strand: false,
+        barcode_id,
+    }
+}
+
+fn pair_orientation_code(left: &bam::Record, right: &bam::Record) -> u8 {
+    let left_reverse = u8::from(left.flags() & 0x10 != 0);
+    let right_reverse = u8::from(right.flags() & 0x10 != 0);
+    (left_reverse << 1) | right_reverse
+}
+
+fn unclipped_record_position(record: &bam::Record) -> i64 {
+    let reverse_strand = record.flags() & 0x10 != 0;
+    let cigar = record.raw_cigar();
+    if reverse_strand {
+        let reference_len: i64 = cigar
+            .iter()
+            .filter(|operation| raw_cigar_consumes_reference(**operation))
+            .map(|operation| raw_cigar_len(*operation))
+            .sum();
+        let trailing_clip: i64 = cigar
+            .iter()
+            .rev()
+            .take_while(|operation| raw_cigar_is_clip(**operation))
+            .map(|operation| raw_cigar_len(*operation))
+            .sum();
+        record.pos() + reference_len + trailing_clip - 1
+    } else {
+        let leading_clip: i64 = cigar
+            .iter()
+            .take_while(|operation| raw_cigar_is_clip(**operation))
+            .map(|operation| raw_cigar_len(*operation))
+            .sum();
+        record.pos() - leading_clip
+    }
+}
+
+fn raw_cigar_len(operation: u32) -> i64 {
+    i64::from(operation >> 4)
+}
+
+fn raw_cigar_op(operation: u32) -> u32 {
+    operation & 0x0f
+}
+
+fn raw_cigar_consumes_reference(operation: u32) -> bool {
+    matches!(raw_cigar_op(operation), 0 | 2 | 3 | 7 | 8)
+}
+
+fn raw_cigar_is_clip(operation: u32) -> bool {
+    matches!(raw_cigar_op(operation), 4 | 5)
+}
+
+fn unclipped_five_prime_position(
+    position: i64,
+    cigar: &str,
+    reverse_strand: bool,
+    line_number: usize,
+) -> Result<i64, MarkDuplicatesError> {
+    let operations = parse_cigar(cigar, line_number)?;
+    if reverse_strand {
+        let reference_len: i64 = operations
+            .iter()
+            .filter(|(_, op)| matches!(op, 'M' | 'D' | 'N' | '=' | 'X'))
+            .map(|(len, _)| *len)
+            .sum();
+        let trailing_clip = operations
+            .iter()
+            .rev()
+            .take_while(|(_, op)| matches!(op, 'S' | 'H'))
+            .map(|(len, _)| *len)
+            .sum::<i64>();
+        Ok(position + reference_len + trailing_clip - 1)
+    } else {
+        let leading_clip = operations
+            .iter()
+            .take_while(|(_, op)| matches!(op, 'S' | 'H'))
+            .map(|(len, _)| *len)
+            .sum::<i64>();
+        Ok(position - leading_clip)
+    }
+}
+
+fn parse_cigar(cigar: &str, line_number: usize) -> Result<Vec<(i64, char)>, MarkDuplicatesError> {
+   

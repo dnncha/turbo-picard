@@ -1,0 +1,127 @@
+;
+
+fn duplicate_candidate_is_pair(flag: u16) -> bool {
+    flag & PAIRED_FLAG != 0 && flag & MATE_UNMAPPED_FLAG == 0
+}
+
+impl MarkDuplicatesSummary {
+    fn read_pair_duplicates(&self) -> u64 {
+        self.duplicate_pair_records / 2
+    }
+
+    fn effective_read_pairs_examined(&self) -> u64 {
+        if self.paired_records_examined > 0 {
+            self.paired_records_examined / 2
+        } else {
+            self.read_pairs_examined
+        }
+    }
+}
+
+struct LibraryLookup {
+    by_read_group: HashMap<Vec<u8>, LibraryId>,
+    first_library_id: LibraryId,
+    unknown_id: LibraryId,
+}
+
+struct LibraryRegistry {
+    ids_by_name: HashMap<String, LibraryId>,
+    summaries: Vec<MarkDuplicatesSummary>,
+}
+
+impl LibraryRegistry {
+    fn new() -> Self {
+        Self {
+            ids_by_name: HashMap::default(),
+            summaries: Vec::new(),
+        }
+    }
+
+    fn intern(&mut self, library: &str) -> LibraryId {
+        if let Some(id) = self.ids_by_name.get(library) {
+            return *id;
+        }
+        let id = LibraryId::try_from(self.summaries.len()).expect("library id fits in u32");
+        self.ids_by_name.insert(library.to_string(), id);
+        self.summaries.push(MarkDuplicatesSummary {
+            library: library.to_string(),
+            unpaired_reads_examined: 0,
+            read_pairs_examined: 0,
+            paired_records_examined: 0,
+            secondary_or_supplementary_records: 0,
+            unpaired_duplicate_records: 0,
+            duplicate_pair_records: 0,
+            read_pair_optical_duplicates: 0,
+            unmapped_records: 0,
+            duplicate_set_histogram: BTreeMap::new(),
+        });
+        id
+    }
+
+    fn summary(&self, id: LibraryId) -> &MarkDuplicatesSummary {
+        &self.summaries[id as usize]
+    }
+
+    fn summary_mut(&mut self, id: LibraryId) -> &mut MarkDuplicatesSummary {
+        &mut self.summaries[id as usize]
+    }
+
+    fn summary_refs(&self) -> Vec<&MarkDuplicatesSummary> {
+        self.summaries
+            .iter()
+            .filter(|summary| !summary.is_empty())
+            .collect()
+    }
+}
+
+impl MarkDuplicatesSummary {
+    fn is_empty(&self) -> bool {
+        self.unpaired_reads_examined == 0
+            && self.read_pairs_examined == 0
+            && self.secondary_or_supplementary_records == 0
+            && self.unpaired_duplicate_records == 0
+            && self.duplicate_pair_records == 0
+            && self.read_pair_optical_duplicates == 0
+            && self.unmapped_records == 0
+            && self.paired_records_examined == 0
+            && self.duplicate_set_histogram.is_empty()
+    }
+}
+
+fn library_lookup(header: &bam::HeaderView, registry: &mut LibraryRegistry) -> LibraryLookup {
+    let mut lookup = HashMap::<Vec<u8>, LibraryId>::default();
+    let unknown_id = registry.intern("Unknown Library");
+    let mut first_library_id = None::<LibraryId>;
+    let header_text = String::from_utf8_lossy(header.as_bytes());
+    for line in header_text.lines() {
+        if !line.starts_with("@RG\t") {
+            continue;
+        }
+        let mut read_group = None::<Vec<u8>>;
+        let mut library_name = None::<&str>;
+        for field in line.split('\t') {
+            if let Some(id) = field.strip_prefix("ID:") {
+                read_group = Some(id.as_bytes().to_vec());
+            }
+            if let Some(library) = field.strip_prefix("LB:") {
+                library_name = Some(library);
+            }
+        }
+        if let Some(read_group) = read_group {
+            let library_id = registry.intern(library_name.unwrap_or("Unknown Library"));
+            first_library_id.get_or_insert(library_id);
+            lookup.insert(read_group, library_id);
+        }
+    }
+
+    LibraryLookup {
+        by_read_group: lookup,
+        first_library_id: first_library_id.unwrap_or(unknown_id),
+        unknown_id,
+    }
+}
+
+fn read_group_ids(header: &bam::HeaderView) -> HashSet<Vec<u8>> {
+    let header_text = String::from_utf8_lossy(header.as_bytes());
+    header_text
+    

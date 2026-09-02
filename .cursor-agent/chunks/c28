@@ -1,0 +1,131 @@
+ let mut operations = Vec::new();
+    let mut length = 0i64;
+    let mut seen_operation = false;
+
+    for character in cigar.bytes() {
+        if character.is_ascii_digit() {
+            length = length
+                .checked_mul(10)
+                .and_then(|value| value.checked_add(i64::from(character - b'0')))
+                .filter(|value| *value >= 0)
+                .ok_or_else(|| MarkDuplicatesError::MalformedSam {
+                    line_number,
+                    reason: format!("invalid CIGAR value: {cigar}"),
+                })?;
+            continue;
+        }
+        if length == 0 {
+            return Err(MarkDuplicatesError::MalformedSam {
+                line_number,
+                reason: format!("invalid CIGAR value: {cigar}"),
+            });
+        }
+        if !matches!(
+            character as char,
+            'M' | 'I' | 'D' | 'N' | 'S' | 'H' | 'P' | '=' | 'X'
+        ) {
+            return Err(MarkDuplicatesError::MalformedSam {
+                line_number,
+                reason: format!("invalid CIGAR value: {cigar}"),
+            });
+        }
+        operations.push((length, character as char));
+        length = 0;
+        seen_operation = true;
+    }
+
+    if !seen_operation {
+        return Err(MarkDuplicatesError::MalformedSam {
+            line_number,
+            reason: format!("invalid CIGAR value: {cigar}"),
+        });
+    }
+
+    if length != 0 {
+        return Err(MarkDuplicatesError::MalformedSam {
+            line_number,
+            reason: format!("invalid CIGAR value: {cigar}"),
+        });
+    }
+
+    Ok(operations)
+}
+
+fn quality_score(record: &bam::Record) -> u64 {
+    record
+        .qual()
+        .iter()
+        .filter(|quality| **quality >= 15)
+        .map(|quality| u64::from(*quality))
+        .sum()
+}
+
+fn has_multiple_read_names(group: &[usize], records: &[bam::Record]) -> bool {
+    let Some(first_index) = group.first() else {
+        return false;
+    };
+    let first_name = records[*first_index].qname();
+    group
+        .iter()
+        .skip(1)
+        .any(|index| records[*index].qname() != first_name)
+}
+
+fn paired_duplicate_set_size(group: &[usize], records: &[bam::Record]) -> Option<u64> {
+    if !group
+        .iter()
+        .any(|index| duplicate_candidate_is_pair(records[*index].flags()))
+    {
+        return None;
+    }
+    let mut names = HashSet::<&[u8]>::default();
+    for index in group.iter().copied() {
+        names.insert(records[index].qname());
+    }
+    u64::try_from(names.len()).ok().filter(|size| *size > 0)
+}
+
+fn best_duplicate_representative_index(
+    group: &[usize],
+    records: &[bam::Record],
+    read_ends: &mut [ReadEndMetadata],
+) -> usize {
+    // The records outlive this map, so use borrowed qname slices. This keeps
+    // representative selection allocation-free while preserving Picard's
+    // stable first-record tie break.
+    let mut scores_by_name = HashMap::<&[u8], (usize, u64)>::default();
+
+    for index in group.iter().copied() {
+        let score = if read_ends[index].quality_score == UNCOMPUTED_QUALITY_SCORE {
+            let score = quality_score(&records[index]);
+            read_ends[index].quality_score = score;
+            score
+        } else {
+            read_ends[index].quality_score
+        };
+        let name = records[index].qname();
+        let entry = scores_by_name.entry(name).or_insert((index, 0));
+        entry.1 += score;
+    }
+
+    scores_by_name
+        .into_values()
+        .max_by(|left, right| left.1.cmp(&right.1).then_with(|| right.0.cmp(&left.0)))
+        .map(|(index, _)| index)
+        .expect("non-empty duplicate group")
+}
+
+fn add_duplicate_set(
+    summary: &mut MarkDuplicatesSummary,
+    all_set_size: u64,
+    non_optical_set_size: Option<u64>,
+) {
+    if all_set_size == 0 {
+        return;
+    }
+    summary
+        .duplicate_set_histogram
+        .entry(all_set_size)
+        .or_default()
+        .all_sets += 1;
+    if let Some(non_optical_set_size) = non_optical_set_size.filter(|size| *siz
