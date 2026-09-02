@@ -1,0 +1,101 @@
+ze = i32::from_le_bytes(size_bytes);
+    let index = i32::from_le_bytes(index_bytes);
+    let has_set_members = flags & EXTERNAL_DECISION_SET_MEMBERS != 0;
+    if has_set_members
+        == (size == EXTERNAL_DECISION_ABSENT_TAG || index == EXTERNAL_DECISION_ABSENT_TAG)
+    {
+        return Err("external MarkDuplicates duplicate-set metadata is incomplete".to_string());
+    }
+    Ok(ExternalDecision {
+        flags,
+        duplicate_set_size: (size != EXTERNAL_DECISION_ABSENT_TAG).then_some(size),
+        duplicate_set_index: (index != EXTERNAL_DECISION_ABSENT_TAG).then_some(index),
+    })
+}
+
+fn merge_external_decisions(
+    left: ExternalDecision,
+    right: ExternalDecision,
+) -> Result<ExternalDecision, String> {
+    let duplicate_set_size = match (left.duplicate_set_size, right.duplicate_set_size) {
+        (Some(left), Some(right)) if left != right => {
+            return Err("external MarkDuplicates duplicate-set sizes conflict".to_string());
+        }
+        (Some(value), _) | (_, Some(value)) => Some(value),
+        (None, None) => None,
+    };
+    let duplicate_set_index = match (left.duplicate_set_index, right.duplicate_set_index) {
+        (Some(left), Some(right)) if left != right => {
+            return Err("external MarkDuplicates duplicate-set indices conflict".to_string());
+        }
+        (Some(value), _) | (_, Some(value)) => Some(value),
+        (None, None) => None,
+    };
+    Ok(ExternalDecision {
+        flags: left.flags | right.flags,
+        duplicate_set_size,
+        duplicate_set_index,
+    })
+}
+
+fn write_external_duplicate_ordinals(
+    sorter: ExternalSorter,
+    path: &Path,
+) -> Result<(), MarkDuplicatesError> {
+    // Duplicate groups arrive in fragment/pair sort order. Normalize their
+    // ordinals once so BAM replay can consume a sequential stream instead of
+    // performing one random seek for every duplicate record. The fixed-width
+    // decision payload preserves optical status and optional DS/DI metadata.
+    let file = File::create(path)?;
+    let mut writer = BufWriter::new(file);
+    let mut previous = None::<(u64, ExternalDecision)>;
+    sorter
+        .finish_into(|item| {
+            if item.key.len() != std::mem::size_of::<u64>() {
+                return Err("external MarkDuplicates decision key has invalid length".to_string());
+            }
+            let decision = decode_external_decision_payload(&item.payload)?;
+            let mut bytes = [0_u8; 8];
+            bytes.copy_from_slice(&item.key);
+            let ordinal = u64::from_be_bytes(bytes);
+            match previous {
+                Some((previous_ordinal, previous_decision)) if previous_ordinal == ordinal => {
+                    previous = Some((
+                        previous_ordinal,
+                        merge_external_decisions(previous_decision, decision)?,
+                    ));
+                }
+                Some((previous_ordinal, previous_decision)) => {
+                    write_external_decision(&mut writer, previous_ordinal, previous_decision)?;
+                    previous = Some((ordinal, decision));
+                }
+                None => previous = Some((ordinal, decision)),
+            }
+            Ok(())
+        })
+        .map_err(MarkDuplicatesError::Operation)?;
+    if let Some((ordinal, decision)) = previous {
+        write_external_decision(&mut writer, ordinal, decision)
+            .map_err(MarkDuplicatesError::Operation)?;
+    }
+    writer.flush()?;
+    Ok(())
+}
+
+fn write_external_decision(
+    writer: &mut impl Write,
+    ordinal: u64,
+    decision: ExternalDecision,
+) -> Result<(), String> {
+    writer
+        .write_all(&ordinal.to_be_bytes())
+        .map_err(|error| error.to_string())?;
+    writer
+        .write_all(&encode_external_decision_payload(&decision))
+        .map_err(|error| error.to_string())
+}
+
+fn read_external_duplicate_decision(
+    reader: &mut impl IoRead,
+) -> Result<Option<(u64, ExternalDecision)>, std::io::Error> {
+    let mut ordinal_bytes = [0_u
