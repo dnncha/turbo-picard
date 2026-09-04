@@ -9,7 +9,7 @@ Why Picard jobs get slow and memory-hungry—and how to test a replacement safel
 
 .. rubric:: Engineering note
 
-**Published:** 4 September 2026 · **Last verified:** 4 September 2026 · **Evidence baseline:** Turbo Picard 0.1.12 against Picard 3.4.0
+**Author:** Donncha O'Toole · **Published:** 4 September 2026 · **Last verified:** 4 September 2026 · **Evidence baseline:** Turbo Picard 0.1.12 against Picard 3.4.0
 
 .. important::
 
