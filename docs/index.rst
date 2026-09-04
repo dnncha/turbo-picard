@@ -31,6 +31,13 @@ Start here
 .. grid:: 1 1 2 2
    :gutter: 2
 
+   .. grid-item-card:: Why Picard jobs get slow
+      :link: picard-markduplicates-slow-memory-alternatives
+      :link-type: doc
+
+      Understand JVM costs, memory pressure, I/O, competing tools, and the
+      safest way to test one replacement command.
+
    .. grid-item-card:: New user
       :link: quickstart
       :link-type: doc
@@ -118,6 +125,7 @@ Start here
    is-this-for-you
    first-command
    evaluation-playbook
+   picard-markduplicates-slow-memory-alternatives
    use-cases
    picard-alternatives
    picard-vs-turbo-picard
