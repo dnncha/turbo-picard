@@ -1,10 +1,10 @@
-How to test Turbo Picard safely
--------------------------------
+How I would test it in a real pipeline
+--------------------------------------
 
-Do not begin by replacing every ``picard`` invocation. Begin with one command that is expensive enough to matter and narrow enough to compare.
+I would not start with the ``picard`` shim or a repo-wide search-and-replace. Pick one command whose runtime or memory use is visible in the profile.
 
-1. Install the explicit command
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+1. Install Turbo Picard alongside Picard
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 .. code-block:: bash
 
@@ -13,10 +13,10 @@ Do not begin by replacing every ``picard`` invocation. Begin with one command th
    turbo-picard doctor --json
    turbo-picard capabilities --json
 
-Keep upstream Picard installed. Do not enable the optional ``picard`` shim yet.
+Leave upstream Picard installed. You want an easy way back.
 
-2. Preflight the exact invocation
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+2. Ask about the exact command
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 .. code-block:: bash
 
@@ -26,12 +26,12 @@ Keep upstream Picard installed. Do not enable the optional ``picard`` shim yet.
      M=turbo.metrics.txt \
      CREATE_INDEX=true
 
-Read the native scope, delegated scope, outputs, reference requirements and caveats. If a required option is outside the documented native scope, stay with Picard or configure fallback.
+Read the answer before you run anything. If an option you rely on is outside native scope, either configure fallback or keep that step on Picard.
 
-3. Run both tools on representative data
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+3. Run both on data that can surprise you
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-Use the same input, options, reference, compression setting and machine. Include ordinary samples and at least one awkward sample: high duplication, multiple libraries, unusual read names, CRAM, UMI or whatever is difficult in your workflow.
+Use the same input, options, reference, compression setting and machine. Do not test only the clean sample you use in demos. Include something awkward for your workflow: high duplication, several libraries, odd read names, CRAM, UMI data, or whatever has broken assumptions before.
 
 .. code-block:: bash
 
@@ -47,88 +47,55 @@ Use the same input, options, reference, compression setting and machine. Include
      M=turbo.metrics.txt \
      CREATE_INDEX=true
 
-Record wall time, CPU, peak RSS, temporary disk and output size.
+Keep wall time, CPU, peak RSS, temporary disk use and output size. A single elapsed-time number throws away too much information.
 
-4. Compare the scientific contract
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+4. Compare what the next stage actually reads
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-Do not stop at ``samtools quickcheck``. Compare what downstream analysis consumes:
+``samtools quickcheck`` is useful, but it cannot tell you that the two tools made the same scientific decisions. For ``MarkDuplicates``, compare the duplicate flags, relevant tags, metrics, headers, sort order, index and failure behaviour that your downstream steps depend on.
 
--  duplicate flags per record;
--  duplicate and optical tags;
--  duplicate-set metadata, where enabled;
--  read groups and headers;
--  metrics rows;
--  index presence and validity;
--  sort order;
--  exit status and failure behaviour.
+The Turbo Picard repository includes command-specific comparison scripts and pinned evidence bundles. I would use those as a starting point, then add checks for the peculiarities of the real pipeline.
 
-The Turbo Picard repository contains comparison scripts and pinned evidence bundles that show how its saved claims were produced.
+5. Canary it
+~~~~~~~~~~~~
 
-5. Canary the change
-~~~~~~~~~~~~~~~~~~~~
+Run a small slice of samples through both paths. Keep Picard available. If the outputs agree and the resource saving survives contact with the real scheduler, widen the trial. If they do not, stop there.
 
-Run a small percentage of samples through both paths. Keep Picard as the automatic fallback. Promote the command only after the representative comparison passes and the resource gain matters on the real scheduler.
+6. Write down the result
+~~~~~~~~~~~~~~~~~~~~~~~~
 
-6. Publish the result
-~~~~~~~~~~~~~~~~~~~~~
+A useful report does not need to be flattering. Record the tool versions, exact commands, input accession or reproducer, machine and storage profile, parity method, wall time, peak RSS, temporary disk use and any mismatch.
 
-A matching result is useful. A mismatch is useful too.
+Independent failures are as valuable to this project as independent wins. They tell me where the compatibility boundary really is.
 
-Record:
+When I would keep Picard
+------------------------
 
--  tool versions and commit or package hashes;
--  exact commands;
--  input accession or a shareable synthetic reproducer;
--  machine and storage profile;
--  parity method;
--  wall time, peak RSS and temporary disk;
--  any unsupported option or difference.
+I would keep the existing Picard step if the command or option is outside Turbo Picard's native scope, if I cannot run a representative comparison, or if the native path does not save enough on the real workload to justify another executable in the stack.
 
-Independent results are the evidence the project needs most.
+The same goes for regulated or clinical pipelines whose change-control process has not approved the replacement. And if profiling says the real bottleneck is storage, alignment or variant calling, changing Picard is simply work on the wrong problem.
 
-When you should stay with Picard
+“No change” is a perfectly good result from an evaluation.
+
+What would make me trust it more
 --------------------------------
 
-Stay with Picard when:
+The current benchmark is maintainer evidence. It is useful, but it is not the evidence I ultimately want.
 
--  the exact command or option is outside Turbo Picard's documented native scope;
--  the workflow needs Picard-specific charts or incidental output formatting that has not been matched;
--  you cannot run a representative comparison;
--  a regulated or clinical change-control process has not approved the new executable;
--  the measured bottleneck is storage, alignment or variant calling rather than the Picard step;
--  the native path is not materially faster or leaner on your data.
+I want production-shaped WGS, WES, CRAM, UMI and multi-library runs from people who did not write Turbo Picard. I want their exact commands and machine details. I want the mismatches left in public, not edited out of the story.
 
-A good acceleration tool should make “no” an easy answer.
+Until that body of evidence exists, the sensible claim is small: Turbo Picard has enough parity and fixture evidence to be worth testing where Picard is a measured bottleneck.
 
-Do not trust the headline
--------------------------
-
-The genomics industry should not trust Turbo Picard because its website has a large speedup number.
-
-It should trust the project when:
-
--  the scope of each claim is visible;
--  unsupported behaviour fails or delegates instead of disappearing;
--  the benchmark can be reproduced;
--  independent teams publish matches and mismatches;
--  production-shaped WGS, WES, CRAM, UMI and multi-library evidence accumulates;
--  the tool remains useful even when the answer is “keep Picard for this command.”
-
-Turbo Picard's current evidence says a trial is worthwhile. It does not ask you to take the rest on faith.
-
-Pick one expensive Picard step. Run both tools. Measure the full process. Compare the outputs that matter.
-
-**Do not trust the benchmark headline. Trust the comparison you can rerun.**
+The test itself is deliberately dull. Pick one command. Run both versions. Measure the process. Compare the outputs. If Turbo Picard wins on your workload without changing what matters, keep it. If it does not, keep Picard.
 
 Next step
 ---------
 
-Keep upstream Picard installed, print the exact trial contract, and compare one representative command:
+Keep upstream Picard installed and print the exact trial contract:
 
 .. code-block:: bash
 
    python3 -m pip install turbo-picard
    turbo-picard trial MarkDuplicates I=input.bam O=marked.bam M=metrics.txt
 
-Then read the :doc:`evaluation playbook <evaluation-playbook>`, inspect the :doc:`command matrix <commands>`, and share a successful match, mismatch, or adoption blocker through the `trial report form <https://github.com/dnncha/turbo-picard/issues/new?template=trial-report.yml>`__.
+Then read the :doc:`evaluation playbook <evaluation-playbook>`, inspect the :doc:`command matrix <commands>`, and share a match, mismatch or adoption blocker through the `trial report form <https://github.com/dnncha/turbo-picard/issues/new?template=trial-report.yml>`__.
