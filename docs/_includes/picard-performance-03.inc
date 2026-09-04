@@ -1,5 +1,5 @@
 Which alternative fits which job?
--------------------------------
+---------------------------------
 
 The useful comparison is not “which Picard replacement is fastest?” The tools below solve different versions of the problem.
 
@@ -53,7 +53,7 @@ Commercial CPU and GPU stacks move the decision to a different level. Sentieon a
 Those are vendor claims tied to their own software and hardware assumptions. They are relevant if you are choosing a broader pipeline platform, less so if you want to replace one command without changing the rest of the system.
 
 Where I think Turbo Picard fits
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 I built Turbo Picard for the awkward middle case: the pipeline already speaks Picard, the step is expensive enough to bother you, and you do not want a performance project to become a workflow rewrite.
 
