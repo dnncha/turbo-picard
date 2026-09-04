@@ -46,7 +46,7 @@ parity_picard() {
       "PATH=${PARITY_WORKDIR}:${PARITY_CONDA_PREFIX}/bin:${PATH:-/usr/bin:/bin}" \
       picard "$@" VALIDATION_STRINGENCY=SILENT QUIET=true
   else
-    picard "$@" VALIDATION_STRINGENCY=SILENT QUIET=true
+    command picard "$@" VALIDATION_STRINGENCY=SILENT QUIET=true
   fi
 }
 
