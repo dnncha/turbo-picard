@@ -1,50 +1,38 @@
-The replacement trap is compatibility
--------------------------------------
-
-It is easy to produce a valid BAM. It is harder to produce the BAM the next step expects.
-
-Duplicate marking alone can involve:
-
--  which alignments participate in duplicate discovery;
--  how unclipped coordinates and orientation are calculated;
--  how the representative read is chosen;
--  optical-duplicate discovery;
--  barcode or UMI grouping;
--  secondary and supplementary alignments;
--  duplicate-set tags;
--  metrics and library-size estimates;
--  output ordering;
--  index creation;
--  exit status and failure behaviour.
-
-Two tools can report the same number of duplicates and still disagree on individual reads. That may or may not matter downstream. The workflow owner has to decide—not the benchmark author.
-
-Turbo Picard therefore uses an explicit compatibility contract. A command can be byte-compatible for a documented scope, semantically compatible, compatible only within a named option subset, delegated to upstream Picard, or unsupported. An output-changing option must be implemented, rejected clearly, or delegated. It must not be silently ignored. [9]_
-
-The comparator also changes with the command. Exact BAM bytes are not always the right test because harmless header fields or equal-coordinate tie ordering can differ. For ``MarkDuplicates``, the comparison should cover duplicate flags, duplicate tags, duplicate-set metadata, optical counts and stable metrics. For ``BuildBamIndex``, exact BAI bytes make sense. For ``SamToFastq``, FASTQ bytes matter. For ``ValidateSamFile``, the issue histogram and exit code matter.
-
-Compatibility is not a badge. It is a list of observable obligations.
-
-What Turbo Picard actually is
------------------------------
-
-Turbo Picard is a native acceleration layer for existing Picard-shaped workflows.
-
-It is designed around four ideas:
-
-1. **Keep the interface familiar.** Existing Picard command names and ``KEY=VALUE`` arguments reduce migration work.
-2. **Make native scope explicit.** ``turbo-picard capabilities --json`` and ``turbo-picard explain --json …`` let a person or workflow inspect what will run natively.
-3. **Fall back instead of bluffing.** Unsupported commands or options can be delegated to an installed Picard command.
-4. **Compare before switching.** The repository includes command-specific parity checks and reproducible benchmark artefacts.
-
-It is not a complete reimplementation of every Picard command. It is not a blanket drop-in replacement. It is not a claim that a maintainer's fixture proves a clinical or cohort workflow safe.
-
-That narrower description may sound less exciting. It is the reason the tool can be evaluated rationally.
-
-What the current evidence says
+Compatibility is the hard part
 ------------------------------
 
-As of Turbo Picard 0.1.12, the saved command suite reports:
+A valid BAM is a low bar. The next stage in the pipeline may care about exactly which read carries the duplicate flag, which tags were written, how metrics were calculated, whether an index appeared and what happened on bad input.
+
+For duplicate marking, I would check at least:
+
+-  duplicate flags and the choice of representative read;
+-  optical-duplicate and duplicate-set tags;
+-  barcode or UMI behaviour when those options are in use;
+-  secondary and supplementary alignments;
+-  metrics, library-size estimates, sort order and index output;
+-  exit codes and failure behaviour.
+
+Two tools can report the same duplicate count and still disagree record by record. Sometimes that difference is harmless. Sometimes it changes downstream work. The pipeline owner has to decide which is true.
+
+Turbo Picard documents compatibility by command and option. A path can be byte-compatible, semantically compatible, native only for a named option set, delegated to Picard, or unsupported. An option that changes output must be implemented, rejected or delegated; silently ignoring it is not acceptable. [9]_
+
+The comparison itself also depends on the command. Exact BAM bytes can differ for harmless reasons such as header fields or tie ordering. ``BuildBamIndex`` can sensibly be checked byte for byte. ``SamToFastq`` should be judged by the FASTQ it writes. ``ValidateSamFile`` needs its issue histogram and exit code checked.
+
+This is the part I would spend the most time on. Saving ten minutes is not worth discovering three stages later that the replacement changed a field nobody thought to compare.
+
+What Turbo Picard does, and what it does not
+--------------------------------------------
+
+Turbo Picard keeps Picard command names and ``KEY=VALUE`` arguments where it has a native implementation. Before running a command, ``turbo-picard capabilities --json`` shows the available surface and ``turbo-picard explain --json …`` explains the exact invocation.
+
+Unsupported work can fall back to an installed Picard. That matters because coverage is deliberately incomplete. Turbo Picard is not a reimplementation of every Picard command, and I would not treat it as a blind drop-in replacement.
+
+The intended migration is boring on purpose: inspect one command, run it both ways, compare the outputs, then decide whether that one step is worth changing.
+
+Evidence so far
+---------------
+
+For Turbo Picard 0.1.12, the saved fixture suite reports:
 
 +----------------------------------+----------------------------------+
 | Evidence                         | Saved result                     |
@@ -63,12 +51,8 @@ As of Turbo Picard 0.1.12, the saved command suite reports:
 | median RSS                       | Picard                           |
 +----------------------------------+----------------------------------+
 
-A separate pinned public NA12878 mitochondrial BAM comparison, retained from an earlier Turbo Picard release, checks 12 commands using command-specific digests. On that roughly 2 MB input, the measured speedups range from 3.09× for ``SortSam`` to 28.49× for ``CollectInsertSizeMetrics``; ``MarkDuplicates`` measures 9.95×. The evidence file records the exact versions and input digest, so this is historical command-level evidence, not a fresh 0.1.12 benchmark. [10]_
+There is also an older public comparison using a pinned NA12878 mitochondrial BAM of roughly 2 MB. It checks 12 commands with command-specific digests. Speedups run from 3.09× for ``SortSam`` to 28.49× for ``CollectInsertSizeMetrics``; ``MarkDuplicates`` is 9.95×. [10]_
 
-This is enough evidence to justify a trial.
+I keep that result because it is reproducible and uses public data. I do not present it as fresh 0.1.12 evidence. It came from an earlier release and the input is tiny.
 
-It is not enough evidence to justify an industry-wide performance promise.
-
-The repository's own production-readiness protocol says that broad claims require production-scale evidence and independent reproduction. It asks workflow owners to test the exact command and option set on representative data, keep Picard available during migration, and stop or fall back on a mismatch. [11]_
-
-That is the standard I want Turbo Picard to be judged by.
+At this point I think the evidence is good enough to justify trying the tool. I do not think it is good enough to make a blanket production claim. The project's production-readiness protocol sets the same bar: test the exact command and options on representative data, keep Picard available, and stop or fall back if the comparison fails. [11]_
