@@ -1,0 +1,44 @@
+name: HMMForge research evidence
+on:
+  push:
+    branches: [research/hmmforge-prototype]
+    paths:
+      - research/hmmforge/**
+      - .github/workflows/hmmforge-research.yml
+permissions:
+  contents: read
+concurrency:
+  group: hmmforge-research-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: research/hmmforge
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+      - name: Install pinned backend and test tools
+        run: |
+          mkdir -p evidence/backend
+          python -m pip install -e '.[test]'
+          python -m pip download --no-deps --only-binary=:all: pyhmmer==0.12.3 -d evidence/backend
+          python -m pip freeze > evidence/environment.txt
+      - name: Unit and scientific integration tests
+        run: python -m pytest -q --junitxml=evidence/tests.xml
+      - name: Synthetic parity-gated end-to-end benchmark
+        run: |
+          python scripts/make_fixture.py evidence/fixture --models 64 --proteins 2000
+          hmmforge benchmark evidence/fixture/models.hmm evidence/fixture/proteins.fa --cpus 2 --repeats 3 --dataset-kind synthetic > evidence/benchmark.json
+          cat evidence/benchmark.json
+      - name: Retain evidence, including failed tests
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: hmmforge-evidence
+          path: research/hmmforge/evidence/
+          retention-days: 14
