@@ -24,6 +24,8 @@ jobs:
           python-version: '3.13'
       - name: Install native build prerequisites
         run: sudo apt-get update -qq && sudo apt-get install -y clang libclang-dev pkg-config make
+      - name: Install existing Python test dependency
+        run: python3 -m pip install PyYAML==6.0.3
       - name: Apply the locally checked source patch
         shell: bash
         run: |
@@ -60,7 +62,7 @@ jobs:
         run: |
           set -euo pipefail
           python3 - <<'PY' | tee /tmp/agent-contracts.log
-          import json, os, subprocess
+          import json, subprocess
           binary = './target/debug/turbo-picard'
           def call(*args):
               return subprocess.check_output([binary, *args], text=True)
@@ -69,7 +71,7 @@ jobs:
           parsed = json.loads(compact)
           assert [x['name'] for x in parsed['commands']] == ['MarkDuplicates']
           assert parsed['benchmark_evidence'] is None
-          assert json.loads(full)['summary'] if 'summary' in json.loads(full) else json.loads(full)['benchmark_evidence']['summary']['command_count'] == 32
+          assert json.loads(full)['benchmark_evidence']['summary']['command_count'] == 32
           for command, args, expected in [
               ('FastqToSam', ['FASTQ=input one.fq', 'F2=input two.fq', '-O', 'output.bam'], ['O=output.bam']),
               ('CollectInsertSizeMetrics', ['M=0.05', 'O=metrics.txt', '--HISTOGRAM_FILE', 'chart.pdf'], ['O=metrics.txt', 'HISTOGRAM_FILE=chart.pdf']),
