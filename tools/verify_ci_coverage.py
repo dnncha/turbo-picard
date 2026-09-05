@@ -5,6 +5,7 @@ from __future__ import annotations
 
 from pathlib import Path
 import sys
+import re
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -22,18 +23,21 @@ def tool_paths(pattern: str) -> list[Path]:
 
 def validate_ci_coverage(ci_text: str, tools_dir: Path = TOOLS) -> list[str]:
     errors: list[str] = []
+    # Only count executable standalone commands, not documentation/comments.
+    discovery = bool(re.search(r"(?m)^\s*python3 -m unittest discover -s tools\s*$", ci_text))
+    compile_all = bool(re.search(r"(?m)^\s*python3 -m compileall -q tools\s*$", ci_text))
     for test_path in tool_paths_in(tools_dir, "test_*.py"):
         rel = f"tools/{test_path.name}"
-        if f"python3 -m unittest {rel}" not in ci_text:
+        if not discovery and f"python3 -m unittest {rel}" not in ci_text:
             errors.append(f"CI does not run unittest module: {rel}")
-        if rel not in ci_text:
+        if not compile_all and rel not in ci_text:
             errors.append(f"CI does not py_compile test module: {rel}")
 
     for verifier_path in tool_paths_in(tools_dir, "verify_*.py"):
         rel = f"tools/{verifier_path.name}"
         if f"python3 {rel}" not in ci_text:
             errors.append(f"CI does not run verifier: {rel}")
-        if rel not in ci_text:
+        if not compile_all and rel not in ci_text:
             errors.append(f"CI does not py_compile verifier: {rel}")
     return errors
 

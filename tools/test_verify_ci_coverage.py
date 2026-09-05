@@ -38,6 +38,25 @@ python3 -m py_compile \
                 [],
             )
 
+    def test_discovery_covers_new_tests_but_still_requires_verifiers(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tools = Path(tmp)
+            (tools / "test_new.py").write_text("# test\n")
+            (tools / "verify_example.py").write_text("# verifier\n")
+            ci = "python3 -m unittest discover -s tools\npython3 -m compileall -q tools\n"
+            self.assertEqual(verify_ci_coverage.validate_ci_coverage(ci, tools),
+                             ["CI does not run verifier: tools/verify_example.py"])
+            self.assertEqual(verify_ci_coverage.validate_ci_coverage(
+                ci + "python3 tools/verify_example.py\n", tools), [])
+
+    def test_commented_discovery_does_not_count_as_test_execution(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tools = Path(tmp)
+            (tools / "test_new.py").write_text("# test\n")
+            errors = verify_ci_coverage.validate_ci_coverage(
+                "# python3 -m unittest discover -s tools\n# python3 -m compileall -q tools\n", tools)
+            self.assertEqual(len(errors), 2)
+
     def test_reports_missing_test_and_verifier_coverage(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             tools = Path(tmp)
