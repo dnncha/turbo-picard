@@ -30,6 +30,15 @@ evidence. Use `turbo-picard trial --json <PicardCommand> ...` for the exact task
 being considered. See the [agentic-coder guide](docs/agentic-coders.rst) for the
 selection rule and safe substitution pattern.
 
+### Source-tree improvements for agents
+
+The next-release source adds `capabilities --json --command MarkDuplicates`
+for compact discovery, executable argument arrays in trial JSON, and a strict
+`TURBO_PICARD_REQUIRE_NATIVE=1` policy. These additions are **not yet in the
+published 0.1.12 package**. Build the source to try them; see the
+[agentic-coder guide](docs/agentic-coders.rst). Inspection reports describe
+command scope, not proof that a particular input or option is validated.
+
 ## Quick Start
 
 Install from PyPI:
@@ -143,11 +152,19 @@ can create a reviewed, privacy-conscious starting point for that report.
 The saved public benchmark suite compares native `turbo-picard` commands against
 Picard 3.4.0 and checks stable outputs before reporting speed. Current saved
 results report `32/32` parity checks passing, with `272.12x` top speedup:
-`NormalizeFasta`, `22.88x` floor speedup: `SetNmMdAndUqTags`, `99.56x`
+`NormalizeFasta`, `22.88x` floor speedup: `SetNmMdAndUqTags`, `99.51x`
 median speedup, and `84.52x` geometric mean speedup.
 
+**Read these as small-fixture measurements, not whole-genome speedups.**
+For example, the saved `MarkDuplicates` case used the generator's `reads=50000`
+setting, with median wall times of **0.075464 seconds** for Turbo Picard and
+**2.238986 seconds** for Picard across three runs. Startup overhead matters at
+this scale. The reported speedup is the median of paired-run ratios, which need
+not equal the ratio of those independent medians. The machine-readable evidence
+now preserves timings, repeat counts and generator parameters alongside ratios.
+
 Summary: `32/32 PASS`; `272.12x` top speedup: `NormalizeFasta`;
-`22.88x` floor speedup: `SetNmMdAndUqTags`; `99.56x` median speedup; `84.52x`
+`22.88x` floor speedup: `SetNmMdAndUqTags`; `99.51x` median speedup; `84.52x`
 geometric mean speedup.
 
 Benchmark details, scope notes, real-data evidence, and reproduction commands

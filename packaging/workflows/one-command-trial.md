@@ -44,7 +44,11 @@ mkdir -p turbo-picard-trial/picard turbo-picard-trial/turbo
   O=turbo-picard-trial/picard/marked.bam \
   M=turbo-picard-trial/picard/metrics.txt
 
-/usr/bin/time -p turbo-picard MarkDuplicates \
+# Legacy isolation also works with 0.1.12; REQUIRE_NATIVE adds an explicit
+# fail-closed policy in the next-release source. Preserve upstream separately.
+env -u TURBO_PICARD_FALLBACK_COMMAND \
+  TURBO_PICARD_DISABLE_AUTO_FALLBACK=1 TURBO_PICARD_REQUIRE_NATIVE=1 \
+  /usr/bin/time -p turbo-picard MarkDuplicates \
   I="$INPUT_BAM" \
   O=turbo-picard-trial/turbo/marked.bam \
   M=turbo-picard-trial/turbo/metrics.txt

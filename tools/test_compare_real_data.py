@@ -11,6 +11,26 @@ import compare_real_data
 
 
 class CompareRealDataTests(unittest.TestCase):
+    def test_native_evaluation_isolates_explicit_and_automatic_fallback(self):
+        original = {"PATH": "/safe/bin", "PICARD_JAR": "/upstream/picard.jar",
+                    "TURBO_PICARD_FALLBACK_COMMAND": "picard"}
+        result = compare_real_data.native_evaluation_env(original)
+        self.assertNotIn("TURBO_PICARD_FALLBACK_COMMAND", result)
+        self.assertEqual(result["TURBO_PICARD_REQUIRE_NATIVE"], "1")
+        self.assertEqual(result["TURBO_PICARD_DISABLE_AUTO_FALLBACK"], "1")
+        self.assertEqual(result["PICARD_JAR"], original["PICARD_JAR"])
+        self.assertIn("TURBO_PICARD_FALLBACK_COMMAND", original)
+
+    def test_subprocess_helpers_enforce_native_evaluation_policy(self):
+        supplied = {"PATH": "/safe/bin", "TURBO_PICARD_FALLBACK_COMMAND": "picard"}
+        for helper in (compare_real_data.run, compare_real_data.run_allowing_exit):
+            with mock.patch.object(compare_real_data.subprocess, "run", return_value=SimpleNamespace(returncode=0)) as mocked:
+                helper(["candidate", "SortSam"], env=supplied)
+            passed = mocked.call_args.kwargs["env"]
+            self.assertEqual(passed["TURBO_PICARD_REQUIRE_NATIVE"], "1")
+            self.assertNotIn("TURBO_PICARD_FALLBACK_COMMAND", passed)
+        self.assertIn("TURBO_PICARD_FALLBACK_COMMAND", supplied)
+
     def test_materialize_alignment_sam_uses_selected_view_entrypoint(self):
         with tempfile.TemporaryDirectory() as tmp:
             input_bam = Path(tmp) / "input.bam"

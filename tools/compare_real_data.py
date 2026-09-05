@@ -1778,12 +1778,27 @@ def picard_prefix_with_rscript_shim(prefix: list[str], workdir: Path) -> list[st
     return prefix
 
 
+def native_evaluation_env(env: dict[str, str] | None = None) -> dict[str, str]:
+    """Never mistake delegation to Java for evidence of native execution.
+
+    Also disable both legacy fallback paths so older candidate binaries cannot
+    silently delegate. Explicitly launched upstream Picard remains unaffected.
+    Copy the environment; never mutate the caller or global process settings.
+    """
+    result = dict(os.environ if env is None else env)
+    result.pop("TURBO_PICARD_FALLBACK_COMMAND", None)
+    result["TURBO_PICARD_DISABLE_AUTO_FALLBACK"] = "1"
+    result["TURBO_PICARD_REQUIRE_NATIVE"] = "1"
+    return result
+
+
 def run(
     command: list[str],
     *,
     stdout: Path | None = None,
     env: dict[str, str] | None = None,
 ) -> float:
+    env = native_evaluation_env(env)
     start = time.perf_counter()
     with tempfile.TemporaryFile("w+b") as stderr_handle:
         if stdout is None:
@@ -1820,6 +1835,7 @@ def run_allowing_exit(
     stdout: Path | None = None,
     env: dict[str, str] | None = None,
 ) -> tuple[float, int]:
+    env = native_evaluation_env(env)
     start = time.perf_counter()
     with tempfile.TemporaryFile("w+b") as stderr_handle:
         if stdout is None:

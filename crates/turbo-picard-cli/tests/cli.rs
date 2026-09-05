@@ -9098,3 +9098,87 @@ fn record_names(sam: &str) -> Vec<&str> {
         .map(|line| line.split('\t').next().expect("record has qname"))
         .collect()
 }
+
+#[test]
+fn native_required_blocks_explicit_fallback_for_all_delegation_paths() {
+    let tempdir = tempfile::tempdir().expect("tempdir exists");
+    let fallback = fallback_script(tempdir.path(), 0);
+    let log = tempdir.path().join("fallback.args");
+    for args in [
+        vec!["EstimateLibraryComplexity", "I=in.bam", "O=metrics.txt"],
+        vec!["-Xmx2g", "ValidateSamFile", "I=in.bam"],
+        vec![
+            "MarkDuplicates",
+            "I=in.bam",
+            "O=out.bam",
+            "M=metrics.txt",
+            "TAGGING_POLICY=Invalid",
+        ],
+    ] {
+        // Presence is deliberately fail-closed, including empty and "0" values.
+        for policy in ["1", "", "0"] {
+            Command::cargo_bin("turbo-picard")
+                .expect("binary exists")
+                .env("TURBO_PICARD_REQUIRE_NATIVE", policy)
+                .env("TURBO_PICARD_FALLBACK_COMMAND", &fallback)
+                .env("TURBO_PICARD_FALLBACK_LOG", &log)
+                .args(&args)
+                .assert()
+                .code(2)
+                .stderr(predicate::str::contains("native execution required"));
+            assert!(!log.exists(), "must not execute upstream fallback");
+        }
+    }
+}
+
+#[test]
+fn native_required_still_runs_a_supported_command() {
+    let dir = tempfile::tempdir().unwrap();
+    let input = dir.path().join("input.fa");
+    let output = dir.path().join("output.fa");
+    fs::write(&input, ">test\nACGT\n").unwrap();
+    Command::cargo_bin("turbo-picard")
+        .unwrap()
+        .env("TURBO_PICARD_REQUIRE_NATIVE", "1")
+        .env("TURBO_PICARD_FALLBACK_COMMAND", "/must/not/be/executed")
+        .args([
+            "NormalizeFasta",
+            &format!("I={}", input.display()),
+            &format!("O={}", output.display()),
+        ])
+        .assert()
+        .success();
+    assert!(fs::read_to_string(output).unwrap().contains("ACGT"));
+}
+
+#[test]
+fn compact_capabilities_has_only_requested_command_and_evidence_reference() {
+    Command::cargo_bin("turbo-picard")
+        .unwrap()
+        .args(["capabilities", "--json", "--command", "MarkDuplicates"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"name\": \"MarkDuplicates\""))
+        .stdout(predicate::str::contains("\"name\": \"SortSam\"").not())
+        .stdout(predicate::str::contains(
+            "\"benchmark_evidence_included\": false",
+        ))
+        .stdout(predicate::str::contains("\"benchmark_evidence\": null"))
+        .stdout(predicate::str::contains("TURBO_PICARD_REQUIRE_NATIVE"));
+    Command::cargo_bin("turbo-picard")
+        .unwrap()
+        .args(["capabilities", "--json", "--command", "NotACommand"])
+        .assert()
+        .code(2);
+}
+
+#[test]
+fn trial_exposes_argv_and_does_not_confuse_inputs_with_outputs() {
+    Command::cargo_bin("turbo-picard").unwrap()
+        .args(["trial", "--json", "FastqToSam", "FASTQ=input one.fq", "F2=input two.fq", "-O", "output.bam"])
+        .assert().success()
+        .stdout(predicate::str::contains("\"executes_command\": false"))
+        .stdout(predicate::str::contains("\"option_support\": \"not-checked\""))
+        .stdout(predicate::str::contains("\"turbo_argv\": [\"turbo-picard\", \"FastqToSam\", \"FASTQ=input one.fq\", \"F2=input two.fq\", \"-O\", \"output.bam\"]"))
+        .stdout(predicate::str::contains("\"declared_outputs\": [\n    \"O=output.bam\"\n  ]"));
+}

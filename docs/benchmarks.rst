@@ -17,6 +17,32 @@ Small direct QC overlap fixtures with riker are kept separately in
 selection should use representative data and the same versions, machine, thread
 settings, outputs, and downstream comparisons.
 
+Absolute timings and statistical scope
+-------------------------------------
+
+The JSON evidence retains ``median_turbo_seconds``, ``median_picard_seconds``,
+``runs`` and ``workload_parameter`` from the saved raw log. The latter is the
+benchmark generator's named ``reads`` argument, not a verified count of aligned
+reads for every command: FASTA and VCF utilities use different fixture shapes.
+
+The saved MarkDuplicates example uses ``reads=50000`` and three runs, with
+median wall times of 0.075464 seconds and 2.238986 seconds respectively. At this
+scale JVM startup can contribute materially. These measurements justify testing
+repeated small jobs; they do not establish a whole-genome performance ratio.
+
+The per-command speedup remains the median of **paired-run ratios**, not the
+ratio of the two independent time medians. The cross-command median averages
+the middle two ratios when there are an even number of commands; this corrects
+the saved summary from 99.56x to **99.51x** without changing any measured run.
+The renderer rejects nonfinite or nonpositive performance values rather than
+publishing them as successful evidence.
+
+The comparison runner and suite now prevent both explicit and automatic Picard
+fallback in the candidate's subprocess environment. A failing native candidate
+is a failed evaluation, not a reason to time an upstream implementation under a
+Turbo Picard label. This policy applies to new runs; it does not retrospectively
+prove how old artifacts were produced.
+
 Run the suite
 -------------
 

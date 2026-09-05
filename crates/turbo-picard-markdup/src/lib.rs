@@ -2505,13 +2505,15 @@ fn optical_duplicate_record_indices(
     read_name_parser: &ReadNameLocationParser,
     optical_duplicate_pixel_distance: Option<u32>,
 ) -> OpticalDuplicateRecords {
-    let mut seen_names = HashSet::<Vec<u8>>::default();
+    // Records remain borrowed throughout this pass. Allocate a name only for
+    // each unique optical read, not twice for every candidate record.
+    let mut seen_names = HashSet::<&[u8]>::default();
     let mut reads = Vec::new();
     for index in group.iter().copied() {
-        let name = records[index].qname().to_vec();
-        if seen_names.insert(name.clone()) {
+        let name = records[index].qname();
+        if seen_names.insert(name) {
             reads.push(OpticalRead {
-                name,
+                name: name.to_vec(),
                 location: read_location_for_record(&records[index], read_name_parser),
             });
         }
@@ -2550,10 +2552,11 @@ struct ReadLocation {
 
 impl ReadLocation {
     fn is_within(&self, other: &Self, pixel_distance: i64) -> bool {
-        self.read_group == other.read_group
+        pixel_distance >= 0
+            && self.read_group == other.read_group
             && self.tile == other.tile
-            && (self.x - other.x).abs() <= pixel_distance
-            && (self.y - other.y).abs() <= pixel_distance
+            && self.x.abs_diff(other.x) <= pixel_distance as u64
+            && self.y.abs_diff(other.y) <= pixel_distance as u64
     }
 }
 
@@ -2571,16 +2574,16 @@ fn read_location_for_record(
 }
 
 fn parse_default_read_coordinates(text: &str) -> Option<(i64, i64, i64)> {
-    let fields = text.split(':').collect::<Vec<_>>();
-    if fields.len() != 5 && fields.len() != 7 {
-        return None;
+    // Picard's default name shape has exactly five or seven colon-separated
+    // fields. Parse from the end without allocating a Vec for every read.
+    let mut fields = text.rsplit(':');
+    let y = parse_numeric_prefix(fields.next()?)?;
+    let x = parse_numeric_prefix(fields.next()?)?;
+    let tile = parse_numeric_prefix(fields.next()?)?;
+    match fields.count() {
+        2 | 4 => Some((tile, x, y)),
+        _ => None,
     }
-    let start = fields.len() - 3;
-    Some((
-        parse_numeric_prefix(fields[start])?,
-        parse_numeric_prefix(fields[start + 1])?,
-        parse_numeric_prefix(fields[start + 2])?,
-    ))
 }
 
 fn parse_numeric_prefix(value: &str) -> Option<i64> {
@@ -2663,11 +2666,16 @@ fn find_optical_duplicate_names(
             let bucket = optical_bucket(location, bucket_size);
             for delta_x in -1..=1 {
                 for delta_y in -1..=1 {
+                    let (Some(x), Some(y)) =
+                        (bucket.x.checked_add(delta_x), bucket.y.checked_add(delta_y))
+                    else {
+                        continue;
+                    };
                     let neighbour = OpticalBucket {
                         read_group: bucket.read_group.clone(),
                         tile: bucket.tile,
-                        x: bucket.x + delta_x,
-                        y: bucket.y + delta_y,
+                        x,
+                        y,
                     };
                     if let Some(indices) = buckets.get(&neighbour) {
                         for other_index in indices {
@@ -4226,5 +4234,126 @@ mod tests {
 
         let key = duplicate_key(&fields, 0, 31, &sam_markdup_config());
         assert_malformed_sam_err(key, 31, "CIGAR");
+    }
+}
+
+#[cfg(test)]
+mod optical_hot_path_tests {
+    use super::*;
+
+    fn previous_parser(text: &str) -> Option<(i64, i64, i64)> {
+        let fields = text.split(':').collect::<Vec<_>>();
+        if fields.len() != 5 && fields.len() != 7 {
+            return None;
+        }
+        let start = fields.len() - 3;
+        Some((
+            parse_numeric_prefix(fields[start])?,
+            parse_numeric_prefix(fields[start + 1])?,
+            parse_numeric_prefix(fields[start + 2])?,
+        ))
+    }
+
+    #[test]
+    fn allocation_free_parser_preserves_previous_semantics() {
+        for fields in 0..10 {
+            for tail in [
+                "",
+                "0",
+                "-12",
+                "42/1",
+                "77#tag",
+                "abc",
+                "é",
+                "+1",
+                "-",
+                "9223372036854775807",
+                "-9223372036854775808",
+                "9223372036854775808",
+            ] {
+                for position in 0..fields.max(1) {
+                    let mut name = vec!["123"; fields];
+                    if position < fields {
+                        name[position] = tail;
+                    }
+                    let name = name.join(":");
+                    assert_eq!(
+                        parse_default_read_coordinates(&name),
+                        previous_parser(&name),
+                        "{name}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn coordinate_distance_cannot_overflow_or_wrap() {
+        let location = |x, y| ReadLocation {
+            read_group: None,
+            tile: 1,
+            x,
+            y,
+        };
+        assert!(!location(i64::MIN, 0).is_within(&location(i64::MAX, 0), 100));
+        assert!(!location(0, i64::MIN).is_within(&location(0, i64::MAX), 100));
+        assert!(location(i64::MIN, 0).is_within(&location(i64::MIN + 100, 0), 100));
+        assert!(!location(0, 0).is_within(&location(0, 0), -1));
+        // Five members force the spatial-bucket path, including extreme cells.
+        let reads = [i64::MIN, i64::MIN, 0, i64::MAX, i64::MAX]
+            .iter()
+            .enumerate()
+            .map(|(index, &x)| OpticalRead {
+                name: format!("read{index}").into_bytes(),
+                location: Some(location(x, x)),
+            })
+            .collect::<Vec<_>>();
+        let duplicates = find_optical_duplicate_names(&reads, b"read0", 0);
+        assert_eq!(duplicates.len(), 2);
+        assert!(!duplicates.contains(b"read0".as_slice()));
+    }
+
+    #[test]
+    #[ignore = "microbenchmark: run in release mode with --ignored --nocapture"]
+    fn benchmark_default_coordinate_parser() {
+        use std::hint::black_box;
+        use std::time::Instant;
+        let names = [
+            "A00123:45:HXYZ:1:1101:12345:67890",
+            "instrument:run:1101:123:456/1",
+            "A:1:F:2:2202:987:654",
+            "not-a-coordinate",
+        ];
+        let measure = |parser: fn(&str) -> Option<(i64, i64, i64)>| {
+            let start = Instant::now();
+            for _ in 0..250_000 {
+                for name in &names {
+                    black_box(parser(black_box(name)));
+                }
+            }
+            start.elapsed().as_secs_f64()
+        };
+        let mut before = Vec::new();
+        let mut after = Vec::new();
+        // Alternate ordering rather than always giving the new parser warm caches.
+        for run in 0..7 {
+            if run % 2 == 0 {
+                before.push(measure(previous_parser));
+                after.push(measure(parse_default_read_coordinates));
+            } else {
+                after.push(measure(parse_default_read_coordinates));
+                before.push(measure(previous_parser));
+            }
+        }
+        before.sort_by(f64::total_cmp);
+        after.sort_by(f64::total_cmp);
+        println!(
+            "scope=coordinate-parser-only calls=1000000 repeats=7 median_previous_seconds={:.6} median_new_seconds={:.6} ratio={:.3}x production_speedup=not-measured",
+            before[3],
+            after[3],
+            before[3] / after[3]
+        );
+        // No performance assertion: shared CI hardware is noisy. Correctness is
+        // gated by the oracle and end-to-end tests, not an arbitrary timing bar.
     }
 }

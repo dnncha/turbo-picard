@@ -43,7 +43,7 @@ class BenchmarkLogEvidenceTests(unittest.TestCase):
                 "top_command": "BuildBamIndex",
                 "floor_speedup": 20.0,
                 "floor_command": "SortSam",
-                "median_speedup": 40.0,
+                "median_speedup": 30.0,
                 "geometric_mean_speedup": 28.28,
             },
             "benchmarks": [
@@ -60,6 +60,16 @@ class BenchmarkLogEvidenceTests(unittest.TestCase):
         )
 
         self.assertEqual(errors, [])
+
+    def test_published_absolute_timings_cannot_drift_from_log(self) -> None:
+        raw = ("benchmark_date=2026-09-05 source=python3 tools/bench_suite.py --repeats 1 --skip-build\n"
+               "command=SortSam reads=100 runs=1 median_turbo_seconds=1 median_picard_seconds=2 median_speedup=2x parity=PASS")
+        manifest = verify_benchmark_log_evidence.build_benchmark_data_from_suite_output(
+            raw, source_artifact="docs/site/assets/bench-suite-output.txt")
+        manifest["benchmarks"][0]["median_turbo_seconds"] = 0.01
+        errors = verify_benchmark_log_evidence.validate_benchmark_log_evidence(
+            raw, manifest, source_artifact="docs/site/assets/bench-suite-output.txt")
+        self.assertTrue(any("median_turbo_seconds" in error for error in errors))
 
     def test_missing_metadata_is_reported(self) -> None:
         suite_output = (

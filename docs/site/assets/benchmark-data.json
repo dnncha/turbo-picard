@@ -9,7 +9,7 @@
     "top_command": "NormalizeFasta",
     "floor_speedup": 22.88,
     "floor_command": "SetNmMdAndUqTags",
-    "median_speedup": 99.56,
+    "median_speedup": 99.51,
     "geometric_mean_speedup": 84.52
   },
   "benchmarks": [
@@ -17,193 +17,417 @@
       "rank": 1,
       "command": "NormalizeFasta",
       "speedup": 272.12,
-      "parity": "PASS"
+      "parity": "PASS",
+      "median_turbo_seconds": 0.006616,
+      "median_picard_seconds": 1.662595,
+      "runs": 3,
+      "workload_parameter": {
+        "name": "reads",
+        "value": 10000
+      }
     },
     {
       "rank": 2,
       "command": "BuildBamIndex",
       "speedup": 243.53,
-      "parity": "PASS"
+      "parity": "PASS",
+      "median_turbo_seconds": 0.006711,
+      "median_picard_seconds": 1.634214,
+      "runs": 3,
+      "workload_parameter": {
+        "name": "reads",
+        "value": 50000
+      }
     },
     {
       "rank": 3,
       "command": "UpdateVcfSequenceDictionary",
       "speedup": 207.52,
-      "parity": "PASS"
+      "parity": "PASS",
+      "median_turbo_seconds": 0.009062,
+      "median_picard_seconds": 1.889074,
+      "runs": 3,
+      "workload_parameter": {
+        "name": "reads",
+        "value": 100000
+      }
     },
     {
       "rank": 4,
       "command": "CollectGcBiasMetrics",
       "speedup": 196.45,
-      "parity": "PASS"
+      "parity": "PASS",
+      "median_turbo_seconds": 0.009946,
+      "median_picard_seconds": 1.941607,
+      "runs": 3,
+      "workload_parameter": {
+        "name": "reads",
+        "value": 100000
+      }
     },
     {
       "rank": 5,
       "command": "CreateSequenceDictionary",
       "speedup": 152.62,
-      "parity": "PASS"
+      "parity": "PASS",
+      "median_turbo_seconds": 0.011278,
+      "median_picard_seconds": 1.721274,
+      "runs": 3,
+      "workload_parameter": {
+        "name": "reads",
+        "value": 10000
+      }
     },
     {
       "rank": 6,
       "command": "GatherVcfs",
       "speedup": 130.7,
-      "parity": "PASS"
+      "parity": "PASS",
+      "median_turbo_seconds": 0.013652,
+      "median_picard_seconds": 1.815809,
+      "runs": 3,
+      "workload_parameter": {
+        "name": "reads",
+        "value": 100000
+      }
     },
     {
       "rank": 7,
       "command": "LiftoverVcf",
       "speedup": 127.28,
-      "parity": "PASS"
+      "parity": "PASS",
+      "median_turbo_seconds": 0.015835,
+      "median_picard_seconds": 1.960596,
+      "runs": 3,
+      "workload_parameter": {
+        "name": "reads",
+        "value": 100000
+      }
     },
     {
       "rank": 8,
       "command": "CollectMultipleMetrics",
       "speedup": 122.66,
-      "parity": "PASS"
+      "parity": "PASS",
+      "median_turbo_seconds": 0.017251,
+      "median_picard_seconds": 2.106581,
+      "runs": 3,
+      "workload_parameter": {
+        "name": "reads",
+        "value": 100000
+      }
     },
     {
       "rank": 9,
       "command": "CollectInsertSizeMetrics",
       "speedup": 117.34,
-      "parity": "PASS"
+      "parity": "PASS",
+      "median_turbo_seconds": 0.016431,
+      "median_picard_seconds": 1.927088,
+      "runs": 3,
+      "workload_parameter": {
+        "name": "reads",
+        "value": 100000
+      }
     },
     {
       "rank": 10,
       "command": "CleanSam",
       "speedup": 115.42,
-      "parity": "PASS"
+      "parity": "PASS",
+      "median_turbo_seconds": 0.015192,
+      "median_picard_seconds": 1.740576,
+      "runs": 3,
+      "workload_parameter": {
+        "name": "reads",
+        "value": 50000
+      }
     },
     {
       "rank": 11,
       "command": "MergeVcfs",
       "speedup": 112.13,
-      "parity": "PASS"
+      "parity": "PASS",
+      "median_turbo_seconds": 0.017591,
+      "median_picard_seconds": 2.018153,
+      "runs": 3,
+      "workload_parameter": {
+        "name": "reads",
+        "value": 100000
+      }
     },
     {
       "rank": 12,
       "command": "MeanQualityByCycle",
       "speedup": 108.66,
-      "parity": "PASS"
+      "parity": "PASS",
+      "median_turbo_seconds": 0.017187,
+      "median_picard_seconds": 1.907384,
+      "runs": 3,
+      "workload_parameter": {
+        "name": "reads",
+        "value": 100000
+      }
     },
     {
       "rank": 13,
       "command": "CollectQualityYieldMetrics",
       "speedup": 108.64,
-      "parity": "PASS"
+      "parity": "PASS",
+      "median_turbo_seconds": 0.016941,
+      "median_picard_seconds": 1.844158,
+      "runs": 3,
+      "workload_parameter": {
+        "name": "reads",
+        "value": 100000
+      }
     },
     {
       "rank": 14,
       "command": "QualityScoreDistribution",
       "speedup": 107.17,
-      "parity": "PASS"
+      "parity": "PASS",
+      "median_turbo_seconds": 0.017642,
+      "median_picard_seconds": 1.890651,
+      "runs": 3,
+      "workload_parameter": {
+        "name": "reads",
+        "value": 100000
+      }
     },
     {
       "rank": 15,
       "command": "ReplaceSamHeader",
       "speedup": 101.84,
-      "parity": "PASS"
+      "parity": "PASS",
+      "median_turbo_seconds": 0.019656,
+      "median_picard_seconds": 1.947707,
+      "runs": 3,
+      "workload_parameter": {
+        "name": "reads",
+        "value": 50000
+      }
     },
     {
       "rank": 16,
       "command": "ValidateSamFile",
       "speedup": 99.56,
-      "parity": "PASS"
+      "parity": "PASS",
+      "median_turbo_seconds": 0.01873,
+      "median_picard_seconds": 1.772965,
+      "runs": 3,
+      "workload_parameter": {
+        "name": "reads",
+        "value": 100000
+      }
     },
     {
       "rank": 17,
       "command": "IntervalListTools",
       "speedup": 99.46,
-      "parity": "PASS"
+      "parity": "PASS",
+      "median_turbo_seconds": 0.020095,
+      "median_picard_seconds": 1.955122,
+      "runs": 3,
+      "workload_parameter": {
+        "name": "reads",
+        "value": 100000
+      }
     },
     {
       "rank": 18,
       "command": "CollectBaseDistributionByCycle",
       "speedup": 98.01,
-      "parity": "PASS"
+      "parity": "PASS",
+      "median_turbo_seconds": 0.019863,
+      "median_picard_seconds": 1.9523,
+      "runs": 3,
+      "workload_parameter": {
+        "name": "reads",
+        "value": 100000
+      }
     },
     {
       "rank": 19,
       "command": "SortVcf",
       "speedup": 89.01,
-      "parity": "PASS"
+      "parity": "PASS",
+      "median_turbo_seconds": 0.021668,
+      "median_picard_seconds": 1.928599,
+      "runs": 3,
+      "workload_parameter": {
+        "name": "reads",
+        "value": 100000
+      }
     },
     {
       "rank": 20,
       "command": "CollectAlignmentSummaryMetrics",
       "speedup": 83.49,
-      "parity": "PASS"
+      "parity": "PASS",
+      "median_turbo_seconds": 0.021773,
+      "median_picard_seconds": 1.817749,
+      "runs": 3,
+      "workload_parameter": {
+        "name": "reads",
+        "value": 100000
+      }
     },
     {
       "rank": 21,
       "command": "BedToIntervalList",
       "speedup": 79.78,
-      "parity": "PASS"
+      "parity": "PASS",
+      "median_turbo_seconds": 0.023071,
+      "median_picard_seconds": 1.840564,
+      "runs": 3,
+      "workload_parameter": {
+        "name": "reads",
+        "value": 100000
+      }
     },
     {
       "rank": 22,
       "command": "ViewSam",
       "speedup": 79.58,
-      "parity": "PASS"
+      "parity": "PASS",
+      "median_turbo_seconds": 0.022669,
+      "median_picard_seconds": 1.809058,
+      "runs": 3,
+      "workload_parameter": {
+        "name": "reads",
+        "value": 50000
+      }
     },
     {
       "rank": 23,
       "command": "AddOrReplaceReadGroups",
       "speedup": 77.78,
-      "parity": "PASS"
+      "parity": "PASS",
+      "median_turbo_seconds": 0.02349,
+      "median_picard_seconds": 1.784503,
+      "runs": 3,
+      "workload_parameter": {
+        "name": "reads",
+        "value": 100000
+      }
     },
     {
       "rank": 24,
       "command": "SamToFastq",
       "speedup": 77.74,
-      "parity": "PASS"
+      "parity": "PASS",
+      "median_turbo_seconds": 0.033594,
+      "median_picard_seconds": 1.895747,
+      "runs": 3,
+      "workload_parameter": {
+        "name": "reads",
+        "value": 50000
+      }
     },
     {
       "rank": 25,
       "command": "CollectWgsMetrics",
       "speedup": 50.81,
-      "parity": "PASS"
+      "parity": "PASS",
+      "median_turbo_seconds": 0.039597,
+      "median_picard_seconds": 2.01612,
+      "runs": 3,
+      "workload_parameter": {
+        "name": "reads",
+        "value": 100000
+      }
     },
     {
       "rank": 26,
       "command": "MergeSamFiles",
       "speedup": 35.49,
-      "parity": "PASS"
+      "parity": "PASS",
+      "median_turbo_seconds": 0.057708,
+      "median_picard_seconds": 2.033694,
+      "runs": 3,
+      "workload_parameter": {
+        "name": "reads",
+        "value": 50000
+      }
     },
     {
       "rank": 27,
       "command": "SortSam",
       "speedup": 35.15,
-      "parity": "PASS"
+      "parity": "PASS",
+      "median_turbo_seconds": 0.052886,
+      "median_picard_seconds": 1.836463,
+      "runs": 3,
+      "workload_parameter": {
+        "name": "reads",
+        "value": 100000
+      }
     },
     {
       "rank": 28,
       "command": "FixMateInformation",
       "speedup": 31.98,
-      "parity": "PASS"
+      "parity": "PASS",
+      "median_turbo_seconds": 0.057545,
+      "median_picard_seconds": 1.856421,
+      "runs": 3,
+      "workload_parameter": {
+        "name": "reads",
+        "value": 100000
+      }
     },
     {
       "rank": 29,
       "command": "FastqToSam",
       "speedup": 31.29,
-      "parity": "PASS"
+      "parity": "PASS",
+      "median_turbo_seconds": 0.10309,
+      "median_picard_seconds": 2.561406,
+      "runs": 3,
+      "workload_parameter": {
+        "name": "reads",
+        "value": 100000
+      }
     },
     {
       "rank": 30,
       "command": "MarkDuplicates",
       "speedup": 28.7,
-      "parity": "PASS"
+      "parity": "PASS",
+      "median_turbo_seconds": 0.075464,
+      "median_picard_seconds": 2.238986,
+      "runs": 3,
+      "workload_parameter": {
+        "name": "reads",
+        "value": 50000
+      }
     },
     {
       "rank": 31,
       "command": "RevertSam",
       "speedup": 24.19,
-      "parity": "PASS"
+      "parity": "PASS",
+      "median_turbo_seconds": 0.078918,
+      "median_picard_seconds": 1.918698,
+      "runs": 3,
+      "workload_parameter": {
+        "name": "reads",
+        "value": 100000
+      }
     },
     {
       "rank": 32,
       "command": "SetNmMdAndUqTags",
       "speedup": 22.88,
-      "parity": "PASS"
+      "parity": "PASS",
+      "median_turbo_seconds": 0.089052,
+      "median_picard_seconds": 2.082645,
+      "runs": 3,
+      "workload_parameter": {
+        "name": "reads",
+        "value": 100000
+      }
     }
   ],
   "source_artifact": "docs/site/assets/bench-suite-output.txt"

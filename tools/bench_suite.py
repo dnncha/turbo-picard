@@ -11,6 +11,8 @@ import sys
 import time
 from pathlib import Path
 
+from compare_real_data import native_evaluation_env
+
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -75,6 +77,7 @@ def run_profiled(command):
         stderr=subprocess.PIPE,
         text=True,
         check=False,
+        env=native_evaluation_env(),
     )
     elapsed = time.perf_counter() - start
     usage_after = resource.getrusage(resource.RUSAGE_CHILDREN)

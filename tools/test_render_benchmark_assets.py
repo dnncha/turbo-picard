@@ -31,7 +31,7 @@ class BenchmarkManifestTests(unittest.TestCase):
         self.assertEqual(data["summary"]["top_speedup"], 272.12)
         self.assertEqual(data["summary"]["floor_command"], "SetNmMdAndUqTags")
         self.assertEqual(data["summary"]["floor_speedup"], 22.88)
-        self.assertEqual(data["summary"]["median_speedup"], 99.56)
+        self.assertEqual(data["summary"]["median_speedup"], 99.51)
         self.assertEqual(data["summary"]["geometric_mean_speedup"], 84.52)
 
         ranks = [row["rank"] for row in data["benchmarks"]]
@@ -41,6 +41,29 @@ class BenchmarkManifestTests(unittest.TestCase):
         self.assertEqual(ranks, list(range(1, 33)))
         self.assertEqual(speedups, sorted(speedups, reverse=True))
         self.assertEqual(parities, {"PASS"})
+
+    def test_even_count_uses_mean_of_both_middle_values(self) -> None:
+        data = render_benchmark_assets.build_benchmark_data_from_rows(
+            [{"command": str(i), "speedup": x, "parity": "PASS"}
+             for i, x in enumerate([1.0, 2.0, 4.0, 100.0])], source="test", date="2026-09-05")
+        self.assertEqual(data["summary"]["median_speedup"], 3.0)
+
+    def test_nonfinite_performance_evidence_is_rejected(self) -> None:
+        for value in [float("nan"), float("inf"), -float("inf"), 0.0, -1.0]:
+            for key in ["speedup", "median_turbo_seconds", "median_picard_seconds"]:
+                with self.subTest(value=value, key=key), self.assertRaises(ValueError):
+                    render_benchmark_assets.build_benchmark_data_from_rows(
+                        [{"command": "SortSam", "speedup": 2.0, "parity": "PASS", key: value}],
+                        source="test", date="2026-09-05")
+
+    def test_saved_log_retains_absolute_times_and_workload_parameter(self) -> None:
+        data = render_benchmark_assets.build_benchmark_data()
+        row = next(row for row in data["benchmarks"] if row["command"] == "MarkDuplicates")
+        self.assertEqual(row["median_turbo_seconds"], 0.075464)
+        self.assertEqual(row["median_picard_seconds"], 2.238986)
+        self.assertEqual(row["workload_parameter"], {"name": "reads", "value": 50000})
+        self.assertEqual(row["runs"], 3)
+        self.assertEqual(row["speedup"], 28.70)  # Not the ratio of medians.
 
     def test_manifest_can_be_built_from_bench_suite_output(self) -> None:
         suite_output = "\n".join(
