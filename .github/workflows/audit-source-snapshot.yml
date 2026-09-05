@@ -1,0 +1,22 @@
+name: Temporary source audit snapshot
+on:
+  push:
+    branches: [improvement/verified-agent-workflows-20260905]
+    paths: [.github/workflows/audit-source-snapshot.yml]
+permissions:
+  contents: read
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - name: Archive tracked public repository files only
+        run: git archive --format=tar.gz HEAD > /tmp/turbo-picard-source.tar.gz
+      - uses: actions/upload-artifact@v4
+        with:
+          name: turbo-picard-audit-source
+          path: /tmp/turbo-picard-source.tar.gz
+          retention-days: 1
