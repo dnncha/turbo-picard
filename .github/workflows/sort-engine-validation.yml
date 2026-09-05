@@ -1,0 +1,88 @@
+name: Sorting engine verification
+on:
+  push:
+    branches: [improvement/sort-engine-validation-20260905]
+    paths: [.github/workflows/sort-engine-validation.yml]
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+      - name: Install build and measurement dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y clang libclang-dev make pkg-config samtools time
+          python3 -m pip install PyYAML==6.0.3
+      - name: Apply integrity-checked candidate and format
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/sort-evidence
+          python3 - <<'PY'
+          import base64, gzip, hashlib
+          from pathlib import Path
+          patch = gzip.decompress(base64.b64decode(Path('.github/sort-engine.patch.b64').read_text().strip(), validate=True))
+          assert hashlib.sha256(patch).hexdigest() == 'f1515de0501c545b4bccaa6d34d3b272f3347a5259eb8c8c0e7d7fe90dea49a7'
+          Path('/tmp/sort-engine.patch').write_bytes(patch)
+          PY
+          git apply --check /tmp/sort-engine.patch
+          git apply /tmp/sort-engine.patch
+          cargo fmt --all
+          git diff --check
+          git add Cargo.lock crates tools/bench_sort_scaling.py tools/test_bench_sort_scaling.py
+          git diff --cached --binary > /tmp/sort-evidence/formatted.patch
+          git write-tree > /tmp/sort-evidence/source-tree.txt
+          git rev-parse HEAD > /tmp/sort-evidence/source-parent.txt
+          git archive --format=tar.gz "$(git write-tree)" > /tmp/sort-evidence/candidate-source.tar.gz
+          rustc --version --verbose > /tmp/sort-evidence/compiler.txt
+          lscpu > /tmp/sort-evidence/cpu.txt
+      - name: Test complete Rust workspace
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo test --workspace --locked 2>&1 | tee /tmp/sort-evidence/rust-tests.log
+      - name: Test all Python tooling and evidence contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m unittest discover -s tools 2>&1 | tee /tmp/sort-evidence/python-tests.log
+          python3 tools/verify_ci_coverage.py
+          python3 tools/verify_real_data_evidence.py --release-ready
+      - name: Build candidate and unchanged baseline with the same release toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo build --release --locked -p turbo-picard-cli --bin turbo-picard
+          cp target/release/turbo-picard /tmp/sort-evidence/candidate
+          git worktree add --detach /tmp/turbo-picard-baseline ac5c8de40f8a47a85d873ba03a0bad1eda99a66a
+          CARGO_TARGET_DIR="$GITHUB_WORKSPACE/target" cargo build --manifest-path /tmp/turbo-picard-baseline/Cargo.toml --release --locked -p turbo-picard-cli --bin turbo-picard
+          cp target/release/turbo-picard /tmp/sort-evidence/baseline
+          printf '%s\n' ac5c8de40f8a47a85d873ba03a0bad1eda99a66a > /tmp/sort-evidence/baseline-commit.txt
+      - name: Measure 32-way BAM merge including full task I/O
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 tools/bench_sort_scaling.py --baseline /tmp/sort-evidence/baseline --candidate /tmp/sort-evidence/candidate --records 1048576 --max-records-in-ram 32768 --repeats 3 --output-dir /tmp/sort-evidence/32-runs | tee /tmp/sort-evidence/32-runs.log
+      - name: Measure multi-pass BAM merge including full task I/O
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 tools/bench_sort_scaling.py --baseline /tmp/sort-evidence/baseline --candidate /tmp/sort-evidence/candidate --records 1048576 --max-records-in-ram 16384 --repeats 3 --output-dir /tmp/sort-evidence/64-runs | tee /tmp/sort-evidence/64-runs.log
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: sorting-engine-evidence
+          path: /tmp/sort-evidence
+          retention-days: 14
