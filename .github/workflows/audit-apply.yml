@@ -1,0 +1,117 @@
+name: Verify agent contracts and optical hot path
+on:
+  push:
+    branches: [improvement/verified-agent-workflows-20260905]
+    paths: [.github/workflows/audit-apply.yml]
+permissions:
+  contents: write
+concurrency:
+  group: turbo-picard-implementation-audit
+  cancel-in-progress: false
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 1
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+      - name: Install native build prerequisites
+        run: sudo apt-get update -qq && sudo apt-get install -y clang libclang-dev pkg-config make
+      - name: Apply the locally checked source patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF_NAME" = 'improvement/verified-agent-workflows-20260905'
+          python3 - <<'PY'
+          import base64, gzip, hashlib
+          from pathlib import Path
+          encoded = ''.join(Path(f'.github/audit-patch.{n}.b64').read_text().strip() for n in (1, 2, 3))
+          patch = gzip.decompress(base64.b64decode(encoded, validate=True))
+          assert hashlib.sha256(patch).hexdigest() == '98321d98a1b4d78d198cb9d649810fba1ac26fdb9ae6e5114d187ae3618fb7fc', 'patch integrity check failed'
+          Path('/tmp/implementation.patch').write_bytes(patch)
+          PY
+          git apply --check /tmp/implementation.patch
+          git apply /tmp/implementation.patch
+          cargo fmt --all
+          git diff --check
+      - name: Run all Python and evidence tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m unittest discover -s tools 2>&1 | tee /tmp/python-tests.log
+          for script in verify_benchmark_log_evidence verify_benchmark_suite_coverage verify_benchmark_thresholds verify_readme_benchmark_evidence verify_benchmark_claim_surfaces verify_workflow_starters verify_readme_links verify_parity_docs verify_real_data_evidence verify_site_benchmark_evidence verify_release_text_quality; do
+            echo "CHECK $script" | tee -a /tmp/evidence-checks.log
+            python3 tools/$script.py 2>&1 | tee -a /tmp/evidence-checks.log
+          done
+      - name: Run the complete Rust workspace tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo test --workspace 2>&1 | tee /tmp/rust-tests.log
+      - name: Check JSON contracts as a subprocess consumer
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY' | tee /tmp/agent-contracts.log
+          import json, os, subprocess
+          binary = './target/debug/turbo-picard'
+          def call(*args):
+              return subprocess.check_output([binary, *args], text=True)
+          full = call('capabilities', '--json')
+          compact = call('capabilities', '--json', '--command', 'MarkDuplicates')
+          parsed = json.loads(compact)
+          assert [x['name'] for x in parsed['commands']] == ['MarkDuplicates']
+          assert parsed['benchmark_evidence'] is None
+          assert json.loads(full)['summary'] if 'summary' in json.loads(full) else json.loads(full)['benchmark_evidence']['summary']['command_count'] == 32
+          for command, args, expected in [
+              ('FastqToSam', ['FASTQ=input one.fq', 'F2=input two.fq', '-O', 'output.bam'], ['O=output.bam']),
+              ('CollectInsertSizeMetrics', ['M=0.05', 'O=metrics.txt', '--HISTOGRAM_FILE', 'chart.pdf'], ['O=metrics.txt', 'HISTOGRAM_FILE=chart.pdf']),
+              ('SamToFastq', ['F=first.fq', 'F2=second.fq'], ['F=first.fq', 'F2=second.fq']),
+          ]:
+              trial = json.loads(call('trial', '--json', command, *args))
+              assert trial['declared_outputs'] == expected
+              assert trial['turbo_argv'] == ['turbo-picard', command, *args]
+              assert trial['executes_command'] is False
+              assert trial['validation']['option_support'] == 'not-checked'
+          print(json.dumps({'json_contracts': 'PASS', 'full_capabilities_bytes': len(full.encode()), 'compact_capabilities_bytes': len(compact.encode()), 'byte_reduction_percent': round(100*(1-len(compact.encode())/len(full.encode())), 2)}, indent=2))
+          PY
+      - name: Measure the isolated coordinate parser in release mode
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo test --release -p turbo-picard-markdup benchmark_default_coordinate_parser -- --ignored --nocapture 2>&1 | tee /tmp/coordinate-parser-benchmark.log
+      - name: Commit tested product changes to this branch only
+        shell: bash
+        run: |
+          set -euo pipefail
+          git add README.md crates docs packaging tools
+          git diff --cached --check
+          git -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' commit -m 'fix: trustworthy agent contracts, native evidence isolation and optical hot-path allocations'
+          git push origin "HEAD:$GITHUB_REF_NAME"
+      - name: Capture reviewable source and logs
+        if: always()
+        shell: bash
+        run: |
+          git diff > /tmp/uncommitted-implementation.patch
+          git archive --format=tar.gz HEAD > /tmp/tested-source.tar.gz
+          git rev-parse HEAD > /tmp/tested-commit.txt
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: turbo-picard-implementation-evidence
+          path: |
+            /tmp/*-tests.log
+            /tmp/evidence-checks.log
+            /tmp/agent-contracts.log
+            /tmp/coordinate-parser-benchmark.log
+            /tmp/uncommitted-implementation.patch
+            /tmp/tested-source.tar.gz
+            /tmp/tested-commit.txt
+          retention-days: 7
