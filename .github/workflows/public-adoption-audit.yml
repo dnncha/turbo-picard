@@ -16,10 +16,18 @@ jobs:
 
     steps:
       - uses: actions/checkout@v5
+        with:
+          # The audit compares local and origin release tags; a shallow
+          # checkout without tags otherwise produces false missing-tag flags.
+          fetch-depth: 0
+          persist-credentials: false
 
       - uses: actions/setup-python@v6
         with:
           python-version: "3.13"
+
+      - name: Verify release-tag checkout regression
+        run: python3 -m unittest tools.test_adoption_checkout
 
       - name: Run read-only public adoption audit
         run: |
