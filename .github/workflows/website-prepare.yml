@@ -29,7 +29,6 @@ jobs:
           source=gzip.decompress(base64.b64decode(encoded,validate=True))
           assert hashlib.sha256(source).hexdigest()=='06b83680efa30daa110941feb8825ffb688929d2636433fdcb026d9594e165ab','website source integrity check failed'
           Path('/tmp/website-source.patch').write_bytes(source)
-          # Correct a transport transcription; the decompressed hash remains mandatory.
           encoded=Path('.github/site-followup.b64').read_text().strip().replace('OdJObJkbM5','OdJkbM5')
           followup=gzip.decompress(base64.b64decode(encoded,validate=True))
           assert hashlib.sha256(followup).hexdigest()=='61962f5d23d87502e0e009bbbaa64f4133047834d7814c3e534c9a2aa29b4c9c','provenance patch integrity check failed'
@@ -76,7 +75,9 @@ jobs:
         run: |
           set -euo pipefail
           test "$GITHUB_REF_NAME" = 'website/problem-led-discovery-20260906'
-          git add .github/workflows/ci.yml .github/workflows/website.yml .readthedocs.yaml README.md docs tools website
+          # GITHUB_TOKEN has no workflows permission. The maintainer connection
+          # adds the two reviewed CI files separately; never escalate this token.
+          git add .readthedocs.yaml README.md docs tools website
           git diff --cached --check
           git -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' commit -m 'feat: ship problem-led website, private evaluation planner and reliable documentation delivery'
           git push origin "HEAD:$GITHUB_REF_NAME"
