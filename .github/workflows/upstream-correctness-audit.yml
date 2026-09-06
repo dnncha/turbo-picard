@@ -1,0 +1,50 @@
+name: Upstream correctness evidence
+
+on:
+  push:
+    branches: [research/upstream-correctness-20260906]
+    paths:
+      - research/upstream-correctness/**
+      - .github/workflows/upstream-correctness-audit.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        case: [bedtools-union, htsjdk-cigar, htsjdk-reference]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@v4
+        if: matrix.case != 'bedtools-union'
+        with:
+          distribution: temurin
+          java-version: |
+            17
+            21
+      - name: Native build dependencies
+        if: matrix.case == 'bedtools-union'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends libbz2-dev liblzma-dev zlib1g-dev
+      - name: Verify original failure and corrected suite
+        run: |
+          python3 research/upstream-correctness/run.py '${{ matrix.case }}' \
+            --work '${{ runner.temp }}/upstream-work' \
+            --output '${{ runner.temp }}/upstream-evidence'
+      - name: Preserve patches, logs and native test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: upstream-${{ matrix.case }}
+          path: ${{ runner.temp }}/upstream-evidence/
+          if-no-files-found: error
+          retention-days: 30
