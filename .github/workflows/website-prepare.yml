@@ -1,0 +1,94 @@
+name: Validate and stage problem-led website
+on:
+  push:
+    branches: [website/problem-led-discovery-20260906]
+    paths: [.github/workflows/website-prepare.yml]
+permissions:
+  contents: write
+concurrency:
+  group: turbo-picard-website-prepare
+  cancel-in-progress: false
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+      - name: Apply integrity-checked website source
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF_NAME" = 'website/problem-led-discovery-20260906'
+          python3 - <<'PY'
+          import base64,gzip,hashlib
+          from pathlib import Path
+          encoded=''.join(Path(f'.github/site-patch.{i}.b64').read_text().strip() for i in range(1,5))
+          source=gzip.decompress(base64.b64decode(encoded,validate=True))
+          assert hashlib.sha256(source).hexdigest()=='06b83680efa30daa110941feb8825ffb688929d2636433fdcb026d9594e165ab','website source integrity check failed'
+          Path('/tmp/website-source.patch').write_bytes(source)
+          PY
+          git apply --check /tmp/website-source.patch
+          git apply /tmp/website-source.patch
+      - name: Install pinned documentation and browser tools
+        run: |
+          python3 -m pip install -r docs/requirements.txt playwright==1.55.0
+          python3 -m playwright install --with-deps chromium
+      - name: Render the social card and generate static website
+        run: |
+          python3 tools/render_site_social.py
+          python3 tools/build_marketing_site.py
+          git diff --check
+      - name: Run the complete repository Python and source gates
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY' 2>&1 | tee /tmp/python-gates.log
+          import subprocess,yaml
+          from pathlib import Path
+          workflow=yaml.safe_load(Path('.github/workflows/ci.yml').read_text())
+          scripts=[step['run'] for job in workflow['jobs'].values() for step in job.get('steps',[]) if step.get('name')=='Test Python tooling']
+          assert len(scripts)==1
+          subprocess.run(['bash','-e','-o','pipefail','-c',scripts[0]],check=True)
+          PY
+          node website/test-planner.cjs 2>&1 | tee /tmp/planner-tests.log
+      - name: Build and verify the exact hosted documentation output twice
+        shell: bash
+        run: |
+          set -euo pipefail
+          for attempt in 1 2; do
+            python3 -m sphinx -W -b html docs docs/_build/html 2>&1 | tee -a /tmp/documentation-tests.log
+            python3 tools/verify_marketing_site.py --built-dir docs/_build/html 2>&1 | tee -a /tmp/documentation-tests.log
+          done
+      - name: Exercise all pages through actual HTTP browser navigation
+        run: python3 tools/check_marketing_browser.py --site docs/_build/html --output /tmp/website-qa
+      - name: Commit validated product sources to this feature branch only
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF_NAME" = 'website/problem-led-discovery-20260906'
+          git add .github/workflows/ci.yml .github/workflows/website.yml .readthedocs.yaml README.md docs tools website
+          git diff --cached --check
+          git -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' commit -m 'feat: ship problem-led website, private evaluation planner and reliable documentation delivery'
+          git push origin "HEAD:$GITHUB_REF_NAME"
+      - name: Preserve source and verification evidence
+        if: always()
+        run: |
+          git diff > /tmp/website-uncommitted.patch
+          git rev-parse HEAD > /tmp/tested-website-sha.txt
+          git archive --format=tar.gz HEAD > /tmp/tested-website-source.tar.gz
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: turbo-picard-website-implementation-evidence
+          path: |
+            /tmp/python-gates.log
+            /tmp/planner-tests.log
+            /tmp/documentation-tests.log
+            /tmp/website-qa
+            /tmp/website-uncommitted.patch
+            /tmp/tested-website-sha.txt
+            /tmp/tested-website-source.tar.gz
+          retention-days: 14
