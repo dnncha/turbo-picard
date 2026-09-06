@@ -21,6 +21,29 @@ SPEC.loader.exec_module(parity_compare)
 
 
 class ParityCompareTests(unittest.TestCase):
+    def test_nonfinite_metrics_do_not_bypass_tolerances(self):
+        for first, second in (("NaN", "7"), ("7", "NaN"), ("NaN", "Infinity"), ("Infinity", "-Infinity")):
+            with self.subTest(first=first, second=second), tempfile.TemporaryDirectory() as tmp:
+                left, right = Path(tmp) / "a", Path(tmp) / "b"
+                left.write_text(f"FIELD\n{first}\n")
+                right.write_text(f"FIELD\n{second}\n")
+                with self.assertRaises(SystemExit):
+                    parity_compare.compare_metrics(left, right, "nonfinite")
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "same"
+            path.write_text("FIELD\nNaN\n")
+            parity_compare.compare_metrics(path, path, "same empty metric")
+
+    def test_nonfinite_wgs_metrics_do_not_bypass_tolerances(self):
+        from unittest import mock
+        # Intercept the loader to isolate numeric policy from file parsing.
+        with mock.patch.object(parity_compare, "load_wgs_metrics") as load:
+            exact = {name: "0" for name in ("MEDIAN_COVERAGE", "MAD_COVERAGE", "PCT_EXC_ADAPTER", "PCT_EXC_UNPAIRED",
+                                           "FOLD_80_BASE_PENALTY", "FOLD_90_BASE_PENALTY", "FOLD_95_BASE_PENALTY", "HET_SNP_Q")}
+            load.side_effect = [dict(exact, GENOME_TERRITORY="NaN"), dict(exact, GENOME_TERRITORY="7")]
+            with self.assertRaisesRegex(SystemExit, "GENOME_TERRITORY"):
+                parity_compare.compare_wgs_metrics(Path("a"), Path("b"), "nonfinite")
+
     def test_load_metrics_ignores_comment_header(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:
             path = Path(tempdir) / "metrics.txt"

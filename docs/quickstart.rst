@@ -14,11 +14,10 @@ For the quickest first try, install from PyPI in a fresh environment:
    python3 -m pip install turbo-picard
    turbo-picard --version
 
-The live PyPI release publishes Linux x86_64 and macOS Apple Silicon wheels
-plus a source distribution. For Linux clusters and shared environments,
-Bioconda is the better fit once the recipe is accepted; until then, use the
-source install below if the PyPI package is not a good fit for the target
-system.
+Check :doc:`packaging` for release-specific wheel and container availability.
+Use a dedicated environment for the first evaluation so the optional ``picard``
+shim cannot replace the upstream executable in an existing pipeline.
+Bioconda installation remains conditional on acceptance of the submitted recipe.
 
 The PyPI package installs two commands:
 

@@ -88,10 +88,8 @@ settings, parity result, wall time, and RSS together. See :doc:`benchmarks` and
 Safe native evaluation and compact inspection
 ---------------------------------------------
 
-The compact discovery, argv arrays and strict native policy below are available
-in the current source tree, not the published 0.1.12 binaries. Build from source
-before using these additions; the existing full discovery command remains
-available in 0.1.12.
+The compact discovery, argv arrays and strict native policy require version
+0.1.13 or later. The full discovery command is also available in 0.1.12.
 
 .. code-block:: bash
 

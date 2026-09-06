@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import csv
 import importlib.util
+import math
 import subprocess
 import sys
 from collections import Counter
@@ -64,7 +65,8 @@ def compare_metrics(picard_path: Path, turbo_path: Path, label: str) -> None:
                 turbo_value = float(turbo_cell)
             except ValueError:
                 raise SystemExit(f"{label} metrics differ between Picard and turbo-picard")
-            if abs(picard_value - turbo_value) > 1e-5:
+            if (not math.isfinite(picard_value) or not math.isfinite(turbo_value)
+                    or abs(picard_value - turbo_value) > 1e-5):
                 raise SystemExit(f"{label} metrics differ between Picard and turbo-picard")
 
 
@@ -121,6 +123,8 @@ def compare_wgs_metrics(picard_path: Path, turbo_path: Path, label: str) -> None
                 f"Picard={picard[field]} turbo={turbo[field]}"
             )
     for field, tolerance in tolerances.items():
+        if picard[field] == turbo[field]:
+            continue
         try:
             picard_value = float(picard[field])
             turbo_value = float(turbo[field])
@@ -131,7 +135,8 @@ def compare_wgs_metrics(picard_path: Path, turbo_path: Path, label: str) -> None
                     f"Picard={picard[field]} turbo={turbo[field]}"
                 )
             continue
-        if abs(picard_value - turbo_value) > tolerance:
+        if (not math.isfinite(picard_value) or not math.isfinite(turbo_value)
+                or abs(picard_value - turbo_value) > tolerance):
             raise SystemExit(
                 f"{label} WGS metric {field} differs from Picard beyond "
                 f"tolerance {tolerance}: Picard={picard[field]} turbo={turbo[field]}"

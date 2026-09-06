@@ -18,7 +18,7 @@ selection should use representative data and the same versions, machine, thread
 settings, outputs, and downstream comparisons.
 
 Absolute timings and statistical scope
--------------------------------------
+--------------------------------------
 
 The JSON evidence retains ``median_turbo_seconds``, ``median_picard_seconds``,
 ``runs`` and ``workload_parameter`` from the saved raw log. The latter is the

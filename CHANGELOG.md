@@ -1,5 +1,48 @@
 # Changelog
 
+## 0.1.13 — 2026-09-06
+
+### Native execution and sorting
+
+- Use a heap for BAM external-merge selection instead of scanning every active
+  run. Preserve the existing comparator and cross-run tie order.
+- Track owned spill files through intermediate merges and failures; reject
+  truncated spill record headers and account for sorting metadata in memory
+  budgets.
+- Reduce optical-coordinate parser allocations and read-name cloning; protect
+  coordinate-distance and neighbouring-grid arithmetic against overflow.
+- Add `TURBO_PICARD_REQUIRE_NATIVE` to prohibit both explicit and automatically
+  discovered Java fallback during native-only evaluation.
+
+### Workflow and agent interfaces
+
+- Add command-scoped `capabilities --json --command <Command>` discovery.
+- Provide executable argument arrays and command-specific output roles in trial
+  JSON, with explicit syntax, option-support and input-inspection boundaries.
+- Stream or externally sort alignment comparisons without sampling or dropping
+  records. Preserve failed evaluation work and refuse to replace existing
+  evidence; `--discard-work` cleans only a successful current run.
+- Reject NaN-versus-number metric mismatches and handle missing optional tags
+  deterministically in duplicate-semantic comparisons.
+
+### Documentation and evidence
+
+- Clarify the README, landing page, agent guidance and real-data evaluation
+  instructions; improve keyboard, mobile and reduced-motion behaviour.
+- Retain absolute timing, repeat-count and workload metadata in benchmark JSON;
+  correct the even-count suite median from 99.56x to 99.51x using unchanged
+  August 14 saved logs. This release does not claim a new production-scale
+  benchmark campaign or universal superiority over other tools.
+- Include the reproducible validation-helper memory benchmark (one million
+  synthetic SAM records); its results do not measure native MarkDuplicates.
+- Fetch tags for public adoption audits, discover new Python regressions in CI,
+  and fix strict Sphinx heading validation.
+
+Bioconda acceptance and version-specific archival DOI assignment are separate
+from the GitHub/PyPI/container release. Cite the exact software version and
+input-specific evidence used.
+
+
 ## 0.1.12 — 2026-08-30
 
 This is the release source for `v0.1.12`. Tag, package, container, and

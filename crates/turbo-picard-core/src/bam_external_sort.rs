@@ -3,8 +3,10 @@
 //! Runs are ordinary BAM files.  That avoids lossy record serialisation and
 //! permits the final k-way merge to write records directly to the destination.
 
+use crate::temp_runs::OwnedRuns;
 use rust_htslib::bam::{self, Read};
 use std::cmp::Ordering;
+use std::collections::BinaryHeap;
 use std::fs::{self, OpenOptions};
 use std::io;
 use std::path::{Path, PathBuf};
@@ -50,6 +52,7 @@ pub struct BamExternalSorter {
     header: bam::Header,
     records: Vec<bam::Record>,
     runs: Vec<PathBuf>,
+    owned_runs: OwnedRuns,
     metrics: BamExternalSortMetrics,
     instance_id: u64,
     next_run_index: u64,
@@ -63,6 +66,7 @@ impl BamExternalSorter {
             header,
             records: Vec::new(),
             runs: Vec::new(),
+            owned_runs: OwnedRuns::default(),
             metrics: BamExternalSortMetrics::default(),
             instance_id: SORTER_ID.fetch_add(1, AtomicOrdering::Relaxed),
             next_run_index: 0,
@@ -100,7 +104,7 @@ impl BamExternalSorter {
         }
         let result = merge_runs(&runs, compare, emit);
         for run in runs {
-            let _ = remove_if_exists(&run);
+            let _ = self.owned_runs.remove(&run);
         }
         result?;
         Ok(self.metrics)
@@ -133,7 +137,7 @@ impl BamExternalSorter {
             self.metrics.run_count += 1;
             merged.push(output);
             for run in chunk {
-                remove_if_exists(run)?;
+                self.owned_runs.remove(run)?;
             }
         }
         Ok(merged)
@@ -150,18 +154,13 @@ impl BamExternalSorter {
             ));
             self.next_run_index += 1;
             match OpenOptions::new().write(true).create_new(true).open(&path) {
-                Ok(_) => return Ok(path),
+                Ok(_) => {
+                    self.owned_runs.register(&path);
+                    return Ok(path);
+                }
                 Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
                 Err(error) => return Err(error.to_string()),
             }
-        }
-    }
-}
-
-impl Drop for BamExternalSorter {
-    fn drop(&mut self) {
-        for run in self.runs.drain(..) {
-            let _ = remove_if_exists(&run);
         }
     }
 }
@@ -194,29 +193,63 @@ fn merge_runs(
     mut emit: impl FnMut(bam::Record) -> Result<(), String>,
 ) -> Result<(), String> {
     let mut readers = Vec::with_capacity(runs.len());
-    let mut current = Vec::with_capacity(runs.len());
+    let mut heap = BinaryHeap::with_capacity(runs.len());
     for path in runs {
         let mut reader = bam::Reader::from_path(path).map_err(|error| error.to_string())?;
-        current.push(next_record(&mut reader)?);
+        let reader_index = readers.len();
+        if let Some(record) = next_record(&mut reader)? {
+            heap.push(HeapRecord {
+                record,
+                reader_index,
+                compare,
+            });
+        }
         readers.push(reader);
     }
-    loop {
-        let Some(index) = current
-            .iter()
-            .enumerate()
-            .filter_map(|(index, record)| record.as_ref().map(|record| (index, record)))
-            .min_by(|(left_index, left), (right_index, right)| {
-                compare(left, right).then_with(|| left_index.cmp(right_index))
-            })
-            .map(|(index, _)| index)
-        else {
-            return Ok(());
-        };
-        let record = current[index].take().expect("selected record exists");
-        emit(record)?;
-        current[index] = next_record(&mut readers[index])?;
+    // One resident record per run, O(log k) rather than O(k) comparisons per
+    // emitted record. Reader index preserves the former cross-run tie order.
+    while let Some(entry) = heap.pop() {
+        let reader_index = entry.reader_index;
+        emit(entry.record)?;
+        if let Some(record) = next_record(&mut readers[reader_index])? {
+            heap.push(HeapRecord {
+                record,
+                reader_index,
+                compare,
+            });
+        }
+    }
+    Ok(())
+}
+
+struct HeapRecord {
+    record: bam::Record,
+    reader_index: usize,
+    compare: RecordCompare,
+}
+
+impl Ord for HeapRecord {
+    fn cmp(&self, other: &Self) -> Ordering {
+        // All entries in a merge use the same comparator. Reverse it for
+        // BinaryHeap's max-heap, so the smallest record is emitted first.
+        (self.compare)(&other.record, &self.record)
+            .then_with(|| other.reader_index.cmp(&self.reader_index))
     }
 }
+
+impl PartialOrd for HeapRecord {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl PartialEq for HeapRecord {
+    fn eq(&self, other: &Self) -> bool {
+        self.cmp(other) == Ordering::Equal
+    }
+}
+
+impl Eq for HeapRecord {}
 
 fn next_record(reader: &mut bam::Reader) -> Result<Option<bam::Record>, String> {
     let mut record = bam::Record::new();
@@ -224,14 +257,6 @@ fn next_record(reader: &mut bam::Reader) -> Result<Option<bam::Record>, String> 
         Some(Ok(())) => Ok(Some(record)),
         Some(Err(error)) => Err(error.to_string()),
         None => Ok(None),
-    }
-}
-
-fn remove_if_exists(path: &Path) -> Result<(), String> {
-    match fs::remove_file(path) {
-        Ok(()) => Ok(()),
-        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
-        Err(error) => Err(error.to_string()),
     }
 }
 
@@ -266,5 +291,112 @@ mod tests {
         assert!(metrics.spills >= 2);
         assert!(fs::read_dir(&dir).unwrap().next().is_none());
         let _ = fs::remove_dir(&dir);
+    }
+    #[test]
+    fn heap_merge_preserves_cross_run_tie_order() {
+        let dir = std::env::temp_dir().join(format!("turbo-bam-ties-{}", process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let mut owner = OwnedRuns::default();
+        let mut paths = Vec::new();
+        for index in 0..4_u8 {
+            let path = dir.join(format!("{index}.bam"));
+            owner.register(&path);
+            let mut record = bam::Record::new();
+            record.set(b"same", None, b"A", &[30]);
+            record.set_mapq(index);
+            write_run(&path, &bam::Header::new(), &[record.clone(), record]).unwrap();
+            paths.push(path);
+        }
+        let mut observed = Vec::new();
+        merge_runs(&paths, qname_compare, |record| {
+            observed.push(record.mapq());
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(observed, [0, 0, 1, 1, 2, 2, 3, 3]);
+        drop(owner);
+        fs::remove_dir(&dir).unwrap();
+    }
+
+    #[test]
+    fn intermediate_bam_merge_failure_cleans_all_runs() {
+        let dir = std::env::temp_dir().join(format!("turbo-bam-failure-{}", process::id()));
+        let mut config = BamExternalSortConfig::new(&dir);
+        config.max_records_in_ram = 1;
+        config.merge_fan_in = 2;
+        let mut sorter = BamExternalSorter::new(bam::Header::new(), config).unwrap();
+        for name in [b"e", b"d", b"c", b"b", b"a"] {
+            let mut record = bam::Record::new();
+            record.set(name, None, b"A", &[30]);
+            sorter.push(record, qname_compare).unwrap();
+        }
+        fs::write(&sorter.runs[0], b"not a BAM").unwrap();
+        assert!(sorter.finish_into(qname_compare, |_| Ok(())).is_err());
+        assert!(fs::read_dir(&dir).unwrap().next().is_none());
+        fs::remove_dir(&dir).unwrap();
+    }
+
+    #[test]
+    fn heap_selection_matches_linear_oracle_with_fewer_comparisons() {
+        use std::sync::atomic::{AtomicUsize, Ordering as CountOrdering};
+        static COMPARISONS: AtomicUsize = AtomicUsize::new(0);
+        fn counted(left: &bam::Record, right: &bam::Record) -> Ordering {
+            COMPARISONS.fetch_add(1, CountOrdering::Relaxed);
+            qname_compare(left, right)
+        }
+        fn entry(value: usize, reader_index: usize) -> HeapRecord {
+            let mut record = bam::Record::new();
+            record.set(format!("r{value:08}").as_bytes(), None, b"A", &[30]);
+            HeapRecord {
+                record,
+                reader_index,
+                compare: counted,
+            }
+        }
+        const RUNS: usize = 32;
+        const RECORDS: usize = 4096;
+        let mut current: Vec<_> = (0..RUNS).map(|i| Some(entry(i, i))).collect();
+        let mut expected = Vec::new();
+        COMPARISONS.store(0, CountOrdering::Relaxed);
+        loop {
+            let index = current
+                .iter()
+                .enumerate()
+                .filter_map(|(i, row)| row.as_ref().map(|row| (i, row)))
+                .min_by(|(li, l), (ri, r)| counted(&l.record, &r.record).then_with(|| li.cmp(ri)))
+                .map(|(i, _)| i);
+            let Some(index) = index else {
+                break;
+            };
+            let row = current[index].take().unwrap();
+            let name = String::from_utf8(row.record.qname().to_vec()).unwrap();
+            let value: usize = name[1..].parse().unwrap();
+            expected.push(name);
+            if value + RUNS < RECORDS {
+                current[index] = Some(entry(value + RUNS, index));
+            }
+        }
+        let linear_comparisons = COMPARISONS.load(CountOrdering::Relaxed);
+        COMPARISONS.store(0, CountOrdering::Relaxed);
+        let mut heap = BinaryHeap::new();
+        for i in 0..RUNS {
+            heap.push(entry(i, i));
+        }
+        let mut observed = Vec::new();
+        while let Some(row) = heap.pop() {
+            let name = String::from_utf8(row.record.qname().to_vec()).unwrap();
+            let value: usize = name[1..].parse().unwrap();
+            observed.push(name);
+            if value + RUNS < RECORDS {
+                heap.push(entry(value + RUNS, row.reader_index));
+            }
+        }
+        let heap_comparisons = COMPARISONS.load(CountOrdering::Relaxed);
+        assert_eq!(observed, expected);
+        assert_eq!(observed.len(), RECORDS);
+        assert!(
+            heap_comparisons * 2 < linear_comparisons,
+            "heap={heap_comparisons}, linear={linear_comparisons}"
+        );
     }
 }

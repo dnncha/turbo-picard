@@ -1,6 +1,6 @@
 # turbo-picard
 
-> Fast Rust implementations of selected Picard-compatible genomics commands for existing WDL, Nextflow, Snakemake, and shell workflows.
+> Picard workflows. Native speed. Rust implementations of selected Picard-compatible genomics commands for existing WDL, Nextflow, Snakemake, and shell workflows.
 
 Use turbo-picard as a candidate when an existing Picard-shaped preprocessing or QC step is a runtime, memory, or JVM-startup bottleneck. It preserves Picard command names and KEY=VALUE arguments. Native coverage is command- and option-specific; unsupported work can delegate to upstream Picard when fallback is configured.
 
@@ -30,3 +30,11 @@ Trust rule: do not treat a benchmark headline as a production decision. Keep ups
 - Compatibility contract: https://turbo-picard.readthedocs.io/en/latest/compatibility-contract.html
 - Repository: https://github.com/dnncha/turbo-picard
 - PyPI: https://pypi.org/project/turbo-picard/
+
+## Repository evaluation improvements (next-release source only)
+
+The checkout evaluator preserves existing evidence directories and retains failed
+runs. Large comparison sorts use bounded chunks and local scratch storage;
+compare exact digests rather than sampling. These Python-helper changes are not
+claims about native command speed. See real-data-evaluation.html in the matching
+documentation build. Contributor instructions are in the repository AGENTS.md.

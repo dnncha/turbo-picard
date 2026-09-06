@@ -11,6 +11,112 @@ import compare_real_data
 
 
 class CompareRealDataTests(unittest.TestCase):
+    def test_report_creation_is_exclusive_after_preflight(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            target = root / "report.md"
+            compare_real_data.validate_shareable_destination(root, target)
+            target.write_text("created concurrently")
+            with self.assertRaises(FileExistsError):
+                compare_real_data.write_new_text(target, "replacement")
+            self.assertEqual(target.read_text(), "created concurrently")
+            alias = root / "alias.md"
+            alias.symlink_to(target)
+            with self.assertRaises(FileExistsError):
+                compare_real_data.write_new_text(alias, "replacement")
+            self.assertEqual(target.read_text(), "created concurrently")
+            fresh = root / "fresh.md"
+            compare_real_data.write_new_text(fresh, "new evidence")
+            self.assertEqual(fresh.read_text(), "new evidence")
+
+    def test_shareable_report_cannot_overwrite_inputs_or_reserved_outputs(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            input_bam = root / "original.bam"
+            input_bam.write_bytes(b"preserve input")
+            for destination in (input_bam, root / "real-data-comparison.json", root / "work/MarkDuplicates/turbo.bam"):
+                with self.assertRaises(SystemExit):
+                    compare_real_data.validate_shareable_destination(root, destination)
+            compare_real_data.validate_shareable_destination(root, root / "shareable.md")
+            compare_real_data.validate_shareable_destination(root, None)
+            self.assertEqual(input_bam.read_bytes(), b"preserve input")
+
+    def test_workspace_preserves_previous_runs_and_unrelated_files(self):
+        for artifact in ("work", "real-data-comparison.json", "real-data-comparison.md", "manifest-entry.json"):
+            with tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                target = root / artifact
+                if artifact == "work":
+                    target.mkdir()
+                    target = target / "raw-input.bam"
+                target.write_bytes(b"do not delete")
+                with self.assertRaisesRegex(SystemExit, "preserved"):
+                    compare_real_data.prepare_comparison_workspace(root)
+                self.assertEqual(target.read_bytes(), b"do not delete")
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            unrelated = root / "input.bam"
+            unrelated.write_bytes(b"input")
+            work = compare_real_data.prepare_comparison_workspace(root)
+            self.assertTrue(work.is_dir())
+            self.assertEqual(unrelated.read_bytes(), b"input")
+            with self.assertRaises(SystemExit):
+                compare_real_data.prepare_comparison_workspace(root)
+
+    def test_workspace_refuses_dangling_links(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "work").symlink_to(root / "missing")
+            with self.assertRaisesRegex(SystemExit, "overwrite"):
+                compare_real_data.prepare_comparison_workspace(root)
+            self.assertTrue((root / "work").is_symlink())
+
+    def test_disk_coordinate_digest_matches_legacy_and_preserves_multiplicity(self):
+        import hashlib
+        from disk_sort import sorted_records
+        from functools import partial
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "input.sam"
+            rows = [f"r{(i * 17) % 101:03}\t0\tchr1\t{i // 7 + 1}\t60\t4M\t*\t0\t0\tACGT\tFFFF\tNM:i:0".encode()
+                    for i in range(200)]
+            rows.insert(3, rows[3])
+            path.write_bytes(b"@SQ\tSN:chr1\tLN:1000\n" + b"\n".join(rows) + b"\n")
+            expected = hashlib.sha256(b"".join(row + b"\n" for row in sorted(rows))).hexdigest()
+            with mock.patch.object(compare_real_data, "sorted_records", partial(sorted_records, chunk_records=3, fan_in=2)):
+                self.assertEqual(compare_real_data.digest_coordinate_sorted_sam_multiset(path), expected)
+            path.write_bytes(b"@SQ\tSN:chr1\tLN:1000\n" + b"\n".join(rows[:3] + rows[4:]) + b"\n")
+            self.assertNotEqual(compare_real_data.digest_coordinate_sorted_sam_multiset(path), expected)
+
+    def test_markduplicates_disk_digest_matches_previous_field_order(self):
+        import hashlib
+        import json
+        from dataclasses import asdict
+        from disk_sort import sorted_records
+        from functools import partial
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "input.sam"
+            rows = [f"read{i % 11}\t{1024 if i % 3 else 0}\tchr1\t{i + 1}\t60\t4M\t=\t{i + 5}\t8\tACGT\tFFFF\tDS:i:{i % 3}"
+                    for i in range(80)]
+            path.write_text("\n".join(rows) + "\n")
+            expected = hashlib.sha256(b"".join(
+                json.dumps(asdict(row), sort_keys=True).encode() + b"\n"
+                for row in sorted(compare_real_data.parse_markduplicates_records(path))
+            )).hexdigest()
+            with mock.patch.object(compare_real_data, "sorted_records", partial(sorted_records, chunk_records=3, fan_in=2)):
+                self.assertEqual(compare_real_data.digest_markduplicates_semantics(path), expected)
+
+    def test_markduplicates_missing_and_present_tags_have_total_order(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "input.sam"
+            row = "same\t1024\tchr1\t1\t60\t4M\t=\t5\t8\tACGT\tFFFF"
+            rows = [row, row + "\tDT:Z:LB", row + "\tDT:Z:SQ", row + "\tDS:i:2"]
+            path.write_text("\n".join(rows) + "\n")
+            expected = compare_real_data.digest_markduplicates_semantics(path)
+            path.write_text("\n".join(reversed(rows)) + "\n")
+            self.assertEqual(compare_real_data.digest_markduplicates_semantics(path), expected)
+            path.write_text("\n".join(rows[:-1]) + "\n")
+            self.assertNotEqual(compare_real_data.digest_markduplicates_semantics(path), expected)
+
     def test_native_evaluation_isolates_explicit_and_automatic_fallback(self):
         original = {"PATH": "/safe/bin", "PICARD_JAR": "/upstream/picard.jar",
                     "TURBO_PICARD_FALLBACK_COMMAND": "picard"}
