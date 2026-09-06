@@ -1,21 +1,25 @@
-# turbo-picard
+# Turbo Picard
 
 [![CI](https://github.com/dnncha/turbo-picard/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/dnncha/turbo-picard/actions/workflows/ci.yml)
 [![PyPI](https://img.shields.io/pypi/v/turbo-picard.svg)](https://pypi.org/project/turbo-picard/)
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.20541927.svg)](https://doi.org/10.5281/zenodo.20541927)
 
-**Evaluate selected Picard commands in Rust when a known preprocessing or QC
-step is a runtime or memory bottleneck.**
+## Picard workflows. Native speed.
 
-`turbo-picard` keeps the workflow interface familiar: Picard command names,
-`KEY=VALUE` arguments, and an optional `picard` compatibility shim. Accelerated
-commands run natively. Commands outside the native surface can delegate to
-upstream Picard when fallback is configured.
+Run selected Picard tools in Rust, using the command names and arguments your
+pipelines already understand. **Accelerate a bottleneck, not a rewrite.**
 
-It is for bioinformatics teams maintaining Picard steps in WDL, Nextflow,
-Snakemake, or shell pipelines. Start with one representative command, compare
-the outputs your downstream workflow consumes, and keep upstream Picard for
-commands or options outside the documented native scope.
+Turbo Picard is built for teams maintaining SAM/BAM/CRAM, VCF and sequencing-QC
+steps in Nextflow, WDL, Snakemake and shell workflows. Native commands avoid the
+JVM; the documented interface keeps migration local to the task you replace.
+
+**Familiar commands.** Keep Picard command names and `KEY=VALUE` arguments.
+**Inspectable results.** Compare scientific outputs and retain an evidence bundle.
+**Explicit execution.** Distinguish native support from configured upstream fallback.
+
+Start with one representative input. Native coverage is command- and
+option-specific; this is not the full upstream suite. Keep Picard for work
+outside the documented scope.
 
 For coding agents and workflow generators, inspect the complete decision
 surface in one call:
@@ -30,6 +34,14 @@ evidence. Use `turbo-picard trial --json <PicardCommand> ...` for the exact task
 being considered. See the [agentic-coder guide](docs/agentic-coders.rst) for the
 selection rule and safe substitution pattern.
 
+### Compact, native-only automation
+
+Version 0.1.13 adds `capabilities --json --command MarkDuplicates` for compact
+discovery, executable argument arrays in trial JSON, and the strict
+`TURBO_PICARD_REQUIRE_NATIVE=1` policy. See the
+[agentic-coder guide](docs/agentic-coders.rst). Inspection reports describe
+command scope, not proof that a particular input or option is validated.
+
 ## Quick Start
 
 Install from PyPI:
@@ -41,7 +53,7 @@ python3 -m pip install turbo-picard
 For a containerized trial, use the published release image:
 
 ```bash
-docker run --rm ghcr.io/dnncha/turbo-picard:0.1.12 --version
+docker run --rm ghcr.io/dnncha/turbo-picard:0.1.13 --version
 ```
 
 Installing from PyPI currently gives you both commands:
@@ -76,6 +88,18 @@ From a repository checkout:
 ```bash
 cargo install --locked --path crates/turbo-picard-cli --bin turbo-picard --bin picard
 ```
+
+## Prove the switch on your data
+
+The repository includes an evaluator that runs both implementations in separate
+output paths and records versions, timings and output digests. It does not
+upload your data. See the [real-data evaluation guide](docs/real-data-evaluation.rst)
+for a copyable command and the interpretation of a match or mismatch.
+
+The next-release evaluator uses disk-backed sorting for large comparisons,
+preserves existing evaluation directories, and retains failed runs for diagnosis.
+These repository-tooling improvements are not a claim about native command
+speed. It measures the comparison helper, not the native genomics commands.
 
 ## When It Helps
 
@@ -143,11 +167,19 @@ can create a reviewed, privacy-conscious starting point for that report.
 The saved public benchmark suite compares native `turbo-picard` commands against
 Picard 3.4.0 and checks stable outputs before reporting speed. Current saved
 results report `32/32` parity checks passing, with `272.12x` top speedup:
-`NormalizeFasta`, `22.88x` floor speedup: `SetNmMdAndUqTags`, `99.56x`
+`NormalizeFasta`, `22.88x` floor speedup: `SetNmMdAndUqTags`, `99.51x`
 median speedup, and `84.52x` geometric mean speedup.
 
+**Read these as small-fixture measurements, not whole-genome speedups.**
+For example, the saved `MarkDuplicates` case used the generator's `reads=50000`
+setting, with median wall times of **0.075464 seconds** for Turbo Picard and
+**2.238986 seconds** for Picard across three runs. Startup overhead matters at
+this scale. The reported speedup is the median of paired-run ratios, which need
+not equal the ratio of those independent medians. The machine-readable evidence
+now preserves timings, repeat counts and generator parameters alongside ratios.
+
 Summary: `32/32 PASS`; `272.12x` top speedup: `NormalizeFasta`;
-`22.88x` floor speedup: `SetNmMdAndUqTags`; `99.56x` median speedup; `84.52x`
+`22.88x` floor speedup: `SetNmMdAndUqTags`; `99.51x` median speedup; `84.52x`
 geometric mean speedup.
 
 Benchmark details, scope notes, real-data evidence, and reproduction commands
@@ -230,10 +262,12 @@ A command-level speedup is not a universal replacement claim. Keep upstream Pica
 
 ## Packaging Status
 
-The latest provider-verified PyPI release is `0.1.12`. It publishes Linux
-x86_64 and ARM64 wheels, macOS Intel and Apple Silicon wheels, and a source
-distribution. The current source release is `0.1.12`; the matching GitHub
-release, PyPI package, and GHCR image have passed their provider checks.
+The current source release is `0.1.13`. Release builds target Linux x86_64 and
+ARM64, macOS Intel and Apple Silicon, plus a source distribution. Publication
+is gated on artifact validation and installation smoke tests; the
+[release page](https://github.com/dnncha/turbo-picard/releases/tag/v0.1.13)
+and [PyPI](https://pypi.org/project/turbo-picard/0.1.13/) identify the published
+artifacts. The Linux ARM64 wheel is cross-built and artifact-validated.
 
 Read the [release notes](CHANGELOG.md) for the release scope and evidence
 boundaries.

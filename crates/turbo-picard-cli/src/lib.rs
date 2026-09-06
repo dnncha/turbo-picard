@@ -5,7 +5,10 @@
     clippy::type_complexity
 )]
 
+mod agent_contract;
 mod cmm_pipeline;
+
+use agent_contract::declared_outputs;
 mod hs_metrics;
 
 const PICARD_REFERENCE_COMMANDS: &str = include_str!(concat!(
@@ -854,12 +857,14 @@ fn print_capabilities_help(program_name: &str) {
 Usage: {program_name} capabilities
        {program_name} capabilities --json
        {program_name} capabilities --format json
+       {program_name} capabilities --json --command MarkDuplicates
 
 Reports the complete turbo-picard decision surface without running a workload.
 The report includes every Picard command's native/fallback status, recommended
 trial fit, install and compatibility commands, and the checked-in benchmark
 evidence. Use JSON when a coding agent, workflow manager, or CI policy needs to
-decide whether turbo-picard is an appropriate candidate."
+decide whether turbo-picard is an appropriate candidate. --command returns one
+command and an evidence reference instead of the full embedded benchmark table."
     );
 }
 
@@ -896,6 +901,7 @@ and CI integrations."
 fn run_doctor(program_name: &str) {
     println!("turbo_picard_version={}", env!("CARGO_PKG_VERSION"));
     println!("program_name={program_name}");
+    println!("require_native={}", require_native());
     match env::current_exe() {
         Ok(path) => println!("current_exe={}", path.display()),
         Err(error) => println!("current_exe=unavailable ({error})"),
@@ -931,16 +937,26 @@ fn run_doctor(program_name: &str) {
 
 fn run_capabilities(args: &[String]) -> Result<(), String> {
     let (format, remaining) = parse_report_args("capabilities", args)?;
-    if !remaining.is_empty() {
-        return Err(format!(
-            "unexpected capabilities argument: {}",
-            remaining.join(" ")
-        ));
-    }
-    let entries = command_matrix_entries();
+    let mut entries = command_matrix_entries();
+    let filtered = match remaining.as_slice() {
+        [] => false,
+        [flag, command] if flag == "--command" => {
+            entries.retain(|entry| entry.name == *command);
+            if entries.is_empty() {
+                return Err(format!("unsupported Picard command: {command}"));
+            }
+            true
+        }
+        _ => {
+            return Err(format!(
+                "unexpected capabilities argument: {}",
+                remaining.join(" ")
+            ));
+        }
+    };
     match format {
         ExplainFormat::Text => print_capabilities_text(&entries),
-        ExplainFormat::Json => print_capabilities_json(&entries),
+        ExplainFormat::Json => print_capabilities_json(&entries, !filtered),
     }
     Ok(())
 }
@@ -966,7 +982,7 @@ fn print_capabilities_text(entries: &[CommandMatrixEntry]) {
     println!("benchmark_evidence=docs/site/assets/benchmark-data.json");
 }
 
-fn print_capabilities_json(entries: &[CommandMatrixEntry]) {
+fn print_capabilities_json(entries: &[CommandMatrixEntry], include_benchmarks: bool) {
     println!("{{");
     println!("  \"schema_version\": 1,");
     println!("  \"tool\": \"turbo-picard\",");
@@ -1007,9 +1023,17 @@ fn print_capabilities_json(entries: &[CommandMatrixEntry]) {
         );
     }
     println!("  ],");
+    println!("  \"native_only_environment\": \"TURBO_PICARD_REQUIRE_NATIVE\",");
+    println!("  \"benchmark_evidence_source\": \"docs/site/assets/benchmark-data.json\",");
+    println!("  \"benchmark_evidence_request\": \"turbo-picard capabilities --json\",");
+    println!("  \"benchmark_evidence_included\": {include_benchmarks},");
     println!(
         "  \"benchmark_evidence\": {}",
-        BENCHMARK_EVIDENCE_JSON.trim()
+        if include_benchmarks {
+            BENCHMARK_EVIDENCE_JSON.trim()
+        } else {
+            "null"
+        }
     );
     println!("}}");
 }
@@ -1030,7 +1054,7 @@ fn run_explain(args: &[String]) -> Result<(), String> {
                     .to_string(),
                 execution_path: "fallback".to_string(),
                 fallback_command: explain_fallback_command(),
-                declared_outputs: declared_outputs(&args[1..]),
+                declared_outputs: declared_outputs(command, &args[1..])?,
             };
             print_explain_report(&report, format);
             return Ok(());
@@ -1048,7 +1072,7 @@ fn run_explain(args: &[String]) -> Result<(), String> {
         }
         .to_string(),
         fallback_command: explain_fallback_command(),
-        declared_outputs: declared_outputs(&args[1..]),
+        declared_outputs: declared_outputs(command, &args[1..])?,
         status: metadata.status,
         native_scope: metadata.native_scope,
         fallback_scope: metadata.fallback_scope,
@@ -1072,10 +1096,12 @@ fn run_trial(program_name: &str, args: &[String]) -> Result<(), String> {
                     .to_string(),
                 picard_command: format_command("picard", &args),
                 turbo_command: format_command(program_name, &args),
-                compare: comparison_contract(&declared_outputs(&args[1..])),
+                picard_argv: command_argv("picard", &args),
+                turbo_argv: command_argv(program_name, &args),
+                compare: comparison_contract(&declared_outputs(command, &args[1..])?),
                 evidence: evidence_contract(),
                 fallback_command: explain_fallback_command(),
-                declared_outputs: declared_outputs(&args[1..]),
+                declared_outputs: declared_outputs(command, &args[1..])?,
             };
             print_trial_report(&report, format);
             return Ok(());
@@ -1083,12 +1109,14 @@ fn run_trial(program_name: &str, args: &[String]) -> Result<(), String> {
         return Err(format!("unsupported Picard command: {command}"));
     };
 
-    let declared_outputs = declared_outputs(&args[1..]);
+    let declared_outputs = declared_outputs(command, &args[1..])?;
     let report = TrialReport {
         trial_fit: trial_fit_for(&metadata.name, &metadata.status).to_string(),
         why: trial_why_for(&metadata.name, &metadata.status).to_string(),
         picard_command: format_command("picard", &args),
         turbo_command: format_command(program_name, &args),
+        picard_argv: command_argv("picard", &args),
+        turbo_argv: command_argv(program_name, &args),
         compare: comparison_contract(&declared_outputs),
         evidence: evidence_contract(),
         fallback_command: explain_fallback_command(),
@@ -1128,6 +1156,8 @@ struct TrialReport {
     why: String,
     picard_command: String,
     turbo_command: String,
+    picard_argv: Vec<String>,
+    turbo_argv: Vec<String>,
     compare: String,
     evidence: String,
     fallback_command: String,
@@ -1198,6 +1228,10 @@ fn print_explain_report(report: &ExplainReport, format: ExplainFormat) {
 }
 
 fn print_explain_text(report: &ExplainReport) {
+    println!(
+        "inspection_only=true option_support=not-checked output_manifest=declared-arguments-only require_native={}",
+        require_native()
+    );
     println!("command={}", report.command);
     println!("status={}", report.status);
     println!("native_scope={}", report.native_scope);
@@ -1213,6 +1247,7 @@ fn print_explain_text(report: &ExplainReport) {
 
 fn print_explain_json(report: &ExplainReport) {
     println!("{{");
+    print_inspection_contract_json();
     println!("  \"schema_version\": {EXPLAIN_JSON_SCHEMA_VERSION},");
     println!("  \"command\": {},", json_string(&report.command));
     println!("  \"status\": {},", json_string(&report.status));
@@ -1250,6 +1285,10 @@ fn print_trial_report(report: &TrialReport, format: ExplainFormat) {
 }
 
 fn print_trial_text(report: &TrialReport) {
+    println!(
+        "inspection_only=true option_support=not-checked output_manifest=declared-arguments-only require_native={}",
+        require_native()
+    );
     println!("command={}", report.command);
     println!("status={}", report.status);
     println!("trial_fit={}", report.trial_fit);
@@ -1268,6 +1307,7 @@ fn print_trial_text(report: &TrialReport) {
 
 fn print_trial_json(report: &TrialReport) {
     println!("{{");
+    print_inspection_contract_json();
     println!("  \"schema_version\": {TRIAL_JSON_SCHEMA_VERSION},");
     println!("  \"command\": {},", json_string(&report.command));
     println!("  \"status\": {},", json_string(&report.status));
@@ -1287,6 +1327,8 @@ fn print_trial_json(report: &TrialReport) {
         "  \"fallback_command\": {},",
         json_string(&report.fallback_command)
     );
+    println!("  \"picard_argv\": {},", json_array(&report.picard_argv));
+    println!("  \"turbo_argv\": {},", json_array(&report.turbo_argv));
     println!("  \"declared_outputs\": [");
     for (index, output) in report.declared_outputs.iter().enumerate() {
         let comma = if index + 1 == report.declared_outputs.len() {
@@ -1310,6 +1352,9 @@ fn format_command(executable: &str, args: &[String]) -> String {
 }
 
 fn shell_token(value: &str) -> String {
+    if value.is_empty() {
+        return "''".to_string();
+    }
     if value
         .chars()
         .all(|character| character.is_ascii_alphanumeric() || "-_./:=+".contains(character))
@@ -1388,6 +1433,34 @@ fn evidence_contract() -> String {
         .to_string()
 }
 
+fn command_argv(program: &str, args: &[String]) -> Vec<String> {
+    std::iter::once(program.to_string())
+        .chain(args.iter().cloned())
+        .collect()
+}
+
+fn json_array(values: &[String]) -> String {
+    format!(
+        "[{}]",
+        values
+            .iter()
+            .map(|value| json_string(value))
+            .collect::<Vec<_>>()
+            .join(", ")
+    )
+}
+
+fn print_inspection_contract_json() {
+    println!("  \"executes_command\": false,");
+    println!("  \"require_native\": {},", require_native());
+    println!(
+        "  \"validation\": {{\"syntax\": \"checked\", \"option_support\": \"not-checked\", \"inputs\": \"not-inspected\", \"output_manifest\": \"declared-arguments-only\"}},"
+    );
+    println!(
+        "  \"warnings\": [\"Command status is not verification of these options or inputs.\", \"Implicit sidecars and generated filenames are not exhaustively enumerated.\", \"Run comparisons in separate output directories; the displayed invocations reuse your provided output paths.\"],"
+    );
+}
+
 fn json_string(value: &str) -> String {
     let mut escaped = String::with_capacity(value.len() + 2);
     escaped.push('"');
@@ -1407,30 +1480,6 @@ fn json_string(value: &str) -> String {
     }
     escaped.push('"');
     escaped
-}
-
-fn declared_outputs(args: &[String]) -> Vec<String> {
-    args.iter()
-        .filter_map(|arg| arg.split_once('='))
-        .filter(|(key, value)| {
-            !value.is_empty()
-                && matches!(
-                    key.to_ascii_uppercase().as_str(),
-                    "O" | "OUTPUT"
-                        | "M"
-                        | "METRICS_FILE"
-                        | "CHART_OUTPUT"
-                        | "HISTOGRAM_FILE"
-                        | "F"
-                        | "FASTQ"
-                        | "F2"
-                        | "SECOND_END_FASTQ"
-                        | "FU"
-                        | "UNPAIRED_FASTQ"
-                )
-        })
-        .map(|(key, value)| format!("{key}={value}"))
-        .collect::<Vec<_>>()
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -21354,7 +21403,15 @@ fn print_picard_command_list() {
     }
 }
 
+fn require_native() -> bool {
+    // Fail closed even for an empty or non-Unicode value. Unset to allow fallback.
+    env::var_os("TURBO_PICARD_REQUIRE_NATIVE").is_some()
+}
+
 fn resolve_fallback_command() -> Option<String> {
+    if require_native() {
+        return None;
+    }
     if let Ok(command) = env::var("TURBO_PICARD_FALLBACK_COMMAND") {
         let trimmed = command.trim();
         if !trimmed.is_empty() {
@@ -21483,6 +21540,12 @@ fn is_turbo_picard_binary(path: &Path) -> bool {
 }
 
 fn try_run_fallback(args: &[String]) -> Option<i32> {
+    if require_native() {
+        eprintln!(
+            "native execution required by TURBO_PICARD_REQUIRE_NATIVE; upstream Picard fallback is disabled (unset this variable to allow delegation)"
+        );
+        return Some(2);
+    }
     let fallback_command = resolve_fallback_command()?;
 
     match fallback_status(&fallback_command, args) {

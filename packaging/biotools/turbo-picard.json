@@ -4,7 +4,7 @@
   "description": "Rust command-line tools for selected Picard-compatible genomics workflows. turbo-picard keeps Picard-style command names and KEY=VALUE arguments, documents native and fallback scope by command, and can delegate unsupported commands to upstream Picard when configured.",
   "homepage": "https://turbo-picard.readthedocs.io/",
   "version": [
-    "0.1.12"
+    "0.1.13"
   ],
   "toolType": [
     "Command-line tool"

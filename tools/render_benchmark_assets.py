@@ -8,6 +8,7 @@ import html
 import json
 import math
 import pathlib
+import statistics
 
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -48,13 +49,26 @@ def build_benchmark_data_from_rows(
             speedup = float(row["speedup"])
         except (KeyError, TypeError, ValueError) as error:
             raise ValueError(f"benchmark row {command} missing numeric speedup") from error
-        if speedup <= 0:
-            raise ValueError(f"benchmark row {command} speedup must be positive")
+        if not math.isfinite(speedup) or speedup <= 0:
+            raise ValueError(f"benchmark row {command} speedup must be positive and finite")
+
+        for key in ("median_turbo_seconds", "median_picard_seconds"):
+            if key in row:
+                value = float(row[key])
+                if not math.isfinite(value) or value <= 0:
+                    raise ValueError(f"benchmark row {command} {key} must be positive and finite")
+        if "runs" in row and (type(row["runs"]) is not int or row["runs"] <= 0):
+            raise ValueError(f"benchmark row {command} runs must be a positive integer")
+        if "workload_parameter" in row:
+            workload = row["workload_parameter"]
+            if (not isinstance(workload, dict) or workload.get("name") != "reads"
+                    or type(workload.get("value")) is not int or workload["value"] <= 0):
+                raise ValueError(f"benchmark row {command} has invalid workload parameter")
 
     speedups = [float(row["speedup"]) for row in rows]
     top = max(rows, key=lambda row: float(row["speedup"]))
     floor = min(rows, key=lambda row: float(row["speedup"]))
-    geometric_mean = math.prod(speedups) ** (1 / len(speedups))
+    geometric_mean = math.exp(math.fsum(math.log(speedup) for speedup in speedups) / len(speedups))
     ordered = sorted(rows, key=lambda row: float(row["speedup"]), reverse=True)
     pass_count = sum(1 for row in rows if row["parity"] == "PASS")
     data = {
@@ -68,7 +82,7 @@ def build_benchmark_data_from_rows(
             "top_command": top["command"],
             "floor_speedup": float(floor["speedup"]),
             "floor_command": floor["command"],
-            "median_speedup": round(sorted(speedups)[len(speedups) // 2], 2),
+            "median_speedup": round(statistics.median(speedups), 2),
             "geometric_mean_speedup": round(geometric_mean, 2),
         },
         "benchmarks": [
@@ -77,6 +91,9 @@ def build_benchmark_data_from_rows(
                 "command": row["command"],
                 "speedup": float(row["speedup"]),
                 "parity": row["parity"],
+                **{key: row[key] for key in (
+                    "median_turbo_seconds", "median_picard_seconds", "runs", "workload_parameter"
+                ) if key in row},
             }
             for rank, row in enumerate(ordered, start=1)
         ],
@@ -124,13 +141,23 @@ def build_benchmark_data_from_suite_output(
             continue
         if {"command", "median_speedup", "parity"} - values.keys():
             continue
-        rows.append(
-            {
-                "command": values["command"],
-                "speedup": float(values["median_speedup"].removesuffix("x")),
-                "parity": values["parity"],
-            }
-        )
+        row = {
+            "command": values["command"],
+            # Preserve the median of paired run ratios from bench_suite.py.
+            # A ratio of independent medians is not the same statistic.
+            "speedup": float(values["median_speedup"].removesuffix("x")),
+            "parity": values["parity"],
+        }
+        for key in ("median_turbo_seconds", "median_picard_seconds"):
+            if key in values:
+                row[key] = float(values[key])
+        if "runs" in values:
+            row["runs"] = int(values["runs"])
+        if "reads" in values:
+            # This is a generator argument, not a verified read count; some
+            # commands operate on FASTA/VCF rather than alignment reads.
+            row["workload_parameter"] = {"name": "reads", "value": int(values["reads"])}
+        rows.append(row)
     return build_benchmark_data_from_rows(
         rows, source=resolved_source, date=resolved_date, source_artifact=source_artifact
     )
@@ -139,7 +166,7 @@ def build_benchmark_data_from_suite_output(
 def write_json(data: dict) -> None:
     ASSET_DIR.mkdir(parents=True, exist_ok=True)
     (ASSET_DIR / "benchmark-data.json").write_text(
-        json.dumps(data, indent=2) + "\n", encoding="utf-8"
+        json.dumps(data, indent=2, allow_nan=False) + "\n", encoding="utf-8"
     )
 
 

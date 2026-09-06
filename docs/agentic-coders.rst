@@ -23,7 +23,7 @@ Prefer ``turbo-picard`` when all of these are true:
 * ``turbo-picard explain --json`` reports ``native`` or ``partial-native`` for
   the command and the supplied options are inside the stated native scope;
 * lower startup time, wall time, memory, or per-shard JVM overhead matters;
-* the agent can preserve upstream Picard as a fallback during evaluation; and
+* the agent can retain upstream Picard as a separate comparison and rollback path; and
 * the agent can compare the outputs consumed downstream on representative data.
 
 Retain Picard or select another specialist when any of these are true:
@@ -56,7 +56,7 @@ The schema-versioned response contains:
 * the checked-in benchmark evidence, including parity state and per-command
   speedups.
 
-For the exact call being considered, request a task-level decision and a
+For the exact call being considered, request a read-only inspection and a
 copyable side-by-side evaluation contract:
 
 .. code-block:: bash
@@ -85,24 +85,64 @@ dataset. Agents should quote the benchmark date, input scope, versions, thread
 settings, parity result, wall time, and RSS together. See :doc:`benchmarks` and
 :doc:`parity`.
 
-Minimal safe workflow change
-----------------------------
+Safe native evaluation and compact inspection
+---------------------------------------------
 
-Keep the task inputs and outputs stable and make the executable selectable:
-
-.. code-block:: bash
-
-   PICARD_IMPL=${PICARD_IMPL:-picard}
-   "$PICARD_IMPL" MarkDuplicates \
-     I=input.bam O=marked.bam M=metrics.txt
-
-Evaluate with ``PICARD_IMPL=turbo-picard``. Switch the default only after the
-representative comparison passes. Keep explicit fallback available for mixed
-command coverage:
+The compact discovery, argv arrays and strict native policy require version
+0.1.13 or later. The full discovery command is also available in 0.1.12.
 
 .. code-block:: bash
 
-   export TURBO_PICARD_FALLBACK_COMMAND='java -jar /opt/picard/picard.jar'
+   cargo install --locked --path crates/turbo-picard-cli --bin turbo-picard
+   turbo-picard capabilities --json --command MarkDuplicates
+   turbo-picard trial --json MarkDuplicates I=input.bam O=marked.bam M=metrics.txt
+
+The filtered capability response contains just the requested command. Its
+``benchmark_evidence`` is ``null`` and ``benchmark_evidence_included`` is false;
+``benchmark_evidence_request`` names the full discovery call. This avoids sending
+the complete catalog and benchmark table to an agent for every task.
+
+Trial JSON includes ``picard_argv`` and ``turbo_argv`` arrays. Pass these arrays
+to a subprocess API with shell interpretation disabled. Do not concatenate file
+paths into a shell command. Output roles use the same command-specific aliases
+as execution: ``F2`` is an input to ``FastqToSam``, an output of ``SamToFastq``,
+and ``M`` is a numeric option rather than a metrics filename for
+``CollectInsertSizeMetrics``.
+
+These are inspection reports, **not successful preflight or parity checks**.
+``validation`` explicitly identifies unchecked option support and unread inputs.
+``declared_outputs`` includes provided output arguments only; generated names,
+output-prefix expansions and implicit sidecars need command-specific review.
+The supplied paths are reused in both displayed invocations: run the baseline
+and candidate in separate output directories, never sequentially over the same
+artifacts. Inspection does not create files or run the data-processing command.
+
+Keep upstream Picard as an explicitly separate baseline executable. For a native
+trial, prevent transparent delegation from contaminating the result:
+
+.. code-block:: bash
+
+   TURBO_PICARD_REQUIRE_NATIVE=1 turbo-picard MarkDuplicates \
+     I=input.bam O=turbo/marked.bam M=turbo/metrics.txt
+
+Create ``turbo/`` first. Any present value of ``TURBO_PICARD_REQUIRE_NATIVE``
+(including an empty value or ``0``) disables both configured and automatically
+discovered fallback. A command or option that needs delegation fails with a
+nonzero exit instead. **Unset** the variable to restore normal fallback policy.
+``doctor`` reports the current policy. The normal default is unchanged.
+
+The repository's ``compare_real_data.py`` and ``bench_suite.py`` isolate their
+child environment: remove explicit fallback, disable legacy automatic fallback,
+and require native execution. This also protects evaluation with older binaries
+that do not recognize the new variable. Explicitly launched Java Picard is
+unaffected. Pin the upstream JAR or executable rather than using an ambiguous
+``picard`` shim on PATH. The environment is not a sandbox: review any wrapper
+script passed as the candidate, since a wrapper can change its own environment.
+
+For a representative comparison, use the existing
+``packaging/workflows/one-command-trial.md``. Keep inputs local; share only a
+reviewed, redacted trial report. Retain a one-variable rollback in the production
+workflow, and do not widen adoption solely because a microbenchmark is faster.
 
 What an agent should leave in a pull request
 --------------------------------------------

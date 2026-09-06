@@ -40,10 +40,9 @@ Current facts to keep consistent:
 - Live package and release source: `turbo-picard` 0.1.12
 - Install: `python3 -m pip install turbo-picard`
 - Current PyPI files: Linux x86_64 and ARM64 wheels, macOS Intel and Apple Silicon wheels, and source distribution
-- Bioconda is not yet a current `0.1.12` install path: the existing open PR
-  #65922 covers `0.1.11` metadata. Use PyPI `0.1.12` or the published
-  container until the exact `0.1.12` tag, archive, review, and publication are
-  complete.
+- The submitted Bioconda PR #65922 targets `0.1.12`. Do not advertise a
+  Bioconda install until acceptance and package-index availability are verified.
+  Use PyPI `0.1.12` or the published container in the meantime.
 - Trial helper: `turbo-picard trial <PicardCommand> ...`
 - Benchmark evidence in the repo reports 32/32 parity-checked commands, 84.52x
   geometric mean speedup, and 272.12x top speedup versus Picard 3.4.0

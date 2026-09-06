@@ -5,3 +5,5 @@
 /benchmarks/real-data/**/evidence/work/
 /benchmarks/riker-comparison/evidence/*-atlas/
 /docs/_build/
+__pycache__/
+*.py[cod]

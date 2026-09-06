@@ -26,6 +26,11 @@ from pathlib import Path
 from typing import Iterable
 from urllib.parse import urlparse
 
+if __package__:
+    from .disk_sort import sorted_records
+else:
+    from disk_sort import sorted_records
+
 
 ROOT = Path(__file__).resolve().parents[1]
 RELEASE_CANDIDATE_MIN_BYTES = 1_000_000
@@ -220,7 +225,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--discard-work",
         action="store_true",
-        help="Remove intermediate command outputs after writing JSON/Markdown digests.",
+        help="Remove this run's intermediates only after passing parity and writing reports. Failed runs are retained.",
     )
     parser.add_argument(
         "--shareable-report",
@@ -260,11 +265,14 @@ def main() -> int:
     if merge_input.suffix.lower() == ".cram" and args.reference_fasta is None:
         raise SystemExit("CRAM merge input requires --reference-fasta")
 
+    validate_shareable_destination(args.output_dir, args.shareable_report)
+    if len(set(args.commands)) != len(args.commands):
+        raise SystemExit("comparison command list contains duplicate commands")
+
     validate_collecthsmetrics_request(args)
 
     validate_manifest_request(args)
 
-    args.output_dir.mkdir(parents=True, exist_ok=True)
     if not args.skip_build:
         run(["cargo", "build", "--release", "-p", "turbo-picard-cli", "--bin", "picard"])
 
@@ -273,33 +281,27 @@ def main() -> int:
         raise SystemExit(f"missing turbo-picard command: {turbo_prefix[0]}")
     picard_prefix = split_command(args.picard_command) if args.picard_command else default_picard_prefix(args.conda_prefix)
 
-    work_root = args.output_dir / "work"
-    if work_root.exists():
-        shutil.rmtree(work_root)
-    work_root.mkdir(parents=True)
+    work_root = prepare_comparison_workspace(args.output_dir)
 
+    # Failed runs deliberately keep their own intermediates for inspection.
     evidence: list[CommandEvidence] = []
-    try:
-        for command in args.commands:
-            evidence.append(
-                compare_command(
-                    command,
-                    args.input_bam,
-                    work_root,
-                    turbo_prefix,
-                    picard_prefix,
-                    args.stop_after,
-                    args.reference_fasta,
-                    merge_input,
-                    args.markduplicates_args,
-                    args.bait_interval_list,
-                    args.target_interval_list,
-                    args.collecthsmetrics_args,
-                )
+    for command in args.commands:
+        evidence.append(
+            compare_command(
+                command,
+                args.input_bam,
+                work_root,
+                turbo_prefix,
+                picard_prefix,
+                args.stop_after,
+                args.reference_fasta,
+                merge_input,
+                args.markduplicates_args,
+                args.bait_interval_list,
+                args.target_interval_list,
+                args.collecthsmetrics_args,
             )
-    finally:
-        if args.discard_work:
-            shutil.rmtree(work_root, ignore_errors=True)
+        )
 
     summary = {
         "input": input_metadata(
@@ -323,7 +325,7 @@ def main() -> int:
             args.target_interval_list,
         )
     json_path = args.output_dir / "real-data-comparison.json"
-    json_path.write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    write_new_text(json_path, json.dumps(summary, indent=2, sort_keys=True) + "\n")
     markdown_path = args.output_dir / "real-data-comparison.md"
     write_markdown(markdown_path, summary)
     if args.dataset_id:
@@ -336,9 +338,9 @@ def main() -> int:
             scope_caveat=args.scope_caveat,
             release_tier=args.release_tier,
         )
-        manifest_entry_path.write_text(
+        write_new_text(
+            manifest_entry_path,
             json.dumps(manifest_entry, indent=2, sort_keys=True) + "\n",
-            encoding="utf-8",
         )
     if args.shareable_report is not None:
         args.shareable_report.parent.mkdir(parents=True, exist_ok=True)
@@ -357,7 +359,45 @@ def main() -> int:
     for row in evidence:
         speedup = f"{row.speedup:.2f}x" if row.speedup is not None else "n/a"
         print(f"{row.command}: {row.status} parity, speedup={speedup}")
+    if args.discard_work and summary["parity"] == "PASS":
+        shutil.rmtree(work_root)
     return 0 if summary["parity"] == "PASS" else 1
+
+
+def write_new_text(path: Path, text: str) -> None:
+    """Never replace a file or follow a target symlink, including after preflight."""
+    with path.open("x", encoding="utf-8") as handle:
+        handle.write(text)
+
+
+def validate_shareable_destination(output_dir: Path, destination: Path | None) -> None:
+    if destination is None:
+        return
+    target = destination.resolve()
+    reserved = {(output_dir / name).resolve() for name in (
+        "real-data-comparison.json", "real-data-comparison.md", "manifest-entry.json")}
+    if destination.exists() or destination.is_symlink():
+        raise SystemExit(f"refusing to overwrite existing shareable report: {destination}")
+    if target in reserved or target.is_relative_to((output_dir / "work").resolve()):
+        raise SystemExit("--shareable-report must not replace a command output or evidence manifest")
+
+
+def prepare_comparison_workspace(output_dir: Path) -> Path:
+    """Claim a new workspace without deleting or replacing a previous run."""
+    for name in ("work", "real-data-comparison.json", "real-data-comparison.md", "manifest-entry.json"):
+        path = output_dir / name
+        if path.exists() or path.is_symlink():
+            raise SystemExit(
+                f"refusing to overwrite existing evaluation artifact: {path}; "
+                "choose a fresh --output-dir (the previous run has been preserved)"
+            )
+    output_dir.mkdir(parents=True, exist_ok=True)
+    work_root = output_dir / "work"
+    try:
+        work_root.mkdir()  # Exclusive claim also rejects concurrent evaluators.
+    except FileExistsError:
+        raise SystemExit(f"evaluation workspace is already in use: {work_root}; choose a fresh --output-dir")
+    return work_root
 
 
 def validate_manifest_request(args: argparse.Namespace) -> None:
@@ -1778,12 +1818,27 @@ def picard_prefix_with_rscript_shim(prefix: list[str], workdir: Path) -> list[st
     return prefix
 
 
+def native_evaluation_env(env: dict[str, str] | None = None) -> dict[str, str]:
+    """Never mistake delegation to Java for evidence of native execution.
+
+    Also disable both legacy fallback paths so older candidate binaries cannot
+    silently delegate. Explicitly launched upstream Picard remains unaffected.
+    Copy the environment; never mutate the caller or global process settings.
+    """
+    result = dict(os.environ if env is None else env)
+    result.pop("TURBO_PICARD_FALLBACK_COMMAND", None)
+    result["TURBO_PICARD_DISABLE_AUTO_FALLBACK"] = "1"
+    result["TURBO_PICARD_REQUIRE_NATIVE"] = "1"
+    return result
+
+
 def run(
     command: list[str],
     *,
     stdout: Path | None = None,
     env: dict[str, str] | None = None,
 ) -> float:
+    env = native_evaluation_env(env)
     start = time.perf_counter()
     with tempfile.TemporaryFile("w+b") as stderr_handle:
         if stdout is None:
@@ -1820,6 +1875,7 @@ def run_allowing_exit(
     stdout: Path | None = None,
     env: dict[str, str] | None = None,
 ) -> tuple[float, int]:
+    env = native_evaluation_env(env)
     start = time.perf_counter()
     with tempfile.TemporaryFile("w+b") as stderr_handle:
         if stdout is None:
@@ -2090,24 +2146,24 @@ def digest_sam_records(path: Path) -> str:
 
 
 def digest_sam_records_and_read_groups(path: Path) -> str:
+    # Two streaming passes preserve the existing digest contract (all read
+    # groups before all records) without retaining every alignment in memory.
     digest = hashlib.sha256()
     read_groups: list[bytes] = []
-    records: list[bytes] = []
     with path.open("rb") as handle:
         for raw in handle:
-            raw = raw.rstrip(b"\n")
             if raw.startswith(b"@RG\t"):
-                read_groups.append(normalize_sam_header_fields(raw))
-            elif not raw.startswith(b"@"):
-                records.append(normalize_sam_record(raw))
+                read_groups.append(normalize_sam_header_fields(raw.rstrip(b"\n")))
     for row in sorted(read_groups):
         digest.update(b"RG\t")
         digest.update(row)
         digest.update(b"\n")
-    for row in records:
-        digest.update(b"REC\t")
-        digest.update(row)
-        digest.update(b"\n")
+    with path.open("rb") as handle:
+        for raw in handle:
+            if not raw.startswith(b"@"):
+                digest.update(b"REC\t")
+                digest.update(normalize_sam_record(raw.rstrip(b"\n")))
+                digest.update(b"\n")
     return digest.hexdigest()
 
 
@@ -2119,38 +2175,41 @@ def normalize_sam_header_fields(row: bytes) -> bytes:
 
 
 def digest_coordinate_sorted_sam_multiset(path: Path) -> str:
-    records: list[tuple[tuple[int, int], bytes]] = []
-    contig_order: dict[bytes, int] = {}
-    with path.open("rb") as handle:
-        for raw in handle:
-            if raw.startswith(b"@SQ\t"):
-                fields = raw.rstrip(b"\n").split(b"\t")
-                for field in fields:
-                    if field.startswith(b"SN:"):
-                        contig_order.setdefault(field.removeprefix(b"SN:"), len(contig_order))
-                        break
-                continue
-            if raw.startswith(b"@"):
-                continue
-            normalized = normalize_sam_record(raw.rstrip(b"\n"))
-            fields = normalized.split(b"\t")
-            if len(fields) < 4:
-                raise SystemExit(f"malformed SAM record in {path}")
-            tid = 1_000_000_000 if fields[2] == b"*" else contig_order.get(fields[2])
-            if tid is None:
-                raise SystemExit(f"SAM record references contig missing from header in {path}: {fields[2]!r}")
-            try:
-                pos = int(fields[3])
-            except ValueError:
-                raise SystemExit(f"malformed SAM position in {path}: {fields[3]!r}")
-            records.append(((tid, pos), normalized))
-    sort_keys = [sort_key for sort_key, _record in records]
-    if sort_keys != sorted(sort_keys):
-        raise SystemExit(f"{path} is not coordinate sorted")
+    def records() -> Iterable[bytes]:
+        contig_order: dict[bytes, int] = {}
+        previous: tuple[int, int] | None = None
+        with path.open("rb") as handle:
+            for raw in handle:
+                if raw.startswith(b"@SQ\t"):
+                    for field in raw.rstrip(b"\n").split(b"\t"):
+                        if field.startswith(b"SN:"):
+                            contig_order.setdefault(field.removeprefix(b"SN:"), len(contig_order))
+                            break
+                    continue
+                if raw.startswith(b"@"):
+                    continue
+                normalized = normalize_sam_record(raw.rstrip(b"\n"))
+                fields = normalized.split(b"\t")
+                if len(fields) < 4:
+                    raise SystemExit(f"malformed SAM record in {path}")
+                tid = 1_000_000_000 if fields[2] == b"*" else contig_order.get(fields[2])
+                if tid is None:
+                    raise SystemExit(f"SAM record references contig missing from header in {path}: {fields[2]!r}")
+                try:
+                    pos = int(fields[3])
+                except ValueError:
+                    raise SystemExit(f"malformed SAM position in {path}: {fields[3]!r}")
+                current = (tid, pos)
+                if previous is not None and current < previous:
+                    raise SystemExit(f"{path} is not coordinate sorted")
+                previous = current
+                yield normalized
+
     digest = hashlib.sha256()
-    for _sort_key, record in sorted(records, key=lambda item: item[1]):
-        digest.update(record)
-        digest.update(b"\n")
+    with sorted_records(records()) as ordered:
+        for record in ordered:
+            digest.update(record)
+            digest.update(b"\n")
     return digest.hexdigest()
 
 
@@ -2283,11 +2342,23 @@ def digest_validate_sam_summary(path: Path, exit_code: int) -> str:
     return digest.hexdigest()
 
 
+def markduplicates_sort_key(encoded: bytes) -> tuple:
+    record = json.loads(encoded)
+    # Preserve dataclass field ordering. A missing tag sorts before a present
+    # one, defining cases in which Python's previous None-vs-value sort raised
+    # TypeError. Digests for previously sortable inputs remain unchanged.
+    return tuple((record[name] is not None, record[name])
+                 for name in MarkDuplicateRecord.__dataclass_fields__)
+
+
 def digest_markduplicates_semantics(path: Path) -> str:
     digest = hashlib.sha256()
-    for record in sorted(parse_markduplicates_records(path)):
-        digest.update(json.dumps(asdict(record), sort_keys=True).encode("utf-8"))
-        digest.update(b"\n")
+    rows = (json.dumps(asdict(record), sort_keys=True).encode("utf-8")
+            for record in parse_markduplicates_records(path))
+    with sorted_records(rows, key=markduplicates_sort_key) as ordered:
+        for row in ordered:
+            digest.update(row)
+            digest.update(b"\n")
     return digest.hexdigest()
 
 
@@ -2369,7 +2440,7 @@ def write_markdown(path: Path, summary: dict) -> None:
     lines.extend(["", "## Artifact digests", ""])
     lines.extend(artifact_digest_lines(summary["commands"]))
     lines.append("")
-    path.write_text("\n".join(lines), encoding="utf-8")
+    write_new_text(path, "\n".join(lines))
 
 
 def markdown_cell(value: object) -> str:
@@ -2458,7 +2529,7 @@ def write_shareable_markdown(
             "",
         ]
     )
-    path.write_text("\n".join(lines), encoding="utf-8")
+    write_new_text(path, "\n".join(lines))
 
 
 def comparison_detail_lines(rows: list[dict]) -> list[str]:

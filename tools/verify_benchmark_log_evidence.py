@@ -140,12 +140,17 @@ def validate_benchmark_log_evidence(
     for command in sorted(set(actual_by_command) & set(expected_by_command)):
         actual_row = actual_by_command[command]
         expected_row = expected_by_command[command]
-        for key in ("rank", "speedup", "parity"):
+        # Legacy manifests contain ratios only. If absolute evidence is published,
+        # it must match the raw log too; never verify just its headline speedup.
+        keys = ["rank", "speedup", "parity"] + [key for key in (
+            "median_turbo_seconds", "median_picard_seconds", "runs", "workload_parameter"
+        ) if key in actual_row]
+        for key in keys:
             compare_field(
                 errors,
                 label=f"manifest benchmark {command} {key}",
                 actual=actual_row.get(key),
-                expected=expected_row[key],
+                expected=expected_row.get(key),
             )
 
     return errors

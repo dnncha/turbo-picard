@@ -1,0 +1,76 @@
+{
+  "digest": "187e420b732e3c28df498fcf6478cb1feada84d2a4d2f2564480ed6885210315",
+  "digest_parity": "PASS",
+  "input_bytes": 141888973,
+  "input_sha256": "5b02031ab2e95b87a17ae8e93a1bb724b794f68475a19d96a1ddbaecac96dd6d",
+  "measurements": {
+    "baseline": [
+      {
+        "digest": "187e420b732e3c28df498fcf6478cb1feada84d2a4d2f2564480ed6885210315",
+        "peak_rss_bytes": 474533888,
+        "repeat": 1,
+        "seconds": 3.704121288000124
+      },
+      {
+        "digest": "187e420b732e3c28df498fcf6478cb1feada84d2a4d2f2564480ed6885210315",
+        "peak_rss_bytes": 474537984,
+        "repeat": 2,
+        "seconds": 3.873716679999916
+      },
+      {
+        "digest": "187e420b732e3c28df498fcf6478cb1feada84d2a4d2f2564480ed6885210315",
+        "peak_rss_bytes": 474431488,
+        "repeat": 3,
+        "seconds": 3.6873722849998103
+      }
+    ],
+    "candidate": [
+      {
+        "digest": "187e420b732e3c28df498fcf6478cb1feada84d2a4d2f2564480ed6885210315",
+        "peak_rss_bytes": 104923136,
+        "repeat": 1,
+        "seconds": 3.518055825000147
+      },
+      {
+        "digest": "187e420b732e3c28df498fcf6478cb1feada84d2a4d2f2564480ed6885210315",
+        "peak_rss_bytes": 104775680,
+        "repeat": 2,
+        "seconds": 3.535889895000082
+      },
+      {
+        "digest": "187e420b732e3c28df498fcf6478cb1feada84d2a4d2f2564480ed6885210315",
+        "peak_rss_bytes": 104787968,
+        "repeat": 3,
+        "seconds": 3.4560432450000462
+      }
+    ]
+  },
+  "memory_measurement": "peak process RSS from getrusage(RUSAGE_SELF); includes interpreter and imports",
+  "method": "digest_coordinate_sorted_sam_multiset",
+  "peak_rss_ratio_baseline_over_candidate": 4.5285150295117855,
+  "platform": "Linux-6.18.35-x86_64-with-glibc2.41",
+  "python": "3.13.5 (main, Jul 15 2026, 20:25:40) [GCC 14.2.0]",
+  "records": 1000000,
+  "run_order": "alternating; fresh processes; filesystem caches not cleared",
+  "schema_version": 1,
+  "scope": "synthetic validation-helper benchmark; NOT native command or production-workflow performance",
+  "source_sha256": {
+    "baseline": "0e1eb2377bd6296c21a5b32fcc3a4f58dab0ea9acaf3d19e1b1083745543238c",
+    "candidate": "ac7441ae372c4d487c627328941bdbc6b1c814e26bed4f9c072ad868e8d0fc3b"
+  },
+  "summary": {
+    "baseline": {
+      "median_peak_rss_bytes": 474533888,
+      "median_seconds": 3.704121288000124
+    },
+    "candidate": {
+      "median_peak_rss_bytes": 104787968,
+      "median_seconds": 3.518055825000147
+    }
+  },
+  "supporting_source_sha256": {
+    "bench_validation_memory.py": "e9c8402473cc3b46e7069208727ac7832c4039d2a6fb622fe7331045dd7523b7",
+    "disk_sort.py": "f74275467d899e8957b035cae1e5e2124f1096c0d87d11078befe11ec7db6615"
+  },
+  "time_ratio_baseline_over_candidate": 1.0528887181601132
+}

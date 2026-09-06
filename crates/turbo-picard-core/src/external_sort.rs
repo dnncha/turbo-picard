@@ -4,6 +4,7 @@
 //! deliberately not an iterator backed by a `Vec`: callers can sort files
 //! much larger than available memory without rebuilding the result in RAM.
 
+use crate::temp_runs::OwnedRuns;
 use std::cmp::Ordering;
 use std::collections::BinaryHeap;
 use std::fs::{self, File, OpenOptions};
@@ -65,7 +66,9 @@ impl SortItem {
     }
 
     fn estimated_bytes(&self) -> usize {
-        self.key.len() + self.payload.len() + 24
+        std::mem::size_of::<Self>()
+            .saturating_add(self.key.capacity())
+            .saturating_add(self.payload.capacity())
     }
 }
 
@@ -75,6 +78,7 @@ pub struct ExternalSorter {
     config: ExternalSortConfig,
     items: Vec<SortItem>,
     runs: Vec<PathBuf>,
+    owned_runs: OwnedRuns,
     next_ordinal: u64,
     resident_bytes: usize,
     metrics: ExternalSortMetrics,
@@ -89,6 +93,7 @@ impl ExternalSorter {
             config,
             items: Vec::new(),
             runs: Vec::new(),
+            owned_runs: OwnedRuns::default(),
             next_ordinal: 0,
             resident_bytes: 0,
             metrics: ExternalSortMetrics::default(),
@@ -137,7 +142,7 @@ impl ExternalSorter {
         }
         let merge_result = merge_runs(&runs, emit);
         for run in runs {
-            let _ = remove_if_exists(&run);
+            let _ = self.owned_runs.remove(&run);
         }
         merge_result?;
         Ok(self.metrics)
@@ -173,7 +178,7 @@ impl ExternalSorter {
             self.metrics.run_count += 1;
             merged.push(output);
             for run in chunk {
-                remove_if_exists(run)?;
+                self.owned_runs.remove(run)?;
             }
         }
         Ok(merged)
@@ -190,18 +195,13 @@ impl ExternalSorter {
             ));
             self.next_run_index += 1;
             match OpenOptions::new().write(true).create_new(true).open(&path) {
-                Ok(_) => return Ok(path),
+                Ok(_) => {
+                    self.owned_runs.register(&path);
+                    return Ok(path);
+                }
                 Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
                 Err(error) => return Err(error.to_string()),
             }
-        }
-    }
-}
-
-impl Drop for ExternalSorter {
-    fn drop(&mut self) {
-        for run in self.runs.drain(..) {
-            let _ = remove_if_exists(&run);
         }
     }
 }
@@ -241,11 +241,16 @@ fn write_item(writer: &mut impl Write, item: &SortItem) -> io::Result<u64> {
 
 fn read_item(reader: &mut impl Read) -> Result<Option<SortItem>, String> {
     let mut key_len_bytes = [0_u8; 4];
-    match reader.read_exact(&mut key_len_bytes) {
+    // Only EOF before the first byte is a clean end of run. A partial
+    // length prefix must not silently discard the final item.
+    match reader.read_exact(&mut key_len_bytes[..1]) {
         Ok(()) => {}
         Err(error) if error.kind() == io::ErrorKind::UnexpectedEof => return Ok(None),
         Err(error) => return Err(error.to_string()),
     }
+    reader
+        .read_exact(&mut key_len_bytes[1..])
+        .map_err(|error| error.to_string())?;
     let mut payload_len_bytes = [0_u8; 8];
     let mut ordinal_bytes = [0_u8; 8];
     reader
@@ -309,11 +314,19 @@ fn merge_runs(
     Ok(())
 }
 
-#[derive(Debug, Eq, PartialEq)]
+#[derive(Debug)]
 struct HeapItem {
     item: SortItem,
     reader_index: usize,
 }
+
+impl PartialEq for HeapItem {
+    fn eq(&self, other: &Self) -> bool {
+        self.cmp(other) == Ordering::Equal
+    }
+}
+
+impl Eq for HeapItem {}
 
 impl Ord for HeapItem {
     fn cmp(&self, other: &Self) -> Ordering {
@@ -325,14 +338,6 @@ impl Ord for HeapItem {
 impl PartialOrd for HeapItem {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(self.cmp(other))
-    }
-}
-
-fn remove_if_exists(path: &Path) -> Result<(), String> {
-    match fs::remove_file(path) {
-        Ok(()) => Ok(()),
-        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
-        Err(error) => Err(error.to_string()),
     }
 }
 
@@ -371,5 +376,46 @@ mod tests {
         assert!(metrics.spills >= 2);
         assert!(fs::read_dir(&dir).unwrap().next().is_none());
         let _ = fs::remove_dir(&dir);
+    }
+    #[test]
+    fn truncated_run_is_an_error_at_every_byte_boundary() {
+        let item = SortItem::new(b"key".to_vec(), 7, b"payload".to_vec());
+        let mut bytes = Vec::new();
+        write_item(&mut bytes, &item).unwrap();
+        assert!(read_item(&mut &b""[..]).unwrap().is_none());
+        for end in 1..bytes.len() {
+            assert!(
+                read_item(&mut &bytes[..end]).is_err(),
+                "accepted truncation at {end}"
+            );
+        }
+        assert_eq!(read_item(&mut bytes.as_slice()).unwrap(), Some(item));
+    }
+
+    #[test]
+    fn intermediate_merge_failure_cleans_all_owned_runs() {
+        let dir = test_dir("sort-failed-merge");
+        let mut config = ExternalSortConfig::new(&dir);
+        config.max_records_in_ram = 1;
+        config.merge_fan_in = 2;
+        let mut sorter = ExternalSorter::new(config).unwrap();
+        for i in 0..5_u8 {
+            sorter.push(vec![i], vec![i]).unwrap();
+        }
+        // Truncate a spill before a multi-pass merge. The input queue and the
+        // partial merge output must remain owned across the early return.
+        fs::write(&sorter.runs[0], b"\0\0").unwrap();
+        assert!(sorter.finish_into(|_| Ok(())).is_err());
+        assert!(fs::read_dir(&dir).unwrap().next().is_none());
+        fs::remove_dir(&dir).unwrap();
+    }
+
+    #[test]
+    fn memory_estimate_counts_reserved_buffers_and_metadata() {
+        let item = SortItem::new(Vec::with_capacity(1024), 0, Vec::with_capacity(2048));
+        assert_eq!(
+            item.estimated_bytes(),
+            std::mem::size_of::<SortItem>() + 3072
+        );
     }
 }
