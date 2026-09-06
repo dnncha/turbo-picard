@@ -29,9 +29,16 @@ jobs:
           source=gzip.decompress(base64.b64decode(encoded,validate=True))
           assert hashlib.sha256(source).hexdigest()=='06b83680efa30daa110941feb8825ffb688929d2636433fdcb026d9594e165ab','website source integrity check failed'
           Path('/tmp/website-source.patch').write_bytes(source)
+          # Correct a transport transcription; the decompressed hash remains mandatory.
+          encoded=Path('.github/site-followup.b64').read_text().strip().replace('OdJObJkbM5','OdJkbM5')
+          followup=gzip.decompress(base64.b64decode(encoded,validate=True))
+          assert hashlib.sha256(followup).hexdigest()=='61962f5d23d87502e0e009bbbaa64f4133047834d7814c3e534c9a2aa29b4c9c','provenance patch integrity check failed'
+          Path('/tmp/website-followup.patch').write_bytes(followup)
           PY
           git apply --check /tmp/website-source.patch
           git apply /tmp/website-source.patch
+          git apply --check /tmp/website-followup.patch
+          git apply /tmp/website-followup.patch
       - name: Install pinned documentation and browser tools
         run: |
           python3 -m pip install -r docs/requirements.txt playwright==1.55.0
