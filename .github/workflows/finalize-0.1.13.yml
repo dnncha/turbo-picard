@@ -1,0 +1,175 @@
+name: Verify and finalize 0.1.13 release
+on:
+  push:
+    branches: [maintenance/publish-0.1.13-20260906]
+    paths: [.github/workflows/finalize-0.1.13.yml]
+permissions:
+  contents: write
+  actions: read
+  packages: read
+concurrency:
+  group: finalize-turbo-picard-0.1.13
+  cancel-in-progress: false
+jobs:
+  finalize:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      RELEASE_SHA: 27340ae8baf366816b39ada92e93b7eed1260008
+      PYPI_RUN: 34000990648
+      CONTAINER_RUN: 34000991251
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: v0.1.13
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+      - name: Validate publication runs and tag
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF_NAME" = 'maintenance/publish-0.1.13-20260906'
+          test "$(git rev-parse HEAD)" = "$RELEASE_SHA"
+          mkdir /tmp/release-assets /tmp/build-artifacts
+          python3 - <<'PY'
+          import json,os,subprocess,time
+          from pathlib import Path
+          for attempt in range(60):
+              ready=True
+              for variable,file in (('PYPI_RUN','pypi-run.json'),('CONTAINER_RUN','container-run.json')):
+                  raw=subprocess.check_output(['gh','api',f"repos/{os.environ['GITHUB_REPOSITORY']}/actions/runs/{os.environ[variable]}"],text=True)
+                  run=json.loads(raw); Path('/tmp/'+file).write_text(raw)
+                  assert run['head_sha']==os.environ['RELEASE_SHA'],file
+                  if run['status']=='completed':
+                      assert run['conclusion']=='success',f"{file}: {run['conclusion']}"
+                  else:
+                      ready=False
+              if ready: break
+              time.sleep(20)
+          else:
+              raise SystemExit('Publication has not completed; refusing to finalize the release.')
+          PY
+          gh run download "$PYPI_RUN" --repo "$GITHUB_REPOSITORY" --dir /tmp/build-artifacts
+      - name: Match all built distributions to public PyPI checksums
+        run: |
+          python3 - <<'PY'
+          import hashlib,json,os,shutil,urllib.request
+          from pathlib import Path
+          root=Path('/tmp/build-artifacts'); out=Path('/tmp/release-assets')
+          manifests=list(root.rglob('turbo-picard-release-manifest.json'))
+          assert len(manifests)==1
+          manifest=json.loads(manifests[0].read_text())
+          assert manifest['workspace_version']=='0.1.13'
+          assert manifest['source']['head_commit']==os.environ['RELEASE_SHA']
+          with urllib.request.urlopen('https://pypi.org/pypi/turbo-picard/0.1.13/json',timeout=30) as response:
+              live=json.load(response)
+          assert live['info']['version']=='0.1.13'
+          urls={row['filename']:row for row in live['urls']}
+          assert len(urls)==5,urls.keys()
+          assert set(urls)=={row['filename'] for row in manifest['artifacts']}
+          for row in manifest['artifacts']:
+              files=list(root.rglob(row['filename'])); assert len(files)==1
+              digest=hashlib.sha256(files[0].read_bytes()).hexdigest()
+              assert digest==row['sha256']==urls[row['filename']]['digests']['sha256']
+              assert not urls[row['filename']]['yanked']
+              shutil.copy2(files[0],out/row['filename'])
+          shutil.copy2(manifests[0],out/manifests[0].name)
+          Path('/tmp/pypi-verified.json').write_text(json.dumps({'version':'0.1.13','artifacts':manifest['artifacts']},indent=2)+'\n')
+          print('All four wheels and source distribution match public PyPI checksums.')
+          PY
+      - name: Install from actual public PyPI and execute native and agent smoke tests
+        run: |
+          set -euo pipefail
+          python3 -m venv /tmp/public-install
+          /tmp/public-install/bin/python -m pip install --index-url https://pypi.org/simple --no-cache-dir --no-deps --only-binary=:all: turbo-picard==0.1.13
+          /tmp/public-install/bin/python -m pip check
+          /tmp/public-install/bin/turbo-picard --version
+          /tmp/public-install/bin/turbo-picard doctor
+          TURBO_PICARD_REQUIRE_NATIVE=1 TURBO_PICARD_BIN=/tmp/public-install/bin/turbo-picard bash tools/verify_install_smoke.sh
+          TURBO_PICARD_REQUIRE_NATIVE=1 TURBO_PICARD_BIN=/tmp/public-install/bin/turbo-picard bash tools/verify_mate_barcode_install_smoke.sh
+          /tmp/public-install/bin/python - <<'PY'
+          import json,os,subprocess
+          from pathlib import Path
+          binary='/tmp/public-install/bin/turbo-picard'
+          caps=json.loads(subprocess.check_output([binary,'capabilities','--json','--command','MarkDuplicates'],text=True))
+          assert [c['name'] for c in caps['commands']]==['MarkDuplicates']
+          trial=json.loads(subprocess.check_output([binary,'trial','--json','FastqToSam','FASTQ=input one.fq','F2=input two.fq','O=out.bam'],text=True))
+          assert trial['declared_outputs']==['O=out.bam']
+          assert trial['executes_command'] is False
+          marker=Path('/tmp/unwanted-fallback');script=Path('/tmp/fallback-sentinel.sh')
+          script.write_text('#!/bin/sh\ntouch /tmp/unwanted-fallback\n');script.chmod(0o700)
+          env=dict(os.environ,TURBO_PICARD_REQUIRE_NATIVE='1',TURBO_PICARD_FALLBACK=str(script))
+          rejected=subprocess.run([binary,'CollectRnaSeqMetrics','I=not-read.bam','O=not-written.txt'],env=env,capture_output=True,text=True)
+          assert rejected.returncode!=0 and not marker.exists()
+          print('Public installation: native fixture, mate barcode, compact capability, trial roles and fallback rejection PASS.')
+          PY
+      - name: Pull and test the public versioned container
+        run: |
+          set -euo pipefail
+          image=ghcr.io/dnncha/turbo-picard:0.1.13
+          docker pull "$image"
+          docker run --rm "$image" --version
+          docker run --rm -e TURBO_PICARD_REQUIRE_NATIVE=1 -v "$GITHUB_WORKSPACE:/workspace:ro" --entrypoint /bin/bash "$image" /workspace/tools/verify_install_smoke.sh
+          docker run --rm -e TURBO_PICARD_REQUIRE_NATIVE=1 -v "$GITHUB_WORKSPACE:/workspace:ro" --entrypoint /bin/bash "$image" /workspace/tools/verify_mate_barcode_install_smoke.sh
+          docker image inspect "$image" > /tmp/container-verified.json
+          python3 - <<'PY'
+          import json,os
+          from pathlib import Path
+          image=json.loads(Path('/tmp/container-verified.json').read_text())[0]
+          assert image['Config']['Labels']['org.opencontainers.image.revision']==os.environ['RELEASE_SHA']
+          assert image['RepoDigests']
+          PY
+      - name: Capture immutable GitHub source checksum and publication receipt
+        run: |
+          set -euo pipefail
+          curl -fL --retry 5 --retry-all-errors --retry-delay 2 https://github.com/dnncha/turbo-picard/archive/refs/tags/v0.1.13.tar.gz -o /tmp/github-source.tar.gz
+          python3 - <<'PY'
+          import hashlib,json,os,tarfile,tomllib
+          from datetime import datetime,timezone
+          from pathlib import Path
+          out=Path('/tmp/release-assets')
+          with tarfile.open('/tmp/github-source.tar.gz') as archive:
+              prefix=archive.getmembers()[0].name.split('/')[0]
+              assert tomllib.loads(archive.extractfile(prefix+'/Cargo.toml').read().decode())['workspace']['package']['version']=='0.1.13'
+          digest=hashlib.sha256(Path('/tmp/github-source.tar.gz').read_bytes()).hexdigest()
+          (out/'GITHUB_SOURCE_SHA256.txt').write_text(digest+'  turbo-picard-v0.1.13.tar.gz\n')
+          image=json.loads(Path('/tmp/container-verified.json').read_text())[0]
+          receipt={'schema_version':1,'version':'0.1.13','tag':'v0.1.13','source_commit':os.environ['RELEASE_SHA'],
+            'verified_at_utc':datetime.now(timezone.utc).isoformat(),'pypi_run':int(os.environ['PYPI_RUN']),
+            'container_run':int(os.environ['CONTAINER_RUN']),'pypi':json.loads(Path('/tmp/pypi-verified.json').read_text()),
+            'container_digest':image['RepoDigests'][0],'github_source_archive_sha256':digest,
+            'runtime_checks':['public PyPI install','native duplicate marking','mate-specific barcodes','compact agent discovery','trial output roles','native-only fallback rejection','public container pull and native fixtures'],
+            'linux_arm64_execution_tested':False,'bioconda_accepted':False,'production_scale_speedup_verified':False}
+          (out/'turbo-picard-publication-receipt.json').write_text(json.dumps(receipt,indent=2)+'\n')
+          checksums=''.join(hashlib.sha256(p.read_bytes()).hexdigest()+'  '+p.name+'\n' for p in sorted(out.iterdir()) if p.is_file())
+          (out/'SHA256SUMS.txt').write_text(checksums)
+          print(json.dumps(receipt,indent=2))
+          PY
+      - name: Attach verified assets and publish GitHub release
+        run: |
+          set -euo pipefail
+          gh release upload v0.1.13 --repo "$GITHUB_REPOSITORY" /tmp/release-assets/*
+          id="$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/v0.1.13" --jq .id)"
+          gh api --method PATCH "repos/$GITHUB_REPOSITORY/releases/$id" -F draft=false -f make_latest=true > /tmp/github-release.json
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          release=json.loads(Path('/tmp/github-release.json').read_text())
+          assert release['tag_name']=='v0.1.13' and release['draft'] is False
+          assert release['published_at']
+          print(release['html_url'])
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: turbo-picard-0.1.13-publication-verification
+          path: |
+            /tmp/release-assets/*.json
+            /tmp/release-assets/*.txt
+            /tmp/github-release.json
+            /tmp/pypi-run.json
+            /tmp/container-run.json
+          retention-days: 90
