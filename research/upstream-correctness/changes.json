@@ -1,0 +1,32 @@
+{
+  "bedtools-union": {
+    "repo": "arq5x/bedtools2",
+    "sha": "614e9a5c5935ab86e873dab9072fbbaf003c1b7e",
+    "test_file": "test/intersect/test-split-union.sh",
+    "source": "src/utils/FileRecordTools/Records/BlockMgr.cpp",
+    "old": "\t\t\t// current overlap block continues\n\t\t\telse\n\t\t\t{\n\t\t\t\tstart = currStart;\n\t\t\t\tend = currEnd;",
+    "new": "\t\t\t// current overlap block continues; retain its original start\n\t\t\telse\n\t\t\t{\n\t\t\t\tend = currEnd;",
+    "title": "intersect: retain the start of a merged overlap under -split",
+    "fixture": "test-split-union.sh"
+  },
+  "htsjdk-cigar": {
+    "repo": "samtools/htsjdk",
+    "sha": "78296e9adab558f053241720426102d64ee603ff",
+    "test_file": "src/test/java/htsjdk/samtools/SAMUtilsExtendedCigarOverlapTest.java",
+    "source": "src/main/java/htsjdk/samtools/SAMUtils.java",
+    "old": "if (operator == CigarOperator.MATCH_OR_MISMATCH) { // M",
+    "new": "if (operator == CigarOperator.MATCH_OR_MISMATCH\n                        || operator == CigarOperator.EQ\n                        || operator == CigarOperator.X) { // M, =, X",
+    "title": "SAMUtils: clip partial = and X elements like M",
+    "fixture": "SAMUtilsExtendedCigarOverlapTest.java"
+  },
+  "htsjdk-reference": {
+    "repo": "samtools/htsjdk",
+    "sha": "78296e9adab558f053241720426102d64ee603ff",
+    "test_file": "src/test/java/htsjdk/samtools/SAMUtilsReferenceOverlapTest.java",
+    "source": "src/main/java/htsjdk/samtools/SAMUtils.java",
+    "old": "        // Only clip records that are left-most in genomic order and overlapping.",
+    "new": "        // Alignment coordinates are only comparable on the same reference sequence.\n        if (!rec.getReferenceName().equals(rec.getMateReferenceName())) return 0;\n\n        // Only clip records that are left-most in genomic order and overlapping.",
+    "title": "SAMUtils: do not overlap-clip mates on different references",
+    "fixture": "SAMUtilsReferenceOverlapTest.java"
+  }
+}
