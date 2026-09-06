@@ -1,0 +1,98 @@
+name: Verify live website interactions
+on:
+  push:
+    branches: [website/publication-check-20260906]
+    paths: [.github/workflows/verify-live-browser.yml]
+permissions:
+  contents: read
+jobs:
+  live-browser:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ad601ae174b76a2cd45cdcb0fcde1db4d559209d
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+      - name: Install browser
+        run: |
+          python3 -m pip install PyYAML==6.0.3 playwright==1.55.0
+          python3 -m playwright install --with-deps chromium
+      - name: Test actual public pages and private script builder
+        run: |
+          python3 - <<'PY'
+          import json,sys
+          from datetime import datetime,timezone
+          from pathlib import Path
+          from playwright.sync_api import sync_playwright,expect
+          sys.path.insert(0,'tools')
+          from build_marketing_site import BASE,PAGES
+          out=Path('/tmp/live-site');out.mkdir()
+          report={'base':BASE,'source_commit':'ad601ae174b76a2cd45cdcb0fcde1db4d559209d','checked_at':datetime.now(timezone.utc).isoformat(),'layouts':[],'checks':[],'javascript_errors':[],'failed_requests':[]}
+          with sync_playwright() as p:
+              browser=p.chromium.launch(headless=True)
+              page=browser.new_page()
+              page.on('pageerror',lambda e:report['javascript_errors'].append(str(e)))
+              page.on('requestfailed',lambda r:report['failed_requests'].append({'url':r.url,'failure':r.failure}))
+              def visit(route):
+                  # Hosted addons can keep requests open; verify the app itself,
+                  # not a network-idle condition unrelated to user readiness.
+                  response=page.goto(BASE+route,wait_until='domcontentloaded',timeout=45000)
+                  assert response.status==200,(route,response.status)
+                  expect(page.locator('h1')).to_be_visible()
+                  page.wait_for_function("getComputedStyle(document.documentElement).getPropertyValue('--paper').trim()==='#f7f8f2'",timeout=15000)
+              try:
+                  for width in (1440,390):
+                      page.set_viewport_size({'width':width,'height':1000 if width>700 else 844})
+                      for route,title,*_ in PAGES:
+                          visit(route);assert page.title()==title
+                          assert page.locator('h1').count()==1
+                          assert not page.evaluate('document.documentElement.scrollWidth>window.innerWidth'),(route,width)
+                          report['layouts'].append({'route':route,'width':width,'status':'PASS'})
+                          if not route:page.screenshot(path=str(out/f'live-home-{width}.png'),full_page=True)
+                  page.set_viewport_size({'width':1280,'height':1000})
+                  visit('commands/')
+                  page.locator('#command-search').fill('CollectRnaSeqMetrics')
+                  expect(page.locator('[data-command]:visible')).to_have_count(1)
+                  assert 'Upstream only' in page.locator('[data-command]:visible').inner_text()
+                  report['checks'].append('live support catalogue filters and preserves upstream-only status')
+                  visit('evaluate/');requests=[]
+                  page.on('request',lambda r:requests.append(r.url))
+                  expect(page.locator('#generate-trial')).to_be_enabled()
+                  page.locator('#trial-jar').fill('/opt/picard.jar')
+                  page.locator('#trial-input').fill('/private/tp-private-smoke.cram')
+                  page.locator('#trial-reference').fill('')
+                  page.locator('#generate-trial').click()
+                  expect(page.locator('#trial-error')).to_contain_text('Reference')
+                  page.locator('#trial-reference').fill('/private/tp-private-reference.fa')
+                  page.locator('#generate-trial').click()
+                  expect(page.locator('#trial-script')).to_contain_text('--reference-fasta')
+                  expect(page.locator('#trial-script')).to_contain_text('tp-private-smoke.cram')
+                  copy=page.locator('#trial-script').locator('..').locator('..').locator('[data-copy]')
+                  expect(copy).to_be_enabled()
+                  page.screenshot(path=str(out/'live-evaluate.png'),full_page=True)
+                  page.locator('#trial-input').fill('/private/tp-private-changed.bam')
+                  expect(copy).to_be_disabled()
+                  assert not any('tp-private-' in url for url in requests),requests
+                  report['checks'].append('live planner requires CRAM reference, generates locally and invalidates stale copies')
+                  assert not report['javascript_errors'],report['javascript_errors']
+                  report['status']='PASS'
+              except Exception as e:
+                  report['status']='FAIL';report['error']=repr(e)
+                  try:page.screenshot(path=str(out/'failure.png'),full_page=True);(out/'failure.html').write_text(page.content())
+                  except Exception:pass
+                  raise
+              finally:
+                  (out/'browser-report.json').write_text(json.dumps(report,indent=2))
+                  browser.close()
+          print(json.dumps({'live_layouts':len(report['layouts']),'live_interactions':len(report['checks']),'status':report['status']}))
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: turbo-picard-live-browser-verification
+          path: /tmp/live-site
+          retention-days: 30
