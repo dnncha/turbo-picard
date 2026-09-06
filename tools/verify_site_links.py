@@ -74,7 +74,9 @@ def validate_site_links(html: str, site_root: Path = SITE_ROOT) -> list[str]:
 
 
 def main() -> int:
-    errors = validate_site_links(SITE.read_text(encoding="utf-8"))
+    errors = []
+    for page in sorted(SITE_ROOT.rglob("*.html")):
+        errors.extend(validate_site_links(page.read_text(encoding="utf-8"), page.parent))
     if errors:
         for error in errors:
             print(error, file=sys.stderr)

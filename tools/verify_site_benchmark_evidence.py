@@ -65,7 +65,7 @@ def validate_site_benchmark_evidence(site: str, data: dict) -> list[str]:
         ),
         ("benchmark exceptions", "missing site benchmark exception disclosure"),
         ("#adopt", "missing site adoption section link"),
-        ("../../CITATION.cff", "missing site CITATION.cff link"),
+        ("CITATION.cff", "missing site CITATION.cff link"),
         ("input SHA-256", "missing site pinned input SHA-256 guidance"),
         ("archived turbo-picard release you used", "missing site archived-release citation guidance"),
         ("12-command release set", "missing site release command-set guidance"),
@@ -88,7 +88,7 @@ def validate_site_benchmark_evidence(site: str, data: dict) -> list[str]:
 
 
 def main() -> int:
-    site = SITE.read_text(encoding="utf-8")
+    site = SITE.read_text(encoding="utf-8") + (SITE.parent / "evidence/index.html").read_text(encoding="utf-8")
     data = json.loads(BENCHMARK_DATA.read_text(encoding="utf-8"))
     errors = validate_site_benchmark_evidence(site, data)
     if errors:

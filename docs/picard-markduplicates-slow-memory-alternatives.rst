@@ -1,9 +1,15 @@
 .. meta::
    :description: Why Picard MarkDuplicates can run slowly or use large amounts of memory, where that cost comes from, which alternatives fit which workflows, and how to test Turbo Picard safely.
+
    :keywords: Picard MarkDuplicates slow, Picard MarkDuplicates memory, Picard MarkDuplicates alternative, samtools markdup vs Picard, Turbo Picard, BAM duplicate marking
 
 Why Picard jobs get slow and memory-hungry, and how to test a replacement safely
 ================================================================================
+
+.. note::
+
+   Looking for a practical starting point? See `MarkDuplicates memory diagnosis and native trial <https://turbo-picard.readthedocs.io/en/latest/solutions/markduplicates-memory/>`_.
+
 
 *Picard has earned its place in genomics pipelines. That makes performance work harder, not easier: a faster command is useless if it quietly changes the scientific contract.*
 

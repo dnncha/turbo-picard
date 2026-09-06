@@ -88,7 +88,7 @@ def validate_site_disclosures(html: str, *, version: str | None = None) -> list[
 
 
 def main() -> int:
-    errors = validate_site_disclosures(SITE.read_text(encoding="utf-8"))
+    errors = validate_site_disclosures(SITE.read_text(encoding="utf-8") + (SITE.parent / "evidence/index.html").read_text(encoding="utf-8"))
     if errors:
         for error in errors:
             print(error, file=sys.stderr)

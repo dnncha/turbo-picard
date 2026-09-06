@@ -1,6 +1,12 @@
 Quickstart
 ==========
 
+.. note::
+
+   Looking for a practical starting point? See `Isolated installation and executable checks <https://turbo-picard.readthedocs.io/en/latest/install/>`_.
+
+
+
 Install with pip
 ----------------
 

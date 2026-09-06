@@ -1,0 +1,23 @@
+# Turbo Picard 0.1.13
+
+Native implementations of selected Picard 3.4.0 commands, not the entire upstream suite.
+
+- [Picard workflows. Native speed.](https://turbo-picard.readthedocs.io/en/latest/)
+- [MarkDuplicates: slow runs and memory failures](https://turbo-picard.readthedocs.io/en/latest/solutions/markduplicates-memory/)
+- [BAM to FASTQ, without the guesswork](https://turbo-picard.readthedocs.io/en/latest/solutions/bam-to-fastq/)
+- [Sequencing QC without the repeated work](https://turbo-picard.readthedocs.io/en/latest/solutions/sequencing-qc/)
+- [BAM sorting that fits your workflow](https://turbo-picard.readthedocs.io/en/latest/solutions/bam-sorting/)
+- [Find your command. Know the boundary.](https://turbo-picard.readthedocs.io/en/latest/commands/)
+- [Prove the switch on your data.](https://turbo-picard.readthedocs.io/en/latest/evaluate/)
+- [One package. A familiar command.](https://turbo-picard.readthedocs.io/en/latest/install/)
+- [Choose by workflow. Not by the biggest number.](https://turbo-picard.readthedocs.io/en/latest/compare/)
+- [Evidence you can inspect.](https://turbo-picard.readthedocs.io/en/latest/evidence/)
+
+## Machine interface
+
+`turbo-picard capabilities --json --command MarkDuplicates`
+`turbo-picard trial --json MarkDuplicates I=input.bam O=turbo.bam M=turbo.txt`
+Inspection is not input validation. Prefer argv arrays and shell=False.
+Set TURBO_PICARD_REQUIRE_NATIVE=1 to prohibit upstream fallback.
+PyPI installs a picard shim as well: isolate the environment.
+Benchmarks describe saved fixtures, not universal production speedups.
