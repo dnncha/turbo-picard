@@ -1,0 +1,47 @@
+name: Public reference bundle
+on:
+  push:
+    branches: [tools/public-reference-bundle-20260906]
+permissions:
+  contents: read
+jobs:
+  acquire:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    env:
+      OMP_NUM_THREADS: '2'
+      NUMBA_NUM_THREADS: '2'
+      MPLBACKEND: Agg
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Prepare offline wheelhouse
+        run: |
+          mkdir -p bundle/wheels bundle/metadata
+          python -m pip wheel 'squidpy==1.8.3' --wheel-dir bundle/wheels > bundle/metadata/wheelhouse.log 2>&1
+          python -m pip install --no-index --find-links bundle/wheels 'squidpy==1.8.3' > bundle/metadata/install.log 2>&1
+      - name: Download public reference data
+        run: python fetch_reference.py 2>&1 | tee bundle/metadata/download.log
+      - name: Store package wheels
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: scientific-python-wheels
+          path: bundle/wheels/
+          retention-days: 7
+          compression-level: 0
+      - name: Store published reference data
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: published-spatial-reference-data
+          path: |
+            bundle/metadata/
+            bundle/data/
+            bundle/notebooks/
+          retention-days: 7
+          compression-level: 6

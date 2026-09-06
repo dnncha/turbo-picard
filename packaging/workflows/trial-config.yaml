@@ -1,9 +1,0 @@
-input_bam: /data/representative.bam
-input_fastq: /data/representative_R1.fastq.gz
-input_fastq2: /data/representative_R2.fastq.gz
-sample_id: trial-sample
-read_group: trial-rg
-output_per_rg: false
-rg_tag: PU
-use_sequential_fastqs: false
-use_turbo_picard: true
