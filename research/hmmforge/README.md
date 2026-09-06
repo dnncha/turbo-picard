@@ -53,7 +53,9 @@ for a parity mismatch. Verification compares reported hits, reported domains,
 scores, bias, coordinates, E-values and inclusion flags. This is floating-point
 tolerance parity, not a promise of bit-for-bit identical output or complete
 HMMER CLI compatibility. `verify` uses the same upstream backend on both paths;
-an independent native-HMMER validation gate remains necessary before release.
+`scripts/native_check.py` adds a comparison against an independently installed
+`hmmscan`, at native table precision. Representative large-catalogue validation
+remains necessary before release.
 
 For model-specific thresholds, add `--cutoffs gathering`, `trusted`, or `noise`.
 Every model must contain the selected cutoff. E-value options apply when no
@@ -110,16 +112,24 @@ normalised. Duplicate model names are rejected.
 `--batch-residues` (default one million) and `--batch-count` (4096) bound the
 sequence batch; an oversized individual protein occupies its own batch.
 `--max-length` (100,000) caps each sequence. **These are not hard RSS limits.**
-All HMMs remain resident; DP workspaces and candidate domain objects also consume
+All HMMs remain resident; DP workspaces and compact candidate domain summaries also consume
 memory. High-hit-density or long-protein workloads can still require substantial
-RAM. Model preparation currently repeats between batches; that is a measured
-optimisation opportunity, not hidden from end-to-end timing.
+RAM. Both paths prepare their profiles once and reuse them across batches. The
+model-major path extracts compact scalar summaries and releases native hit-list
+alignment buffers after each model instead of retaining them for the whole batch.
 
 Not implemented: GPU kernels, `domtblout`, full `hmmscan` CLI compatibility,
 InterPro member-database orchestration, Pfam clan-overlap resolution, distributed
 execution, persistent result caching or clinical validation.
 
 ## Development
+
+Version 0.1.0a2 passes 42 tests, plus independent HMMER 3.4 table comparisons
+on both a synthetic workload and a small biological fixture. On the tested
+GitHub runner, median elapsed-time improvements were 1.50x and 1.47x,
+respectively. These are small-fixture results, not production savings.
+See [measured results and limitations](docs/RESULTS.md) and the raw reports in
+`evidence/`. Results from different machines or versions are recorded separately.
 
 See [the engineering plan](docs/ENGINEERING.md) and [handoff](docs/HANDOFF.md).
 Do not claim a speedup that has not survived a representative-data parity gate.

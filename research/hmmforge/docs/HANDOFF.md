@@ -25,8 +25,11 @@ Do not publish a PyPI package or announce a production accelerator yet.
 Important evidence distinction: the first committed prototype passed 40 tests
 and the synthetic benchmark in GitHub Actions run 33999639022. That initial run
 was ~1.65x faster in elapsed time than the scan path, but only ~6% lower CPU time.
-Version 0.1.0a2 adds prepared-profile reuse and compact extraction. Subsequent
-reports are separate; never present initial timings as latest-version timings.
+Version 0.1.0a2 adds prepared-profile reuse and compact extraction. The latest
+completed GitHub run 34000192881 passed all 42 tests and independent native HMMER
+3.4 comparisons on both fixtures. Same-run median wall speedups were 1.50x
+synthetic and 1.47x small-biological. CPU-time reductions were 13.5% and 36.6%.
+Read RESULTS.md; never present initial timings as latest-version timings.
 
 Create small datasets without a network fetch:
 
