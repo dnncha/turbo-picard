@@ -1,0 +1,85 @@
+name: Launch verified 0.1.13 publication
+on:
+  push:
+    branches: [maintenance/publish-0.1.13-20260906]
+    paths: [.github/workflows/launch-0.1.13.yml]
+permissions:
+  contents: write
+  actions: write
+concurrency:
+  group: publish-turbo-picard-0.1.13
+  cancel-in-progress: false
+jobs:
+  launch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      RELEASE_SHA: 27340ae8baf366816b39ada92e93b7eed1260008
+      RELEASE_TAG: v0.1.13
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: 27340ae8baf366816b39ada92e93b7eed1260008
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify merged source and completed release checks
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF_NAME" = 'maintenance/publish-0.1.13-20260906'
+          test "$(git rev-parse HEAD)" = "$RELEASE_SHA"
+          test "$(git rev-parse HEAD^{tree})" = 'c441b9e97f357a8e5cb0eeadd95fec6600901d8f'
+          gh api "repos/$GITHUB_REPOSITORY/pulls/30" > /tmp/pr.json
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/34000412052" > /tmp/ci.json
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/34000412052/jobs?per_page=100" > /tmp/jobs.json
+          python3 - <<'PY'
+          import json, os, tomllib
+          from pathlib import Path
+          pr, ci, jobs = [json.loads(Path('/tmp/'+p+'.json').read_text()) for p in ('pr','ci','jobs')]
+          assert pr['merged'] and pr['merge_commit_sha'] == os.environ['RELEASE_SHA']
+          assert pr['head']['sha'] == '1056eae72d8fb1eee70ff6f79b58d9c6249ef48b'
+          assert ci['head_sha'] == pr['head']['sha'] and ci['conclusion'] == 'success'
+          expected = {'Picard parity','Docker image','Snakemake starter','nf-core process candidate','Rust (ubuntu-latest)','Rust (macos-14)'}
+          found = {j['name'] for j in jobs['jobs'] if j['status']=='completed' and j['conclusion']=='success'}
+          assert expected <= found, expected-found
+          assert tomllib.loads(Path('Cargo.toml').read_text())['workspace']['package']['version']=='0.1.13'
+          PY
+      - name: Check unused version, create immutable tag and draft release
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import urllib.request, urllib.error
+          try:
+              urllib.request.urlopen('https://pypi.org/pypi/turbo-picard/0.1.13/json',timeout=30)
+          except urllib.error.HTTPError as e:
+              if e.code != 404: raise
+          else:
+              raise SystemExit('0.1.13 already exists on PyPI; refusing to replace a release')
+          PY
+          remote_tags="$(git ls-remote --tags origin refs/tags/v0.1.13)"
+          test -z "$remote_tags"
+          gh api --method POST "repos/$GITHUB_REPOSITORY/git/refs" -f ref="refs/tags/$RELEASE_TAG" -f sha="$RELEASE_SHA"
+          python3 - <<'PY'
+          from pathlib import Path
+          text=Path('CHANGELOG.md').read_text()
+          notes=text.split('## 0.1.13 — 2026-09-06',1)[1].split('\n## 0.1.12',1)[0].strip()
+          Path('/tmp/release-notes.md').write_text(notes+'\n\nInstall: `python3 -m pip install --upgrade turbo-picard==0.1.13`\n\nContainer: `ghcr.io/dnncha/turbo-picard:0.1.13`\n')
+          PY
+          gh release create "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --verify-tag --draft --title 'turbo-picard 0.1.13' --notes-file /tmp/release-notes.md
+      - name: Dispatch existing tag-guarded publication workflows
+        run: |
+          set -euo pipefail
+          gh api --method POST "repos/$GITHUB_REPOSITORY/actions/workflows/publish-pypi.yml/dispatches" -f ref="$RELEASE_TAG" -f 'inputs[publish]=true'
+          gh api --method POST "repos/$GITHUB_REPOSITORY/actions/workflows/publish-docker.yml/dispatches" -f ref="$RELEASE_TAG"
+          gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json tagName,isDraft,url,targetCommitish > /tmp/release-launch.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: turbo-picard-0.1.13-publication-launch
+          path: |
+            /tmp/pr.json
+            /tmp/ci.json
+            /tmp/jobs.json
+            /tmp/release-launch.json
+            /tmp/release-notes.md
+          retention-days: 7
