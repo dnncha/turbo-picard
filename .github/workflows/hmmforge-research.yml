@@ -5,12 +5,16 @@ on:
     paths:
       - research/hmmforge/**
       - .github/workflows/hmmforge-research.yml
+  workflow_dispatch:
 permissions:
   contents: read
+concurrency:
+  group: hmmforge-${{ github.ref }}
+  cancel-in-progress: true
 jobs:
-  validate:
+  package:
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 20
     defaults:
       run:
         working-directory: research/hmmforge
@@ -19,27 +23,84 @@ jobs:
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
         with:
           python-version: '3.13'
-      - name: Install dependencies
+      - name: Install
         run: |
-          python -m pip install -e '.[test]'
+          python -m pip install -e '.[test]' build
           sudo apt-get update -qq
           sudo apt-get install -y hmmer
-      - name: Unit and integration tests
+      - name: Regression and three-engine study
         run: |
-          mkdir -p evidence
-          python -m pytest -q --junitxml=evidence/tests.xml
-      - name: Biological and synthetic parity
+          mkdir -p evidence/a3-ci
+          python -m pytest -q --junitxml=evidence/a3-ci/tests.xml
+          python scripts/make_fixture.py /tmp/hmmforge-synthetic
+          python scripts/backend_fixture.py /tmp/hmmforge-biological
+          python -m hmmforge.study run /tmp/hmmforge-synthetic/models.hmm /tmp/hmmforge-synthetic/proteins.fa --cpus 2 --repeats 3 --dataset-kind synthetic --output-dir evidence/a3-ci/synthetic > evidence/a3-ci/synthetic-summary.json
+          python -m hmmforge.study run /tmp/hmmforge-biological/models.hmm /tmp/hmmforge-biological/proteins.fa --cpus 2 --repeats 3 --dataset-kind biological --output-dir evidence/a3-ci/biological > evidence/a3-ci/biological-summary.json
+          python scripts/native_check.py /tmp/hmmforge-synthetic/models.hmm /tmp/hmmforge-synthetic/proteins.fa --cpus 2 > evidence/a3-ci/native-synthetic.json
+          python scripts/native_check.py /tmp/hmmforge-biological/models.hmm /tmp/hmmforge-biological/proteins.fa --cpus 2 > evidence/a3-ci/native-biological.json
+      - name: Build and clean-install wheel
         run: |
-          python scripts/make_fixture.py evidence/synthetic
-          python scripts/backend_fixture.py evidence/biological
-          hmmforge benchmark evidence/synthetic/models.hmm evidence/synthetic/proteins.fa --cpus 2 --repeats 3 --dataset-kind synthetic > evidence/synthetic.json
-          hmmforge benchmark evidence/biological/models.hmm evidence/biological/proteins.fa --cpus 2 --repeats 3 --dataset-kind biological > evidence/biological.json
-          python scripts/native_check.py evidence/synthetic/models.hmm evidence/synthetic/proteins.fa --cpus 2 > evidence/native-synthetic.json
-          python scripts/native_check.py evidence/biological/models.hmm evidence/biological/proteins.fa --cpus 2 > evidence/native-biological.json
-      - name: Retain evidence
+          python -m build
+          python -m venv --system-site-packages /tmp/hmmforge-wheel
+          /tmp/hmmforge-wheel/bin/python -m pip install --no-deps --force-reinstall dist/*.whl
+          cd /tmp
+          /tmp/hmmforge-wheel/bin/python -m hmmforge verify /tmp/hmmforge-biological/models.hmm /tmp/hmmforge-biological/proteins.fa
+      - name: Retain regression evidence and installable artifacts
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: hmmforge-evidence
-          path: research/hmmforge/evidence/
-          retention-days: 14
+          name: hmmforge-a3-package-and-evidence
+          path: |
+            research/hmmforge/dist/
+            research/hmmforge/evidence/a3-ci/
+          retention-days: 30
+  catalogue:
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    defaults:
+      run:
+        working-directory: research/hmmforge
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.13'
+      - name: Install research dependencies
+        run: |
+          python -m pip install -e .
+          sudo apt-get update -qq
+          sudo apt-get install -y hmmer linux-tools-generic
+          mkdir -p evidence/full-catalogue
+          python -m pip freeze > evidence/full-catalogue/environment.txt
+          lscpu > evidence/full-catalogue/cpu.txt
+      - name: Acquire fixed catalogue and result-independent protein subset
+        run: |
+          python scripts/prepare_catalogue.py /tmp/hmmforge-pfam38 --release 38.0 > evidence/full-catalogue/catalogue-lock.json
+          python scripts/backend_fixture.py /tmp/hmmforge-biological
+          cp /tmp/hmmforge-biological/provenance.json evidence/full-catalogue/protein-provenance.json
+          python scripts/sample_fasta.py /tmp/hmmforge-biological/proteins.fa /tmp/hmmforge-catalogue-input.fa --count 512 > evidence/full-catalogue/sample.json
+      - name: Three-engine full-model-catalogue study
+        run: |
+          python -m hmmforge.study run /tmp/hmmforge-pfam38/models.hmm /tmp/hmmforge-catalogue-input.fa --cpus 2 --repeats 3 --cutoffs gathering --dataset-kind biological --timeout-seconds 1200 --output-dir evidence/full-catalogue/study > evidence/full-catalogue/summary.json
+      - name: Independent native-HMMER gathering-cutoff parity
+        if: success() || failure()
+        run: |
+          test -f /tmp/hmmforge-pfam38/models.hmm
+          python scripts/native_check.py /tmp/hmmforge-pfam38/models.hmm /tmp/hmmforge-catalogue-input.fa --cpus 2 --cutoffs gathering > evidence/full-catalogue/native-parity.json
+      - name: Native sampling on disposable runner
+        if: success() || failure()
+        run: |
+          test -f /tmp/hmmforge-catalogue-input.fa
+          sysctl kernel.perf_event_paranoid > evidence/full-catalogue/perf-permissions.txt
+          sudo sysctl -w kernel.perf_event_paranoid=1 >> evidence/full-catalogue/perf-permissions.txt || true
+          PERF=$(find /usr/lib -path '*linux-tools*' -name perf -type f 2>/dev/null | head -n 1)
+          if [ -z "$PERF" ]; then PERF=perf; fi
+          python scripts/native_profile.py --perf "$PERF" evidence/full-catalogue/native-profile -- python -m hmmforge.study _worker /tmp/hmmforge-pfam38/models.hmm /tmp/hmmforge-catalogue-input.fa --cpus 2 --cutoffs gathering --engine model-major --output evidence/full-catalogue/profile-output.jsonl
+      - name: Retain complete evidence, including failures
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: hmmforge-full-catalogue-evidence
+          path: research/hmmforge/evidence/full-catalogue/
+          retention-days: 30

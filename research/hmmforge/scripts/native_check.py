@@ -18,11 +18,11 @@ from hmmforge.core import Options, annotate_batch, load_models
 from hmmforge.io import batches, read_fasta, sha256
 
 
-def run(models_path: Path, proteins_path: Path, cpus=1):
+def run(models_path: Path, proteins_path: Path, cpus=1, cutoffs=None):
     for command in ("hmmpress", "hmmscan"):
         if shutil.which(command) is None:
             raise RuntimeError(f"{command} is not installed")
-    opts = Options(cpus=cpus)
+    opts = Options(cpus=cpus, bit_cutoffs=cutoffs)
     models = load_models(models_path, opts)
     # This verification script is intentionally for small fixtures, not huge
     # production inputs. The annotation CLI itself streams its inputs.
@@ -40,6 +40,7 @@ def run(models_path: Path, proteins_path: Path, cpus=1):
         subprocess.run(["hmmpress", str(database)], capture_output=True, text=True, check=True)
         subprocess.run(["hmmscan", "--cpu", str(cpus), "--seed", "42", "--noali",
                         "--tblout", str(root/"hits.tbl"), "--domtblout", str(root/"domains.tbl"),
+                        *([{"gathering": "--cut_ga", "trusted": "--cut_tc", "noise": "--cut_nc"}[cutoffs]] if cutoffs else []),
                         str(database), str(fasta)], stdout=subprocess.DEVNULL,
                        stderr=subprocess.PIPE, text=True, check=True)
         def parse(path):
@@ -80,7 +81,7 @@ def run(models_path: Path, proteins_path: Path, cpus=1):
             for field, pos, precision in (("c_evalue",11,".2g"),("i_evalue",12,".2g"),("score",13,".1f"),("bias",14,".1f")):
                 equal(a[field], b[pos], precision, f"{key}.{field}")
     return dict(schema="hmmforge.native-parity.v1", parity=not errors,
-                native_version=version, models_sha256=sha256(models_path),
+                native_version=version, cutoffs=cutoffs, models_sha256=sha256(models_path),
                 proteins_sha256=sha256(proteins_path), proteins=len(proteins),
                 reported_models=len(our_hits), reported_domains=len(our_domains),
                 mismatches=len(errors), examples=errors[:20],
@@ -93,7 +94,8 @@ if __name__ == "__main__":
     parser.add_argument("models", type=Path)
     parser.add_argument("proteins", type=Path)
     parser.add_argument("--cpus", type=int, default=1)
+    parser.add_argument("--cutoffs", choices=("gathering", "trusted", "noise"))
     args = parser.parse_args()
-    report = run(args.models, args.proteins, args.cpus)
+    report = run(args.models, args.proteins, args.cpus, args.cutoffs)
     print(json.dumps(report, sort_keys=True))
     raise SystemExit(0 if report["parity"] else 3)
