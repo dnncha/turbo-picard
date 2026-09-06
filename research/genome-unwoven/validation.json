@@ -1,0 +1,128 @@
+{
+  "method": "Independent sorted interval unions and two-pointer intersections; no builder imports",
+  "all24ChromosomesAnd10CategoriesAgree": true,
+  "allFamilyUnionsAndFragmentCountsAgree": true,
+  "familiesChecked": 62,
+  "chromosomes": [
+    {
+      "chromosome": "chr1",
+      "disjointCategoriesAgree": true,
+      "repeatUnionOutsideGaps": 119060158
+    },
+    {
+      "chromosome": "chr2",
+      "disjointCategoriesAgree": true,
+      "repeatUnionOutsideGaps": 118242668
+    },
+    {
+      "chromosome": "chr3",
+      "disjointCategoriesAgree": true,
+      "repeatUnionOutsideGaps": 101618056
+    },
+    {
+      "chromosome": "chr4",
+      "disjointCategoriesAgree": true,
+      "repeatUnionOutsideGaps": 98047218
+    },
+    {
+      "chromosome": "chr5",
+      "disjointCategoriesAgree": true,
+      "repeatUnionOutsideGaps": 93200987
+    },
+    {
+      "chromosome": "chr6",
+      "disjointCategoriesAgree": true,
+      "repeatUnionOutsideGaps": 85025860
+    },
+    {
+      "chromosome": "chr7",
+      "disjointCategoriesAgree": true,
+      "repeatUnionOutsideGaps": 81490465
+    },
+    {
+      "chromosome": "chr8",
+      "disjointCategoriesAgree": true,
+      "repeatUnionOutsideGaps": 74215449
+    },
+    {
+      "chromosome": "chr9",
+      "disjointCategoriesAgree": true,
+      "repeatUnionOutsideGaps": 62884333
+    },
+    {
+      "chromosome": "chr10",
+      "disjointCategoriesAgree": true,
+      "repeatUnionOutsideGaps": 66409926
+    },
+    {
+      "chromosome": "chr11",
+      "disjointCategoriesAgree": true,
+      "repeatUnionOutsideGaps": 70699483
+    },
+    {
+      "chromosome": "chr12",
+      "disjointCategoriesAgree": true,
+      "repeatUnionOutsideGaps": 70436663
+    },
+    {
+      "chromosome": "chr13",
+      "disjointCategoriesAgree": true,
+      "repeatUnionOutsideGaps": 48148260
+    },
+    {
+      "chromosome": "chr14",
+      "disjointCategoriesAgree": true,
+      "repeatUnionOutsideGaps": 46756704
+    },
+    {
+      "chromosome": "chr15",
+      "disjointCategoriesAgree": true,
+      "repeatUnionOutsideGaps": 43446075
+    },
+    {
+      "chromosome": "chr16",
+      "disjointCategoriesAgree": true,
+      "repeatUnionOutsideGaps": 42267367
+    },
+    {
+      "chromosome": "chr17",
+      "disjointCategoriesAgree": true,
+      "repeatUnionOutsideGaps": 43047178
+    },
+    {
+      "chromosome": "chr18",
+      "disjointCategoriesAgree": true,
+      "repeatUnionOutsideGaps": 40761648
+    },
+    {
+      "chromosome": "chr19",
+      "disjointCategoriesAgree": true,
+      "repeatUnionOutsideGaps": 34840398
+    },
+    {
+      "chromosome": "chr20",
+      "disjointCategoriesAgree": true,
+      "repeatUnionOutsideGaps": 34155276
+    },
+    {
+      "chromosome": "chr21",
+      "disjointCategoriesAgree": true,
+      "repeatUnionOutsideGaps": 20674347
+    },
+    {
+      "chromosome": "chr22",
+      "disjointCategoriesAgree": true,
+      "repeatUnionOutsideGaps": 20908038
+    },
+    {
+      "chromosome": "chrX",
+      "disjointCategoriesAgree": true,
+      "repeatUnionOutsideGaps": 96223930
+    },
+    {
+      "chromosome": "chrY",
+      "disjointCategoriesAgree": true,
+      "repeatUnionOutsideGaps": 16525545
+    }
+  ]
+}
