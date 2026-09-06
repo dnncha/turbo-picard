@@ -1,5 +1,6 @@
 """Generate reproducible SYNTHETIC workloads, never used as production proof."""
 import argparse
+import datetime
 import random
 from pathlib import Path
 import pyhmmer as ph
@@ -23,6 +24,8 @@ with open(args.output / "models.hmm", "wb") as handle:
         sequence = "".join(rng.choices(alphabet, k=rng.randint(80, 400)))
         seeds.append(sequence)
         model, _, _ = builder.build(ph.easel.TextSequence(name=f"synthetic_{i}", sequence=sequence).digitize(amino), background)
+        model.creation_time = datetime.datetime(2026, 1, 1)
+        model.command_line = "hmmforge synthetic fixture; sequence seed=71839; builder seed=42"
         model.write(handle)
 with open(args.output / "proteins.fa", "w") as handle:
     for i in range(args.proteins):

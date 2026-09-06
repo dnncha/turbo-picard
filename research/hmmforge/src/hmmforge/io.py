@@ -61,6 +61,8 @@ def read_fasta(path: str | Path, max_length: int = 100_000) -> Iterator[Protein]
             else:
                 if header is None:
                     raise ValueError(f"sequence before FASTA header at line {line_number}")
+                if not line.isascii():
+                    raise ValueError(f"non-ASCII amino-acid symbols at line {line_number}")
                 seq = "".join(line.split()).upper()
                 invalid = set(seq) - AMINO
                 if invalid:

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import itertools
+import hashlib
 import json
 import platform
 import resource
@@ -50,6 +51,8 @@ def parser():
 def options(args):
     if min(args.batch_count, args.batch_residues, args.max_length) < 1:
         raise ValueError("batch limits and max-length must be positive")
+    if args.max_length > 100_000:
+        raise ValueError("max-length cannot exceed the standard HMMER pipeline limit of 100000")
     return Options(cpus=args.cpus, seed=args.seed, E=args.E, domE=args.domE,
                    incE=args.incE, incdomE=args.incdomE, bit_cutoffs=args.cutoffs)
 
@@ -61,7 +64,11 @@ def usage():
 
 
 def provenance(args, opts):
-    return dict(hmmforge=__version__, pyhmmer=backend().__version__, python=platform.python_version(),
+    source = hashlib.sha256()
+    for path in sorted(Path(__file__).parent.glob("*.py")):
+        source.update(path.name.encode())
+        source.update(path.read_bytes())
+    return dict(package_source_sha256=source.hexdigest(),hmmforge=__version__, pyhmmer=backend().__version__, python=platform.python_version(),
                 platform=platform.platform(), machine=platform.machine(), options=asdict(opts),
                 models_sha256=sha256(args.models), proteins_sha256=sha256(args.proteins),
                 batch_count=args.batch_count, batch_residues=args.batch_residues,
@@ -108,6 +115,8 @@ def perform(args):
         for batch in search():
             candidate = annotate_batch(models, batch, opts, "model-major")
             reference = annotate_batch(models, batch, opts, "scan")
+            report["reported_models"] += sum(len(r["hits"]) for r in candidate)
+            report["reported_domains"] += sum(len(h["domains"]) for r in candidate for h in r["hits"])
             issues = differences(reference, candidate, f"batch{report['batches']}")
             if issues:
                 report["parity"] = False
@@ -172,10 +181,16 @@ def benchmark(args):
             problems.extend(compare_files(outputs["scan"], outputs["model-major"]))
     medians = {engine: statistics.median(r["end_to_end_seconds"] for r in runs if r["engine"] == engine)
                for engine in ("scan", "model-major")}
+    cpu_medians = {engine: statistics.median(r["cpu_seconds"] for r in runs if r["engine"] == engine)
+                   for engine in ("scan", "model-major")}
+    rss_medians = {engine: statistics.median(r["peak_rss_bytes"] for r in runs if r["engine"] == engine)
+                   for engine in ("scan", "model-major")}
     return dict(schema="hmmforge.benchmark.v1", dataset_kind=args.dataset_kind, parity=not problems,
                 mismatch_examples=problems[:20], cache_state="process-cold; OS page cache uncontrolled",
                 baseline="PyHMMER 0.12.3 in-memory optimized-profile hmmscan", runs=runs,
-                medians_seconds=medians,
+                medians_seconds=medians, medians_cpu_seconds=cpu_medians,
+                medians_peak_rss_bytes=rss_medians,
+                cpu_time_ratio_scan_over_model_major=cpu_medians["scan"] / cpu_medians["model-major"] if not problems else None,
                 speedup_scan_over_model_major=medians["scan"] / medians["model-major"] if not problems else None,
                 production_claim_permitted=False)
 
@@ -194,7 +209,7 @@ def main(argv=None):
             report = benchmark(args) if args.command == "benchmark" else perform(args)
         dump_json(report, sys.stdout)
         return 0 if report.get("parity", True) else 3
-    except (ValueError, OSError, RuntimeError) as exc:
+    except (ValueError, OSError, RuntimeError, MemoryError, OverflowError) as exc:
         dump_json(dict(schema="hmmforge.error.v1", error=type(exc).__name__, message=str(exc)), sys.stderr)
         return 2
 

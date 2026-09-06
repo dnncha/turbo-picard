@@ -1,7 +1,7 @@
 """Numerical kernels belong to HMMER/PyHMMER; this module plans execution.
 
 The experimental model-major path transposes hmmsearch output, keeping Z equal
- to the number of MODELS and restoring conditional domain E-values separately
+to the number of MODELS and restoring conditional domain E-values separately
 for each protein. It must be validated on the user's workload before adoption.
 """
 from __future__ import annotations
@@ -66,11 +66,31 @@ def validate_models(models, options: Options):
             raise ValueError(f"model {model.name!r} lacks {options.bit_cutoffs} cutoffs")
 
 
+class ModelDatabase:
+    """Prepare profiles once, shared by both competing execution plans.
+
+    Treat the owned models and profiles as immutable outside this object.
+    A database is for sequential batch calls; concurrent calls on the same
+    instance are not part of the supported public API.
+    """
+    def __init__(self, models, options: Options):
+        ph = backend()
+        self.models = tuple(models)
+        validate_models(self.models, options)
+        self.cutoff_mode = options.bit_cutoffs
+        amino = ph.easel.Alphabet.amino()
+        background = ph.plan7.Background(amino)
+        self.profiles = ph.plan7.OptimizedProfileBlock(amino, [
+            m.to_profile(background).to_optimized() for m in self.models])
+        self.lookup = {m.name: m for m in self.models}
+
+    def __len__(self):
+        return len(self.models)
+
+
 def load_models(path, options: Options):
     with backend().plan7.HMMFile(path) as handle:
-        models = list(handle)
-    validate_models(models, options)
-    return models
+        return ModelDatabase(list(handle), options)
 
 
 def _domain(domain, nmodels: int, domz: int, included: bool | None = None):
@@ -103,16 +123,20 @@ def annotate_batch(models, proteins: list[Protein], options: Options,
                    engine: str = "model-major") -> list[dict]:
     """Return one row per protein, including no-hit proteins, in input order.
 
-    Coordinates are 1-based and inclusive. A batch retains candidate domain
-    objects until all profiles have run. Memory includes models, DP workspaces
+    Coordinates are 1-based and inclusive. A batch retains compact domain
+    summaries until all profiles have run. Memory includes models, DP workspaces
     and candidate hits; the residue budget is NOT an RSS guarantee.
     """
     ph = backend()
-    validate_models(models, options)
+    db = models if isinstance(models, ModelDatabase) else ModelDatabase(models, options)
+    if db.cutoff_mode != options.bit_cutoffs:
+        validate_models(db.models, options)
     if engine not in ("model-major", "scan"):
         raise ValueError(f"unsupported engine: {engine}")
     if not proteins:
         return []
+    if any(p.index < 0 or not p.name or not p.sequence or len(p.sequence) > 100_000 for p in proteins):
+        raise ValueError("proteins require nonnegative ordinals, names and 1..100000 residues")
     if len({p.index for p in proteins}) != len(proteins):
         raise ValueError("protein ordinals must be unique within a batch")
     amino = ph.easel.Alphabet.amino()
@@ -121,14 +145,10 @@ def annotate_batch(models, proteins: list[Protein], options: Options,
         for p in proteins])
     rows = [dict(schema="hmmforge.annotations.v1", index=p.index, name=p.name,
                  description=p.description, length=len(p.sequence), hits=[]) for p in proteins]
-    nmodels = len(models)
+    nmodels = len(db)
     kwargs = options.pipeline(nmodels)
     if engine == "scan":
-        background = ph.plan7.Background(amino)
-        profiles = ph.plan7.OptimizedProfileBlock(amino, [
-            model.to_profile(background).to_optimized() for model in models])
-        lookup = {model.name: model for model in models}
-        for row, hits in zip(rows, ph.hmmer.hmmscan(seqs, profiles, cpus=options.cpus,
+        for row, hits in zip(rows, ph.hmmer.hmmscan(seqs, db.profiles, cpus=options.cpus,
                                                    **kwargs), strict=True):
             reported = list(hits.reported)
             for hit in reported:
@@ -139,30 +159,34 @@ def annotate_batch(models, proteins: list[Protein], options: Options,
                         # Reference values come directly from the upstream scan.
                         item.update(i_evalue=dom.i_evalue, c_evalue=dom.c_evalue)
                         domains.append(item)
-                row["hits"].append(_hit(hit, lookup[hit.name], domains))
+                row["hits"].append(_hit(hit, db.lookup[hit.name], domains))
     else:
         index = {p.key: i for i, p in enumerate(proteins)}
-        candidates = [[] for _ in proteins]
-        # Broad domain flags preserve HMMER's duplicate-alignment suppression.
-        # Never resurrect a suppressed domain by blindly thresholding pvalues.
+        # Broad flags preserve HMMER's duplicate-alignment suppression.
         kwargs.update(domZ=1, domE=1.0, incdomE=1.0)
-        results = ph.hmmer.hmmsearch(models, seqs, cpus=options.cpus,
+        results = ph.hmmer.hmmsearch(db.profiles, seqs, cpus=options.cpus,
                                      parallel="queries", **kwargs)
-        for model, hits in zip(models, results, strict=True):
+        for model, hits in zip(db.models, results, strict=True):
             for hit in hits.reported:
-                candidates[index[hit.name]].append((model, hit))
-        for row, found in zip(rows, candidates, strict=True):
-            domz = len(found)
-            for model, hit in found:
-                domains = []
-                for domain in hit.domains:
-                    if not domain.reported:
-                        continue
-                    reported, included = (True, domain.included) if options.bit_cutoffs else (
-                        conditional_domain(domain.pvalue, domz, options, hit.included))
+                # Copy only required primitives. Keeping a Hit object alive also
+                # retains its entire native TopHits owner and alignment buffers.
+                # Release those per-model buffers rather than retain all of them
+                # until the batch is complete.
+                domains = [_domain(d, nmodels, 1) for d in hit.domains if d.reported]
+                rows[index[hit.name]]["hits"].append(
+                    _hit(hit, model, domains, hit.pvalue * nmodels))
+        for row in rows:
+            domz = len(row["hits"])
+            for hit in row["hits"]:
+                kept = []
+                for domain in hit["domains"]:
+                    domain["c_evalue"] = domain["pvalue"] * domz
+                    reported, included = (True, domain["included"]) if options.bit_cutoffs else (
+                        conditional_domain(domain["pvalue"], domz, options, hit["included"]))
                     if reported:
-                        domains.append(_domain(domain, nmodels, domz, included))
-                row["hits"].append(_hit(hit, model, domains, hit.pvalue * nmodels))
+                        domain["included"] = included
+                        kept.append(domain)
+                hit["domains"] = kept
     for row in rows:
         row["hits"].sort(key=lambda hit: hit["model"])
         for hit in row["hits"]:

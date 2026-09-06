@@ -1,19 +1,11 @@
-name: HMMForge research evidence
-on:
-  push:
-    branches: [research/hmmforge-prototype]
-    paths:
-      - research/hmmforge/**
-      - .github/workflows/hmmforge-research.yml
+name: HMMForge evidence
+on: [push, pull_request]
 permissions:
   contents: read
 jobs:
   validate:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
-    defaults:
-      run:
-        working-directory: research/hmmforge
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
@@ -41,5 +33,5 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: hmmforge-evidence
-          path: research/hmmforge/evidence/
+          path: evidence/
           retention-days: 14
