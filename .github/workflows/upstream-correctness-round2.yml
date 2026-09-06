@@ -1,0 +1,90 @@
+name: Upstream correctness round 2
+on:
+  push:
+    branches: [research/upstream-correctness-20260906]
+    paths:
+      - research/upstream-correctness-round2/**
+      - .github/workflows/upstream-correctness-round2.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  python-packages:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      AUDIT_OUTPUT: ${{ runner.temp }}/round2-python
+      OPENBLAS_NUM_THREADS: '1'
+      OMP_NUM_THREADS: '2'
+      NUMBA_NUM_THREADS: '2'
+      MPLBACKEND: Agg
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Install released packages
+        run: python -m pip install biopython scanpy gseapy
+      - name: Execute public-API fixtures and complete-null experiment
+        run: python research/upstream-correctness-round2/audit.py python
+      - name: Preserve exact current upstream sources for comparison
+        if: always()
+        run: |
+          python - <<'PY'
+          import hashlib, json, os, pathlib, subprocess, urllib.request
+          root=pathlib.Path(os.environ['AUDIT_OUTPUT'])/'upstream-heads'; root.mkdir(parents=True,exist_ok=True)
+          sources={
+            'biopython/biopython':['Bio/Phylo/Consensus.py','Bio/Phylo/TreeConstruction.py','Tests/test_Consensus.py','Tests/test_TreeConstruction.py'],
+            'scverse/scanpy':['src/scanpy/tools/_rank_genes_groups.py','tests/test_rank_genes_groups_logreg.py'],
+            'zqfang/GSEApy':['gseapy/stats.py','gseapy/enrichr.py']}
+          manifest={}
+          for repo,paths in sources.items():
+            sha=subprocess.check_output(['git','ls-remote','https://github.com/'+repo+'.git','HEAD'],text=True).split()[0]
+            manifest[repo]={'sha':sha,'files':{}}
+            for path in paths:
+              try:
+                data=urllib.request.urlopen(f'https://raw.githubusercontent.com/{repo}/{sha}/{path}',timeout=30).read()
+              except Exception as exc:
+                manifest[repo]['files'][path]={'error':str(exc)};continue
+              dest=root/repo/path;dest.parent.mkdir(parents=True,exist_ok=True);dest.write_bytes(data)
+              manifest[repo]['files'][path]={'sha256':hashlib.sha256(data).hexdigest()}
+          (root/'manifest.json').write_text(json.dumps(manifest,indent=2)+'\n')
+          print(json.dumps(manifest,indent=2))
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: round2-python-native-evidence
+          path: ${{ env.AUDIT_OUTPUT }}
+          if-no-files-found: error
+          retention-days: 30
+  bedtools:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      AUDIT_OUTPUT: ${{ runner.temp }}/round2-bedtools
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Build current upstream BEDTools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends libbz2-dev liblzma-dev zlib1g-dev
+          mkdir -p "$AUDIT_OUTPUT"
+          git clone --depth 1 https://github.com/arq5x/bedtools2.git "$RUNNER_TEMP/bedtools2"
+          git -C "$RUNNER_TEMP/bedtools2" rev-parse HEAD > "$AUDIT_OUTPUT/upstream-sha.txt"
+          make -C "$RUNNER_TEMP/bedtools2" -j2 > "$AUDIT_OUTPUT/build.log" 2>&1
+          cp "$RUNNER_TEMP/bedtools2/src/utils/FileRecordTools/Records/BlockMgr.cpp" "$AUDIT_OUTPUT/BlockMgr.cpp"
+          echo "BEDTOOLS=$RUNNER_TEMP/bedtools2/bin/bedtools" >> "$GITHUB_ENV"
+      - name: Compare either-fraction semantics with and without splitting
+        run: python3 research/upstream-correctness-round2/audit.py bedtools
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: round2-bedtools-native-evidence
+          path: ${{ env.AUDIT_OUTPUT }}
+          if-no-files-found: error
+          retention-days: 30
