@@ -1,0 +1,91 @@
+name: Publish verified 0.1.13 draft
+on:
+  push:
+    branches: [maintenance/publish-0.1.13-20260906]
+    paths: [.github/workflows/publish-verified-draft-0.1.13.yml]
+permissions:
+  contents: write
+  actions: read
+concurrency:
+  group: finalize-turbo-picard-0.1.13
+  cancel-in-progress: false
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - name: Recover completed runtime verification and immutable asset hashes
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF_NAME" = 'maintenance/publish-0.1.13-20260906'
+          mkdir /tmp/verified
+          gh run download 34001179127 --repo "$GITHUB_REPOSITORY" --name turbo-picard-0.1.13-publication-verification --dir /tmp/verified
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/34001179127/jobs?per_page=100" > /tmp/verification-jobs.json
+          gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/v0.1.13" > /tmp/tag.json
+          gh api "repos/$GITHUB_REPOSITORY/releases/383413560" > /tmp/draft.json
+          python3 - <<'PY'
+          import hashlib,json,urllib.request
+          from pathlib import Path
+          root=Path('/tmp/verified/release-assets')
+          receipt=json.loads((root/'turbo-picard-publication-receipt.json').read_text())
+          assert receipt['source_commit']=='27340ae8baf366816b39ada92e93b7eed1260008'
+          assert receipt['version']=='0.1.13'
+          assert json.loads(Path('/tmp/tag.json').read_text())['object']['sha']==receipt['source_commit']
+          jobs=json.loads(Path('/tmp/verification-jobs.json').read_text())['jobs']
+          assert len(jobs)==1
+          expected={'Validate publication runs and tag','Match all built distributions to public PyPI checksums','Install from actual public PyPI and execute native and agent smoke tests','Pull and test the public versioned container','Capture immutable GitHub source checksum and publication receipt'}
+          passed={s['name'] for s in jobs[0]['steps'] if s['conclusion']=='success'}
+          assert expected <= passed,expected-passed
+          release=json.loads(Path('/tmp/draft.json').read_text())
+          assert release['id']==383413560 and release['tag_name']=='v0.1.13' and release['draft']
+          expected_hashes={name:digest for digest,name in (line.split('  ',1) for line in (root/'SHA256SUMS.txt').read_text().splitlines())}
+          expected_hashes['SHA256SUMS.txt']=hashlib.sha256((root/'SHA256SUMS.txt').read_bytes()).hexdigest()
+          assets={a['name']:a for a in release['assets']}
+          assert set(assets)==set(expected_hashes),(set(assets),set(expected_hashes))
+          for name,digest in expected_hashes.items():
+              assert assets[name]['state']=='uploaded' and assets[name]['digest']=='sha256:'+digest,name
+          with urllib.request.urlopen('https://pypi.org/pypi/turbo-picard/0.1.13/json',timeout=30) as response:
+              pypi=json.load(response)
+          assert pypi['info']['version']=='0.1.13' and len(pypi['urls'])==5
+          for asset in pypi['urls']:
+              assert not asset['yanked']
+              assert expected_hashes[asset['filename']]==asset['digests']['sha256']
+          print('All runtime gates passed and all nine uploaded release assets match verified hashes. No assets will be replaced.')
+          PY
+      - name: Publish the verified draft without rebuilding or overwriting assets
+        run: |
+          set -euo pipefail
+          gh api --method PATCH "repos/$GITHUB_REPOSITORY/releases/383413560" -F draft=false -f make_latest=true > /tmp/github-release.json
+          python3 - <<'PY'
+          import json,time,urllib.request
+          from pathlib import Path
+          release=json.loads(Path('/tmp/github-release.json').read_text())
+          assert release['id']==383413560 and release['tag_name']=='v0.1.13'
+          assert release['draft'] is False and release['published_at']
+          # Anonymous public access must work, not just the publisher token.
+          request=urllib.request.Request('https://api.github.com/repos/dnncha/turbo-picard/releases/tags/v0.1.13',headers={'User-Agent':'turbo-picard-release-verification'})
+          for attempt in range(5):
+              try:
+                  with urllib.request.urlopen(request,timeout=30) as response: public=json.load(response)
+                  assert public['id']==383413560 and public['draft'] is False
+                  assert len(public['assets'])==9
+                  break
+              except Exception:
+                  if attempt==4: raise
+                  time.sleep(3)
+          Path('/tmp/public-github-release.json').write_text(json.dumps(public,indent=2)+'\n')
+          print(public['html_url'])
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: turbo-picard-0.1.13-completed-release
+          path: |
+            /tmp/verified/release-assets/*
+            /tmp/verification-jobs.json
+            /tmp/tag.json
+            /tmp/github-release.json
+            /tmp/public-github-release.json
+          retention-days: 90
