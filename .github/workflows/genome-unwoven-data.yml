@@ -1,0 +1,36 @@
+name: Genome Unwoven public data evidence
+on:
+  push:
+    branches: [research/genome-unwoven-data]
+    paths: [research/genome-unwoven/build_genome.py, .github/workflows/genome-unwoven-data.yml]
+permissions:
+  contents: write
+concurrency:
+  group: genome-unwoven-data
+  cancel-in-progress: false
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Build public hg38 annotations under a 2 GB address-space limit
+        run: |
+          ulimit -v 2097152
+          python research/genome-unwoven/build_genome.py --output research/genome-unwoven/data
+      - uses: actions/upload-artifact@v4
+        with:
+          name: genome-unwoven-data
+          path: research/genome-unwoven/data
+          retention-days: 30
+      - name: Preserve generated public data on this isolated research branch only
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add research/genome-unwoven/data
+          git diff --cached --quiet && exit 0
+          git commit -m 'Preserve validated public hg38 coverage and source checksums'
+          git push origin HEAD:research/genome-unwoven-data
