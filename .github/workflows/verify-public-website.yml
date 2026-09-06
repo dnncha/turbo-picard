@@ -1,0 +1,126 @@
+name: Verify public marketing website
+on:
+  push:
+    branches: [website/publication-check-20260906]
+    paths: [.github/workflows/verify-public-website.yml]
+permissions:
+  contents: read
+jobs:
+  public-site:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: fa500340421639bf8d188ea4500795c6500cf838
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+      - name: Install verification tools
+        run: |
+          python3 -m pip install PyYAML==6.0.3 playwright==1.55.0
+          python3 -m playwright install --with-deps chromium
+      - name: Verify public delivery and search metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/public-site
+          python3 - <<'PY'
+          import json,sys,time,urllib.request
+          from pathlib import Path
+          from xml.etree import ElementTree as ET
+          sys.path.insert(0,'tools')
+          from build_marketing_site import BASE,PAGES
+          from verify_marketing_site import Page
+          out=Path('/tmp/public-site');report={'pages':[],'hosting':[]}
+          def get(url):
+              req=urllib.request.Request(url,headers={'User-Agent':'TurboPicardPublicationCheck/1.0','Cache-Control':'no-cache'})
+              with urllib.request.urlopen(req,timeout=20) as r:
+                  return {'url':url,'final_url':r.url,'status':r.status,'headers':dict(r.headers),'body':r.read(2000000).decode('utf-8','replace')}
+          for endpoint in ('https://app.readthedocs.org/api/v3/projects/turbo-picard/','https://app.readthedocs.org/api/v3/projects/turbo-picard/builds/?limit=3'):
+              try:report['hosting'].append(get(endpoint))
+              except Exception as e:report['hosting'].append({'url':endpoint,'error':str(e)})
+          (out/'hosting-before.json').write_text(json.dumps(report['hosting'],indent=2))
+          # This job is read-only. It waits for the separate reviewed merge/webhook;
+          # it does not merge a pull request or change hosting settings.
+          for attempt in range(75):
+              try:
+                  home=get(BASE)
+                  if Page(home['body']).title==PAGES[0][1]:break
+              except Exception as e:print(type(e).__name__,str(e))
+              print(f'Waiting for reviewed public website ({attempt+1}/75)',flush=True);time.sleep(10)
+          else:raise SystemExit('The new homepage is not public; deployment is not verified.')
+          for route,title,*_ in PAGES:
+              row=get(BASE+route);parsed=Page(row['body'])
+              assert parsed.title==title,(route,parsed.title)
+              assert parsed.h1==1,route
+              assert parsed.canonicals==[BASE+route],(route,parsed.canonicals)
+              assert parsed.meta.get('robots')=='index,follow',route
+              assert 'noindex' not in str(row['headers'].get('X-Robots-Tag','')).lower(),route
+              path=out/'html'/route/'index.html';path.parent.mkdir(parents=True,exist_ok=True);path.write_text(row.pop('body'))
+              row['title']=title;row['canonical']=parsed.canonicals[0];report['pages'].append(row)
+          for route in ('quickstart.html','commands.html','parity.html','real-data-evaluation.html','assets/site.css','assets/site.js','llms.txt','sitemap.xml'):
+              row=get(BASE+route);assert row['status']==200
+              if route=='sitemap.xml':
+                  locations={e.text for e in ET.fromstring(row['body']).iter() if e.tag.endswith('loc')}
+                  assert all(BASE+r in locations for r,*_ in PAGES)
+              report['pages'].append({k:v for k,v in row.items() if k!='body'})
+          root=get('https://turbo-picard.readthedocs.io/')
+          assert Page(root['body']).title==PAGES[0][1],('default root serves old content',root['final_url'])
+          for endpoint in ('https://turbo-picard.readthedocs.io/robots.txt','https://turbo-picard.readthedocs.io/sitemap.xml','https://app.readthedocs.org/api/v3/projects/turbo-picard/builds/?limit=3'):
+              report['hosting'].append(get(endpoint))
+          (out/'http-report.json').write_text(json.dumps(report,indent=2))
+          print(json.dumps({'public_marketing_pages':10,'preserved_docs_and_assets':8,'default_root':root['final_url'],'status':'PASS'}))
+          PY
+      - name: Test the actual public browser experience
+        run: |
+          python3 - <<'PY'
+          import json,sys
+          from pathlib import Path
+          from playwright.sync_api import sync_playwright
+          sys.path.insert(0,'tools')
+          from build_marketing_site import BASE,PAGES
+          out=Path('/tmp/public-site');report={'layouts':[],'checks':[],'javascript_errors':[]}
+          with sync_playwright() as p:
+              browser=p.chromium.launch(headless=True)
+              page=browser.new_page()
+              page.on('pageerror',lambda e:report['javascript_errors'].append(str(e)))
+              for width in (1440,390):
+                  page.set_viewport_size({'width':width,'height':1000 if width>700 else 844})
+                  for route,*_ in PAGES:
+                      response=page.goto(BASE+route,wait_until='networkidle');assert response.status==200
+                      assert page.locator('h1').count()==1
+                      assert not page.evaluate('document.documentElement.scrollWidth>window.innerWidth'),(route,width)
+                      report['layouts'].append({'route':route,'width':width,'status':'PASS'})
+                      if not route:page.screenshot(path=str(out/f'live-home-{width}.png'),full_page=True)
+              page.set_viewport_size({'width':1280,'height':1000})
+              page.goto(BASE+'commands/',wait_until='networkidle')
+              page.locator('#command-search').fill('CollectRnaSeqMetrics')
+              assert page.locator('[data-command]:visible').count()==1
+              assert 'Upstream only' in page.locator('[data-command]:visible').inner_text()
+              report['checks'].append('live catalogue filters and exposes fallback-only boundary')
+              page.goto(BASE+'evaluate/',wait_until='networkidle');requests=[]
+              page.on('request',lambda r:requests.append(r.url))
+              page.locator('#trial-input').fill('/private/tp-private-smoke.cram')
+              page.locator('#generate-trial').click();assert 'Reference' in page.locator('#trial-error').inner_text()
+              page.locator('#trial-reference').fill('/private/tp-private-reference.fa')
+              page.locator('#trial-jar').fill('/opt/picard.jar');page.locator('#generate-trial').click()
+              assert '--reference-fasta' in page.locator('#trial-script').inner_text()
+              copy=page.locator('#trial-script').locator('..').locator('..').locator('[data-copy]')
+              assert not copy.is_disabled()
+              page.locator('#trial-input').fill('/private/tp-private-changed.bam');assert copy.is_disabled()
+              assert not any('tp-private-' in url for url in requests),requests
+              report['checks'].append('live planner gates CRAM, generates locally and disables stale copies')
+              page.screenshot(path=str(out/'live-evaluate.png'),full_page=True)
+              assert not report['javascript_errors'],report['javascript_errors']
+              browser.close()
+          report['status']='PASS';(out/'browser-report.json').write_text(json.dumps(report,indent=2))
+          print(json.dumps({'public_layouts':len(report['layouts']),'public_interactions':len(report['checks']),'status':'PASS'}))
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: turbo-picard-public-website-verification
+          path: /tmp/public-site
+          retention-days: 30
