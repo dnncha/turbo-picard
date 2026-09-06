@@ -4,6 +4,8 @@
 [![PyPI](https://img.shields.io/pypi/v/turbo-picard.svg)](https://pypi.org/project/turbo-picard/)
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.20541927.svg)](https://doi.org/10.5281/zenodo.20541927)
 
+[Website](https://turbo-picard.readthedocs.io/en/latest/) · [Find your command](https://turbo-picard.readthedocs.io/en/latest/commands/) · [Compare on your data](https://turbo-picard.readthedocs.io/en/latest/evaluate/)
+
 ## Picard workflows. Native speed.
 
 Run selected Picard tools in Rust, using the command names and arguments your

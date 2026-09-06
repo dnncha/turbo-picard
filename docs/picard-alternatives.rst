@@ -1,6 +1,12 @@
 Picard alternatives for bioinformatics workflows
 ================================================
 
+.. note::
+
+   Looking for a practical starting point? See `Workflow-focused tool comparison <https://turbo-picard.readthedocs.io/en/latest/compare/>`_.
+
+
+
 .. meta::
    :description: Compare turbo-picard, samtools, Sambamba, SAMBLASTER, FastDup and riker for Picard-compatible bioinformatics, duplicate marking and sequencing-QC workflows.
    :keywords: Picard alternatives, bioinformatics, duplicate marking, MarkDuplicates, SAM, BAM, CRAM, sequencing QC

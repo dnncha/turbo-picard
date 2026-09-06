@@ -1118,7 +1118,8 @@ def main(argv: list[str] | None = None) -> int:
     manifest = load_manifest()
     readme = README.read_text(encoding="utf-8")
     project_readme = PROJECT_README.read_text(encoding="utf-8")
-    site = SITE.read_text(encoding="utf-8")
+    # Provenance belongs on the linked evidence page, not in the marketing hero.
+    site = SITE.read_text(encoding="utf-8") + (SITE.parent / "evidence/index.html").read_text(encoding="utf-8")
     benchmark_docs = BENCHMARK_DOCS.read_text(encoding="utf-8")
     adoption_docs = ADOPTION_DOCS.read_text(encoding="utf-8")
     errors = validate_real_data_evidence(

@@ -1,0 +1,3 @@
+User-agent: *
+Allow: /
+Sitemap: https://turbo-picard.readthedocs.io/en/latest/sitemap.xml

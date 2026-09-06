@@ -20,7 +20,7 @@ CLAIM_SURFACES = (
     "docs/performance.rst",
     "docs/picard-alternatives.rst",
     "docs/picard-vs-turbo-picard.rst",
-    "docs/site/index.html",
+    "docs/site/evidence/index.html",
     "packaging/bioconda/BIOCONDA_PR.md",
     "packaging/outreach/README.md",
     "packaging/outreach/biostars.md",

@@ -5,8 +5,8 @@ An evaluation should answer one question: does this version of Turbo Picard
 preserve the outputs your task needs, with useful runtime or resource savings?
 A fast fixture alone does not answer that question.
 
-This page describes the **next-release repository evaluator**. The evaluator
-is a Python script in the checkout, not a new command shipped in PyPI 0.1.12.
+This page describes the **repository evaluator included with release 0.1.13**.
+It is a Python script in the source checkout, not a separate PyPI CLI command.
 It can evaluate an explicitly selected installed binary. The strict native-only
 environment policy also disables legacy fallback paths for older candidates.
 
