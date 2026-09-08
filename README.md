@@ -4,20 +4,16 @@
 [![PyPI](https://img.shields.io/pypi/v/turbo-picard.svg)](https://pypi.org/project/turbo-picard/)
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.20541927.svg)](https://doi.org/10.5281/zenodo.20541927)
 
-[Website](https://turbo-picard.readthedocs.io/en/latest/) · [Find your command](https://turbo-picard.readthedocs.io/en/latest/commands/) · [Compare on your data](https://turbo-picard.readthedocs.io/en/latest/evaluate/)
+[Documentation](https://turbo-picard.readthedocs.io/en/latest/) · [Command coverage](docs/commands.rst) · [Evaluate on your data](docs/real-data-evaluation.rst) · [Research](https://cheerfulduck.com/research)
 
-## Picard workflows. Native speed.
+## Run a selected Picard step in Rust
 
 Run selected Picard tools in Rust, using the command names and arguments your
-pipelines already understand. **Accelerate a bottleneck, not a rewrite.**
+pipelines already understand. Evaluate one command before changing a pipeline.
 
 Turbo Picard is built for teams maintaining SAM/BAM/CRAM, VCF and sequencing-QC
 steps in Nextflow, WDL, Snakemake and shell workflows. Native commands avoid the
 JVM; the documented interface keeps migration local to the task you replace.
-
-**Familiar commands.** Keep Picard command names and `KEY=VALUE` arguments.
-**Inspectable results.** Compare scientific outputs and retain an evidence bundle.
-**Explicit execution.** Distinguish native support from configured upstream fallback.
 
 Start with one representative input. Native coverage is command- and
 option-specific; this is not the full upstream suite. Keep Picard for work
@@ -49,7 +45,7 @@ command scope, not proof that a particular input or option is validated.
 Install from PyPI:
 
 ```bash
-python3 -m pip install turbo-picard
+python3 -m pip install turbo-picard==0.1.13
 ```
 
 For a containerized trial, use the published release image:
@@ -91,19 +87,19 @@ From a repository checkout:
 cargo install --locked --path crates/turbo-picard-cli --bin turbo-picard --bin picard
 ```
 
-## Prove the switch on your data
+## Compare before changing a workflow
 
 The repository includes an evaluator that runs both implementations in separate
 output paths and records versions, timings and output digests. It does not
 upload your data. See the [real-data evaluation guide](docs/real-data-evaluation.rst)
 for a copyable command and the interpretation of a match or mismatch.
 
-The next-release evaluator uses disk-backed sorting for large comparisons,
+The evaluator in this source checkout uses disk-backed sorting for large comparisons,
 preserves existing evaluation directories, and retains failed runs for diagnosis.
-These repository-tooling improvements are not a claim about native command
-speed. It measures the comparison helper, not the native genomics commands.
+The evaluator records command runtimes separately from comparison work;
+improvements to its sorting helper do not establish faster native commands.
 
-## When It Helps
+## Suitable first evaluations
 
 - You already run Picard commands and want to trial one slow step first.
 - You need Picard-style command names and `KEY=VALUE` arguments to stay stable.
@@ -118,7 +114,7 @@ commands.
 Use `turbo-picard trial <PicardCommand> ...` to print a side-by-side Picard and
 turbo-picard evaluation contract before changing a workflow.
 
-## When To Stay With Picard
+## Cases that need upstream Picard or further validation
 
 - You need an option or command that is not inside the documented native scope
   and cannot use fallback.
@@ -129,9 +125,7 @@ turbo-picard evaluation contract before changing a workflow.
 
 ## Documentation
 
-The full docs are on Read the Docs:
-
-**https://turbo-picard.readthedocs.io/en/latest/**
+The [full documentation](https://turbo-picard.readthedocs.io/en/latest/) covers installation, command scope, evaluation, and maintenance.
 
 Useful starting points:
 
@@ -164,97 +158,39 @@ comment on the [public trial report thread](https://github.com/dnncha/turbo-pica
 From a repository checkout, `tools/compare_real_data.py --shareable-report`
 can create a reviewed, privacy-conscious starting point for that report.
 
-## Benchmarks
+## Benchmark evidence
 
-The saved public benchmark suite compares native `turbo-picard` commands against
-Picard 3.4.0 and checks stable outputs before reporting speed. Current saved
-results report `32/32` parity checks passing, with `272.12x` top speedup:
-`NormalizeFasta`, `22.88x` floor speedup: `SetNmMdAndUqTags`, `99.51x`
-median speedup, and `84.52x` geometric mean speedup.
+The saved suite records 32 command comparisons against Picard 3.4.0, each
+checked against its specified output contract. These are small-fixture results:
+startup overhead contributes substantially to the measured ratios. The saved
+suite reports a 22.88x minimum, 84.52x geometric mean, and 272.12x maximum
+speedup on those fixtures. In the saved
+`MarkDuplicates` case, the generator used `reads=50000`; median wall times were
+0.075464 seconds for Turbo Picard and 2.238986 seconds for Picard across three
+runs. This is not a whole-genome performance estimate.
 
-**Read these as small-fixture measurements, not whole-genome speedups.**
-For example, the saved `MarkDuplicates` case used the generator's `reads=50000`
-setting, with median wall times of **0.075464 seconds** for Turbo Picard and
-**2.238986 seconds** for Picard across three runs. Startup overhead matters at
-this scale. The reported speedup is the median of paired-run ratios, which need
-not equal the ratio of those independent medians. The machine-readable evidence
-now preserves timings, repeat counts and generator parameters alongside ratios.
+See the [benchmark guide](docs/benchmarks.rst) for methods and real-data scope,
+the [saved summary](docs/benchmark-readme-reference.md) for all 32 measurements
+and reproduction commands, and the [parity guide](docs/parity.rst) for what was
+compared. Metrics-text agreement does not establish Picard-equivalent charts.
 
-Summary: `32/32 PASS`; `272.12x` top speedup: `NormalizeFasta`;
-`22.88x` floor speedup: `SetNmMdAndUqTags`; `99.51x` median speedup; `84.52x`
-geometric mean speedup.
+[Cheerful Duck Research](https://cheerfulduck.com/research) publishes our broader
+bioinformatics software investigations, reproduction material, and corrections.
 
-Benchmark details, scope notes, real-data evidence, and reproduction commands
-are in the [benchmark docs](https://turbo-picard.readthedocs.io/en/latest/benchmarks.html).
-The [parity guide](https://turbo-picard.readthedocs.io/en/latest/parity.html)
-explains what the comparisons do and do not prove.
-For `CollectBaseDistributionByCycle`, `CollectGcBiasMetrics`,
-`CollectInsertSizeMetrics`, `MeanQualityByCycle`, and
-`QualityScoreDistribution`, metrics text is the parity target; chart outputs are
-lightweight PDF summaries, not Picard-equivalent rendered plots.
+### Check the saved real-data record
 
-Saved benchmark run:
-
-- Date: `2026-08-14`
-- Command: `python3 tools/bench_suite.py --repeats 3 --skip-build`
-- Raw log: `docs/site/assets/bench-suite-output.txt`
-- benchmark exceptions: `AccelerationStatus`, `capabilities`, `doctor`,
-  `explain`, and `trial` are utility commands, not Picard workload
-  comparisons. `CollectHsMetrics` has separate ALL_READS and sidecar parity
-  coverage, plus a real-data comparator path for pinned WES/capture intervals;
-  representative capture-data performance evidence is still pending.
-
-| Command | Speedup | Parity |
-| --- | ---: | :--- |
-| NormalizeFasta | 272.12x | PASS |
-| BuildBamIndex | 243.53x | PASS |
-| UpdateVcfSequenceDictionary | 207.52x | PASS |
-| CollectGcBiasMetrics | 196.45x | PASS |
-| CreateSequenceDictionary | 152.62x | PASS |
-| GatherVcfs | 130.70x | PASS |
-| LiftoverVcf | 127.28x | PASS |
-| CollectMultipleMetrics | 122.66x | PASS |
-| CollectInsertSizeMetrics | 117.34x | PASS |
-| CleanSam | 115.42x | PASS |
-| MergeVcfs | 112.13x | PASS |
-| MeanQualityByCycle | 108.66x | PASS |
-| CollectQualityYieldMetrics | 108.64x | PASS |
-| QualityScoreDistribution | 107.17x | PASS |
-| ReplaceSamHeader | 101.84x | PASS |
-| ValidateSamFile | 99.56x | PASS |
-| IntervalListTools | 99.46x | PASS |
-| CollectBaseDistributionByCycle | 98.01x | PASS |
-| SortVcf | 89.01x | PASS |
-| CollectAlignmentSummaryMetrics | 83.49x | PASS |
-| BedToIntervalList | 79.78x | PASS |
-| ViewSam | 79.58x | PASS |
-| AddOrReplaceReadGroups | 77.78x | PASS |
-| SamToFastq | 77.74x | PASS |
-| CollectWgsMetrics | 50.81x | PASS |
-| MergeSamFiles | 35.49x | PASS |
-| SortSam | 35.15x | PASS |
-| FixMateInformation | 31.98x | PASS |
-| FastqToSam | 31.29x | PASS |
-| MarkDuplicates | 28.70x | PASS |
-| RevertSam | 24.19x | PASS |
-| SetNmMdAndUqTags | 22.88x | PASS |
-
-Release evidence checks:
+The `benchmarks/real-data/` manifest records pinned inputs for
+`gatk-na12878-mito`, `picard-snvq`, and `gatk-na12878-mito-cram`.
+From a checkout, use the existing evidence tools:
 
 ```bash
 python3 tools/update_real_data_manifest.py
-python3 tools/verify_benchmark_log_evidence.py
-python3 tools/verify_benchmark_suite_coverage.py
-python3 tools/verify_benchmark_thresholds.py
 python3 tools/verify_real_data_evidence.py
 python3 tools/verify_real_data_evidence.py --release-ready
 ```
 
-Real-data evidence lives in `benchmarks/real-data/` and records pinned input
-sources, command scopes, and input SHA-256 hashes. Current release-candidate
-dataset IDs are `gatk-na12878-mito`, `picard-snvq`, and
-`gatk-na12878-mito-cram`.
-
+These commands check the repository's saved evidence. They do not validate a
+new input file or replace a comparison of your own workflow.
 
 ## Workflow evaluation
 
