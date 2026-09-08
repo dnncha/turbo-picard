@@ -4,20 +4,16 @@
 [![PyPI](https://img.shields.io/pypi/v/turbo-picard.svg)](https://pypi.org/project/turbo-picard/)
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.20541927.svg)](https://doi.org/10.5281/zenodo.20541927)
 
-[Website](https://turbo-picard.readthedocs.io/en/latest/) · [Find your command](https://turbo-picard.readthedocs.io/en/latest/commands/) · [Compare on your data](https://turbo-picard.readthedocs.io/en/latest/evaluate/)
+[Documentation](https://turbo-picard.readthedocs.io/en/latest/) · [Command coverage](docs/commands.rst) · [Evaluate on your data](docs/real-data-evaluation.rst) · [Research](https://cheerfulduck.com/research)
 
-## Picard workflows. Native speed.
+## Run a selected Picard step in Rust
 
 Run selected Picard tools in Rust, using the command names and arguments your
-pipelines already understand. **Accelerate a bottleneck, not a rewrite.**
+pipelines already understand. Evaluate one command before changing a pipeline.
 
 Turbo Picard is built for teams maintaining SAM/BAM/CRAM, VCF and sequencing-QC
 steps in Nextflow, WDL, Snakemake and shell workflows. Native commands avoid the
 JVM; the documented interface keeps migration local to the task you replace.
-
-**Familiar commands.** Keep Picard command names and `KEY=VALUE` arguments.
-**Inspectable results.** Compare scientific outputs and retain an evidence bundle.
-**Explicit execution.** Distinguish native support from configured upstream fallback.
 
 Start with one representative input. Native coverage is command- and
 option-specific; this is not the full upstream suite. Keep Picard for work
@@ -49,7 +45,7 @@ command scope, not proof that a particular input or option is validated.
 Install from PyPI:
 
 ```bash
-python3 -m pip install turbo-picard
+python3 -m pip install turbo-picard==0.1.13
 ```
 
 For a containerized trial, use the published release image:
@@ -91,17 +87,17 @@ From a repository checkout:
 cargo install --locked --path crates/turbo-picard-cli --bin turbo-picard --bin picard
 ```
 
-## Prove the switch on your data
+## Compare before changing a workflow
 
 The repository includes an evaluator that runs both implementations in separate
 output paths and records versions, timings and output digests. It does not
 upload your data. See the [real-data evaluation guide](docs/real-data-evaluation.rst)
 for a copyable command and the interpretation of a match or mismatch.
 
-The next-release evaluator uses disk-backed sorting for large comparisons,
+The evaluator in this source checkout uses disk-backed sorting for large comparisons,
 preserves existing evaluation directories, and retains failed runs for diagnosis.
-These repository-tooling improvements are not a claim about native command
-speed. It measures the comparison helper, not the native genomics commands.
+The evaluator records command runtimes separately from comparison work;
+improvements to its sorting helper do not establish faster native commands.
 
 ## When It Helps
 
@@ -129,9 +125,7 @@ turbo-picard evaluation contract before changing a workflow.
 
 ## Documentation
 
-The full docs are on Read the Docs:
-
-**https://turbo-picard.readthedocs.io/en/latest/**
+The full docs are on Read the Docs: [installation, command scope, evaluation, and maintenance](https://turbo-picard.readthedocs.io/en/latest/).
 
 Useful starting points:
 
@@ -164,7 +158,29 @@ comment on the [public trial report thread](https://github.com/dnncha/turbo-pica
 From a repository checkout, `tools/compare_real_data.py --shareable-report`
 can create a reviewed, privacy-conscious starting point for that report.
 
-## Benchmarks
+## Benchmark evidence
+
+The saved suite records 32 command comparisons against Picard 3.4.0, each
+checked against its specified output contract. These are small-fixture results:
+startup overhead contributes substantially to the measured ratios. The saved
+suite reports a 22.88x minimum, 84.52x geometric mean, and 272.12x maximum
+speedup on those fixtures. In the saved
+`MarkDuplicates` case, the generator used `reads=50000`; median wall times were
+0.075464 seconds for Turbo Picard and 2.238986 seconds for Picard across three
+runs. This is not a whole-genome performance estimate.
+
+See the [benchmark guide](docs/benchmarks.rst) for methods and real-data scope,
+the [saved record](#saved-benchmark-record) for all 32 measurements
+and reproduction commands, and the [parity guide](docs/parity.rst) for what was
+compared. Metrics-text agreement does not establish Picard-equivalent charts.
+
+[Cheerful Duck Research](https://cheerfulduck.com/research) publishes our broader
+bioinformatics software investigations, reproduction material, and corrections.
+
+### Saved benchmark record
+
+<details>
+<summary>Expand all measurements, input provenance, and reproduction commands</summary>
 
 The saved public benchmark suite compares native `turbo-picard` commands against
 Picard 3.4.0 and checks stable outputs before reporting speed. Current saved
@@ -255,6 +271,22 @@ sources, command scopes, and input SHA-256 hashes. Current release-candidate
 dataset IDs are `gatk-na12878-mito`, `picard-snvq`, and
 `gatk-na12878-mito-cram`.
 
+</details>
+
+### Check the saved real-data record
+
+The `benchmarks/real-data/` manifest records pinned inputs for
+`gatk-na12878-mito`, `picard-snvq`, and `gatk-na12878-mito-cram`.
+From a checkout, use the existing evidence tools:
+
+```bash
+python3 tools/update_real_data_manifest.py
+python3 tools/verify_real_data_evidence.py
+python3 tools/verify_real_data_evidence.py --release-ready
+```
+
+These commands check the repository's saved evidence. They do not validate a
+new input file or replace a comparison of your own workflow.
 
 ## Workflow evaluation
 

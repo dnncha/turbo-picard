@@ -1,7 +1,7 @@
 Turbo Picard
 ============
 
-**Picard workflows. Native speed.**
+Rust implementations of selected Picard commands.
 
 Run selected Picard tools in Rust without redesigning the surrounding pipeline.
 Keep familiar command names, ``KEY=VALUE`` arguments, and the metrics and output
@@ -22,6 +22,16 @@ speedup on its documented fixtures. Those results describe the saved commands,
 options, inputs, and machine profile; they are not a prediction for another
 workflow. See :doc:`benchmarks` and :doc:`parity` before using them in an
 evaluation.
+
+Research and evidence
+---------------------
+
+`Cheerful Duck Research <https://cheerfulduck.com/research>`_ publishes our
+bioinformatics software investigations, reproduction material, and corrections.
+For this tool, begin with :doc:`compatibility-contract` to define the outputs
+that matter to your workflow, then use :doc:`real-data-evaluation` to compare
+them. A matching fixture establishes agreement for that fixture and comparison
+contract; broader use needs representative inputs.
 
 Start here
 ----------
