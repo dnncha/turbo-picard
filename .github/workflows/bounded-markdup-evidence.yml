@@ -1,0 +1,132 @@
+name: Bounded MarkDuplicates evidence
+
+on:
+  pull_request:
+    paths:
+      - 'crates/turbo-picard-core/src/**'
+      - 'crates/turbo-picard-markdup/**'
+      - 'tools/bench_bounded_markduplicates.py'
+      - 'tools/test_bench_bounded_markduplicates.py'
+      - '.github/workflows/bounded-markdup-evidence.yml'
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+concurrency:
+  group: bounded-markdup-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  compare:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      BASE_SHA: '62ccb0ce436a8da6edfcf86e7f6921326e909709'
+      HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      CARGO_BUILD_JOBS: '4'
+      CARGO_TARGET_DIR: ${{ runner.temp }}/bounded-build
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          path: candidate
+          persist-credentials: false
+      - uses: actions/checkout@v5
+        with:
+          ref: '62ccb0ce436a8da6edfcf86e7f6921326e909709'
+          path: baseline
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install native build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang libclang-dev make pkg-config
+      - uses: mamba-org/setup-micromamba@v3
+        with:
+          environment-name: bounded-parity
+          create-args: >-
+            -c conda-forge
+            -c bioconda
+            picard=3.4.0
+            samtools
+      - name: Capture provenance and validate the evidence generator
+        run: |
+          mkdir provenance binaries
+          rustc -Vv > provenance/rustc.txt
+          uname -a > provenance/host.txt
+          lscpu >> provenance/host.txt
+          df -T . >> provenance/host.txt
+          printf 'base=%s\nhead=%s\n' "$BASE_SHA" "$HEAD_SHA" > provenance/source.txt
+          sha256sum candidate/Cargo.lock candidate/tools/bench_bounded_markduplicates.py candidate/crates/turbo-picard-markdup/src/*.rs > provenance/source-sha256.txt
+          prefix="${MAMBA_ROOT_PREFIX}/envs/bounded-parity"
+          "$prefix/bin/samtools" --version > provenance/samtools.txt
+          "$prefix/bin/picard" --version > provenance/picard.txt 2>&1
+          "$prefix/bin/java" -version > provenance/java.txt 2>&1
+          python3 - "$prefix" <<'PYWRAPPER'
+          import sys, shlex
+          from pathlib import Path
+          prefix = Path(sys.argv[1])
+          jars = {path.resolve() for path in (prefix / 'share').rglob('picard.jar')}
+          if len(jars) != 1:
+              raise SystemExit(f'Expected one exact Picard JAR, found {jars}')
+          argv = [str(prefix / 'bin/java'), '-Xmx2g', '-XX:ActiveProcessorCount=1', '-jar', str(jars.pop())]
+          wrapper = Path('binaries/picard-controlled')
+          wrapper.write_text('#!/bin/sh\nexec ' + shlex.join(argv) + ' "$@"\n')
+          wrapper.chmod(0o755)
+          PYWRAPPER
+          find "$prefix/share" -name '*.jar' -type f -exec sha256sum {} \; > provenance/java-artifacts.txt
+          cp "$prefix"/conda-meta/*.json provenance/
+          cd candidate
+          python3 -m unittest discover -s tools -p 'test_bench_bounded_markduplicates.py' -v
+      - name: Build the exact before and after command binaries
+        run: |
+          cargo build --manifest-path baseline/Cargo.toml --release --locked -p turbo-picard-cli --bin turbo-picard
+          cp "$CARGO_TARGET_DIR/release/turbo-picard" binaries/baseline
+          cargo build --manifest-path candidate/Cargo.toml --release --locked -p turbo-picard-cli --bin turbo-picard
+          cp "$CARGO_TARGET_DIR/release/turbo-picard" binaries/candidate
+          sha256sum binaries/* > provenance/binaries.txt
+      - name: Compare nine adversarial cases against actual Picard
+        run: |
+          prefix="${MAMBA_ROOT_PREFIX}/envs/bounded-parity"
+          python3 candidate/tools/bench_bounded_markduplicates.py \
+            --candidate "$PWD/binaries/candidate" \
+            --baseline "$PWD/binaries/baseline" \
+            --picard "$PWD/binaries/picard-controlled" \
+            --samtools "$prefix/bin/samtools" \
+            --output-dir "$PWD/evidence" \
+            --repeats 3
+      - name: Publish scoped measurements
+        if: always()
+        run: |
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          path = Path('evidence/report.json')
+          if not path.exists():
+              raise SystemExit('No command evidence was produced; inspect the build logs.')
+          report = json.loads(path.read_text())
+          lines = ['# Bounded MarkDuplicates evidence', '', report['scope'], '',
+                   report['comparison'], '', f"Required candidate checks: {report['candidate_pass']}", '',
+                   '| Case | Baseline seconds | Candidate seconds | Picard seconds | Baseline RSS bytes | Candidate RSS bytes | Candidate parity |',
+                   '|---|---:|---:|---:|---:|---:|---:|---|']
+          for s in report['summaries']:
+              b, c, p = s['baseline'], s['candidate'], s['picard']
+              lines.append(f"| {s['case']} | {b['median_wall_seconds']:.6f} | {c['median_wall_seconds']:.6f} | {p['median_wall_seconds']:.6f} | {b['median_peak_rss_bytes']} | {c['median_peak_rss_bytes']} | {c['parity_pass']} |")
+          lines += ['', 'One warm-up and three measured repetitions. Alternating order, one-CPU affinity, native HTS workers disabled, Java heap 2 GiB. Warm-cache shared runner; not WGS or universal superiority evidence. Failed baseline cases remain in raw JSON and are not speedup claims.']
+          text = '\n'.join(lines) + '\n'
+          Path('evidence/report.md').write_text(text)
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as stream:
+              stream.write(text)
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: bounded-markduplicates-evidence
+          path: |
+            provenance/
+            evidence/
+          retention-days: 14
