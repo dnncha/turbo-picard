@@ -1,5 +1,9 @@
 #![forbid(unsafe_code)]
 
+mod bounded_plan;
+#[cfg(test)]
+mod bounded_plan_tests;
+
 use regex::Regex;
 use rust_htslib::bam::header::HeaderRecord;
 use rust_htslib::bam::record::Aux;
@@ -9,7 +13,7 @@ use std::cmp::Ordering;
 use std::collections::BTreeMap;
 use std::fs;
 use std::fs::File;
-use std::io::{BufWriter, Read as IoRead, Write};
+use std::io::{BufReader, BufWriter, Read as IoRead, Write};
 use std::num::NonZeroU32;
 use std::path::Path;
 use tempfile::{Builder as TempDirBuilder, TempDir, tempdir};
@@ -628,6 +632,7 @@ struct ExternalPlanRecord {
     ordinal: u64,
     library_id: LibraryId,
     read_group: Option<Vec<u8>>,
+    template_key: Vec<u8>,
     flags: u16,
     reference_id: i32,
     position: i64,
@@ -646,10 +651,13 @@ fn external_plan_record(
     library_id: LibraryId,
     config: &MarkDuplicatesConfig,
 ) -> ExternalPlanRecord {
+    let read_group = record_read_group(record);
+    let template_key = bounded_plan::template_key(read_group.as_deref(), record.qname());
     ExternalPlanRecord {
         ordinal,
         library_id,
-        read_group: record_read_group(record),
+        read_group,
+        template_key,
         flags: record.flags(),
         reference_id: record.tid(),
         position: record.pos(),
@@ -791,6 +799,8 @@ fn try_run_external_plan(
         push_markdup_pg_header_if_needed(&mut header);
     }
 
+    // The header-only reader must not retain an idle HTS worker pool.
+    drop(reader);
     let mut summary = MarkDuplicatesSummary {
         library,
         unpaired_reads_examined: 0,
@@ -808,28 +818,38 @@ fn try_run_external_plan(
     let mut fragment_sorter = external_sorter(temporary.path(), "turbo-picard-markdup-fragment")?;
     let mut record_count = 0_u64;
     let mut last_output_order = None::<(i32, i64, Vec<u8>, u16)>;
+    let mut last_coordinate = None::<(i32, i64)>;
 
     for input in &config.inputs {
         let mut reader = open_markdup_reader(config, input)?;
         let input_library_lookup = library_lookup(reader.header(), &mut library_registry);
-        for result in reader.records() {
-            let mut record = result?;
+        let mut record = bam::Record::new();
+        while let Some(result) = reader.read(&mut record) {
+            result?;
             let flag = record.flags() & !DUPLICATE_FLAG;
             if record.flags() != flag {
                 record.set_flags(flag);
             }
-            let output_order = (record.tid(), record.pos(), record.qname().to_vec(), flag);
-            if last_output_order
-                .as_ref()
-                .is_some_and(|previous| output_order.cmp(previous) == Ordering::Less)
-            {
-                // The compact multi-input path sorts the final records by
-                // coordinate.  Do not silently change that contract here:
-                // fall back if the input streams are not already globally
-                // ordered, so the bounded path remains deterministic.
-                return Ok(None);
+            if config.inputs.len() == 1 {
+                // A single input is replayed unchanged. Coordinate order permits
+                // arbitrary QNAME/flag ties and puts unplaced records last.
+                let coordinate = bounded_plan::coordinate_key(record.tid(), record.pos());
+                if last_coordinate.is_some_and(|previous| coordinate < previous) {
+                    return Ok(None);
+                }
+                last_coordinate = Some(coordinate);
+            } else {
+                // Preserve the existing multi-input output-order contract. This
+                // is deliberately separate from single-input eligibility.
+                let output_order = (record.tid(), record.pos(), record.qname().to_vec(), flag);
+                if last_output_order
+                    .as_ref()
+                    .is_some_and(|previous| output_order.cmp(previous) == Ordering::Less)
+                {
+                    return Ok(None);
+                }
+                last_output_order = Some(output_order);
             }
-            last_output_order = Some(output_order);
 
             let library_id = record_library_id(&record, &input_library_lookup);
             let ordinal = record_count;
@@ -874,7 +894,7 @@ fn try_run_external_plan(
             if duplicate_candidate_is_pair(flag) {
                 qname_sorter
                     .push(
-                        plan.qname.clone(),
+                        plan.template_key.clone(),
                         encode_external_plan_record(&plan, false),
                     )
                     .map_err(MarkDuplicatesError::Operation)?;
@@ -888,6 +908,9 @@ fn try_run_external_plan(
         }
     }
 
+    if !config.quiet {
+        eprintln!("MarkDuplicates: using external-sort plan ({record_count} records)");
+    }
     let mut pair_sorter = external_sorter(temporary.path(), "turbo-picard-markdup-pair")?;
     let mut decision_sorter = external_sorter(temporary.path(), "turbo-picard-markdup-decisions")?;
     let mut pending_pair = None::<ExternalPlanRecord>;
@@ -895,7 +918,7 @@ fn try_run_external_plan(
         .finish_into(|item| {
             if pending_pair
                 .as_ref()
-                .is_some_and(|pending| pending.qname.as_slice() != item.key.as_slice())
+                .is_some_and(|pending| pending.template_key.as_slice() != item.key.as_slice())
             {
                 pending_pair = None;
             }
@@ -904,7 +927,12 @@ fn try_run_external_plan(
                 return Ok(());
             }
             if let Some(first) = pending_pair.take() {
-                if first.qname == plan.qname {
+                if first.template_key == plan.template_key {
+                    // Do not silently fabricate a template from two first (or
+                    // two second) primary alignments with the same identity.
+                    if !matches!((first.flags & 0xc0, plan.flags & 0xc0), (0x40, 0x80) | (0x80, 0x40)) {
+                        return Err("external MarkDuplicates mates must have complementary first/second flags".to_string());
+                    }
                     let key = external_pair_key(&first, &plan);
                     pair_sorter.push(key.clone(), encode_external_plan_record(&first, true))?;
                     pair_sorter.push(key, encode_external_plan_record(&plan, true))?;
@@ -940,7 +968,7 @@ fn try_run_external_plan(
     write_external_duplicate_ordinals(decision_sorter, &decision_path)?;
 
     let mut writer = open_markdup_writer(config, &config.output, &header)?;
-    let mut decisions = File::open(&decision_path)?;
+    let mut decisions = BufReader::new(File::open(&decision_path)?);
     let mut replay_ordinal = 0_u64;
     let mut next_duplicate = read_external_duplicate_decision(&mut decisions)?;
     for input in &config.inputs {
@@ -1037,7 +1065,7 @@ fn decode_external_plan_record(
             .map_err(|_| "external MarkDuplicates QNAME length is too large".to_string())?;
         read_external_bytes(payload, &mut offset, length)?.to_vec()
     } else {
-        key.to_vec()
+        bounded_plan::template_qname(key)?.to_vec()
     };
     let barcode = ExternalBarcodeValues {
         primary: decode_external_barcode(payload, &mut offset)?,
@@ -1048,10 +1076,15 @@ fn decode_external_plan_record(
     if offset != payload.len() {
         return Err("external MarkDuplicates record payload has trailing bytes".to_string());
     }
+    let template_key = bounded_plan::template_key(read_group.as_deref(), &qname);
+    if !qname_in_payload && template_key != key {
+        return Err("external MarkDuplicates template key disagrees with its payload".to_string());
+    }
     Ok(ExternalPlanRecord {
         ordinal,
         library_id,
         read_group,
+        template_key,
         flags,
         reference_id,
         position,
@@ -1253,7 +1286,7 @@ fn process_external_duplicate_group(
     let mut names = HashMap::<Vec<u8>, (u64, u64)>::default();
     for member in group {
         let entry = names
-            .entry(member.qname.clone())
+            .entry(member.template_key.clone())
             .or_insert((0, member.ordinal));
         entry.0 = entry.0.saturating_add(member.quality_score);
         entry.1 = entry.1.min(member.ordinal);
@@ -1285,23 +1318,25 @@ fn process_external_duplicate_group(
     }
 
     let representative_name = representative_external_name(&names);
-    let mut reads = names
-        .keys()
-        .map(|name| OpticalRead {
-            name: name.clone(),
-            location: group
-                .iter()
-                .find(|member| member.qname == *name)
-                .and_then(|member| {
-                    processing_config
-                        .read_name_parser
-                        .coordinates(member.qname.as_slice())
-                        .map(|(tile, x, y)| ReadLocation {
-                            read_group: member.read_group.clone(),
-                            tile,
-                            x,
-                            y,
-                        })
+    // Visit the family once instead of searching the entire family for each
+    // distinct template (quadratic on large PCR duplicate families).
+    let mut reads = group
+        .iter()
+        .filter(|member| {
+            names
+                .get(member.template_key.as_slice())
+                .is_some_and(|(_, ordinal)| *ordinal == member.ordinal)
+        })
+        .map(|member| OpticalRead {
+            name: member.template_key.clone(),
+            location: processing_config
+                .read_name_parser
+                .coordinates(member.qname.as_slice())
+                .map(|(tile, x, y)| ReadLocation {
+                    read_group: member.read_group.clone(),
+                    tile,
+                    x,
+                    y,
                 }),
         })
         .collect::<Vec<_>>();
@@ -1349,7 +1384,7 @@ fn process_external_duplicate_group(
         .then(|| {
             let duplicate_set_index = group
                 .iter()
-                .filter(|member| member.qname.as_slice() == representative_name)
+                .filter(|member| member.template_key.as_slice() == representative_name)
                 .map(|member| i32::try_from(member.ordinal).unwrap_or(i32::MAX))
                 .min()
                 .unwrap_or(i32::MAX);
@@ -1359,7 +1394,7 @@ fn process_external_duplicate_group(
             )
         });
     for member in group {
-        let is_representative = member.qname.as_slice() == representative_name;
+        let is_representative = member.template_key.as_slice() == representative_name;
         if is_representative && duplicate_set_tags.is_none() {
             continue;
         }
@@ -1369,7 +1404,7 @@ fn process_external_duplicate_group(
             summary,
             library_registry,
             !is_representative,
-            !is_representative && optical_names.contains(member.qname.as_slice()),
+            !is_representative && optical_names.contains(member.template_key.as_slice()),
             duplicate_set_tags,
         )?;
     }
@@ -1397,7 +1432,7 @@ fn process_external_fragment_group(
 
     let representative_name = representative_external_name(names);
     for member in group {
-        if member.qname.as_slice() != representative_name {
+        if member.template_key.as_slice() != representative_name {
             mark_external_duplicate(member, decisions, summary, library_registry, false)?;
         }
     }
@@ -1611,7 +1646,7 @@ fn write_external_decision(
 }
 
 fn read_external_duplicate_decision(
-    reader: &mut File,
+    reader: &mut impl IoRead,
 ) -> Result<Option<(u64, ExternalDecision)>, std::io::Error> {
     let mut ordinal_bytes = [0_u8; 8];
     if reader.read(&mut ordinal_bytes[..1])? == 0 {
@@ -1627,7 +1662,7 @@ fn read_external_duplicate_decision(
 
 fn write_external_plan_records(
     reader: &mut bam::Reader,
-    decisions: &mut File,
+    decisions: &mut impl IoRead,
     ordinal: &mut u64,
     next_duplicate: &mut Option<(u64, ExternalDecision)>,
     config: &MarkDuplicatesConfig,
@@ -1884,6 +1919,9 @@ fn try_run_small_single_bam_compact_plan(
     }
 
     let mut reader = open_markdup_reader(config, &config.inputs[0])?;
+    if read_group_ids(reader.header()).len() > 1 {
+        return Ok(None);
+    }
     for (record_index, result) in reader.records().enumerate() {
         result?;
         if record_index >= COMPACT_MARKDUP_MAX_RECORDS {
@@ -1958,6 +1996,9 @@ fn try_run_single_bam_no_duplicate_fast_path(
     }
 
     let mut reader = open_markdup_reader(config, &config.input)?;
+    if read_group_ids(reader.header()).len() > 1 {
+        return Ok(None);
+    }
     let mut library_registry = LibraryRegistry::new();
     let library_lookup = library_lookup(reader.header(), &mut library_registry);
     let library = library_registry
@@ -1994,8 +2035,14 @@ fn try_run_single_bam_no_duplicate_fast_path(
     };
     let mut should_fallback = false;
 
-    for result in reader.records() {
+    for (record_index, result) in reader.records().enumerate() {
         let record = result?;
+        // A speculative no-duplicate probe must not grow whole-file hash tables.
+        // Its temporary output is discarded by the existing fallback cleanup.
+        if record_index >= COMPACT_MARKDUP_MAX_RECORDS {
+            should_fallback = true;
+            break;
+        }
         let flag = record.flags();
         if flag & DUPLICATE_FLAG != 0 {
             should_fallback = true;
@@ -3927,12 +3974,13 @@ mod tests {
 
         let qname_payload = encode_external_plan_record(&plan, false);
         let qname_round_trip =
-            decode_external_plan_record(plan.qname.as_slice(), &qname_payload, false)
+            decode_external_plan_record(plan.template_key.as_slice(), &qname_payload, false)
                 .expect("qname-sort payload decodes");
         assert_eq!(qname_round_trip.ordinal, 17);
         assert_eq!(qname_round_trip.library_id, 3);
         assert_eq!(qname_round_trip.flags, 0x41);
         assert_eq!(qname_round_trip.qname, b"read-17");
+        assert_eq!(qname_round_trip.template_key, plan.template_key);
 
         let member_payload = encode_external_plan_record(&plan, true);
         let member_round_trip =
