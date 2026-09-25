@@ -7,4 +7,5 @@ pub mod hts_io;
 pub mod markdup_config;
 pub mod picard_args;
 
+mod merge_tree;
 mod temp_runs;
