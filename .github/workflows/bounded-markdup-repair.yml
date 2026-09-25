@@ -39,6 +39,19 @@ jobs:
           mkdir repair-evidence
           cp crates/turbo-picard-markdup/src/lib.rs repair-evidence/original-lib.rs
           python3 tools/maintenance/apply_bounded_markdup_fix.py
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('crates/turbo-picard-markdup/src/lib.rs')
+          text = path.read_text()
+          old = 'decode_external_plan_record(plan.qname.as_slice(), &qname_payload, false)'
+          new = 'decode_external_plan_record(plan.template_key.as_slice(), &qname_payload, false)'
+          assert text.count(old) == 1
+          text = text.replace(old, new)
+          old = 'assert_eq!(qname_round_trip.qname, b"read-17");'
+          assert text.count(old) == 1
+          text = text.replace(old, old + '\n        assert_eq!(qname_round_trip.template_key, plan.template_key);')
+          path.write_text(text)
+          PY
           cargo fmt --all
           git diff --check
           git diff > repair-evidence/source.patch
