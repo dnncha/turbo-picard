@@ -64,7 +64,6 @@ jobs:
           sha256sum candidate/Cargo.lock candidate/tools/bench_bounded_markduplicates.py candidate/crates/turbo-picard-markdup/src/*.rs > provenance/source-sha256.txt
           prefix="${MAMBA_ROOT_PREFIX}/envs/bounded-parity"
           "$prefix/bin/samtools" --version > provenance/samtools.txt
-          "$prefix/bin/picard" --version > provenance/picard.txt 2>&1
           "$prefix/bin/java" -version > provenance/java.txt 2>&1
           python3 - "$prefix" <<'PYWRAPPER'
           import sys, shlex
@@ -78,6 +77,7 @@ jobs:
           wrapper.write_text('#!/bin/sh\nexec ' + shlex.join(argv) + ' "$@"\n')
           wrapper.chmod(0o755)
           PYWRAPPER
+          binaries/picard-controlled MarkDuplicates --version 2>&1 | tee provenance/picard.txt
           find "$prefix/share" -name '*.jar' -type f -exec sha256sum {} \; > provenance/java-artifacts.txt
           cp "$prefix"/conda-meta/*.json provenance/
           cd candidate
@@ -109,10 +109,11 @@ jobs:
           if not path.exists():
               raise SystemExit('No command evidence was produced; inspect the build logs.')
           report = json.loads(path.read_text())
+          complete = len(report['summaries']) == 9
           lines = ['# Bounded MarkDuplicates evidence', '', report['scope'], '',
-                   report['comparison'], '', f"Required candidate checks: {report['candidate_pass']}", '',
+                   report['comparison'], '', f"All cases completed: {complete}; required candidate checks: {complete and report['candidate_pass']}", '',
                    '| Case | Baseline seconds | Candidate seconds | Picard seconds | Baseline RSS bytes | Candidate RSS bytes | Candidate parity |',
-                   '|---|---:|---:|---:|---:|---:|---:|---|']
+                   '|---|---:|---:|---:|---:|---:|---|']
           for s in report['summaries']:
               b, c, p = s['baseline'], s['candidate'], s['picard']
               lines.append(f"| {s['case']} | {b['median_wall_seconds']:.6f} | {c['median_wall_seconds']:.6f} | {p['median_wall_seconds']:.6f} | {b['median_peak_rss_bytes']} | {c['median_peak_rss_bytes']} | {c['parity_pass']} |")
