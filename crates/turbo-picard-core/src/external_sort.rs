@@ -1,12 +1,12 @@
 //! Bounded-memory stable external sorting over precomputed binary keys.
 //!
-//! The final merge calls the supplied sink directly.  In particular, this is
+//! The final merge calls the supplied sink directly. In particular, this is
 //! deliberately not an iterator backed by a `Vec`: callers can sort files
 //! much larger than available memory without rebuilding the result in RAM.
 
+use crate::merge_tree::MergeTree;
 use crate::temp_runs::OwnedRuns;
 use std::cmp::Ordering;
-use std::collections::BinaryHeap;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, BufReader, BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
@@ -72,7 +72,7 @@ impl SortItem {
     }
 }
 
-/// A stable file-backed sorter.  `finish_into` is the only completion API so
+/// A stable file-backed sorter. `finish_into` is the only completion API so
 /// a caller cannot accidentally turn a disk-backed sort into a full-RAM one.
 pub struct ExternalSorter {
     config: ExternalSortConfig,
@@ -120,7 +120,7 @@ impl ExternalSorter {
 
     /// Complete the sort and deliver each item in order to `emit`.
     ///
-    /// No output collection is allocated by this method.  Temporary files are
+    /// No output collection is allocated by this method. Temporary files are
     /// deleted on success, failure, and drop.
     pub fn finish_into(
         mut self,
@@ -136,6 +136,9 @@ impl ExternalSorter {
         }
 
         self.spill_current_run()?;
+        // clear() retains the run-sized allocation. No more input will arrive,
+        // so release it before allocating merge readers and their head records.
+        self.items = Vec::new();
         let mut runs = std::mem::take(&mut self.runs);
         while runs.len() > self.config.merge_fan_in.max(2) {
             runs = self.merge_pass(runs)?;
@@ -172,6 +175,12 @@ impl ExternalSorter {
         let fan_in = self.config.merge_fan_in.max(2);
         let mut merged = Vec::new();
         for chunk in runs.chunks(fan_in) {
+            // Carry a singleton forward without reading and rewriting it. It
+            // remains registered with owned_runs, including on later failure.
+            if chunk.len() == 1 {
+                merged.push(chunk[0].clone());
+                continue;
+            }
             let output = self.create_run_path()?;
             let bytes = merge_runs_to_file(chunk, &output)?;
             self.metrics.bytes_written = self.metrics.bytes_written.saturating_add(bytes);
@@ -207,7 +216,9 @@ impl ExternalSorter {
 }
 
 fn sort_items(items: &mut [SortItem]) {
-    items.sort_by(compare_items);
+    // The ordinal is part of the comparison, so equal user keys still retain
+    // insertion order without the auxiliary allocation of a stable sort.
+    items.sort_unstable_by(compare_items);
 }
 
 fn compare_items(left: &SortItem, right: &SortItem) -> Ordering {
@@ -293,52 +304,20 @@ fn merge_runs(
     mut emit: impl FnMut(SortItem) -> Result<(), String>,
 ) -> Result<(), String> {
     let mut readers = Vec::with_capacity(runs.len());
-    let mut heap = BinaryHeap::<HeapItem>::new();
+    let mut heads = Vec::with_capacity(runs.len());
     for path in runs {
         let mut reader = BufReader::new(File::open(path).map_err(|error| error.to_string())?);
-        if let Some(item) = read_item(&mut reader)? {
-            heap.push(HeapItem {
-                item,
-                reader_index: readers.len(),
-            });
-        }
+        heads.push(read_item(&mut reader)?);
         readers.push(reader);
     }
-    while let Some(heap_item) = heap.pop() {
-        let reader_index = heap_item.reader_index;
-        emit(heap_item.item)?;
-        if let Some(item) = read_item(&mut readers[reader_index])? {
-            heap.push(HeapItem { item, reader_index });
-        }
+    let mut tree = MergeTree::new(&heads, compare_items);
+    while let Some(reader_index) = tree.winner() {
+        let item = heads[reader_index].take().expect("winning merge head");
+        emit(item)?;
+        heads[reader_index] = read_item(&mut readers[reader_index])?;
+        tree.update(reader_index, &heads, compare_items);
     }
     Ok(())
-}
-
-#[derive(Debug)]
-struct HeapItem {
-    item: SortItem,
-    reader_index: usize,
-}
-
-impl PartialEq for HeapItem {
-    fn eq(&self, other: &Self) -> bool {
-        self.cmp(other) == Ordering::Equal
-    }
-}
-
-impl Eq for HeapItem {}
-
-impl Ord for HeapItem {
-    fn cmp(&self, other: &Self) -> Ordering {
-        compare_items(&other.item, &self.item)
-            .then_with(|| other.reader_index.cmp(&self.reader_index))
-    }
-}
-
-impl PartialOrd for HeapItem {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(self.cmp(other))
-    }
 }
 
 #[cfg(test)]
@@ -377,6 +356,7 @@ mod tests {
         assert!(fs::read_dir(&dir).unwrap().next().is_none());
         let _ = fs::remove_dir(&dir);
     }
+
     #[test]
     fn truncated_run_is_an_error_at_every_byte_boundary() {
         let item = SortItem::new(b"key".to_vec(), 7, b"payload".to_vec());
@@ -417,5 +397,73 @@ mod tests {
             item.estimated_bytes(),
             std::mem::size_of::<SortItem>() + 3072
         );
+    }
+
+    #[test]
+    fn singleton_runs_are_not_rewritten_during_merge_passes() {
+        let dir = test_dir("sort-singleton-carry");
+        let mut config = ExternalSortConfig::new(&dir);
+        config.max_records_in_ram = 1;
+        config.merge_fan_in = 2;
+        let mut sorter = ExternalSorter::new(config).unwrap();
+        for value in (0..5_u8).rev() {
+            sorter.push(vec![value], vec![value]).unwrap();
+        }
+        let mut observed = Vec::new();
+        let metrics = sorter
+            .finish_into(|item| {
+                observed.push(item.payload[0]);
+                Ok(())
+            })
+            .unwrap();
+        assert_eq!(observed, [0, 1, 2, 3, 4]);
+        assert_eq!(metrics.spills, 5);
+        assert_eq!(metrics.run_count, 8);
+        // Five initial records, four in each intermediate pass; each is 22 B.
+        assert_eq!(metrics.bytes_written, 13 * 22);
+        assert!(fs::read_dir(&dir).unwrap().next().is_none());
+        fs::remove_dir(&dir).unwrap();
+    }
+
+    #[test]
+    fn equal_keys_remain_stable_with_and_without_spilling() {
+        for limit in [1, 2, 7, 100] {
+            let dir = test_dir(&format!("sort-equal-keys-{limit}"));
+            let mut config = ExternalSortConfig::new(&dir);
+            config.max_records_in_ram = limit;
+            config.merge_fan_in = 3;
+            let mut sorter = ExternalSorter::new(config).unwrap();
+            for value in 0..40_u8 {
+                sorter.push(vec![1], vec![value]).unwrap();
+            }
+            let mut observed = Vec::new();
+            sorter
+                .finish_into(|item| {
+                    observed.push(item.payload[0]);
+                    Ok(())
+                })
+                .unwrap();
+            assert_eq!(observed, (0..40_u8).collect::<Vec<_>>());
+            assert!(fs::read_dir(&dir).unwrap().next().is_none());
+            fs::remove_dir(&dir).unwrap();
+        }
+    }
+
+    #[test]
+    fn sink_failure_cleans_merged_and_carried_runs() {
+        let dir = test_dir("sort-sink-failure");
+        let mut config = ExternalSortConfig::new(&dir);
+        config.max_records_in_ram = 1;
+        config.merge_fan_in = 2;
+        let mut sorter = ExternalSorter::new(config).unwrap();
+        for value in 0..5_u8 {
+            sorter.push(vec![value], vec![value]).unwrap();
+        }
+        assert_eq!(
+            sorter.finish_into(|_| Err("sink failed".to_string())),
+            Err("sink failed".to_string())
+        );
+        assert!(fs::read_dir(&dir).unwrap().next().is_none());
+        fs::remove_dir(&dir).unwrap();
     }
 }

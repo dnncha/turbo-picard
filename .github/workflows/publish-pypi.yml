@@ -250,3 +250,62 @@ jobs:
 
       - name: Verify live PyPI metadata
         run: python3 tools/verify_pypi_package.py --live --retries 12 --retry-delay 5
+
+  release-assets:
+    name: Attach distributions and provenance to GitHub release
+    runs-on: ubuntu-latest
+    needs: [publish]
+    if: github.event_name == 'release' && github.ref_type == 'tag'
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+
+      - name: Download wheel distributions
+        uses: actions/download-artifact@v4
+        with:
+          pattern: wheels-*
+          path: dist
+          merge-multiple: true
+
+      - name: Download source distribution
+        uses: actions/download-artifact@v4
+        with:
+          name: sdist
+          path: dist
+
+      - name: Download release handoff manifest
+        uses: actions/download-artifact@v4
+        with:
+          name: turbo-picard-release-manifest
+          path: release-manifest
+
+      - name: Assemble checksums and source archive provenance
+        run: |
+          set -euo pipefail
+          mkdir -p release-assets
+          cp dist/*.whl dist/*.tar.gz release-assets/
+          cp release-manifest/turbo-picard-release-manifest.json release-assets/
+          (
+            cd release-assets
+            sha256sum ./*.whl ./*.tar.gz > SHA256SUMS.txt
+          )
+          source_archive="$RUNNER_TEMP/${GITHUB_REF_NAME}.tar.gz"
+          curl --fail --location --retry 5 --retry-all-errors \
+            "https://github.com/${GITHUB_REPOSITORY}/archive/refs/tags/${GITHUB_REF_NAME}.tar.gz" \
+            --output "$source_archive"
+          source_sha256="$(sha256sum "$source_archive" | cut -d ' ' -f 1)"
+          printf '%s  %s.tar.gz\n' "$source_sha256" "$GITHUB_REF_NAME" \
+            > release-assets/GITHUB_SOURCE_SHA256.txt
+
+      - name: Upload release assets without replacing mismatched files
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python3 tools/upload_github_release_assets.py --directory release-assets

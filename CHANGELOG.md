@@ -1,5 +1,38 @@
 # Changelog
 
+## 0.1.14 — 2026-09-25
+
+### Bounded MarkDuplicates correctness and memory
+
+- Keep coordinate-tied and unplaced single-input reads eligible for the native
+  external plan while rejecting genuine coordinate reversals.
+- Frame read-group and read-name identity together, require complementary
+  first/second flags for primary mates, and bypass single-identity shortcuts
+  when multiple read groups are present.
+- Limit the speculative no-duplicate scan to 100,000 records.
+- Reuse first-pass BAM allocations, visit each duplicate family once, and buffer
+  compact decision records during replay.
+
+### Validation and measured trade-off
+
+- All nine adversarial synthetic whole-command cases matched Picard 3.4.0 and
+  the prior `62ccb0c` checkpoint on three measured repetitions. Comparisons
+  covered ordered alignment fields and tags except `PG`, `SQ`/`RG` headers, and
+  normalized `DuplicationMetrics` tables. The candidate reported external-plan
+  selection in every case.
+- On the warm-cache spill fixtures, the previous checkpoint and 0.1.14 measured:
+
+  | Input | Median wall time | Median peak RSS |
+  | --- | ---: | ---: |
+  | 600k records | 0.77 s → 1.37 s | 254 MiB → 162 MiB |
+  | 1.2m records | 1.57 s → 2.52 s | 503 MiB → 163 MiB |
+
+  The same 0.1.14 runs were 3.5× and 2.3× faster than Picard 3.4.0 on those
+  fixtures. These are synthetic, warm-cache measurements with one CPU pinned
+  on a shared runner; they do not establish WGS/cohort performance or a
+  process-wide hard-RSS guarantee. See the [retained run](https://github.com/dnncha/turbo-picard/actions/runs/36176829841)
+  for inputs, hashes, commands, raw logs, and the measured repetitions.
+
 ## 0.1.13 — 2026-09-06
 
 ### Native execution and sorting

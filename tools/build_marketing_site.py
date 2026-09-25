@@ -113,7 +113,7 @@ def render_all(root: Path = ROOT) -> dict[str, bytes]:
         else:
             schema += [{'@context':'https://schema.org','@type':'BreadcrumbList','itemListElement':[{'@type':'ListItem','position':1,'name':'Turbo Picard','item':BASE},{'@type':'ListItem','position':2,'name':heading,'item':BASE+route}]}]
         body=(root/f'website/pages/{key}.html').read_text()
-        body=body.replace('{{DEFAULT_TRIAL}}',esc((root/'website/default-trial.sh').read_text().strip().replace('0.1.13',version)))
+        body=body.replace('{{DEFAULT_TRIAL}}',esc((root/'website/default-trial.sh').read_text().strip().replace('{{VERSION}}',version)))
         body=body.replace('{{CATALOGUE}}',command_catalogue(matrix)).replace('{{BENCHMARK_TABLE}}',evidence_table(data)).replace('{{SAMPLE_RESULTS}}',sample_results(data))
         body=body.replace('{{REAL_DATA_PROVENANCE}}',real_data_provenance(manifest))
         content=chrome.replace('{{BODY}}',body)

@@ -1,0 +1,174 @@
+name: External sort core evidence
+
+on:
+  pull_request:
+    paths:
+      - 'crates/turbo-picard-core/src/**'
+      - 'tools/bench_external_sort.rs'
+      - '.github/workflows/external-sort-performance.yml'
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+concurrency:
+  group: external-sort-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  compare:
+    name: Exact-output external sort comparison
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      BASE_SHA: ${{ github.event.pull_request.base.sha }}
+      HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          path: candidate
+          persist-credentials: false
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          path: baseline
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Capture provenance
+        run: |
+          mkdir evidence
+          rustc -Vv | tee evidence/rustc.txt
+          uname -a > evidence/host.txt
+          lscpu >> evidence/host.txt
+          df -T . >> evidence/host.txt
+          printf 'base=%s\nhead=%s\n' "$BASE_SHA" "$HEAD_SHA" > evidence/source.txt
+          sha256sum candidate/tools/bench_external_sort.rs candidate/crates/turbo-picard-core/src/{external_sort,bam_external_sort,merge_tree,temp_runs}.rs > evidence/source-sha256.txt
+      - name: Test actual standard-library sorter and tournament modules
+        run: |
+          rustc --edition=2024 --test -A dead_code candidate/tools/bench_external_sort.rs -o evidence/sort-tests
+          evidence/sort-tests --nocapture 2>&1 | tee evidence/tests.txt
+      - name: Build identical harness against both revisions
+        run: |
+          cp candidate/tools/bench_external_sort.rs baseline/tools/bench_external_sort.rs
+          # The baseline sorter does not import this module. The identical
+          # harness declares it so both builds have the same benchmark source.
+          cp candidate/crates/turbo-picard-core/src/merge_tree.rs baseline/crates/turbo-picard-core/src/merge_tree.rs
+          rustc --edition=2024 -C opt-level=3 -C codegen-units=1 -A dead_code baseline/tools/bench_external_sort.rs -o evidence/baseline
+          rustc --edition=2024 -C opt-level=3 -C codegen-units=1 -A dead_code candidate/tools/bench_external_sort.rs -o evidence/candidate
+          sha256sum evidence/baseline evidence/candidate > evidence/binary-sha256.txt
+      - name: Alternate seven measured repeats with exact output verification
+        run: |
+          python3 - <<'PY'
+          import hashlib
+          import json
+          import os
+          import pathlib
+          import statistics
+          import subprocess
+
+          root = pathlib.Path('evidence').resolve()
+          cases = [
+              ('memory-random', 'random', 262144, 1000000, 32),
+              ('memory-ordered', 'ordered', 262144, 1000000, 32),
+              ('spill-random', 'random', 262144, 8192, 32),
+              ('spill-equal', 'equal', 262144, 8192, 32),
+              ('spill-reversed', 'reversed', 262144, 8192, 32),
+              ('multi-pass-tail', 'random', 139264, 8192, 4),
+          ]
+          report = {
+              'scope': 'synthetic external-sort core; not BAM, MarkDuplicates, WGS or competitor evidence',
+              'base_sha': os.environ['BASE_SHA'],
+              'head_sha': os.environ['HEAD_SHA'],
+              'warmups': 1,
+              'measured_repeats': 7,
+              'cache_policy': 'warm-cache; no cache dropping or fsync; includes generation, sort, spill and buffered output',
+              'host_class': 'shared GitHub-hosted runner; independent reproduction required',
+              'runs': [],
+              'summaries': [],
+          }
+          for name, shape, count, limit, fan_in in cases:
+              expected_hash = None
+              for repeat in range(8):
+                  order = ['baseline', 'candidate'] if repeat % 2 == 0 else ['candidate', 'baseline']
+                  for version in order:
+                      destination = root / f'{name}-{repeat}-{version}'
+                      resource_file = root / f'{name}-{repeat}-{version}.time'
+                      argv = ['/usr/bin/time', '-f', '%e %U %S %M', '-o', str(resource_file),
+                              str(root / version), str(destination), shape, str(count), str(limit), str(fan_in)]
+                      proc = subprocess.run(argv, text=True, capture_output=True, timeout=120)
+                      row = {'case': name, 'version': version, 'repeat': repeat, 'warmup': repeat == 0,
+                             'argv': argv, 'exit_code': proc.returncode, 'stderr': proc.stderr, 'stdout': proc.stdout}
+                      report['runs'].append(row)
+                      (root / 'report.json').write_text(json.dumps(report, indent=2) + '\n')
+                      if proc.returncode:
+                          raise RuntimeError(f'{name} {version}: {proc.stderr}')
+                      row.update(json.loads(proc.stdout))
+                      elapsed, user, system, rss_kib = resource_file.read_text().split()
+                      row.update(process_seconds=float(elapsed), user_seconds=float(user),
+                                 system_seconds=float(system), max_rss_bytes=int(rss_kib) * 1024)
+                      digest = hashlib.sha256()
+                      output = destination / 'sorted.bin'
+                      with output.open('rb') as stream:
+                          for block in iter(lambda: stream.read(1024 * 1024), b''):
+                              digest.update(block)
+                      row['output_sha256'] = digest.hexdigest()
+                      if expected_hash is None:
+                          expected_hash = row['output_sha256']
+                      row['exact_output_pass'] = row['output_sha256'] == expected_hash
+                      (root / 'report.json').write_text(json.dumps(report, indent=2) + '\n')
+                      if not row['exact_output_pass']:
+                          raise RuntimeError(f'exact output mismatch: {name} {version}')
+                      # Remove only this invocation's generated, verified output.
+                      # Failed outputs remain available in the runner workspace.
+                      output.unlink()
+              summary = {'case': name, 'exact_output_pass': True}
+              for version in ['baseline', 'candidate']:
+                  rows = [r for r in report['runs'] if r['case'] == name and r['version'] == version and not r['warmup']]
+                  summary[version] = {
+                      'median_seconds': statistics.median(r['seconds'] for r in rows),
+                      'min_seconds': min(r['seconds'] for r in rows),
+                      'max_seconds': max(r['seconds'] for r in rows),
+                      'median_max_rss_bytes': statistics.median(r['max_rss_bytes'] for r in rows),
+                      'scratch_bytes_written': rows[0]['scratch_bytes_written'],
+                      'run_count': rows[0]['run_count'],
+                  }
+              summary['baseline_over_candidate_time'] = summary['baseline']['median_seconds'] / summary['candidate']['median_seconds']
+              report['summaries'].append(summary)
+              (root / 'report.json').write_text(json.dumps(report, indent=2) + '\n')
+              print(json.dumps(summary), flush=True)
+          lines = ['# Synthetic external-sort core evidence', '', report['scope'], '',
+                   f"Base: `{report['base_sha']}`; candidate: `{report['head_sha']}`.", '',
+                   'One warm-up and seven measured repeats, alternating execution order. All full output SHA-256 values match.', '',
+                   'Shared CI runner, warm caches, buffered output (no fsync). These are not whole-genomics-command speedups.', '',
+                   '| Case | Baseline seconds | Candidate seconds | Time ratio | Baseline RSS bytes | Candidate RSS bytes |',
+                   '|---|---:|---:|---:|---:|---:|']
+          for s in report['summaries']:
+              b, c = s['baseline'], s['candidate']
+              lines.append(f"| {s['case']} | {b['median_seconds']:.6f} | {c['median_seconds']:.6f} | {s['baseline_over_candidate_time']:.3f} | {b['median_max_rss_bytes']} | {c['median_max_rss_bytes']} |")
+          text = '\n'.join(lines) + '\n'
+          (root / 'report.md').write_text(text)
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as stream:
+              stream.write(text)
+          PY
+      - name: Capture Rust formatting differences
+        if: always()
+        run: |
+          cd candidate
+          rustfmt --edition=2024 crates/turbo-picard-core/src/{merge_tree,external_sort,bam_external_sort}.rs tools/bench_external_sort.rs
+          git diff -- crates/turbo-picard-core/src tools/bench_external_sort.rs > ../evidence/rustfmt.patch
+          git diff --exit-code -- crates/turbo-picard-core/src tools/bench_external_sort.rs
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: external-sort-core-evidence
+          path: |
+            evidence/*.txt
+            evidence/*.time
+            evidence/*.json
+            evidence/*.md
+            evidence/*.patch
+          retention-days: 14

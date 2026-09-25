@@ -1,11 +1,13 @@
 //! Bounded-memory external sorting for alignment records.
 //!
-//! Runs are ordinary BAM files.  That avoids lossy record serialisation and
+//! Runs are ordinary BAM files. That avoids lossy record serialisation and
 //! permits the final k-way merge to write records directly to the destination.
 
+use crate::merge_tree::MergeTree;
 use crate::temp_runs::OwnedRuns;
 use rust_htslib::bam::{self, Read};
 use std::cmp::Ordering;
+#[cfg(test)]
 use std::collections::BinaryHeap;
 use std::fs::{self, OpenOptions};
 use std::io;
@@ -46,7 +48,7 @@ pub struct BamExternalSortMetrics {
 }
 
 /// Alignment sorter which only holds the current run and one record per open
-/// run in memory.  It owns its temporary files until completion.
+/// run in memory. It owns its temporary files until completion.
 pub struct BamExternalSorter {
     config: BamExternalSortConfig,
     header: bam::Header,
@@ -98,6 +100,8 @@ impl BamExternalSorter {
         }
 
         self.spill_current_run(compare)?;
+        // Release the empty run buffer before allocating the merge readers.
+        self.records = Vec::new();
         let mut runs = std::mem::take(&mut self.runs);
         while runs.len() > self.config.merge_fan_in.max(2) {
             runs = self.merge_pass(runs, compare)?;
@@ -132,6 +136,11 @@ impl BamExternalSorter {
         let fan_in = self.config.merge_fan_in.max(2);
         let mut merged = Vec::new();
         for chunk in runs.chunks(fan_in) {
+            // Keep singleton BAMs owned, but avoid a decode/encode round trip.
+            if chunk.len() == 1 {
+                merged.push(chunk[0].clone());
+                continue;
+            }
             let output = self.create_run_path()?;
             merge_runs_to_file(chunk, &output, &self.header, compare)?;
             self.metrics.run_count += 1;
@@ -193,62 +202,55 @@ fn merge_runs(
     mut emit: impl FnMut(bam::Record) -> Result<(), String>,
 ) -> Result<(), String> {
     let mut readers = Vec::with_capacity(runs.len());
-    let mut heap = BinaryHeap::with_capacity(runs.len());
+    let mut heads = Vec::with_capacity(runs.len());
     for path in runs {
         let mut reader = bam::Reader::from_path(path).map_err(|error| error.to_string())?;
-        let reader_index = readers.len();
-        if let Some(record) = next_record(&mut reader)? {
-            heap.push(HeapRecord {
-                record,
-                reader_index,
-                compare,
-            });
-        }
+        heads.push(next_record(&mut reader)?);
         readers.push(reader);
     }
-    // One resident record per run, O(log k) rather than O(k) comparisons per
-    // emitted record. Reader index preserves the former cross-run tie order.
-    while let Some(entry) = heap.pop() {
-        let reader_index = entry.reader_index;
-        emit(entry.record)?;
-        if let Some(record) = next_record(&mut readers[reader_index])? {
-            heap.push(HeapRecord {
-                record,
-                reader_index,
-                compare,
-            });
-        }
+    // One record per input stays in a fixed slot. Only indices move through
+    // the tournament; equal keys continue to prefer the earlier input run.
+    let mut tree = MergeTree::new(&heads, compare);
+    while let Some(reader_index) = tree.winner() {
+        let record = heads[reader_index].take().expect("winning BAM merge head");
+        emit(record)?;
+        heads[reader_index] = next_record(&mut readers[reader_index])?;
+        tree.update(reader_index, &heads, compare);
     }
     Ok(())
 }
 
+// Retained only as the historical heap reference for the comparison test.
+#[cfg(test)]
 struct HeapRecord {
     record: bam::Record,
     reader_index: usize,
     compare: RecordCompare,
 }
 
+#[cfg(test)]
 impl Ord for HeapRecord {
     fn cmp(&self, other: &Self) -> Ordering {
-        // All entries in a merge use the same comparator. Reverse it for
-        // BinaryHeap's max-heap, so the smallest record is emitted first.
         (self.compare)(&other.record, &self.record)
             .then_with(|| other.reader_index.cmp(&self.reader_index))
     }
 }
 
+#[cfg(test)]
 impl PartialOrd for HeapRecord {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(self.cmp(other))
     }
 }
 
+#[cfg(test)]
 impl PartialEq for HeapRecord {
     fn eq(&self, other: &Self) -> bool {
         self.cmp(other) == Ordering::Equal
     }
 }
 
+#[cfg(test)]
 impl Eq for HeapRecord {}
 
 fn next_record(reader: &mut bam::Reader) -> Result<Option<bam::Record>, String> {
@@ -292,6 +294,7 @@ mod tests {
         assert!(fs::read_dir(&dir).unwrap().next().is_none());
         let _ = fs::remove_dir(&dir);
     }
+
     #[test]
     fn heap_merge_preserves_cross_run_tie_order() {
         let dir = std::env::temp_dir().join(format!("turbo-bam-ties-{}", process::id()));
@@ -398,5 +401,52 @@ mod tests {
             heap_comparisons * 2 < linear_comparisons,
             "heap={heap_comparisons}, linear={linear_comparisons}"
         );
+    }
+
+    #[test]
+    fn singleton_carry_preserves_ties_across_multiple_passes() {
+        let dir = std::env::temp_dir().join(format!("turbo-bam-carry-{}", process::id()));
+        let mut config = BamExternalSortConfig::new(&dir);
+        config.max_records_in_ram = 1;
+        config.merge_fan_in = 2;
+        let mut sorter = BamExternalSorter::new(bam::Header::new(), config).unwrap();
+        for index in 0..5_u8 {
+            let mut record = bam::Record::new();
+            record.set(b"same", None, b"A", &[30]);
+            record.set_mapq(index);
+            sorter.push(record, qname_compare).unwrap();
+        }
+        let mut observed = Vec::new();
+        let metrics = sorter
+            .finish_into(qname_compare, |record| {
+                observed.push(record.mapq());
+                Ok(())
+            })
+            .unwrap();
+        assert_eq!(observed, [0, 1, 2, 3, 4]);
+        assert_eq!(metrics.spills, 5);
+        assert_eq!(metrics.run_count, 8);
+        assert!(fs::read_dir(&dir).unwrap().next().is_none());
+        fs::remove_dir(&dir).unwrap();
+    }
+
+    #[test]
+    fn sink_failure_cleans_merged_and_carried_bam_runs() {
+        let dir = std::env::temp_dir().join(format!("turbo-bam-sink-failure-{}", process::id()));
+        let mut config = BamExternalSortConfig::new(&dir);
+        config.max_records_in_ram = 1;
+        config.merge_fan_in = 2;
+        let mut sorter = BamExternalSorter::new(bam::Header::new(), config).unwrap();
+        for index in 0..5_u8 {
+            let mut record = bam::Record::new();
+            record.set(format!("r{index}").as_bytes(), None, b"A", &[30]);
+            sorter.push(record, qname_compare).unwrap();
+        }
+        assert_eq!(
+            sorter.finish_into(qname_compare, |_| Err("sink failed".to_string())),
+            Err("sink failed".to_string())
+        );
+        assert!(fs::read_dir(&dir).unwrap().next().is_none());
+        fs::remove_dir(&dir).unwrap();
     }
 }
