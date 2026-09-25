@@ -66,7 +66,7 @@ jobs:
           "$prefix/bin/samtools" --version > provenance/samtools.txt
           "$prefix/bin/java" -version > provenance/java.txt 2>&1
           python3 - "$prefix" <<'PYWRAPPER'
-          import sys, shlex
+          import sys, shlex, subprocess
           from pathlib import Path
           prefix = Path(sys.argv[1])
           jars = {path.resolve() for path in (prefix / 'share').rglob('picard.jar')}
@@ -74,10 +74,18 @@ jobs:
               raise SystemExit(f'Expected one exact Picard JAR, found {jars}')
           argv = [str(prefix / 'bin/java'), '-Xmx2g', '-XX:ActiveProcessorCount=1', '-jar', str(jars.pop())]
           wrapper = Path('binaries/picard-controlled')
-          wrapper.write_text('#!/bin/sh\nexec ' + shlex.join(argv) + ' "$@"\n')
+          wrapper.write_text('#!/bin/sh\nif [ "$#" -eq 1 ] && [ "$1" = "--version" ]; then set -- MarkDuplicates --version; fi\nexec ' + shlex.join(argv) + ' "$@"\n')
           wrapper.chmod(0o755)
+          # Picard 3.4.0 emits Version:3.4.0 and returns 1 for this informational
+          # parse-only action. Validate its exact output; real commands must
+          # still return zero and pass all scientific comparisons below.
+          version = subprocess.run([str(wrapper.resolve()), 'MarkDuplicates', '--version'], capture_output=True, text=True, timeout=60)
+          output = version.stdout + version.stderr
+          Path('provenance/picard.txt').write_text(output + f'\nversion_exit_code={version.returncode}\n')
+          print(output, flush=True)
+          if version.returncode not in (0, 1) or 'Version:3.4.0' not in output.splitlines():
+              raise SystemExit('Could not verify the pinned Picard version')
           PYWRAPPER
-          binaries/picard-controlled MarkDuplicates --version 2>&1 | tee provenance/picard.txt
           find "$prefix/share" -name '*.jar' -type f -exec sha256sum {} \; > provenance/java-artifacts.txt
           cp "$prefix"/conda-meta/*.json provenance/
           cd candidate
