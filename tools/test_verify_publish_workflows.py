@@ -61,6 +61,33 @@ jobs:
         uses: pypa/gh-action-pypi-publish@release/v1
 """
 
+VALID_GITHUB_RELEASE_ASSETS_JOB = """
+jobs:
+  release-assets:
+    needs: [publish]
+    if: github.event_name == 'release' && github.ref_type == 'tag'
+    permissions:
+      contents: write
+    steps:
+      - name: Download wheel distributions
+        with:
+          pattern: wheels-*
+      - name: Download source distribution
+        with:
+          name: sdist
+      - name: Download release handoff manifest
+        with:
+          name: turbo-picard-release-manifest
+      - name: Assemble checksums
+        run: |
+          SHA256SUMS.txt
+          GITHUB_SOURCE_SHA256.txt
+      - name: Upload guarded assets
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python3 tools/upload_github_release_assets.py
+"""
+
 
 class VerifyPublishWorkflowsTests(unittest.TestCase):
     def write_workflow(self, text: str) -> Path:
@@ -126,6 +153,22 @@ class VerifyPublishWorkflowsTests(unittest.TestCase):
         errors = verify_publish_workflows.validate_pypi_publish_workflow(root)
         self.assertIn(
             "PyPI publish job must not download the release manifest into dist",
+            errors,
+        )
+
+    def test_accepts_least_privilege_release_asset_job(self) -> None:
+        root = self.write_pypi_workflow(VALID_GITHUB_RELEASE_ASSETS_JOB)
+        self.assertEqual([], verify_publish_workflows.validate_github_release_assets_job(root))
+
+    def test_rejects_release_asset_job_with_oidc_permission(self) -> None:
+        root = self.write_pypi_workflow(
+            VALID_GITHUB_RELEASE_ASSETS_JOB.replace(
+                "      contents: write\n", "      contents: write\n      id-token: write\n"
+            )
+        )
+        errors = verify_publish_workflows.validate_github_release_assets_job(root)
+        self.assertIn(
+            "GitHub release asset job must not receive PyPI OIDC publishing permission",
             errors,
         )
 

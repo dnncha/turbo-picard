@@ -61,7 +61,7 @@ def validate_pypi_publish_workflow(root: Path = ROOT) -> list[str]:
     publish_marker = "\n  publish:\n"
     if publish_marker not in text:
         return ["PyPI publish workflow is missing its publish job"]
-    publish = text.split(publish_marker, 1)[1]
+    publish = text.split(publish_marker, 1)[1].split("\n  release-assets:\n", 1)[0]
     errors: list[str] = []
     required = (
         (
@@ -93,8 +93,43 @@ def validate_pypi_publish_workflow(root: Path = ROOT) -> list[str]:
     return errors
 
 
+def validate_github_release_assets_job(root: Path = ROOT) -> list[str]:
+    path = root / ".github" / "workflows" / "publish-pypi.yml"
+    if not path.is_file():
+        return ["GitHub release asset workflow is missing"]
+    text = path.read_text(encoding="utf-8")
+    if "\n  release-assets:\n" not in text:
+        return ["PyPI workflow must attach verified distributions and provenance to the GitHub release"]
+    job = text.split("\n  release-assets:\n", 1)[1]
+    errors: list[str] = []
+    required = (
+        ("needs: [publish]", "GitHub release assets must wait for successful PyPI publication"),
+        ("if: github.event_name == 'release' && github.ref_type == 'tag'", "GitHub release assets must run only for a published tag release"),
+        ("contents: write", "GitHub release asset job must have permission to attach assets"),
+        ("pattern: wheels-*", "GitHub release asset job must download the validated wheel artifacts"),
+        ("name: sdist", "GitHub release asset job must download the source distribution"),
+        ("name: turbo-picard-release-manifest", "GitHub release asset job must download the handoff manifest"),
+        ("SHA256SUMS.txt", "GitHub release must include distribution checksums"),
+        ("GITHUB_SOURCE_SHA256.txt", "GitHub release must include the GitHub source archive digest"),
+        ("tools/upload_github_release_assets.py", "GitHub release assets must use the guarded uploader"),
+        ("GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}", "GitHub release asset uploader must receive the scoped workflow token"),
+    )
+    for needle, message in required:
+        if needle not in job:
+            errors.append(message)
+    if "id-token: write" in job:
+        errors.append("GitHub release asset job must not receive PyPI OIDC publishing permission")
+    if "softprops/action-gh-release" in job or "ncipollo/release-action" in job:
+        errors.append("GitHub release asset job must use the repository's guarded uploader")
+    return errors
+
+
 def main() -> int:
-    errors = validate_docker_publish_workflow() + validate_pypi_publish_workflow()
+    errors = (
+        validate_docker_publish_workflow()
+        + validate_pypi_publish_workflow()
+        + validate_github_release_assets_job()
+    )
     if errors:
         for error in errors:
             print(error, file=sys.stderr)
