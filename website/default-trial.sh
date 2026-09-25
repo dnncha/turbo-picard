@@ -7,8 +7,8 @@ for tool in git java samtools; do command -v "$tool" >/dev/null; done
 work="$(mktemp -d)"
 printf 'Trial directory: %s\n' "$work"
 python3 -m venv "$work/venv"
-"$work/venv/bin/python" -m pip install --only-binary=:all: 'turbo-picard==0.1.13'
-git clone --depth 1 --branch 'v0.1.13' \
+"$work/venv/bin/python" -m pip install --only-binary=:all: 'turbo-picard=={{VERSION}}'
+git clone --depth 1 --branch 'v{{VERSION}}' \
   https://github.com/dnncha/turbo-picard.git "$work/source"
 turbo_prefix="$("$work/venv/bin/python" -c 'import shlex,sys; from pathlib import Path; print(shlex.quote(str(Path(sys.executable).with_name("turbo-picard"))))')"
 "$work/venv/bin/python" "$work/source/tools/compare_real_data.py" \

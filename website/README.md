@@ -69,7 +69,10 @@ August 14 data is explicitly dated, with absolute medians, input parameters,
 repetitions, raw logs and the entire comparison table. Keep the source evidence
 unchanged unless an actual new benchmark is run. The 0.1.13 release checks and
 platform notes describe that release only; do not silently relabel them as tests
-of a new package version. No fake testimonials, affiliations, review ratings,
+of a new package version. The 0.1.14 MarkDuplicates command comparison is a
+separate synthetic, warm-cache run; its release notes state both its lower peak
+RSS and its slower runtime relative to the previous checkpoint. No fake
+testimonials, affiliations, review ratings,
 production claims or upstream workflow adoption badges.
 
 The homepage keeps the native-scope boundary visible. Exhaustive methodology,
