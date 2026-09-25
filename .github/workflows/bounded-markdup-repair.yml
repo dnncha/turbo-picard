@@ -1,0 +1,79 @@
+name: One-shot bounded MarkDuplicates repair
+
+on:
+  push:
+    branches: ['perf/external-sort-audit-20260925']
+    paths:
+      - '.github/workflows/bounded-markdup-repair.yml'
+      - 'tools/maintenance/apply_bounded_markdup_fix.py'
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  repair:
+    if: github.repository == 'dnncha/turbo-picard'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write
+    env:
+      CARGO_BUILD_JOBS: '4'
+      RUST_TEST_THREADS: '2'
+      TURBO_PICARD_THREADS: '0'
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.sha }}
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install existing native build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang libclang-dev make pkg-config
+      - name: Apply exact source repair and format changed modules
+        run: |
+          mkdir repair-evidence
+          cp crates/turbo-picard-markdup/src/lib.rs repair-evidence/original-lib.rs
+          python3 tools/maintenance/apply_bounded_markdup_fix.py
+          cargo fmt --all
+          git diff --check
+          git diff > repair-evidence/source.patch
+          cp crates/turbo-picard-markdup/src/lib.rs repair-evidence/candidate-lib.rs
+          rustc -Vv > repair-evidence/toolchain.txt
+      - name: Test actual native core and duplicate engines
+        run: |
+          cargo test --locked -p turbo-picard-core -p turbo-picard-markdup 2>&1 | tee repair-evidence/tests.txt
+      - name: Commit only tested source changes without overwriting concurrent work
+        env:
+          EXPECTED_HEAD: ${{ github.sha }}
+        run: |
+          branch='perf/external-sort-audit-20260925'
+          actual="$(git ls-remote origin "refs/heads/$branch" | cut -f1)"
+          test "$actual" = "$EXPECTED_HEAD"
+          python3 - <<'PY'
+          import subprocess
+          allowed = {
+              'crates/turbo-picard-markdup/src/lib.rs',
+              'crates/turbo-picard-markdup/src/bounded_plan.rs',
+              'crates/turbo-picard-markdup/src/bounded_plan_tests.rs',
+          }
+          changed = set(subprocess.check_output(['git', 'diff', '--name-only'], text=True).splitlines())
+          if not changed or not changed <= allowed:
+              raise SystemExit(f'Refusing unexpected changed paths: {sorted(changed)}')
+          PY
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add crates/turbo-picard-markdup/src/lib.rs crates/turbo-picard-markdup/src/bounded_plan.rs crates/turbo-picard-markdup/src/bounded_plan_tests.rs
+          git commit -m 'fix: preserve bounded coordinate plans and read-group template identity'
+          git push origin "HEAD:refs/heads/$branch"
+          git rev-parse HEAD | tee repair-evidence/commit.txt
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: bounded-markdup-repair-evidence
+          path: repair-evidence/
+          retention-days: 14
