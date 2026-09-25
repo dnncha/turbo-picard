@@ -461,6 +461,9 @@ def validate_release_evidence(root: pathlib.Path = ROOT) -> list[str]:
     verifier_path = root / "tools" / "verify_real_data_evidence.py"
     readme_path = root / "README.md"
     site_path = root / "docs" / "site" / "index.html"
+    site_evidence_path = site_path.parent / "evidence" / "index.html"
+    if site_evidence_path.is_file():
+        site_path = site_evidence_path
     docs_packaging_path = root / "docs" / "packaging.rst"
     packaging_readme_path = root / "packaging" / "bioconda" / "turbo-picard" / "README.md"
     packaging_shim_readme_path = (
