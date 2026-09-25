@@ -28,7 +28,6 @@ jobs:
       BASE_SHA: '62ccb0ce436a8da6edfcf86e7f6921326e909709'
       HEAD_SHA: ${{ github.event.pull_request.head.sha }}
       CARGO_BUILD_JOBS: '4'
-      CARGO_TARGET_DIR: ${{ runner.temp }}/bounded-build
     steps:
       - uses: actions/checkout@v5
         with:
@@ -56,6 +55,7 @@ jobs:
       - name: Capture provenance and validate the evidence generator
         run: |
           mkdir provenance binaries
+          echo "CARGO_TARGET_DIR=$RUNNER_TEMP/bounded-build" >> "$GITHUB_ENV"
           rustc -Vv > provenance/rustc.txt
           uname -a > provenance/host.txt
           lscpu >> provenance/host.txt
