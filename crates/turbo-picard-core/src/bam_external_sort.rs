@@ -99,9 +99,7 @@ impl BamExternalSorter {
         if !self.records.is_empty() && incoming_bytes > self.config.max_bytes_in_ram.max(1) {
             self.spill_current_run(compare)?;
         }
-        self.resident_record_bytes = self
-            .resident_record_bytes
-            .saturating_add(record_bytes);
+        self.resident_record_bytes = self.resident_record_bytes.saturating_add(record_bytes);
         self.records.push(record);
         let estimated_bytes = self.resident_record_bytes.saturating_add(
             self.records
