@@ -5958,15 +5958,37 @@ fn run_intervallisttools(args: &[String]) -> Result<(), String> {
     let dont_merge_abutting = optional_bool(&args, "DONT_MERGE_ABUTTING")?.unwrap_or(false);
     let padding = optional_i64(&args, "PADDING")?.unwrap_or(0);
 
-    let first_text = fs::read_to_string(&inputs[0]).map_err(|error| error.to_string())?;
-    let header_text = interval_list_header_text(&first_text);
+    let first_file = fs::File::open(&inputs[0]).map_err(|error| error.to_string())?;
+    let mut first_reader = BufReader::new(first_file);
+    let mut header_text = String::new();
+    let mut line = String::new();
+    loop {
+        line.clear();
+        if first_reader
+            .read_line(&mut line)
+            .map_err(|error| error.to_string())?
+            == 0
+            || !line.starts_with('@')
+        {
+            break;
+        }
+        if !line.starts_with("@PG\t") {
+            header_text.push_str(line.trim_end_matches(['\r', '\n']));
+            header_text.push('\n');
+        }
+    }
     let contig_order = dictionary_contig_order(&header_text);
     let contig_lengths = dictionary_contig_lengths(&header_text);
     let mut intervals = Vec::<BedInterval>::new();
-    intervals.extend(read_interval_list_intervals(&first_text, &contig_order)?);
-    for input in inputs.iter().skip(1) {
-        let text = fs::read_to_string(input).map_err(|error| error.to_string())?;
-        intervals.extend(read_interval_list_intervals(&text, &contig_order)?);
+    for input in inputs {
+        let file = fs::File::open(input).map_err(|error| error.to_string())?;
+        for (line_index, line) in BufReader::new(file).lines().enumerate() {
+            let line = line.map_err(|error| error.to_string())?;
+            if let Some(interval) = parse_interval_list_line(&line, line_index + 1, &contig_order)?
+            {
+                intervals.push(interval);
+            }
+        }
     }
     if padding > 0 {
         apply_interval_padding(&mut intervals, &contig_lengths, padding as u64)?;
@@ -5979,15 +6001,20 @@ fn run_intervallisttools(args: &[String]) -> Result<(), String> {
         intervals = unique_intervals(intervals, dont_merge_abutting);
     }
 
-    let mut text = interval_list_output_header(&header_text, inputs.len() > 1);
+    let file = fs::File::create(output).map_err(|error| error.to_string())?;
+    let mut writer = BufWriter::new(file);
+    writer
+        .write_all(interval_list_output_header(&header_text, inputs.len() > 1).as_bytes())
+        .map_err(|error| error.to_string())?;
     for interval in intervals {
-        let _ = writeln!(
-            &mut text,
+        writeln!(
+            &mut writer,
             "{}\t{}\t{}\t{}\t{}",
             interval.contig, interval.start, interval.end, interval.strand, interval.name
-        );
+        )
+        .map_err(|error| error.to_string())?;
     }
-    fs::write(output, text).map_err(|error| error.to_string())
+    writer.flush().map_err(|error| error.to_string())
 }
 
 fn revertsam_can_use_sam_text_fast_path(
@@ -10266,65 +10293,72 @@ fn read_interval_list_intervals(
 ) -> Result<Vec<BedInterval>, String> {
     let mut intervals = Vec::new();
     for (line_index, line) in text.lines().enumerate() {
-        if line.starts_with('@') || line.trim().is_empty() {
-            continue;
+        if let Some(interval) = parse_interval_list_line(line, line_index + 1, contig_order)? {
+            intervals.push(interval);
         }
-        let mut fields = line.split('\t');
-        let Some(contig) = fields.next() else {
-            return Err(format!("malformed interval_list line {}", line_index + 1));
-        };
-        let Some(start) = fields.next() else {
-            return Err(format!("malformed interval_list line {}", line_index + 1));
-        };
-        let Some(end) = fields.next() else {
-            return Err(format!("malformed interval_list line {}", line_index + 1));
-        };
-        let Some(strand) = fields.next() else {
-            return Err(format!("malformed interval_list line {}", line_index + 1));
-        };
-        let Some(name) = fields.next() else {
-            return Err(format!("malformed interval_list line {}", line_index + 1));
-        };
-        let name = if let Some(extra) = fields.next() {
-            let mut name = String::from(name);
-            name.push('\t');
-            name.push_str(extra);
-            for field in fields {
-                name.push('\t');
-                name.push_str(field);
-            }
-            name
-        } else {
-            name.to_string()
-        };
-        let contig = contig.to_string();
-        let Some(contig_index) = contig_order.get(&contig).copied() else {
-            return Err(format!(
-                "interval_list contig {contig} is not present in sequence dictionary"
-            ));
-        };
-        let start = start
-            .parse::<u64>()
-            .map_err(|_| format!("malformed interval start on line {}", line_index + 1))?;
-        let end = end
-            .parse::<u64>()
-            .map_err(|_| format!("malformed interval end on line {}", line_index + 1))?;
-        if end < start {
-            return Err(format!(
-                "interval end before start on line {}",
-                line_index + 1
-            ));
-        }
-        intervals.push(BedInterval {
-            contig,
-            contig_index,
-            start,
-            end,
-            strand: strand.to_string(),
-            name,
-        });
     }
     Ok(intervals)
+}
+
+fn parse_interval_list_line(
+    line: &str,
+    line_number: usize,
+    contig_order: &BTreeMap<String, usize>,
+) -> Result<Option<BedInterval>, String> {
+    if line.starts_with('@') || line.trim().is_empty() {
+        return Ok(None);
+    }
+    let mut fields = line.split('\t');
+    let Some(contig) = fields.next() else {
+        return Err(format!("malformed interval_list line {line_number}"));
+    };
+    let Some(start) = fields.next() else {
+        return Err(format!("malformed interval_list line {line_number}"));
+    };
+    let Some(end) = fields.next() else {
+        return Err(format!("malformed interval_list line {line_number}"));
+    };
+    let Some(strand) = fields.next() else {
+        return Err(format!("malformed interval_list line {line_number}"));
+    };
+    let Some(name) = fields.next() else {
+        return Err(format!("malformed interval_list line {line_number}"));
+    };
+    let name = if let Some(extra) = fields.next() {
+        let mut name = String::from(name);
+        name.push('\t');
+        name.push_str(extra);
+        for field in fields {
+            name.push('\t');
+            name.push_str(field);
+        }
+        name
+    } else {
+        name.to_string()
+    };
+    let contig = contig.to_string();
+    let Some(contig_index) = contig_order.get(&contig).copied() else {
+        return Err(format!(
+            "interval_list contig {contig} is not present in sequence dictionary"
+        ));
+    };
+    let start = start
+        .parse::<u64>()
+        .map_err(|_| format!("malformed interval start on line {line_number}"))?;
+    let end = end
+        .parse::<u64>()
+        .map_err(|_| format!("malformed interval end on line {line_number}"))?;
+    if end < start {
+        return Err(format!("interval end before start on line {line_number}"));
+    }
+    Ok(Some(BedInterval {
+        contig,
+        contig_index,
+        start,
+        end,
+        strand: strand.to_string(),
+        name,
+    }))
 }
 
 fn apply_interval_padding(

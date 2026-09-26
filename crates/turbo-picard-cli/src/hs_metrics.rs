@@ -10,6 +10,7 @@ use rust_htslib::bam::{self, Read};
 use rustc_hash::{FxHashMap, FxHashSet};
 use std::collections::BTreeMap;
 use std::fs;
+use std::io::{BufWriter, Write};
 
 const HS_METRICS_HEADER: &str = "BAIT_SET\tBAIT_TERRITORY\tBAIT_DESIGN_EFFICIENCY\tON_BAIT_BASES\tNEAR_BAIT_BASES\tOFF_BAIT_BASES\tPCT_SELECTED_BASES\tPCT_OFF_BAIT\tON_BAIT_VS_SELECTED\tMEAN_BAIT_COVERAGE\tPCT_USABLE_BASES_ON_BAIT\tPCT_USABLE_BASES_ON_TARGET\tFOLD_ENRICHMENT\tHS_LIBRARY_SIZE\tHS_PENALTY_10X\tHS_PENALTY_20X\tHS_PENALTY_30X\tHS_PENALTY_40X\tHS_PENALTY_50X\tHS_PENALTY_100X\tTARGET_TERRITORY\tGENOME_SIZE\tTOTAL_READS\tPF_READS\tPF_BASES\tPF_UNIQUE_READS\tPF_UQ_READS_ALIGNED\tPF_BASES_ALIGNED\tPF_UQ_BASES_ALIGNED\tON_TARGET_BASES\tPCT_PF_READS\tPCT_PF_UQ_READS\tPCT_PF_UQ_READS_ALIGNED\tMEAN_TARGET_COVERAGE\tMEDIAN_TARGET_COVERAGE\tMAX_TARGET_COVERAGE\tMIN_TARGET_COVERAGE\tZERO_CVG_TARGETS_PCT\tPCT_EXC_DUPE\tPCT_EXC_ADAPTER\tPCT_EXC_MAPQ\tPCT_EXC_BASEQ\tPCT_EXC_OVERLAP\tPCT_EXC_OFF_TARGET\tFOLD_80_BASE_PENALTY\tPCT_TARGET_BASES_1X\tPCT_TARGET_BASES_2X\tPCT_TARGET_BASES_10X\tPCT_TARGET_BASES_20X\tPCT_TARGET_BASES_30X\tPCT_TARGET_BASES_40X\tPCT_TARGET_BASES_50X\tPCT_TARGET_BASES_100X\tPCT_TARGET_BASES_250X\tPCT_TARGET_BASES_500X\tPCT_TARGET_BASES_1000X\tPCT_TARGET_BASES_2500X\tPCT_TARGET_BASES_5000X\tPCT_TARGET_BASES_10000X\tPCT_TARGET_BASES_25000X\tPCT_TARGET_BASES_50000X\tPCT_TARGET_BASES_100000X\tAT_DROPOUT\tGC_DROPOUT\tHET_SNP_SENSITIVITY\tHET_SNP_Q\tSAMPLE\tLIBRARY\tREAD_GROUP";
 
@@ -606,13 +607,12 @@ impl HsMetricsCollector {
         let Some(unfiltered_depth) = target.unfiltered_depths.get_mut(target_offset) else {
             return;
         };
+        let within_cap = *unfiltered_depth < self.config.coverage_cap;
         *unfiltered_depth = unfiltered_depth
             .saturating_add(1)
             .min(self.config.coverage_cap);
-        if let Some(value) = self.baseq_histogram.get_mut(quality as usize)
-            && *unfiltered_depth <= self.config.coverage_cap
-        {
-            *value += 1;
+        if within_cap {
+            self.baseq_histogram[quality as usize] += 1;
         }
         self.uncapped_baseq_histogram[quality as usize] += 1;
 
@@ -824,7 +824,11 @@ impl HsMetricsCollector {
                 .map_err(|error| error.to_string())?;
         }
         if let Some(path) = self.config.per_base_coverage.as_deref() {
-            fs::write(path, self.per_base_coverage_text()).map_err(|error| error.to_string())?;
+            let file = fs::File::create(path).map_err(|error| error.to_string())?;
+            let mut writer = BufWriter::new(file);
+            self.write_per_base_coverage(&mut writer)
+                .map_err(|error| error.to_string())?;
+            writer.flush().map_err(|error| error.to_string())?;
         }
         Ok(())
     }
@@ -885,20 +889,21 @@ impl HsMetricsCollector {
         output
     }
 
-    fn per_base_coverage_text(&self) -> String {
-        let mut output = String::from("chrom\tpos\ttarget\tcoverage\n");
+    fn write_per_base_coverage(&self, output: &mut impl Write) -> std::io::Result<()> {
+        output.write_all(b"chrom\tpos\ttarget\tcoverage\n")?;
         for target in &self.targets {
             for (offset, depth) in target.high_quality_depths.iter().enumerate() {
-                output.push_str(&format!(
-                    "{}\t{}\t{}\t{}\n",
+                writeln!(
+                    output,
+                    "{}\t{}\t{}\t{}",
                     target.span.contig,
                     target.span.start + offset as u64 + 1,
                     target.span.name,
                     depth,
-                ));
+                )?;
             }
         }
-        output
+        Ok(())
     }
 
     fn high_quality_depth_histogram(&self) -> Vec<u64> {
@@ -1389,5 +1394,44 @@ mod tests {
         assert!(text.contains("BAIT_SET\tBAIT_TERRITORY"));
         assert!(text.contains("coverage_or_base_quality\thigh_quality_coverage_count"));
         assert_eq!(text.lines().filter(|line| *line == "0\t10\t0").count(), 1);
+    }
+
+    #[test]
+    fn base_quality_histogram_stops_at_coverage_cap() {
+        let mut config = test_config();
+        config.coverage_cap = 2;
+        let mut collector = HsMetricsCollector::new(&config).expect("collector");
+        for _ in 0..3 {
+            collector.observe_base(
+                "chr1",
+                0,
+                30,
+                true,
+                true,
+                &mut FxHashSet::default(),
+                &mut None,
+            );
+        }
+        assert_eq!(collector.targets[0].unfiltered_depths[0], 2);
+        assert_eq!(collector.targets[0].high_quality_depths[0], 3);
+        assert_eq!(collector.baseq_histogram[30], 2);
+        assert_eq!(collector.uncapped_baseq_histogram[30], 3);
+    }
+
+    #[test]
+    fn per_base_coverage_streams_the_expected_rows() {
+        let mut collector = HsMetricsCollector::new(&test_config()).expect("collector");
+        collector.targets[0].high_quality_depths[0] = 4;
+        let mut output = Vec::new();
+        collector
+            .write_per_base_coverage(&mut output)
+            .expect("coverage output");
+        let text = String::from_utf8(output).expect("utf8 output");
+        assert!(
+            text.starts_with(
+                "chrom\tpos\ttarget\tcoverage\nchr1\t1\ttarget\t4\nchr1\t2\ttarget\t0\n"
+            )
+        );
+        assert_eq!(text.lines().count(), 11);
     }
 }
