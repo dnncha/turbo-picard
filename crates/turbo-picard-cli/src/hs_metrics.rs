@@ -1402,7 +1402,15 @@ mod tests {
         config.coverage_cap = 2;
         let mut collector = HsMetricsCollector::new(&config).expect("collector");
         for _ in 0..3 {
-            collector.observe_base("chr1", 0, 30, true, true, &mut FxHashSet::default(), &mut None);
+            collector.observe_base(
+                "chr1",
+                0,
+                30,
+                true,
+                true,
+                &mut FxHashSet::default(),
+                &mut None,
+            );
         }
         assert_eq!(collector.targets[0].unfiltered_depths[0], 2);
         assert_eq!(collector.targets[0].high_quality_depths[0], 3);
@@ -1419,9 +1427,11 @@ mod tests {
             .write_per_base_coverage(&mut output)
             .expect("coverage output");
         let text = String::from_utf8(output).expect("utf8 output");
-        assert!(text.starts_with(
-            "chrom\tpos\ttarget\tcoverage\nchr1\t1\ttarget\t4\nchr1\t2\ttarget\t0\n"
-        ));
+        assert!(
+            text.starts_with(
+                "chrom\tpos\ttarget\tcoverage\nchr1\t1\ttarget\t4\nchr1\t2\ttarget\t0\n"
+            )
+        );
         assert_eq!(text.lines().count(), 11);
     }
 }

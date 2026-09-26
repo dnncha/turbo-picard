@@ -5984,7 +5984,8 @@ fn run_intervallisttools(args: &[String]) -> Result<(), String> {
         let file = fs::File::open(input).map_err(|error| error.to_string())?;
         for (line_index, line) in BufReader::new(file).lines().enumerate() {
             let line = line.map_err(|error| error.to_string())?;
-            if let Some(interval) = parse_interval_list_line(&line, line_index + 1, &contig_order)? {
+            if let Some(interval) = parse_interval_list_line(&line, line_index + 1, &contig_order)?
+            {
                 intervals.push(interval);
             }
         }
@@ -6009,11 +6010,7 @@ fn run_intervallisttools(args: &[String]) -> Result<(), String> {
         writeln!(
             &mut writer,
             "{}\t{}\t{}\t{}\t{}",
-            interval.contig,
-            interval.start,
-            interval.end,
-            interval.strand,
-            interval.name
+            interval.contig, interval.start, interval.end, interval.strand, interval.name
         )
         .map_err(|error| error.to_string())?;
     }
