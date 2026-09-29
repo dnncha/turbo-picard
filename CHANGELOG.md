@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.1.15 — 2026-09-29
+
+### Correctness
+
+- `CollectHsMetrics`: count base qualities only while a target position is
+  below `COVERAGE_CAP`. The previous comparison stayed true after the stored
+  depth saturated and could skew `HET_SNP_SENSITIVITY` on deep capture data.
+
+### Memory
+
+- `SortSam` and other BAM external sorts now spill a run before an incoming
+  record would push its estimated payload and record-vector allocation past a
+  256 MiB default budget, alongside the existing record-count limit. A single
+  oversized record spills immediately. This is an approximate run-buffer
+  budget, not a hard process RSS bound.
+- `CollectHsMetrics` streams `PER_BASE_COVERAGE` rows through a buffered writer
+  instead of building the whole sidecar in memory.
+- `IntervalListTools` reads input rows incrementally and streams its output.
+
+### Validation
+
+- 419 Rust tests, Picard 3.4.0 parity, nf-core, Snakemake, and Docker CI
+  gates pass. `SortSam` queryname and coordinate outputs on the retained
+  NA12878 mitochondrial BAM are byte-identical to 0.1.14 with no measured
+  time or peak-RSS regression. No speedup is claimed for this release.
+
 ## 0.1.14 — 2026-09-25
 
 ### Bounded MarkDuplicates correctness and memory

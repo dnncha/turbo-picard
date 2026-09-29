@@ -34,7 +34,7 @@ selection rule and safe substitution pattern.
 
 ### Compact, native-only automation
 
-Version 0.1.14 improves native `MarkDuplicates` handling for coordinate ties,
+Version 0.1.15 improves native `MarkDuplicates` handling for coordinate ties,
 unplaced reads, and repeated read names across read groups. It bounds a
 speculative shortcut and lowers peak memory on the checked-in large spill
 fixtures. See the [release notes](CHANGELOG.md) for the measured runtime and
@@ -51,13 +51,13 @@ command scope, not proof that a particular input or option is validated.
 Install from PyPI:
 
 ```bash
-python3 -m pip install turbo-picard==0.1.14
+python3 -m pip install turbo-picard==0.1.15
 ```
 
 For a containerized trial, use the published release image:
 
 ```bash
-docker run --rm ghcr.io/dnncha/turbo-picard:0.1.14 --version
+docker run --rm ghcr.io/dnncha/turbo-picard:0.1.15 --version
 ```
 
 Installing from PyPI currently gives you both commands:
@@ -302,11 +302,11 @@ A command-level speedup is not a universal replacement claim. Keep upstream Pica
 
 ## Packaging Status
 
-The current source release is `0.1.14`. Release builds target Linux x86_64 and
+The current source release is `0.1.15`. Release builds target Linux x86_64 and
 ARM64, macOS Intel and Apple Silicon, plus a source distribution. Publication
 is gated on artifact validation and installation smoke tests; the
-[release page](https://github.com/dnncha/turbo-picard/releases/tag/v0.1.14)
-and [PyPI](https://pypi.org/project/turbo-picard/0.1.14/) identify the published
+[release page](https://github.com/dnncha/turbo-picard/releases/tag/v0.1.15)
+and [PyPI](https://pypi.org/project/turbo-picard/0.1.15/) identify the published
 artifacts. The Linux ARM64 wheel is cross-built and artifact-validated.
 
 Read the [release notes](CHANGELOG.md) for the release scope and evidence
