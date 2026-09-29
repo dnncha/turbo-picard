@@ -17,6 +17,7 @@ use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
 
 static SORTER_ID: AtomicU64 = AtomicU64::new(0);
 const DEFAULT_MAX_RECORDS: usize = 500_000;
+const DEFAULT_MAX_BYTES: usize = 256 * 1024 * 1024;
 const DEFAULT_MERGE_FAN_IN: usize = 32;
 
 pub type RecordCompare = fn(&bam::Record, &bam::Record) -> Ordering;
@@ -25,6 +26,8 @@ pub type RecordCompare = fn(&bam::Record, &bam::Record) -> Ordering;
 pub struct BamExternalSortConfig {
     pub tmp_dir: PathBuf,
     pub max_records_in_ram: usize,
+    /// Approximate run budget for record buffers and the vector allocation.
+    pub max_bytes_in_ram: usize,
     pub merge_fan_in: usize,
     pub prefix: String,
 }
@@ -34,6 +37,7 @@ impl BamExternalSortConfig {
         Self {
             tmp_dir: tmp_dir.into(),
             max_records_in_ram: DEFAULT_MAX_RECORDS,
+            max_bytes_in_ram: DEFAULT_MAX_BYTES,
             merge_fan_in: DEFAULT_MERGE_FAN_IN,
             prefix: "turbo-picard-bam-sort".to_string(),
         }
@@ -44,6 +48,7 @@ impl BamExternalSortConfig {
 pub struct BamExternalSortMetrics {
     pub spills: usize,
     pub max_resident_records: usize,
+    pub max_estimated_bytes: usize,
     pub run_count: usize,
 }
 
@@ -53,6 +58,7 @@ pub struct BamExternalSorter {
     config: BamExternalSortConfig,
     header: bam::Header,
     records: Vec<bam::Record>,
+    resident_record_bytes: usize,
     runs: Vec<PathBuf>,
     owned_runs: OwnedRuns,
     metrics: BamExternalSortMetrics,
@@ -67,6 +73,7 @@ impl BamExternalSorter {
             config,
             header,
             records: Vec::new(),
+            resident_record_bytes: 0,
             runs: Vec::new(),
             owned_runs: OwnedRuns::default(),
             metrics: BamExternalSortMetrics::default(),
@@ -76,10 +83,35 @@ impl BamExternalSorter {
     }
 
     pub fn push(&mut self, record: bam::Record, compare: RecordCompare) -> Result<(), String> {
+        let record_bytes = record.inner().m_data as usize;
+        // Spill before admitting a record that would exceed the run budget.
+        // A single oversized record still has to be held briefly, but it must
+        // not share a run with the records already resident in memory.
+        let incoming_bytes = self
+            .resident_record_bytes
+            .saturating_add(record_bytes)
+            .saturating_add(
+                self.records
+                    .capacity()
+                    .max(self.records.len().saturating_add(1))
+                    .saturating_mul(std::mem::size_of::<bam::Record>()),
+            );
+        if !self.records.is_empty() && incoming_bytes > self.config.max_bytes_in_ram.max(1) {
+            self.spill_current_run(compare)?;
+        }
+        self.resident_record_bytes = self.resident_record_bytes.saturating_add(record_bytes);
         self.records.push(record);
+        let estimated_bytes = self.resident_record_bytes.saturating_add(
+            self.records
+                .capacity()
+                .saturating_mul(std::mem::size_of::<bam::Record>()),
+        );
         self.metrics.max_resident_records =
             self.metrics.max_resident_records.max(self.records.len());
-        if self.records.len() >= self.config.max_records_in_ram.max(1) {
+        self.metrics.max_estimated_bytes = self.metrics.max_estimated_bytes.max(estimated_bytes);
+        if self.records.len() >= self.config.max_records_in_ram.max(1)
+            || estimated_bytes >= self.config.max_bytes_in_ram.max(1)
+        {
             self.spill_current_run(compare)?;
         }
         Ok(())
@@ -125,6 +157,7 @@ impl BamExternalSorter {
         self.metrics.run_count += 1;
         self.runs.push(path);
         self.records.clear();
+        self.resident_record_bytes = 0;
         Ok(())
     }
 
@@ -268,6 +301,68 @@ mod tests {
 
     fn qname_compare(left: &bam::Record, right: &bam::Record) -> Ordering {
         left.qname().cmp(right.qname())
+    }
+
+    #[test]
+    fn byte_budget_spills_large_records_and_preserves_order() {
+        let dir = std::env::temp_dir().join(format!(
+            "turbo-bam-byte-budget-{}-{}",
+            process::id(),
+            SORTER_ID.fetch_add(1, AtomicOrdering::Relaxed)
+        ));
+        let mut config = BamExternalSortConfig::new(&dir);
+        config.max_records_in_ram = 100;
+        config.max_bytes_in_ram = 4096;
+        let mut sorter = BamExternalSorter::new(bam::Header::new(), config).unwrap();
+        for (name, length) in [(b"c".as_slice(), 20), (b"a", 10_000), (b"b", 20)] {
+            let mut record = bam::Record::new();
+            record.set(name, None, &vec![b'A'; length], &vec![30; length]);
+            sorter.push(record, qname_compare).unwrap();
+        }
+        let mut names = Vec::new();
+        let metrics = sorter
+            .finish_into(qname_compare, |record| {
+                names.push(record.qname().to_vec());
+                Ok(())
+            })
+            .unwrap();
+        assert_eq!(names, [b"a".to_vec(), b"b".to_vec(), b"c".to_vec()]);
+        assert!(metrics.spills >= 2);
+        // An individual oversized record can exceed the budget once; it is
+        // spilled immediately and cannot accumulate with later records.
+        assert!(metrics.max_estimated_bytes >= 4096);
+        assert!(fs::read_dir(&dir).unwrap().next().is_none());
+        fs::remove_dir(&dir).unwrap();
+    }
+
+    #[test]
+    fn byte_budget_spills_before_large_record_joins_existing_run() {
+        let dir = std::env::temp_dir().join(format!(
+            "turbo-bam-byte-pre-spill-{}-{}",
+            process::id(),
+            SORTER_ID.fetch_add(1, AtomicOrdering::Relaxed)
+        ));
+        let mut config = BamExternalSortConfig::new(&dir);
+        config.max_records_in_ram = 100;
+        config.max_bytes_in_ram = 4096;
+        let mut sorter = BamExternalSorter::new(bam::Header::new(), config).unwrap();
+        for (name, length) in [(b"c".as_slice(), 1000), (b"a", 10_000), (b"b", 1000)] {
+            let mut record = bam::Record::new();
+            record.set(name, None, &vec![b'A'; length], &vec![30; length]);
+            sorter.push(record, qname_compare).unwrap();
+        }
+        let mut names = Vec::new();
+        let metrics = sorter
+            .finish_into(qname_compare, |record| {
+                names.push(record.qname().to_vec());
+                Ok(())
+            })
+            .unwrap();
+        assert_eq!(names, [b"a".to_vec(), b"b".to_vec(), b"c".to_vec()]);
+        assert_eq!(metrics.spills, 3);
+        assert_eq!(metrics.max_resident_records, 1);
+        assert!(fs::read_dir(&dir).unwrap().next().is_none());
+        fs::remove_dir(&dir).unwrap();
     }
 
     #[test]
