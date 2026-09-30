@@ -33,7 +33,7 @@ classifiers = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/dnncha/turbo-picard"
+Homepage = "https://turbo-picard.readthedocs.io/en/latest/"
 Documentation = "https://turbo-picard.readthedocs.io/"
 Source = "https://github.com/dnncha/turbo-picard"
 Issues = "https://github.com/dnncha/turbo-picard/issues"

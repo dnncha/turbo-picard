@@ -2,11 +2,22 @@
 
 {% block extrahead %}
   {{ super() }}
+  {% if pagename in ("search", "genindex") %}
+    <meta name="robots" content="noindex,follow" />
+  {% endif %}
+  {% if tp_description %}
+    <meta name="description" content="{{ tp_description|e }}" />
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="Turbo Picard" />
+    <meta property="og:title" content="{{ title|striptags|e }}" />
+    <meta property="og:description" content="{{ tp_description|e }}" />
+    <meta property="og:url" content="https://turbo-picard.readthedocs.io/en/latest/{{ pagename }}.html" />
+    <meta property="og:image" content="https://turbo-picard.readthedocs.io/en/latest/assets/social-card.png" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="{{ title|striptags|e }}" />
+    <meta name="twitter:description" content="{{ tp_description|e }}" />
+  {% endif %}
   {% if pagename == "index" %}
-    <meta
-      name="description"
-      content="Rust command-line tools for selected Picard-compatible genomics workflows."
-    />
     <script type="application/ld+json">
       {
         "@context": "https://schema.org",
