@@ -1,5 +1,4 @@
 .. meta::
-   :description: Why Picard MarkDuplicates can run slowly or use large amounts of memory, where that cost comes from, which alternatives fit which workflows, and how to test Turbo Picard safely.
 
    :keywords: Picard MarkDuplicates slow, Picard MarkDuplicates memory, Picard MarkDuplicates alternative, samtools markdup vs Picard, Turbo Picard, BAM duplicate marking
 

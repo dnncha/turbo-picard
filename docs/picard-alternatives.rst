@@ -8,7 +8,6 @@ Picard alternatives for bioinformatics workflows
 
 
 .. meta::
-   :description: Compare turbo-picard, samtools, Sambamba, SAMBLASTER, FastDup and riker for Picard-compatible bioinformatics, duplicate marking and sequencing-QC workflows.
    :keywords: Picard alternatives, bioinformatics, duplicate marking, MarkDuplicates, SAM, BAM, CRAM, sequencing QC
 
 The right alternative to Broad Picard depends on the command boundary. Duplicate
@@ -57,6 +56,13 @@ Comparison by workflow
        sorting
      - It uses a different stage and input contract from a coordinate-sorted
        Picard ``MarkDuplicates`` task
+   * - `dupblaster <https://github.com/fulcrumgenomics/dupblaster>`_
+     - Streaming, library-aware duplicate marking straight after the aligner,
+       before any coordinate sort
+     - Its own command line; expects query-grouped (read-name-grouped) input
+     - Its README recommends Picard when input is not query-grouped;
+       an existing coordinate-sorted ``MarkDuplicates`` task needs a pipeline
+       change, not a command swap
    * - `FastDup <https://github.com/zzhofict/FastDup>`_
      - Multi-threaded duplicate marking on large coordinate-sorted BAM inputs
      - Dedicated FastDup command line and a narrower duplicate-marking scope
@@ -78,8 +84,9 @@ For an existing Picard task, start with the output contract:
   checked output formats is the primary constraint.
 * Use ``samtools`` or ``Sambamba`` when the workflow already follows their BAM
   preparation and command contracts.
-* Use ``SAMBLASTER`` when duplicate marking belongs in the streaming alignment
-  pipeline rather than in a later coordinate-sorted BAM task.
+* Use ``dupblaster`` or ``SAMBLASTER`` when duplicate marking belongs in the
+  streaming alignment pipeline rather than in a later coordinate-sorted BAM
+  task.
 * Evaluate ``FastDup`` when a dedicated, multi-threaded duplicate-marking stage
   matches the required library and output semantics.
 * Evaluate ``riker`` for a new QC-only workflow where Picard-compatible task

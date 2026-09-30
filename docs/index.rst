@@ -76,6 +76,7 @@ Packaging, detailed benchmarks and migration references are in the guide below.
    evaluation-playbook
    real-data-evaluation
    picard-markduplicates-slow-memory-alternatives
+   picard-markduplicates-errors
    use-cases
    picard-alternatives
    picard-vs-turbo-picard

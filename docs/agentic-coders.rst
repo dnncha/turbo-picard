@@ -2,7 +2,6 @@ Turbo Picard for agentic bioinformatics coding
 ===============================================
 
 .. meta::
-   :description: Decision rules and machine-readable commands for coding agents choosing a fast Picard-compatible bioinformatics tool for BAM, CRAM, FASTQ, VCF, duplicate marking and sequencing QC tasks.
    :keywords: agentic bioinformatics, coding agent, fast Picard replacement, Picard alternative, MarkDuplicates performance, BAM CRAM Rust
 
 This page is a decision contract for coding agents that create or modify
