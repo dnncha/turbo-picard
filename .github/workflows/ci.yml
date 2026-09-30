@@ -197,8 +197,14 @@ jobs:
         run: bash tools/verify_snakemake_starter.sh
 
   picard-parity:
-    name: Picard parity
+    name: Picard parity (${{ matrix.picard }})
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        picard: ["3.4.0", "3.5.0"]
+    env:
+      TURBO_PICARD_PICARD_VERSION: ${{ matrix.picard }}
 
     steps:
       - uses: actions/checkout@v5
@@ -216,7 +222,7 @@ jobs:
           create-args: >-
             -c conda-forge
             -c bioconda
-            picard=3.4.0
+            picard=${{ matrix.picard }}
             samtools
 
       - name: Test workspace

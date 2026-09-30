@@ -121,8 +121,16 @@ if ! parity_validate_samfile_exit_matches "$picard_validate_exit" "$turbo_valida
   echo "GATK mito CRAM ValidateSamFile exit differs from Picard: Picard=$picard_validate_exit turbo=$turbo_validate_exit" >&2
   exit 1
 fi
+# Picard 3.5.0 (HTSJDK 5) restores MD/NM when decoding CRAM against a reference,
+# so it no longer reports MISSING_TAG_NM for this input. Turbo Picard follows
+# Picard 3.4.0 here; see docs/parity.rst.
+validate_ignore=()
+if [[ "${TURBO_PICARD_PICARD_VERSION:-3.4.0}" != 3.4.* ]]; then
+  validate_ignore=(--ignore-type WARNING:MISSING_TAG_NM)
+fi
 python3 "$compare" validate-summary --label "GATK mito CRAM ValidateSamFile" \
-  --picard "$workdir/picard-validate.txt" --turbo "$workdir/turbo-validate.txt"
+  --picard "$workdir/picard-validate.txt" --turbo "$workdir/turbo-validate.txt" \
+  "${validate_ignore[@]}"
 
 picard CollectQualityYieldMetrics \
   "I=$input_cram" "O=$workdir/picard-quality-yield.txt" "R=$reference"
@@ -230,13 +238,21 @@ view_to_sam "$workdir/turbo-reheader.cram" "$workdir/turbo-reheader.sam"
 python3 "$compare" stable-sam-ignore-md-nm --label "GATK mito CRAM ReplaceSamHeader" \
   --picard "$workdir/picard-reheader.sam" --turbo "$workdir/turbo-reheader.sam"
 
+# Picard 3.5.0 (HTSJDK 5) sets the mate-unmapped flag on unmapped reads with a
+# mapped mate when it writes CRAM (424 records here); its BAM output keeps the
+# input flags. Compare against Picard's BAM output on 3.5+ so the check still
+# tests Turbo Picard's CRAM writer. See docs/parity.rst.
+picard_merged="$workdir/picard-merged.cram"
+if [[ "${TURBO_PICARD_PICARD_VERSION:-3.4.0}" != 3.4.* ]]; then
+  picard_merged="$workdir/picard-merged.bam"
+fi
 picard MergeSamFiles \
-  "I=$input_cram" "I=$input_cram" "O=$workdir/picard-merged.cram" \
+  "I=$input_cram" "I=$input_cram" "O=$picard_merged" \
   "R=$reference" ASSUME_SORTED=true
 turbo MergeSamFiles \
   "I=$input_cram" "I=$input_cram" "O=$workdir/turbo-merged.cram" \
   "R=$reference" ASSUME_SORTED=true
-view_to_sam "$workdir/picard-merged.cram" "$workdir/picard-merged.sam"
+view_to_sam "$picard_merged" "$workdir/picard-merged.sam"
 view_to_sam "$workdir/turbo-merged.cram" "$workdir/turbo-merged.sam"
 python3 "$compare" merge-multiset --label "GATK mito CRAM MergeSamFiles" \
   --picard "$workdir/picard-merged.sam" --turbo "$workdir/turbo-merged.sam"

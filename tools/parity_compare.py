@@ -359,7 +359,9 @@ def normalized_sam_records(path: Path, compare_real_data) -> list[bytes]:
     return records
 
 
-def compare_validate_summary(picard_path: Path, turbo_path: Path, label: str) -> None:
+def compare_validate_summary(
+    picard_path: Path, turbo_path: Path, label: str, ignore_types: tuple[str, ...] = ()
+) -> None:
     def counts(path: Path) -> dict[str, str]:
         rows: dict[str, str] = {}
         with path.open(encoding="utf-8") as handle:
@@ -371,7 +373,12 @@ def compare_validate_summary(picard_path: Path, turbo_path: Path, label: str) ->
                     rows[row[0]] = row[1]
         return rows
 
-    if counts(picard_path) != counts(turbo_path):
+    picard_counts = counts(picard_path)
+    turbo_counts = counts(turbo_path)
+    for error_type in ignore_types:
+        picard_counts.pop(error_type, None)
+        turbo_counts.pop(error_type, None)
+    if picard_counts != turbo_counts:
         raise SystemExit(f"{label} ValidateSamFile summary differs from Picard")
 
 
@@ -441,6 +448,12 @@ def parse_args() -> argparse.Namespace:
     validate.add_argument("--label", required=True)
     validate.add_argument("--picard", required=True, type=Path)
     validate.add_argument("--turbo", required=True, type=Path)
+    validate.add_argument(
+        "--ignore-type",
+        action="append",
+        default=[],
+        help="Summary row, such as WARNING:MISSING_TAG_NM, to leave out of the comparison",
+    )
 
     stable_sam = subparsers.add_parser("stable-sam")
     stable_sam.add_argument("--label", required=True)
@@ -507,7 +520,9 @@ def main() -> int:
     elif args.command == "cleansam":
         compare_clean_sam_fields(args.picard, args.turbo, args.label)
     elif args.command == "validate-summary":
-        compare_validate_summary(args.picard, args.turbo, args.label)
+        compare_validate_summary(
+            args.picard, args.turbo, args.label, tuple(args.ignore_type)
+        )
     elif args.command == "stable-sam":
         compare_stable_sam_lines(args.picard, args.turbo, args.label)
     elif args.command == "stable-sam-ignore-md-nm":
