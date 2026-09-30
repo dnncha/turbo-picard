@@ -1,5 +1,5 @@
-Performance Notes
-=================
+Why Turbo Picard is faster than Picard
+======================================
 
 ``turbo-picard`` gets most of its speed from avoiding JVM startup, running common
 Picard operations natively, and keeping BAM/CRAM I/O on mature HTSlib code.

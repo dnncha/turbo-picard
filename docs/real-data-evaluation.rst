@@ -1,4 +1,4 @@
-Prove the switch on your data
+Real-data evaluation protocol
 =============================
 
 An evaluation should answer one question: does this version of Turbo Picard
