@@ -88,17 +88,17 @@ impl IntervalIndex {
         contig: &str,
         start: u64,
         end: u64,
-    ) -> Box<dyn Iterator<Item = &'a IndexedSpan> + 'a> {
-        let Some(spans) = self.by_contig.get(contig) else {
-            return Box::new(std::iter::empty());
-        };
+    ) -> impl Iterator<Item = &'a IndexedSpan> + 'a {
+        let spans = self
+            .by_contig
+            .get(contig)
+            .map(Vec::as_slice)
+            .unwrap_or_default();
         let first = first_span_with_end_after(spans, start);
-        Box::new(
-            spans[first..]
-                .iter()
-                .take_while(move |span| span.start < end)
-                .filter(move |span| span.end > start),
-        )
+        spans[first..]
+            .iter()
+            .take_while(move |span| span.start < end)
+            .filter(move |span| span.end > start)
     }
 
     fn overlaps(&self, contig: &str, start: u64, end: u64) -> bool {
@@ -1311,6 +1311,51 @@ pub fn collect_hs_metrics<R: Read>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn interval_queries_match_linear_half_open_oracle() {
+        let spans: Vec<Span> = (0..64)
+            .map(|index| Span {
+                contig: format!("chr{}", index % 2),
+                start: (index / 2) * 7,
+                end: (index / 2) * 7 + 3,
+                name: index.to_string(),
+            })
+            .collect();
+        let index = IntervalIndex::from_spans(&spans);
+        for contig in ["chr0", "chr1", "missing"] {
+            for start in 0..230 {
+                let expected_index = spans.iter().position(|span| {
+                    span.contig == contig && span.start <= start && start < span.end
+                });
+                assert_eq!(index.index_at(contig, start), expected_index);
+                for end in (start + 1)..=230 {
+                    let expected: Vec<usize> = spans
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, span)| {
+                            span.contig == contig && span.start < end && span.end > start
+                        })
+                        .map(|(position, _)| position)
+                        .collect();
+                    let actual: Vec<usize> = index
+                        .candidates(contig, start, end)
+                        .map(|span| span.index)
+                        .collect();
+                    assert_eq!(actual, expected);
+                    assert_eq!(index.overlaps(contig, start, end), !expected.is_empty());
+                    let expected_bases: u64 = expected
+                        .iter()
+                        .map(|&position| {
+                            let span = &spans[position];
+                            span.end.min(end) - span.start.max(start)
+                        })
+                        .sum();
+                    assert_eq!(index.overlap_bases(contig, start, end), expected_bases);
+                }
+            }
+        }
+    }
 
     fn test_config() -> HsMetricsConfig {
         HsMetricsConfig {

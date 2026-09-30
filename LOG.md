@@ -1,5 +1,44 @@
 # Turbo Picard work log
 
+## 2026-09-30 — remove interval-query allocations and whole-file parity reads
+
+- Based on `724cadc16bd7714454da4961b64a1e31a42e6f43`. HsMetrics interval
+  candidates now use a concrete slice iterator instead of a boxed iterator.
+  The interval search, half-open coordinates, coverage policy and metrics are
+  unchanged. A linear oracle checks all nonempty query ranges on two contigs,
+  gaps, exact boundaries and a missing contig.
+  Rebased onto `9ad15c17bb6179fca51520a7118e306e1157c6bd` before publication;
+  its intervening documentation/metadata changes leave benchmarked runtime
+  source unchanged.
+- `compare_binary_files` reads exact 1 MiB chunks until both EOFs rather than
+  loading both complete files. Regression tests cover empty/equal files,
+  differing lengths in both directions, trailing zero bytes and changes at
+  chunk boundaries. This preserves exact byte parity for coverage sidecars.
+- Reproduce the synthetic interval component benchmark with:
+
+  ```sh
+  python3 tools/bench_hs_interval_lookup.py \
+    --baseline-ref 724cadc16bd7714454da4961b64a1e31a42e6f43 \
+    --output benchmarks/hs-interval-lookup-20260930.csv
+  ```
+
+  Five repetitions per variant, alternating order, one million point queries
+  over 4,096 synthetic spans. Production interval code is extracted verbatim;
+  both checksums match. Rust 1.98.1, `-O`, Linux x86_64, no resource limits.
+  Median lookup time: baseline 0.036543 s, candidate 0.024689 s (1.48x).
+  Counted allocations: 1,000,000 baseline, zero candidate in every run.
+  Raw timings, source/harness hashes and compiler version are retained in the
+  CSV. This is a component measurement, not a full-command or WES benchmark;
+  RSS was not measured for this harness.
+- Local checks: 420 Rust tests passed (one ignored); the Python tooling suite
+  ran 495 tests (494 passed, one skipped because samtools is unavailable);
+  formatting, Python compilation and required coverage,
+  benchmark-evidence and link verifiers passed. The existing CollectHsMetrics
+  parity script matched Picard 3.4.0 metrics, histogram and both sidecars with
+  overlapping-read clipping enabled and disabled.
+- Full native CI, package/container and workflow-starter gates remain required
+  before merge. No merge, tag, package publication or release is performed.
+
 ## 2026-08-14 — add executable WES/capture CollectHsMetrics trial path
 
 - Extended `tools/compare_real_data.py` and its audit wrapper with a bounded

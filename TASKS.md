@@ -6,6 +6,11 @@ and evidence-backed growth.
 
 ## Next gates
 
+- Verify the 30 September allocation-free HsMetrics interval lookup and
+  streaming binary parity comparison through the complete native CI workflow
+  before merge. Local component timings and tiny Picard parity are recorded in
+  `LOG.md`; they do not establish production WES throughput.
+
 1. Run the pinned production-scale MarkDuplicates protocol on a permissioned
    30x WGS input, plus representative WES, UMI/barcode, optical-heavy,
    multi-library, and reference-backed CRAM profiles.
