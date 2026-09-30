@@ -312,8 +312,13 @@ def report_first_line_difference(
 
 
 def compare_binary_files(picard_path: Path, turbo_path: Path, label: str) -> None:
-    if picard_path.read_bytes() != turbo_path.read_bytes():
-        raise SystemExit(f"{label} binary output differs from Picard")
+    with picard_path.open("rb") as picard, turbo_path.open("rb") as turbo:
+        while True:
+            before, after = picard.read(1024 * 1024), turbo.read(1024 * 1024)
+            if before != after:
+                raise SystemExit(f"{label} binary output differs from Picard")
+            if not before:
+                return
 
 
 def compare_fastq_trio(

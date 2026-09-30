@@ -9,6 +9,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 
 MODULE_PATH = Path(__file__).with_name("parity_compare.py")
@@ -21,6 +22,34 @@ SPEC.loader.exec_module(parity_compare)
 
 
 class ParityCompareTests(unittest.TestCase):
+    def test_binary_comparison_streams_equal_files_and_checks_both_eofs(self):
+        with tempfile.TemporaryDirectory() as directory:
+            left, right = Path(directory) / "left", Path(directory) / "right"
+            block = b"ACGT" * (1024 * 256)
+            for size in (0, 1, len(block), len(block) + 1, 3 * len(block) + 17):
+                data = (block * 4)[:size]
+                left.write_bytes(data)
+                right.write_bytes(data)
+                with patch.object(Path, "read_bytes", side_effect=AssertionError("whole-file read")):
+                    parity_compare.compare_binary_files(left, right, "fixture")
+                for extra in (b"x", b"\x00"):
+                    right.write_bytes(data + extra)
+                    for first, second in ((left, right), (right, left)):
+                        with self.assertRaisesRegex(SystemExit, "fixture binary output differs from Picard"):
+                            parity_compare.compare_binary_files(first, second, "fixture")
+
+    def test_binary_comparison_detects_changes_across_chunk_boundaries(self):
+        with tempfile.TemporaryDirectory() as directory:
+            left, right = Path(directory) / "left", Path(directory) / "right"
+            data = bytearray(b"A" * (2 * 1024 * 1024 + 7))
+            left.write_bytes(data)
+            for offset in (0, 1024 * 1024 - 1, 1024 * 1024, len(data) - 1):
+                changed = data.copy()
+                changed[offset] = ord("T")
+                right.write_bytes(changed)
+                with self.assertRaisesRegex(SystemExit, "binary output differs"):
+                    parity_compare.compare_binary_files(left, right, "fixture")
+
     def test_nonfinite_metrics_do_not_bypass_tolerances(self):
         for first, second in (("NaN", "7"), ("7", "NaN"), ("NaN", "Infinity"), ("Infinity", "-Infinity")):
             with self.subTest(first=first, second=second), tempfile.TemporaryDirectory() as tmp:
