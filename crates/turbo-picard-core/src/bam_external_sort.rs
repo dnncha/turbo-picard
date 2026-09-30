@@ -3,6 +3,7 @@
 //! Runs are ordinary BAM files. That avoids lossy record serialisation and
 //! permits the final k-way merge to write records directly to the destination.
 
+use crate::external_sort::reserve_run_slot;
 use crate::merge_tree::MergeTree;
 use crate::temp_runs::OwnedRuns;
 use rust_htslib::bam::{self, Read};
@@ -99,6 +100,12 @@ impl BamExternalSorter {
         if !self.records.is_empty() && incoming_bytes > self.config.max_bytes_in_ram.max(1) {
             self.spill_current_run(compare)?;
         }
+        reserve_run_slot(
+            &mut self.records,
+            self.resident_record_bytes.saturating_add(record_bytes),
+            self.config.max_bytes_in_ram,
+            self.config.max_records_in_ram,
+        )?;
         self.resident_record_bytes = self.resident_record_bytes.saturating_add(record_bytes);
         self.records.push(record);
         let estimated_bytes = self.resident_record_bytes.saturating_add(
@@ -301,6 +308,38 @@ mod tests {
 
     fn qname_compare(left: &bam::Record, right: &bam::Record) -> Ordering {
         left.qname().cmp(right.qname())
+    }
+
+    #[test]
+    fn bam_vector_growth_does_not_overshoot_the_run_budget() {
+        let dir = std::env::temp_dir().join(format!(
+            "turbo-bam-vector-budget-{}-{}",
+            process::id(),
+            SORTER_ID.fetch_add(1, AtomicOrdering::Relaxed),
+        ));
+        let mut record = bam::Record::new();
+        record.set(b"same", None, b"A", &[30]);
+        let budget = 5 * (record.inner().m_data as usize + std::mem::size_of::<bam::Record>());
+        let mut config = BamExternalSortConfig::new(&dir);
+        config.max_bytes_in_ram = budget;
+        let mut sorter = BamExternalSorter::new(bam::Header::new(), config).unwrap();
+        for index in 0..40_u8 {
+            let mut next = record.clone();
+            next.set_mapq(index);
+            sorter.push(next, qname_compare).unwrap();
+            assert!(sorter.metrics().max_estimated_bytes <= budget);
+        }
+        let mut qualities = Vec::new();
+        sorter
+            .finish_into(qname_compare, |record| {
+                qualities.push(record.mapq());
+                Ok(())
+            })
+            .unwrap();
+        qualities.sort_unstable();
+        assert_eq!(qualities, (0..40_u8).collect::<Vec<_>>());
+        assert!(fs::read_dir(&dir).unwrap().next().is_none());
+        fs::remove_dir(&dir).unwrap();
     }
 
     #[test]

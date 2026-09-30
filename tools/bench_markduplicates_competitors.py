@@ -21,6 +21,8 @@ import statistics
 import subprocess
 import sys
 import threading
+import tempfile
+from contextlib import closing
 import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -73,6 +75,7 @@ class RunResult:
     metrics: str
     resource_backend: str
     error: str | None = None
+    removed_environment: tuple[str, ...] = ()
 
 
 def sha256_file(path: Path) -> str:
@@ -171,7 +174,7 @@ def preset_tools(
             (turbo, "MarkDuplicates", "I={input}", "O={output}", "M={metrics}", "TMP_DIR={tmp}", *reference, *common),
             (turbo, "--version"),
             "picard",
-            (("TURBO_PICARD_THREADS", "{threads}"),),
+            (("TURBO_PICARD_THREADS", "{threads}"), ("TURBO_PICARD_REQUIRE_NATIVE", "1")),
         ) if turbo else None,
         "picard": ToolSpec(
             "picard",
@@ -181,7 +184,7 @@ def preset_tools(
         ) if picard else None,
         "samtools": ToolSpec(
             "samtools",
-            (samtools, "markdup", "-@", "{threads}", "--no-PG", *samtools_reference, "-f", "{metrics}", "{input}", "{output}"),
+            (samtools, "markdup", "-@", "{threads}", "--no-PG", "-T", "{tmp}/samtools", *samtools_reference, "-f", "{metrics}", "{input}", "{output}"),
             (samtools, "--version"),
             "samtools",
         ) if samtools else None,
@@ -343,7 +346,7 @@ def gnu_time_available() -> bool:
         )
     except OSError:
         return False
-    return "GNU time" in result.stdout
+    return result.returncode == 0 and "gnu time" in result.stdout.lower()
 
 
 def run_metered(command, stdout_handle, stderr_handle, resource_log, timeout, environment):
@@ -351,15 +354,20 @@ def run_metered(command, stdout_handle, stderr_handle, resource_log, timeout, en
     if gnu_time_available():
         time_format = f"{TIME_PREFIX}\t%e\t%U\t%S\t%M\t%x"
         try:
-            completed = subprocess.run(
+            process = subprocess.Popen(
                 [str(GNU_TIME), "-f", time_format, "-o", str(resource_log), *command],
                 stdout=stdout_handle,
                 stderr=stderr_handle,
-                check=False,
-                timeout=timeout,
+                start_new_session=True,
                 env=environment,
             )
-            return completed.returncode, parse_time_file(resource_log), None, "gnu-time"
+            try:
+                return_code = process.wait(timeout=timeout)
+            except subprocess.TimeoutExpired:
+                os.killpg(process.pid, signal.SIGKILL)
+                process.wait()
+                raise
+            return return_code, parse_time_file(resource_log), None, "gnu-time"
         except (OSError, subprocess.TimeoutExpired, ValueError) as exc:
             return None, {}, str(exc), "gnu-time"
 
@@ -434,9 +442,17 @@ def run_once(
         for key, value in spec.environment
     }
     environment = os.environ.copy()
+    removed_environment = ()
+    if spec.name == "turbo-picard":
+        removed_environment = tuple(sorted(key for key in environment if key.startswith("TURBO_PICARD_")))
+        for key in removed_environment:
+            environment.pop(key)
+        run_environment["TURBO_PICARD_REQUIRE_NATIVE"] = "1"
+    run_environment["TMPDIR"] = str(tmp.resolve())
     environment.update(run_environment)
     (root / "command.json").write_text(json.dumps(command, indent=2) + "\n", encoding="utf-8")
     (root / "environment.json").write_text(json.dumps(run_environment, indent=2) + "\n", encoding="utf-8")
+    (root / "removed-environment.json").write_text(json.dumps(removed_environment, indent=2) + "\n", encoding="utf-8")
     exit_code: int | None = None
     error: str | None = None
     resources: dict[str, float | int] = {}
@@ -468,6 +484,7 @@ def run_once(
         metrics=str(metrics.relative_to(root.parents[2])),
         resource_backend=resource_backend,
         error=error,
+        removed_environment=removed_environment,
     )
 
 
@@ -521,6 +538,8 @@ def parse_sam_fields(line: str) -> tuple[object, ...] | None:
         tags.get("RX"),
         tags.get("BX"),
         tags.get("BY"),
+        tuple(fields[:11]),
+        tuple(sorted(tag for tag in fields[11:] if not tag.startswith("PG:Z:"))),
     )
 
 
@@ -546,25 +565,33 @@ def sam_fields(
             if reference_fasta is not None
             else []
         )
-        process = subprocess.Popen(
-            [samtools, "view", "-h", *reference_args, str(path)],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-        )
-        assert process.stdout is not None
-        for line in process.stdout:
-            parsed = parse_sam_fields(line)
-            if parsed is not None:
-                yield parsed
-        process.stdout.close()
-        stderr = process.stderr.read() if process.stderr is not None else ""
-        if process.stderr is not None:
-            process.stderr.close()
-        return_code = process.wait()
-        if return_code != 0:
-            detail = stderr.strip() or f"samtools exited with status {return_code}"
-            raise RuntimeError(f"samtools could not read {path}: {detail}")
+        with tempfile.TemporaryFile(mode="w+t") as errors:
+            process = subprocess.Popen(
+                [samtools, "view", "-h", *reference_args, str(path)],
+                stdout=subprocess.PIPE,
+                stderr=errors,
+                text=True,
+            )
+            assert process.stdout is not None
+            try:
+                for line in process.stdout:
+                    parsed = parse_sam_fields(line)
+                    if parsed is not None:
+                        yield parsed
+                return_code = process.wait()
+                if return_code != 0:
+                    errors.seek(0)
+                    detail = errors.read().strip() or f"samtools exited with status {return_code}"
+                    raise RuntimeError(f"samtools could not read {path}: {detail}")
+            finally:
+                process.stdout.close()
+                if process.poll() is None:
+                    process.terminate()
+                    try:
+                        process.wait(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        process.kill()
+                        process.wait()
         return
     pysam_kwargs = (
         {"reference_filename": str(reference_fasta.resolve())}
@@ -573,8 +600,7 @@ def sam_fields(
     )
     with pysam.AlignmentFile(str(path), "rb", **pysam_kwargs) as handle:
         for record in handle.fetch(until_eof=True):
-            tag = lambda name: record.get_tag(name) if record.has_tag(name) else None
-            yield (record.query_name, record.is_duplicate, record.reference_id, record.reference_start, record.cigarstring, record.next_reference_id, record.next_reference_start, record.template_length, tag("DT"), tag("DS"), tag("DI"), tag("RX"), tag("BX"), tag("BY"))
+            yield parse_sam_fields(record.to_string())
 
 
 def has_picard_metrics(path: Path) -> bool:
@@ -608,21 +634,20 @@ def compare_outputs(
     compared = 0
     mismatch: dict[str, object] | None = None
     try:
-        left = sam_fields(reference_output, reference_fasta)
-        right = sam_fields(candidate_output, reference_fasta)
-        while True:
-            a = next(left, None)
-            b = next(right, None)
-            if a is None or b is None:
+        with closing(sam_fields(reference_output, reference_fasta)) as left, closing(sam_fields(candidate_output, reference_fasta)) as right:
+            while True:
+                a = next(left, None)
+                b = next(right, None)
+                if a is None or b is None:
+                    if a != b:
+                        mismatch = {"record_index": compared, "reason": "record counts differ"}
+                    break
                 if a != b:
-                    mismatch = {"record_index": compared, "reason": "record counts differ"}
-                break
-            if a != b:
-                mismatch = {"record_index": compared, "reason": "duplicate-marking semantics differ", "reference": list(a), "candidate": list(b)}
-                break
-            compared += 1
+                    mismatch = {"record_index": compared, "reason": "alignment fields or duplicate-marking semantics differ", "reference": list(a), "candidate": list(b)}
+                    break
+                compared += 1
     except (OSError, ValueError, RuntimeError) as exc:
-        return {"status": "ERROR", "comparator": "ordered duplicate flags/tags and alignment identity", "records_compared": compared, "error": str(exc)}
+        return {"status": "ERROR", "comparator": "v2: ordered full SAM fields and typed tags excluding PG", "records_compared": compared, "error": str(exc)}
     metrics_compared = has_picard_metrics(reference_metrics) and has_picard_metrics(candidate_metrics)
     metrics_match = None
     if metrics_compared:
@@ -630,11 +655,45 @@ def compare_outputs(
     status = "PASS" if mismatch is None and metrics_match is not False else "FAIL"
     return {
         "status": status,
-        "comparator": "ordered duplicate flags/tags and alignment identity" + (" plus normalized Picard DuplicationMetrics" if metrics_compared else " (metrics not comparable)"),
+        "comparator": "v2: ordered full SAM fields and typed tags excluding PG" + (" plus normalized Picard DuplicationMetrics" if metrics_compared else " (metrics not comparable)"),
         "records_compared": compared,
         "alignment_mismatch": mismatch,
         "metrics_compared": metrics_compared,
         "metrics_match": metrics_match,
+    }
+
+
+def check_measured_parity(
+    tool: dict[str, object],
+    reference_run: dict[str, object],
+    output_dir: Path,
+    reference_fasta: Path | None = None,
+) -> dict[str, object]:
+    comparisons = []
+    for run in tool["runs"]:
+        if run["warmup"] or run["status"] != "success":
+            continue
+        if run is reference_run:
+            comparison = {"status": "REFERENCE", "comparator": "self"}
+        else:
+            comparison = compare_outputs(
+                output_dir / reference_run["output"],
+                output_dir / run["output"],
+                output_dir / reference_run["metrics"],
+                output_dir / run["metrics"],
+                reference_fasta,
+            )
+        comparisons.append({"repeat": run["repeat"], "output": run["output"], **comparison})
+    tool["parity_runs"] = comparisons
+    if not comparisons:
+        return {"status": "NOT_RUN", "reason": "candidate has no successful measured output"}
+    for comparison in comparisons:
+        if comparison["status"] not in {"PASS", "REFERENCE"}:
+            return {**comparison, "checked_repeats": len(comparisons)}
+    return {
+        **comparisons[0],
+        "checked_repeats": len(comparisons),
+        "scope": "every successful measured repeat against the first successful reference output",
     }
 
 
@@ -825,6 +884,10 @@ def main(argv: list[str] | None = None) -> int:
         },
         "protocol": {
             "threads": args.threads,
+            "thread_scope": "per-tool option; per-handle HTS and samtools compression workers exclude the main thread, not a total process thread limit",
+            "parity_scope": "every successful measured repeat, including reference consistency",
+            "alignment_contract": "v2: ordered full SAM fields and typed auxiliary tags excluding PG",
+            "turbo_environment_policy": "remove inherited TURBO_PICARD_* and require native execution; explicit tool environment retained",
             "repeats": args.repeats,
             "warmups": args.warmups,
             "temporary_disk_sample_ms": args.disk_sample_ms,
@@ -888,21 +951,10 @@ def main(argv: list[str] | None = None) -> int:
     for name, tool in tools_report.items():
         if tool.get("status") == "unavailable":
             continue
-        candidate = next((run for run in tool["runs"] if not run["warmup"] and run["status"] == "success"), None)
         if not reference_run:
             tool["parity"] = {"status": "NOT_RUN", "reason": f"reference tool {args.reference_tool!r} has no successful measured output"}
-        elif not candidate:
-            tool["parity"] = {"status": "NOT_RUN", "reason": "candidate has no successful measured output"}
-        elif name == args.reference_tool:
-            tool["parity"] = {"status": "REFERENCE", "comparator": "self"}
         else:
-            tool["parity"] = compare_outputs(
-                output_dir / reference_run["output"],
-                output_dir / candidate["output"],
-                output_dir / reference_run["metrics"],
-                output_dir / candidate["metrics"],
-                args.reference_fasta,
-            )
+            tool["parity"] = check_measured_parity(tool, reference_run, output_dir, args.reference_fasta)
 
     required_names = [name.strip() for name in args.require_tools.split(",") if name.strip()]
     required_failures = []

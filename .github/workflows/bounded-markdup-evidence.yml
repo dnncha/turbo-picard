@@ -25,7 +25,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
-      BASE_SHA: '62ccb0ce436a8da6edfcf86e7f6921326e909709'
+      BASE_SHA: ${{ github.event.pull_request.base.sha }}
       HEAD_SHA: ${{ github.event.pull_request.head.sha }}
       CARGO_BUILD_JOBS: '4'
     steps:
@@ -36,7 +36,7 @@ jobs:
           persist-credentials: false
       - uses: actions/checkout@v5
         with:
-          ref: '62ccb0ce436a8da6edfcf86e7f6921326e909709'
+          ref: ${{ github.event.pull_request.base.sha }}
           path: baseline
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@stable

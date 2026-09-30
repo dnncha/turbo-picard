@@ -51,6 +51,19 @@ Production-scale WGS, WES, UMI, optical-heavy, CRAM, and multi-library evidence
 still belongs in the pinned evidence workflow described in
 :doc:`production-readiness`.
 
+External sort memory
+--------------------
+
+The keyed and BAM external sorters count reserved vector capacity and record
+buffers in their resident-run budget. They spill before admitting a record that
+would exceed it and cap geometric vector growth to the remaining space. A single
+oversized record is isolated in its own run with one metadata slot.
+
+This is an allocation budget for the resident run, not a process RSS limit.
+The caller temporarily holds the incoming record; allocator overhead, HTSlib
+buffers, concurrent sorters and merge heads also use memory. Use measured peak
+RSS and a scheduler or cgroup memory limit when planning a whole-command run.
+
 Threading
 ---------
 
@@ -82,6 +95,11 @@ a dedicated application reader thread, such as large WGS/QC paths, use a smaller
 pipeline thread for the same CPU budget. Set
 ``TURBO_PICARD_PIPELINE_READER_THREADS`` only when profiling shows that this
 specialized path needs a different value from ``TURBO_PICARD_READER_THREADS``.
+
+These worker counts apply per HTSlib handle, not to the total process. Concurrent
+readers, writers and application threads add to them. Use explicit role counts
+when controlling CPU use; ``TURBO_PICARD_MAX_THREADS`` caps automatic defaults
+only and does not override explicit counts.
 
 This helps most when the command is spending real time in BAM or CRAM
 compression, decompression, reference-backed CRAM work, or BAI generation after
