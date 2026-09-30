@@ -327,7 +327,7 @@ mod tests {
             let mut next = record.clone();
             next.set_mapq(index);
             sorter.push(next, qname_compare).unwrap();
-            assert!(sorter.metrics().max_estimated_bytes <= budget);
+            assert!(sorter.metrics.max_estimated_bytes <= budget);
         }
         let mut qualities = Vec::new();
         sorter
