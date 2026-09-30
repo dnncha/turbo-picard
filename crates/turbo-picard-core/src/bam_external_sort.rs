@@ -327,6 +327,16 @@ mod tests {
             let mut next = record.clone();
             next.set_mapq(index);
             sorter.push(next, qname_compare).unwrap();
+            let allocated = sorter
+                .records
+                .iter()
+                .map(|record| record.inner().m_data as usize)
+                .sum::<usize>()
+                + sorter.records.capacity() * std::mem::size_of::<bam::Record>();
+            assert!(
+                allocated <= budget,
+                "allocated {allocated} with budget {budget}"
+            );
             assert!(sorter.metrics.max_estimated_bytes <= budget);
         }
         let mut qualities = Vec::new();

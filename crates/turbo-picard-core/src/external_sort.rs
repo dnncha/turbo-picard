@@ -392,8 +392,12 @@ mod tests {
         let mut sorter = ExternalSorter::new(config).unwrap();
         for index in 0..40_u8 {
             sorter.push(vec![1], vec![index]).unwrap();
-            let allocated =
-                sorter.resident_bytes + sorter.items.capacity() * std::mem::size_of::<SortItem>();
+            let allocated = sorter
+                .items
+                .iter()
+                .map(|item| item.key.capacity() + item.payload.capacity())
+                .sum::<usize>()
+                + sorter.items.capacity() * std::mem::size_of::<SortItem>();
             assert!(
                 allocated <= budget,
                 "allocated {allocated} with budget {budget}"
