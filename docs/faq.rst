@@ -1,5 +1,5 @@
-FAQ
-===
+Turbo Picard FAQ
+================
 
 Is this trying to replace all of Picard?
 ----------------------------------------

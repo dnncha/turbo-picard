@@ -1,5 +1,5 @@
-Benchmarks
-==========
+Turbo Picard vs Picard benchmarks
+=================================
 
 Benchmarks are useful only when they are reproducible and tied to parity. The
 repository benchmark suite is designed to report speed while keeping command
