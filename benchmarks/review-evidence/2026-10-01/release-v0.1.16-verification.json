@@ -1,0 +1,80 @@
+{
+  "observed_at_utc": "2026-10-01T23:18:15.526121+00:00",
+  "version": "0.1.16",
+  "tag": "v0.1.16",
+  "source_commit": "68a6ed006c455fb42b040f5264d282a4332bf86e",
+  "source_tree": "e2cfaa5d3aaa2f8f5ee10da29907bed73068bf31",
+  "release_url": "https://github.com/dnncha/turbo-picard/releases/tag/v0.1.16",
+  "pypi_url": "https://pypi.org/project/turbo-picard/0.1.16/",
+  "checks": {
+    "version": "0.1.16",
+    "source_commit": "68a6ed006c455fb42b040f5264d282a4332bf86e",
+    "pypi_distributions": 5,
+    "github_assets": 8,
+    "cross_channel_hashes_match": true,
+    "source_archive_hash_matches": true
+  },
+  "registry": {
+    "tag": "0.1.16",
+    "digest": "sha256:c3d96da52a0b39f2f998a901b13b33863e37c5412078dec588cb2630ac6bda7e",
+    "version": "0.1.16",
+    "revision": "68a6ed006c455fb42b040f5264d282a4332bf86e"
+  },
+  "github_source_sha256": "e7c3c6c6e1a2ba3e1a70d630acff462d907e0f3984a63b06c94c203feee0a9b8",
+  "artifacts": [
+    {
+      "bytes": 8763698,
+      "filename": "turbo_picard-0.1.16-py3-none-macosx_10_12_x86_64.whl",
+      "kind": "wheel",
+      "sha256": "5753895ffc83ef1247a218b503c621676a05dd2bf62d85ba5d7effae7e9557e5"
+    },
+    {
+      "bytes": 9085054,
+      "filename": "turbo_picard-0.1.16-py3-none-macosx_11_0_arm64.whl",
+      "kind": "wheel",
+      "sha256": "1f50af4def119d1180dffd12e18942ce73e5192456a1d301d435912e1da4f0fa"
+    },
+    {
+      "bytes": 9406367,
+      "filename": "turbo_picard-0.1.16-py3-none-manylinux_2_17_aarch64.manylinux2014_aarch64.whl",
+      "kind": "wheel",
+      "sha256": "7f19192e3da77706bed689bbbb9da376e158163ce854d9628c053f093ec8196e"
+    },
+    {
+      "bytes": 9590800,
+      "filename": "turbo_picard-0.1.16-py3-none-manylinux_2_17_x86_64.manylinux2014_x86_64.whl",
+      "kind": "wheel",
+      "sha256": "f5d849a4015e754cc60da306c6f663c4742423d1a70e6dda82fd41ddaef76b27"
+    },
+    {
+      "bytes": 264897,
+      "filename": "turbo_picard-0.1.16.tar.gz",
+      "kind": "sdist",
+      "sha256": "d3b0a6cc290550b33ab0190f4988d3a1431ce701e0a98da8b574475314eed8aa"
+    }
+  ],
+  "ci": {
+    "release_pr": 36935688024,
+    "merged_source": 36937384143,
+    "release_creation": 36938647768,
+    "pypi": 36938672469,
+    "container": 36938675017
+  },
+  "installed_linux_smoke": {
+    "fresh_venv": true,
+    "installed_from": "PyPI",
+    "turbo_picard_version": "0.1.16",
+    "picard_shim_version": "0.1.16",
+    "native_execution_required": true,
+    "fixture": "fixtures/markduplicates/basic/input.bam",
+    "fixture_sha256": "6c26429951752a8a786cdbf4dfbd9f00910b7cd19b62d2f0199a9eb034014820",
+    "markduplicates_executed": true,
+    "picard_semantic_output_comparison_passed": true,
+    "comparison_input_representation": "BAMs rendered to SAM with samtools 1.24; PG provenance excluded by existing comparator"
+  },
+  "limits": [
+    "Linux ARM64 wheel cross-built and artifact-validated; no ARM64 execution claimed here.",
+    "Scientific and performance scope remains the retained fixture evidence; production-scale or universal superiority is not established."
+  ]
+}
+
