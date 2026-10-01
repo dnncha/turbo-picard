@@ -4,8 +4,8 @@
 Requires real Picard, samtools and built Turbo Picard executables. Existing
 outputs are never overwritten. Comparisons cover every SAM alignment field and
 auxiliary tag except tool-specific PG provenance, record order, SQ/RG header
-content, and the existing normalized DuplicationMetrics table contract. Plot
-rendering and histogram equivalence are not established by this runner.
+content, normalized DuplicationMetrics tables, and numeric histogram columns
+and bins (bounded-v3). Plot rendering is not established by this runner.
 """
 from __future__ import annotations
 
@@ -15,10 +15,13 @@ import json
 import os
 import platform
 import shutil
+import signal
 import statistics
 import subprocess
 import time
+import threading
 from dataclasses import dataclass
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Iterator
 
@@ -30,6 +33,7 @@ class Case:
     padding: int
     family_size: int = 2
     remove: str = "none"
+    paired_padding: bool = False
 
 
 def cases() -> list[Case]:
@@ -43,12 +47,15 @@ def cases() -> list[Case]:
         Case("large-duplicate-family", "family", 80_000, family_size=20_000),
         Case("spill-600k", "ties", 600_000),
         Case("spill-1200k", "ties", 1_200_000),
+        Case("paired-600k", "ties", 300_000, paired_padding=True),
+        Case("paired-spill-1200k", "ties", 600_000, paired_padding=True),
     ]
 
 
 def sam_lines(case: Case) -> Iterator[str]:
     yield "@HD\tVN:1.6\tSO:coordinate\n"
-    yield "@SQ\tSN:chr1\tLN:100000000\n"
+    reference_length = 1_000_000_000 if case.paired_padding else 100_000_000
+    yield f"@SQ\tSN:chr1\tLN:{reference_length}\n"
     yield "@RG\tID:rg1\tSM:sample\tLB:lib1\tPL:ILLUMINA\n"
     if case.shape in {"same-library", "separate-libraries", "optical"}:
         library = "lib2" if case.shape == "separate-libraries" else "lib1"
@@ -75,6 +82,14 @@ def sam_lines(case: Case) -> Iterator[str]:
     for name, flag, position in [("secondary", 256, 301), ("supplementary", 2048, 321)]:
         yield f"{name}\t{flag}\tchr1\t{position}\t30\t20M\t*\t0\t0\t{sequence}\t{'?' * 20}\tRG:Z:rg1\n"
     for index in range(case.padding):
+        if case.paired_padding:
+            # 150-base reads with distinct 350-base template spans. Positions
+            # stay coordinate ordered; each pair is a no-duplicate group.
+            position = 1000 + 400 * index
+            for flag, own, mate, length in [(99, position, position + 200, 350),
+                                             (147, position + 200, position, -350)]:
+                yield f"pair-{index:08}\t{flag}\tchr1\t{own}\t60\t150M\t=\t{mate}\t{length}\t{'ACGT' * 37 + 'AC'}\t{'?' * 150}\tRG:Z:rg1\n"
+            continue
         yield f"pad-{index:08}\t0\tchr1\t{1000 + 30 * index}\t60\t20M\t*\t0\t0\t{sequence}\t{'?' * 20}\tRG:Z:rg1\n"
     # The family case intentionally exercises the old external path too; a
     # terminal unplaced record would force the old compact fallback instead.
@@ -124,19 +139,74 @@ def summarize_bam(path: Path, samtools: str, log_dir: Path) -> dict:
             "duplicate_records": duplicates, "sq_rg_headers": sorted(headers)}
 
 
-def measure(argv: list[str], directory: Path, env: dict[str, str]) -> dict:
+def read_histograms(path: Path) -> list[dict]:
+    """Compare every histogram column/bin while normalizing numeric spelling."""
+    sections = []
+    section = None
+    for line in path.read_text().splitlines():
+        if line.startswith("## HISTOGRAM"):
+            section = {"columns": None, "rows": []}
+            sections.append(section)
+        elif line.startswith("#"):
+            section = None
+        elif section is not None and line.strip():
+            fields = line.split("\t")
+            if section["columns"] is None:
+                if len(set(fields)) != len(fields):
+                    raise ValueError("duplicate histogram columns")
+                section["columns"] = fields
+                continue
+            if len(fields) != len(section["columns"]):
+                raise ValueError("malformed histogram row width")
+            values = []
+            for field in fields:
+                try:
+                    value = Decimal(field)
+                except InvalidOperation as exc:
+                    raise ValueError("nonnumeric histogram value") from exc
+                if not value.is_finite():
+                    raise ValueError("nonfinite histogram value")
+                values.append(format(value.normalize(), "f") if value else "0")
+            section["rows"].append(values)
+    for section in sections:
+        if section["columns"] is None:
+            raise ValueError("missing histogram header")
+        bins = [row[0] for row in section["rows"]]
+        if len(set(bins)) != len(bins):
+            raise ValueError("duplicate histogram bins")
+        section["rows"].sort(key=lambda row: Decimal(row[0]))
+    return sections
+
+
+def measure(argv: list[str], directory: Path, env: dict[str, str], timeout_seconds: float = 300) -> dict:
     directory.mkdir()
     (directory / "scratch").mkdir()
     resource = directory / "resources.txt"
-    command = ["/usr/bin/time", "-f", "%e %U %S %M", "-o", str(resource), *argv]
+    command = [shutil.which("time") or "/usr/bin/time", "-f", "%e %U %S %M", "-o", str(resource), *argv]
     started = time.perf_counter()
+    timed_out = threading.Event()
     with (directory / "stdout.txt").open("w") as stdout, (directory / "stderr.txt").open("w") as stderr:
-        try:
-            result = subprocess.run(command, stdout=stdout, stderr=stderr, env=env, timeout=300)
-            exit_code = result.returncode
-        except subprocess.TimeoutExpired:
+        with subprocess.Popen(command, stdout=stdout, stderr=stderr, env=env,
+                              start_new_session=True) as process:
+            def expire() -> None:
+                if process.poll() is None:
+                    timed_out.set()
+                    try:
+                        os.killpg(process.pid, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+            deadline = threading.Timer(timeout_seconds, expire)
+            deadline.daemon = True
+            deadline.start()
+            try:
+                # Blocking wait avoids the 50ms polling quantization introduced
+                # by Popen.wait(timeout=...) on short native commands.
+                exit_code = process.wait()
+            finally:
+                deadline.cancel()
+        if timed_out.is_set():
             exit_code = 124
-            stderr.write("\nBenchmark command timed out after 300 seconds.\n")
+            stderr.write(f"\nBenchmark process group timed out after {timeout_seconds} seconds.\n")
     row = {"argv": argv, "exit_code": exit_code, "wall_seconds": time.perf_counter() - started}
     if exit_code == 0:
         elapsed, user, system, rss = resource.read_text().split()
@@ -165,11 +235,12 @@ def main() -> int:
     root = args.output_dir.resolve()
     root.mkdir(parents=True, exist_ok=False)
     report = {"scope": "adversarial synthetic whole MarkDuplicates commands; not WGS/cohort evidence",
-              "comparison": "ordered full alignment fields and tags excluding PG; SQ/RG headers; normalized DuplicationMetrics table (not histograms/charts)",
+              "comparison": "ordered full alignment fields and tags excluding PG; SQ/RG headers; normalized DuplicationMetrics tables and numeric histograms (bounded-v3; not charts)",
               "candidate_source": os.environ.get("HEAD_SHA"), "baseline_source": os.environ.get("BASE_SHA"),
               "harness_sha256": digest_file(Path(__file__)),
               "host": platform.platform(), "cpu_affinity": sorted(os.sched_getaffinity(0)) if hasattr(os, "sched_getaffinity") else None,
               "repeats": args.repeats, "warmups": 1, "cache_policy": "warm page cache; no fsync or cache dropping",
+              "wall_measurement": "blocking wait with process-group timeout watchdog",
               "inputs": [], "runs": [], "summaries": [], "candidate_pass": True}
     executables = {"candidate": str(args.candidate.resolve()), "picard": str(Path(args.picard).resolve())}
     if args.baseline:
@@ -188,7 +259,7 @@ def main() -> int:
     affinity = []
     if shutil.which("taskset") and hasattr(os, "sched_getaffinity"):
         affinity = ["taskset", "-c", str(min(os.sched_getaffinity(0)))]
-    report["execution_policy"] = {"affinity_prefix": affinity, "turbo_hts_workers": 0, "java_active_processors": 1, "java_heap": "2g"}
+    report["execution_policy"] = {"affinity_prefix": affinity, "turbo_hts_workers": 0, "java_active_processors": 1, "java_heap": "2g", "gnu_time": shutil.which("time") or "/usr/bin/time"}
 
     def save() -> None:
         (root / "report.json").write_text(json.dumps(report, indent=2) + "\n")
@@ -202,7 +273,7 @@ def main() -> int:
         bam = case_dir / "input.bam"
         subprocess.run([args.samtools, "view", "-b", "-o", str(bam), str(sam)], check=True, timeout=120)
         report["inputs"].append({"case": case.name, "shape": case.shape, "padding": case.padding,
-                                 "sam_sha256": digest_file(sam), "bam_sha256": digest_file(bam), "bam_bytes": bam.stat().st_size})
+                                 "paired_padding": case.paired_padding, "sam_sha256": digest_file(sam), "bam_sha256": digest_file(bam), "bam_bytes": bam.stat().st_size})
         sam.unlink()
         reference = None
         for repeat in range(args.repeats + 1):
@@ -236,6 +307,16 @@ def main() -> int:
                     if not table:
                         raise RuntimeError(f"missing duplication metrics: {metrics}")
                     summary["duplication_metrics"] = [table[0], *sorted(table[1:])]
+                    try:
+                        summary["histograms"] = read_histograms(metrics)
+                    except ValueError as error:
+                        summary["histogram_error"] = str(error)
+                        if version == "picard":
+                            row["output_summary"] = summary
+                            row["parity_pass"] = False
+                            report["candidate_pass"] = False
+                            save()
+                            raise RuntimeError("Picard oracle histogram is invalid") from error
                     row["output_summary"] = summary
                     row["output_bytes"] = output.stat().st_size
                     row["external_plan_reported"] = "using external-sort plan" in (destination / "stderr.txt").read_text()

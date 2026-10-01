@@ -3,6 +3,7 @@
 mod bounded_plan;
 #[cfg(test)]
 mod bounded_plan_tests;
+mod external_mates;
 
 use regex::Regex;
 use rust_htslib::bam::header::HeaderRecord;
@@ -10,7 +11,7 @@ use rust_htslib::bam::record::Aux;
 use rust_htslib::bam::{self, Read, index};
 use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 use std::cmp::Ordering;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::fs::File;
 use std::io::{BufReader, BufWriter, Read as IoRead, Write};
@@ -729,9 +730,17 @@ fn paired_external_barcode_values(
 }
 
 fn external_sorter(tmp_dir: &Path, prefix: &str) -> Result<ExternalSorter, MarkDuplicatesError> {
+    external_sorter_with_bytes(tmp_dir, prefix, EXTERNAL_MARKDUP_MAX_BYTES_IN_RAM)
+}
+
+fn external_sorter_with_bytes(
+    tmp_dir: &Path,
+    prefix: &str,
+    max_bytes: usize,
+) -> Result<ExternalSorter, MarkDuplicatesError> {
     let mut sort_config = ExternalSortConfig::new(tmp_dir);
     sort_config.max_records_in_ram = EXTERNAL_MARKDUP_MAX_RECORDS_IN_RAM;
-    sort_config.max_bytes_in_ram = EXTERNAL_MARKDUP_MAX_BYTES_IN_RAM;
+    sort_config.max_bytes_in_ram = max_bytes;
     sort_config.prefix = prefix.to_string();
     ExternalSorter::new(sort_config).map_err(MarkDuplicatesError::Operation)
 }
@@ -814,7 +823,13 @@ fn try_run_external_plan(
         duplicate_set_histogram: BTreeMap::new(),
     };
     let temporary = external_plan_tempdir(config)?;
-    let mut qname_sorter = external_sorter(temporary.path(), "turbo-picard-markdup-qname")?;
+    // The two mate stages share the former QNAME window's allocation budget.
+    let mate_bytes = EXTERNAL_MARKDUP_MAX_BYTES_IN_RAM / 2;
+    let mut qname_sorter =
+        external_sorter_with_bytes(temporary.path(), "turbo-picard-markdup-qname", mate_bytes)?;
+    let mut pair_sorter =
+        external_sorter_with_bytes(temporary.path(), "turbo-picard-markdup-pair", mate_bytes)?;
+    let mut mate_cache = external_mates::ExternalMateCache::new();
     let mut fragment_sorter = external_sorter(temporary.path(), "turbo-picard-markdup-fragment")?;
     let mut record_count = 0_u64;
     let mut last_output_order = None::<(i32, i64, Vec<u8>, u16)>;
@@ -887,63 +902,29 @@ fn try_run_external_plan(
             }
 
             let plan = external_plan_record(ordinal, &record, library_id, config);
-            // The QNAME pass only pairs records.  Do not send unpaired
-            // records through a second external sort: the fragment pass
-            // below already owns their duplicate decisions, and single-end
-            // inputs are common in real pipelines.
-            if duplicate_candidate_is_pair(flag) {
-                qname_sorter
-                    .push(
-                        plan.template_key.clone(),
-                        encode_external_plan_record(&plan, false),
-                    )
-                    .map_err(MarkDuplicatesError::Operation)?;
-            }
             fragment_sorter
                 .push(
                     external_fragment_key(&plan),
                     encode_external_plan_record(&plan, true),
                 )
                 .map_err(MarkDuplicatesError::Operation)?;
+            if duplicate_candidate_is_pair(flag) {
+                mate_cache
+                    .push(plan, &mut qname_sorter, &mut pair_sorter)
+                    .map_err(MarkDuplicatesError::Operation)?;
+            }
         }
     }
 
     if !config.quiet {
         eprintln!("MarkDuplicates: using external-sort plan ({record_count} records)");
     }
-    let mut pair_sorter = external_sorter(temporary.path(), "turbo-picard-markdup-pair")?;
+    mate_cache
+        .flush(&mut qname_sorter)
+        .map_err(MarkDuplicatesError::Operation)?;
+    drop(mate_cache);
     let mut decision_sorter = external_sorter(temporary.path(), "turbo-picard-markdup-decisions")?;
-    let mut pending_pair = None::<ExternalPlanRecord>;
-    qname_sorter
-        .finish_into(|item| {
-            if pending_pair
-                .as_ref()
-                .is_some_and(|pending| pending.template_key.as_slice() != item.key.as_slice())
-            {
-                pending_pair = None;
-            }
-            let plan = decode_external_plan_record(&item.key, &item.payload, false)?;
-            if !duplicate_candidate_is_pair(plan.flags) {
-                return Ok(());
-            }
-            if let Some(first) = pending_pair.take() {
-                if first.template_key == plan.template_key {
-                    // Do not silently fabricate a template from two first (or
-                    // two second) primary alignments with the same identity.
-                    if !matches!((first.flags & 0xc0, plan.flags & 0xc0), (0x40, 0x80) | (0x80, 0x40)) {
-                        return Err("external MarkDuplicates mates must have complementary first/second flags".to_string());
-                    }
-                    let key = external_pair_key(&first, &plan);
-                    pair_sorter.push(key.clone(), encode_external_plan_record(&first, true))?;
-                    pair_sorter.push(key, encode_external_plan_record(&plan, true))?;
-                } else {
-                    pending_pair = Some(plan);
-                }
-            } else {
-                pending_pair = Some(plan);
-            }
-            Ok(())
-        })
+    external_mates::finish_spilled(qname_sorter, &mut pair_sorter)
         .map_err(MarkDuplicatesError::Operation)?;
 
     process_external_duplicate_groups(
@@ -1044,11 +1025,64 @@ fn encode_external_barcode(payload: &mut Vec<u8>, barcode: Option<&[u8]>) {
     }
 }
 
+// Views into a sort payload let singleton reads and ordinary pairs pass without
+// allocating QNAME, read-group, barcode, or template-key copies. All fields are
+// still decoded and validated before a no-decision group can be discarded.
+struct BorrowedExternalPlanRecord<'a> {
+    ordinal: u64,
+    library_id: LibraryId,
+    read_group: Option<&'a [u8]>,
+    flags: u16,
+    reference_id: i32,
+    position: i64,
+    mate_reference_id: i32,
+    mate_position: i64,
+    template_length: i64,
+    unclipped_position: i64,
+    quality_score: u64,
+    qname: &'a [u8],
+    barcode: [Option<&'a [u8]>; 3],
+}
+
+impl BorrowedExternalPlanRecord<'_> {
+    fn into_owned(self) -> ExternalPlanRecord {
+        ExternalPlanRecord {
+            ordinal: self.ordinal,
+            library_id: self.library_id,
+            read_group: self.read_group.map(<[u8]>::to_vec),
+            flags: self.flags,
+            reference_id: self.reference_id,
+            position: self.position,
+            mate_reference_id: self.mate_reference_id,
+            mate_position: self.mate_position,
+            template_length: self.template_length,
+            unclipped_position: self.unclipped_position,
+            quality_score: self.quality_score,
+            qname: self.qname.to_vec(),
+            template_key: bounded_plan::template_key(self.read_group, self.qname),
+            barcode: ExternalBarcodeValues {
+                primary: self.barcode[0].map(<[u8]>::to_vec),
+                read_one: self.barcode[1].map(<[u8]>::to_vec),
+                read_two: self.barcode[2].map(<[u8]>::to_vec),
+            },
+        }
+    }
+}
+
 fn decode_external_plan_record(
     key: &[u8],
     payload: &[u8],
     qname_in_payload: bool,
 ) -> Result<ExternalPlanRecord, String> {
+    decode_borrowed_external_plan_record(key, payload, qname_in_payload)
+        .map(BorrowedExternalPlanRecord::into_owned)
+}
+
+fn decode_borrowed_external_plan_record<'a>(
+    key: &'a [u8],
+    payload: &'a [u8],
+    qname_in_payload: bool,
+) -> Result<BorrowedExternalPlanRecord<'a>, String> {
     let mut offset = 0usize;
     let ordinal = read_external_u64(payload, &mut offset)?;
     let library_id = read_external_u32(payload, &mut offset)?;
@@ -1063,28 +1097,26 @@ fn decode_external_plan_record(
     let qname = if qname_in_payload {
         let length = usize::try_from(read_external_u32(payload, &mut offset)?)
             .map_err(|_| "external MarkDuplicates QNAME length is too large".to_string())?;
-        read_external_bytes(payload, &mut offset, length)?.to_vec()
+        read_external_bytes(payload, &mut offset, length)?
     } else {
-        bounded_plan::template_qname(key)?.to_vec()
+        bounded_plan::template_qname(key)?
     };
-    let barcode = ExternalBarcodeValues {
-        primary: decode_external_barcode(payload, &mut offset)?,
-        read_one: decode_external_barcode(payload, &mut offset)?,
-        read_two: decode_external_barcode(payload, &mut offset)?,
-    };
-    let read_group = decode_external_barcode(payload, &mut offset)?;
+    let barcode = [
+        decode_borrowed_external_barcode(payload, &mut offset)?,
+        decode_borrowed_external_barcode(payload, &mut offset)?,
+        decode_borrowed_external_barcode(payload, &mut offset)?,
+    ];
+    let read_group = decode_borrowed_external_barcode(payload, &mut offset)?;
     if offset != payload.len() {
         return Err("external MarkDuplicates record payload has trailing bytes".to_string());
     }
-    let template_key = bounded_plan::template_key(read_group.as_deref(), &qname);
-    if !qname_in_payload && template_key != key {
+    if !qname_in_payload && bounded_plan::template_key(read_group, qname) != key {
         return Err("external MarkDuplicates template key disagrees with its payload".to_string());
     }
-    Ok(ExternalPlanRecord {
+    Ok(BorrowedExternalPlanRecord {
         ordinal,
         library_id,
         read_group,
-        template_key,
         flags,
         reference_id,
         position,
@@ -1098,13 +1130,16 @@ fn decode_external_plan_record(
     })
 }
 
-fn decode_external_barcode(payload: &[u8], offset: &mut usize) -> Result<Option<Vec<u8>>, String> {
+fn decode_borrowed_external_barcode<'a>(
+    payload: &'a [u8],
+    offset: &mut usize,
+) -> Result<Option<&'a [u8]>, String> {
     match read_external_u8(payload, offset)? {
         0 => Ok(None),
         1 => {
             let length = usize::try_from(read_external_u64(payload, offset)?)
                 .map_err(|_| "external MarkDuplicates barcode length is too large".to_string())?;
-            Ok(Some(read_external_bytes(payload, offset, length)?.to_vec()))
+            Ok(Some(read_external_bytes(payload, offset, length)?))
         }
         _ => Err("external MarkDuplicates barcode marker is invalid".to_string()),
     }
@@ -1238,36 +1273,78 @@ fn process_external_duplicate_groups(
     processing_config: &ExternalDuplicateProcessingConfig<'_>,
 ) -> Result<(), MarkDuplicatesError> {
     let mut current_key = None::<Vec<u8>>;
+    let mut pending = Vec::<SortItem>::with_capacity(2);
     let mut group = Vec::<ExternalPlanRecord>::new();
+    let mut flush = |pending: &mut Vec<SortItem>, group: &mut Vec<ExternalPlanRecord>| {
+        if group.is_empty() {
+            // Even groups that cannot produce a duplicate decision must reject
+            // corrupt spill payloads. Compare framed identity (RG plus QNAME),
+            // keeping missing and empty read groups distinct.
+            let first = pending
+                .first()
+                .map(|item| decode_borrowed_external_plan_record(&item.key, &item.payload, true))
+                .transpose()?;
+            let second = pending
+                .get(1)
+                .map(|item| decode_borrowed_external_plan_record(&item.key, &item.payload, true))
+                .transpose()?;
+            match (first, second) {
+                (Some(first), Some(second))
+                    if first.qname == second.qname && first.read_group == second.read_group =>
+                {
+                    if paired_groups {
+                        add_duplicate_set(summary, 1, Some(1));
+                        add_duplicate_set(
+                            library_registry.summary_mut(first.library_id),
+                            1,
+                            Some(1),
+                        );
+                    }
+                    pending.clear();
+                    return Ok(());
+                }
+                (_, None) => {
+                    pending.clear();
+                    return Ok(());
+                }
+                _ => {}
+            }
+            for item in pending.drain(..) {
+                group.push(decode_external_plan_record(&item.key, &item.payload, true)?);
+            }
+        }
+        process_external_duplicate_group(
+            group,
+            decisions,
+            summary,
+            library_registry,
+            paired_groups,
+            track_duplicate_set_histogram,
+            processing_config,
+        )?;
+        group.clear();
+        Ok::<(), String>(())
+    };
     sorter
         .finish_into(|item: SortItem| {
             if current_key.as_deref() != Some(item.key.as_slice()) {
-                process_external_duplicate_group(
-                    &group,
-                    decisions,
-                    summary,
-                    library_registry,
-                    paired_groups,
-                    track_duplicate_set_histogram,
-                    processing_config,
-                )?;
-                group.clear();
-                current_key = Some(item.key.clone());
+                flush(&mut pending, &mut group)?;
+                let key = current_key.get_or_insert_with(Vec::new);
+                key.clear();
+                key.extend_from_slice(&item.key);
             }
-            group.push(decode_external_plan_record(&item.key, &item.payload, true)?);
+            if group.is_empty() && pending.len() < 2 {
+                pending.push(item);
+            } else {
+                for item in pending.drain(..) {
+                    group.push(decode_external_plan_record(&item.key, &item.payload, true)?);
+                }
+                group.push(decode_external_plan_record(&item.key, &item.payload, true)?);
+            }
             Ok(())
         })
         .map_err(MarkDuplicatesError::Operation)?;
-    process_external_duplicate_group(
-        &group,
-        decisions,
-        summary,
-        library_registry,
-        paired_groups,
-        track_duplicate_set_histogram,
-        processing_config,
-    )
-    .map_err(MarkDuplicatesError::Operation)
+    flush(&mut pending, &mut group).map_err(MarkDuplicatesError::Operation)
 }
 
 fn process_external_duplicate_group(
@@ -1283,10 +1360,10 @@ fn process_external_duplicate_group(
         return Ok(());
     }
 
-    let mut names = HashMap::<Vec<u8>, (u64, u64)>::default();
+    let mut names = HashMap::<&[u8], (u64, u64)>::default();
     for member in group {
         let entry = names
-            .entry(member.template_key.clone())
+            .entry(member.template_key.as_slice())
             .or_insert((0, member.ordinal));
         entry.0 = entry.0.saturating_add(member.quality_score);
         entry.1 = entry.1.min(member.ordinal);
@@ -1318,44 +1395,54 @@ fn process_external_duplicate_group(
     }
 
     let representative_name = representative_external_name(&names);
-    // Visit the family once instead of searching the entire family for each
-    // distinct template (quadratic on large PCR duplicate families).
-    let mut reads = group
-        .iter()
-        .filter(|member| {
+    let optical_names = if matches!(
+        processing_config.read_name_parser,
+        ReadNameLocationParser::Disabled
+    ) || names.len() > DEFAULT_MAX_OPTICAL_DUPLICATE_SET_SIZE
+    {
+        // Optical discovery is known to be empty in these cases. Avoid
+        // cloning and sorting every template merely to return an empty set.
+        HashSet::default()
+    } else {
+        // Visit the family once instead of searching the entire family for each
+        // distinct template (quadratic on large PCR duplicate families).
+        let mut reads = group
+            .iter()
+            .filter(|member| {
+                names
+                    .get(member.template_key.as_slice())
+                    .is_some_and(|(_, ordinal)| *ordinal == member.ordinal)
+            })
+            .map(|member| OpticalRead {
+                name: member.template_key.clone(),
+                location: processing_config
+                    .read_name_parser
+                    .coordinates(member.qname.as_slice())
+                    .map(|(tile, x, y)| ReadLocation {
+                        read_group: member.read_group.clone(),
+                        tile,
+                        x,
+                        y,
+                    }),
+            })
+            .collect::<Vec<_>>();
+        reads.sort_by_key(|read| {
             names
-                .get(member.template_key.as_slice())
-                .is_some_and(|(_, ordinal)| *ordinal == member.ordinal)
-        })
-        .map(|member| OpticalRead {
-            name: member.template_key.clone(),
-            location: processing_config
-                .read_name_parser
-                .coordinates(member.qname.as_slice())
-                .map(|(tile, x, y)| ReadLocation {
-                    read_group: member.read_group.clone(),
-                    tile,
-                    x,
-                    y,
-                }),
-        })
-        .collect::<Vec<_>>();
-    reads.sort_by_key(|read| {
-        names
-            .get(&read.name)
-            .map(|(_, ordinal)| *ordinal)
-            .unwrap_or(u64::MAX)
-    });
-    let optical_names = find_optical_duplicate_names(
-        &reads,
-        representative_name,
-        i64::from(
-            processing_config
-                .config
-                .optical_duplicate_pixel_distance
-                .unwrap_or(100),
-        ),
-    );
+                .get(read.name.as_slice())
+                .map(|(_, ordinal)| *ordinal)
+                .unwrap_or(u64::MAX)
+        });
+        find_optical_duplicate_names(
+            &reads,
+            representative_name,
+            i64::from(
+                processing_config
+                    .config
+                    .optical_duplicate_pixel_distance
+                    .unwrap_or(100),
+            ),
+        )
+    };
     if track_duplicate_set_histogram {
         let optical_names_count = u64::try_from(optical_names.len()).unwrap_or(u64::MAX);
         let non_optical_size =
@@ -1413,7 +1500,7 @@ fn process_external_duplicate_group(
 
 fn process_external_fragment_group(
     group: &[ExternalPlanRecord],
-    names: &HashMap<Vec<u8>, (u64, u64)>,
+    names: &HashMap<&[u8], (u64, u64)>,
     decisions: &mut ExternalSorter,
     summary: &mut MarkDuplicatesSummary,
     library_registry: &mut LibraryRegistry,
@@ -1439,7 +1526,7 @@ fn process_external_fragment_group(
     Ok(())
 }
 
-fn representative_external_name(names: &HashMap<Vec<u8>, (u64, u64)>) -> &[u8] {
+fn representative_external_name<'a>(names: &HashMap<&'a [u8], (u64, u64)>) -> &'a [u8] {
     names
         .iter()
         .max_by(|left, right| {
@@ -1448,7 +1535,7 @@ fn representative_external_name(names: &HashMap<Vec<u8>, (u64, u64)>) -> &[u8] {
                 .cmp(&right.1.0)
                 .then_with(|| right.1.1.cmp(&left.1.1))
         })
-        .map(|(name, _)| name.as_slice())
+        .map(|(name, _)| *name)
         .expect("external duplicate group has a name")
 }
 
@@ -3464,57 +3551,66 @@ fn metrics_text_for_libraries<'a>(
         output.push_str(&metrics_row(summary));
     }
     let histogram = combined_duplicate_set_histogram(summaries.iter().copied());
-    if !histogram.is_empty() {
+    // Picard writes ROI only for one library, independently of whether optical
+    // discovery recorded any duplicate-set histogram. Library-size estimation
+    // excludes optical duplicates; ROI uses all examined/unique pairs.
+    let roi = if let [summary] = summaries.as_slice() {
+        let pairs = summary.effective_read_pairs_examined();
+        let unique = pairs.saturating_sub(summary.read_pair_duplicates());
+        estimate_library_size(
+            pairs.saturating_sub(summary.read_pair_optical_duplicates),
+            unique,
+        )
+        .map(|size| (size, pairs, unique))
+    } else {
+        None
+    };
+    let all_sets = histogram.values().any(|counts| counts.all_sets > 0);
+    let optical_sets = histogram.values().any(|counts| counts.optical_sets > 0);
+    let non_optical_sets = histogram.values().any(|counts| counts.non_optical_sets > 0);
+    if roi.is_some() || all_sets || optical_sets || non_optical_sets {
         output.push_str("\n## HISTOGRAM\tjava.lang.Double\n");
-        let has_optical_sets = histogram.values().any(|counts| counts.optical_sets > 0);
-        if has_optical_sets {
-            output.push_str("set_size\tall_sets\toptical_sets\tnon_optical_sets\n");
-            for (set_size, counts) in histogram {
-                if counts.all_sets == 0 && counts.optical_sets == 0 && counts.non_optical_sets == 0
-                {
-                    continue;
-                }
-                output.push_str(&format!(
-                    "{:.1}\t{}\t{}\t{}\n",
-                    set_size as f64, counts.all_sets, counts.optical_sets, counts.non_optical_sets
-                ));
+        output.push_str(if roi.is_some() { "BIN" } else { "set_size" });
+        if roi.is_some() {
+            output.push_str("\tCoverageMult");
+        }
+        if all_sets {
+            output.push_str("\tall_sets");
+        }
+        if optical_sets {
+            output.push_str("\toptical_sets");
+        }
+        if non_optical_sets {
+            output.push_str("\tnon_optical_sets");
+        }
+        output.push('\n');
+        // The writer takes the union of existing histogram bins, not every
+        // integer up to the largest duplicate family.
+        let mut bins = histogram.keys().copied().collect::<BTreeSet<_>>();
+        if roi.is_some() {
+            bins.extend(1..=100);
+        }
+        for bin in bins {
+            let counts = histogram.get(&bin).copied().unwrap_or_default();
+            output.push_str(&format!("{:.1}", bin as f64));
+            if let Some((size, pairs, unique)) = roi {
+                let value = if bin <= 100 {
+                    estimate_roi(size, bin as f64, pairs, unique)
+                } else {
+                    0.0
+                };
+                output.push_str(&format!("\t{}", format_metric_float(value)));
             }
-        } else {
-            output.push_str("BIN\tCoverageMult\tall_sets\tnon_optical_sets\n");
-            let read_pairs_examined = summaries
-                .iter()
-                .map(|summary| {
-                    summary
-                        .effective_read_pairs_examined()
-                        .saturating_sub(summary.read_pair_optical_duplicates)
-                })
-                .sum::<u64>();
-            let read_pair_duplicates = summaries
-                .iter()
-                .map(|summary| summary.read_pair_duplicates())
-                .sum::<u64>();
-            let unique_read_pairs = read_pairs_examined.saturating_sub(read_pair_duplicates);
-            let estimated_library_size =
-                estimate_library_size(read_pairs_examined, unique_read_pairs);
-            let max_set_size = histogram.keys().copied().max().unwrap_or_default().max(100);
-            for set_size in 1..=max_set_size {
-                let counts = histogram.get(&set_size).copied().unwrap_or_default();
-                let coverage_mult = estimated_library_size
-                    .map(|library_size| {
-                        estimate_roi(
-                            library_size,
-                            set_size as f64,
-                            read_pairs_examined,
-                            unique_read_pairs,
-                        )
-                    })
-                    .map(format_metric_float)
-                    .unwrap_or_default();
-                output.push_str(&format!(
-                    "{:.1}\t{}\t{}\t{}\n",
-                    set_size as f64, coverage_mult, counts.all_sets, counts.non_optical_sets
-                ));
+            if all_sets {
+                output.push_str(&format!("\t{}", counts.all_sets));
             }
+            if optical_sets {
+                output.push_str(&format!("\t{}", counts.optical_sets));
+            }
+            if non_optical_sets {
+                output.push_str(&format!("\t{}", counts.non_optical_sets));
+            }
+            output.push('\n');
         }
     }
 
@@ -3995,6 +4091,180 @@ mod tests {
     }
 
     #[test]
+    fn lazy_external_groups_match_eager_decisions_and_histograms() {
+        // Exercise empty groups, singleton reads, ordinary mates, real duplicate
+        // families, reused QNAMEs across RGs, and absent versus empty RGs. Run
+        // both in RAM and through spill files; compare the entire decision stream
+        // and per-library metrics against the existing eager group processor.
+        for spill in [false, true] {
+            for paired in [false, true] {
+                for histogram in [false, true] {
+                    for tags in [false, true] {
+                        for remove in [false, true] {
+                            let mut config = sam_markdup_config();
+                            config.tag_duplicate_set_members = tags;
+                            config.remove_duplicates = remove;
+                            let parser = ReadNameLocationParser::from_config(&config).unwrap();
+                            let processing = ExternalDuplicateProcessingConfig {
+                                config: &config,
+                                read_name_parser: &parser,
+                            };
+                            let mut families = vec![Vec::new()];
+                            for size in 1..=6 {
+                                let mut family = Vec::new();
+                                for index in 0..size {
+                                    let name =
+                                        format!("INST:RUN:FLOW:1:1:{}:{}", 100 + index / 2, 100);
+                                    let record = record_with_name_and_qualities(
+                                        name.as_bytes(),
+                                        &[20 + index as u8],
+                                        if paired { 0x41 } else { 0 },
+                                    );
+                                    family.push(external_plan_record(
+                                        index as u64,
+                                        &record,
+                                        0,
+                                        &config,
+                                    ));
+                                }
+                                families.push(family);
+                            }
+                            let record = record_with_name_and_qualities(b"shared", &[30], 0x41);
+                            for groups in [
+                                [None, Some(Vec::new())],
+                                [Some(b"rg1".to_vec()), Some(b"rg2".to_vec())],
+                                [Some(b"rg1".to_vec()), Some(b"rg1".to_vec())],
+                            ] {
+                                let mut family = Vec::new();
+                                for (index, rg) in groups.into_iter().enumerate() {
+                                    let mut plan =
+                                        external_plan_record(index as u64, &record, 0, &config);
+                                    plan.read_group = rg;
+                                    plan.template_key = bounded_plan::template_key(
+                                        plan.read_group.as_deref(),
+                                        &plan.qname,
+                                    );
+                                    family.push(plan);
+                                }
+                                families.push(family);
+                            }
+                            let run = |lazy: bool| {
+                                let tmp = tempdir().unwrap();
+                                let mut sort_config = ExternalSortConfig::new(tmp.path());
+                                if spill {
+                                    sort_config.max_records_in_ram = 1;
+                                }
+                                sort_config.prefix = "groups".into();
+                                let mut groups = ExternalSorter::new(sort_config.clone()).unwrap();
+                                sort_config.prefix = "decisions".into();
+                                let mut decisions = ExternalSorter::new(sort_config).unwrap();
+                                let mut libraries = LibraryRegistry::new();
+                                let id = libraries.intern("library");
+                                let mut summary = libraries.summary(id).clone();
+                                for (index, family) in families.iter().enumerate() {
+                                    if lazy {
+                                        for member in family {
+                                            groups
+                                                .push(
+                                                    (index as u64).to_be_bytes().to_vec(),
+                                                    encode_external_plan_record(member, true),
+                                                )
+                                                .unwrap();
+                                        }
+                                    } else {
+                                        process_external_duplicate_group(
+                                            family,
+                                            &mut decisions,
+                                            &mut summary,
+                                            &mut libraries,
+                                            paired,
+                                            histogram,
+                                            &processing,
+                                        )
+                                        .unwrap();
+                                    }
+                                }
+                                if lazy {
+                                    process_external_duplicate_groups(
+                                        groups,
+                                        &mut decisions,
+                                        &mut summary,
+                                        &mut libraries,
+                                        paired,
+                                        histogram,
+                                        &processing,
+                                    )
+                                    .unwrap();
+                                }
+                                let mut output = Vec::new();
+                                decisions
+                                    .finish_into(|item| {
+                                        output.push((item.key, item.payload));
+                                        Ok(())
+                                    })
+                                    .unwrap();
+                                (output, summary, libraries.summaries)
+                            };
+                            assert_eq!(
+                                run(true),
+                                run(false),
+                                "spill={spill}, paired={paired}, histogram={histogram}, tags={tags}, remove={remove}"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn lazy_singleton_groups_reject_corrupt_payloads() {
+        let config = sam_markdup_config();
+        let record = record_with_name_and_qualities(b"singleton", &[30], 0);
+        let mut plan = external_plan_record(0, &record, 0, &config);
+        plan.read_group = Some(b"group".to_vec());
+        plan.barcode.primary = Some(b"barcode".to_vec());
+        let payload = encode_external_plan_record(&plan, true);
+        let mut malformed: Vec<Vec<u8>> = (0..payload.len())
+            .map(|end| payload[..end].to_vec())
+            .collect();
+        let mut trailing = payload.clone();
+        trailing.push(0);
+        malformed.push(trailing);
+        // Invalid presence markers must be rejected as well as truncation.
+        let marker = 62 + 4 + plan.qname.len();
+        let mut bad_marker = payload.clone();
+        bad_marker[marker] = 2;
+        malformed.push(bad_marker);
+        let parser = ReadNameLocationParser::from_config(&config).unwrap();
+        let processing = ExternalDuplicateProcessingConfig {
+            config: &config,
+            read_name_parser: &parser,
+        };
+        for invalid in malformed {
+            let tmp = tempdir().unwrap();
+            let mut groups = external_sorter(tmp.path(), "groups").unwrap();
+            groups.push(b"key".to_vec(), invalid).unwrap();
+            let mut decisions = external_sorter(tmp.path(), "decisions").unwrap();
+            let mut libraries = LibraryRegistry::new();
+            let id = libraries.intern("library");
+            let mut summary = libraries.summary(id).clone();
+            assert!(
+                process_external_duplicate_groups(
+                    groups,
+                    &mut decisions,
+                    &mut summary,
+                    &mut libraries,
+                    false,
+                    false,
+                    &processing
+                )
+                .is_err()
+            );
+        }
+    }
+
+    #[test]
     fn external_decision_payload_round_trips_duplicate_set_metadata() {
         let decision = ExternalDecision {
             flags: EXTERNAL_DECISION_DUPLICATE
@@ -4187,6 +4457,64 @@ mod tests {
         assert!(metrics.contains("set_size\tall_sets\toptical_sets\tnon_optical_sets"));
         assert!(metrics.contains("1.0\t0\t0\t1"));
         assert!(metrics.contains("2.0\t1\t1\t0"));
+    }
+
+    #[test]
+    fn metrics_write_roi_without_duplicate_set_bins() {
+        // Picard 3.4.0 emits 100 ROI bins for this one-library, no-optical
+        // 20,000-pair family. Its library estimate and unique-pair count are
+        // both one, so every coverage multiplier rounds to one.
+        let mut libraries = LibraryRegistry::new();
+        let id = libraries.intern("library");
+        let summary = libraries.summary_mut(id);
+        summary.read_pairs_examined = 20_000;
+        summary.paired_records_examined = 40_000;
+        summary.duplicate_pair_records = 39_998;
+        let text = metrics_text(summary);
+        let histogram = text
+            .split("## HISTOGRAM\tjava.lang.Double\n")
+            .nth(1)
+            .unwrap();
+        let mut expected = "BIN\tCoverageMult\n".to_string();
+        for bin in 1..=100 {
+            expected.push_str(&format!("{bin}.0\t1\n"));
+        }
+        assert_eq!(histogram, expected);
+    }
+
+    #[test]
+    fn metrics_do_not_compute_roi_across_distinct_libraries() {
+        let mut libraries = LibraryRegistry::new();
+        let first = libraries.intern("first");
+        let second = libraries.intern("second");
+        for id in [first, second] {
+            let summary = libraries.summary_mut(id);
+            summary.paired_records_examined = 4;
+            summary.read_pairs_examined = 2;
+            summary.duplicate_pair_records = 2;
+            add_duplicate_set(summary, 2, Some(2));
+        }
+        let text = metrics_text_for_libraries(libraries.summaries.iter());
+        assert!(!text.contains("CoverageMult"));
+        assert!(text.ends_with("set_size\tall_sets\tnon_optical_sets\n2.0\t2\t2\n"));
+    }
+
+    #[test]
+    fn metrics_use_sparse_family_bins_beyond_roi_range() {
+        let mut libraries = LibraryRegistry::new();
+        let id = libraries.intern("library");
+        let summary = libraries.summary_mut(id);
+        summary.read_pairs_examined = 20_000;
+        summary.paired_records_examined = 40_000;
+        summary.duplicate_pair_records = 39_998;
+        add_duplicate_set(summary, 20_000, Some(20_000));
+        let text = metrics_text(summary);
+        let histogram = text
+            .split("## HISTOGRAM\tjava.lang.Double\n")
+            .nth(1)
+            .unwrap();
+        assert_eq!(histogram.lines().count(), 102);
+        assert!(histogram.ends_with("20000.0\t0\t1\t1\n"));
     }
 
     #[test]

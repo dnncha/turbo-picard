@@ -13,17 +13,23 @@ shows a ``22.88x`` floor speedup, ``84.52x`` geometric mean speedup, and
 ``272.12x`` top speedup against Picard 3.4.0. Those are saved-fixture results,
 not whole-genome guarantees.
 
-For duplicate marking, a single BAM or explicit-reference CRAM is first
-record-count checked. Inputs with at most 100,000 records use the compact
-two-pass plan to avoid unnecessary sort-file overhead; larger inputs use the
-disk-backed plan and replay the original alignment files for final output.
-Multiple alignment inputs that are already globally coordinate-ordered use the
-disk-backed plan as well. The bounded path includes ``BARCODE_TAG`` and
+For duplicate marking, a coordinate-ordered BAM or explicit-reference CRAM uses
+an external two-pass plan and replays the original alignment files for output.
+Globally coordinate-ordered multiple inputs use this plan as well. Nearby mates
+are joined in a cache with at most 4,096 records and 4 MiB of owned buffers;
+metadata is bounded separately by that record limit. Evicted identities use the
+stable external QNAME join. A lazily allocated 1 MiB filter prevents an evicted
+identity from re-entering the cache; false positives defer additional records to
+the exact join. The QNAME and pair sort windows share one allocation budget.
+The bounded path includes ``BARCODE_TAG`` and
 ``READ_ONE_BARCODE_TAG``/``READ_TWO_BARCODE_TAG`` grouping, Picard-compatible
 optical-family discovery with the default or a validated three-capture-group
 ``READ_NAME_REGEX``, and ``REMOVE_SEQUENCING_DUPLICATES``. Explicit
 ``READ_NAME_REGEX=null`` disables optical discovery and retains Picard's
-no-optical metrics behavior. Duplicate-set tagging (``DS``/``DI``) is carried
+no-optical metrics behavior. Coverage-estimation histograms are emitted for a
+single library when its library-size estimate exists, including when optical
+detection is disabled. Distinct libraries do not receive a pooled ROI estimate;
+duplicate-family bins remain separate columns beside ROI where applicable. Duplicate-set tagging (``DS``/``DI``) is carried
 through bounded replay for paired duplicate families. Multiple streams that are
 not already globally coordinate-ordered fall back to the existing in-memory
 multi-input path so the output-order contract is preserved. A local adversarial

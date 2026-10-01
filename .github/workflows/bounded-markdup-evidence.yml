@@ -102,7 +102,7 @@ jobs:
             echo "Baseline and candidate executables are byte-identical; refusing to report a source comparison." >&2
             exit 1
           fi
-      - name: Compare nine adversarial cases against actual Picard
+      - name: Compare adversarial and paired-read cases against actual Picard
         run: |
           prefix="${MAMBA_ROOT_PREFIX}/envs/bounded-parity"
           python3 candidate/tools/bench_bounded_markduplicates.py \
