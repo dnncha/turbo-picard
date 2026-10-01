@@ -1,5 +1,5 @@
-Why Turbo Picard is faster than Picard
-======================================
+Native execution and measured performance
+=========================================
 
 ``turbo-picard`` gets most of its speed from avoiding JVM startup, running common
 Picard operations natively, and keeping BAM/CRAM I/O on mature HTSlib code.
@@ -13,17 +13,27 @@ shows a ``22.88x`` floor speedup, ``84.52x`` geometric mean speedup, and
 ``272.12x`` top speedup against Picard 3.4.0. Those are saved-fixture results,
 not whole-genome guarantees.
 
-For duplicate marking, a single BAM or explicit-reference CRAM is first
-record-count checked. Inputs with at most 100,000 records use the compact
-two-pass plan to avoid unnecessary sort-file overhead; larger inputs use the
-disk-backed plan and replay the original alignment files for final output.
-Multiple alignment inputs that are already globally coordinate-ordered use the
-disk-backed plan as well. The bounded path includes ``BARCODE_TAG`` and
+For duplicate marking, a coordinate-ordered BAM or explicit-reference CRAM uses
+an external two-pass plan and replays the original alignment files for output.
+Globally coordinate-ordered multiple inputs use this plan as well. Nearby mates
+are joined in a cache with at most 4,096 records and 4 MiB of owned buffers;
+metadata is bounded separately by that record limit. Evicted identities use the
+stable external QNAME join. A lazily allocated 1 MiB filter prevents an evicted
+identity from re-entering the cache; false positives defer additional records to
+the exact join. The QNAME and pair sort windows share one allocation budget
+(160 MiB and 96 MiB respectively). When the scan finds no mapped primary
+unpaired candidate, the fragment stage cannot emit decisions; its buffers are
+released without sorting those runs.
+The bounded path includes ``BARCODE_TAG`` and
 ``READ_ONE_BARCODE_TAG``/``READ_TWO_BARCODE_TAG`` grouping, Picard-compatible
 optical-family discovery with the default or a validated three-capture-group
 ``READ_NAME_REGEX``, and ``REMOVE_SEQUENCING_DUPLICATES``. Explicit
 ``READ_NAME_REGEX=null`` disables optical discovery and retains Picard's
-no-optical metrics behavior. Duplicate-set tagging (``DS``/``DI``) is carried
+no-optical metrics behavior. Coverage-estimation histograms are emitted for a
+single library when its library-size estimate exists, including when optical
+detection is disabled. Distinct libraries do not receive a pooled ROI estimate;
+duplicate-family bins remain separate columns beside ROI where applicable.
+Duplicate-set tagging (``DS``/``DI``) is carried
 through bounded replay for paired duplicate families. Multiple streams that are
 not already globally coordinate-ordered fall back to the existing in-memory
 multi-input path so the output-order contract is preserved. A local adversarial
@@ -50,6 +60,52 @@ that every MarkDuplicates mode is constant-memory or production-approved.
 Production-scale WGS, WES, UMI, optical-heavy, CRAM, and multi-library evidence
 still belongs in the pinned evidence workflow described in
 :doc:`production-readiness`.
+
+Duplicate pipeline comparison
+-----------------------------
+
+``tools/bench_bounded_markduplicates.py`` checks ordered mandatory SAM fields,
+every typed auxiliary tag except PG provenance, SQ/RG headers, duplication
+metrics and every numeric histogram column and bin against actual Picard.
+The named ``bounded-v4`` contract compares explicitly zoned RG run dates as
+exact instants: Picard may rewrite their timezone without changing the date.
+Different instants, other header fields and alignment DT tags stay distinct.
+Malformed dates or dates with more than six fractional digits are preserved
+without normalization. Histogram normalization changes numeric spelling only.
+
+``tools/bench_native_duplicate_landscape.py`` measures current native tools
+from identical coordinate BAMs. Required name grouping, mate tags and final
+coordinate sorting are included in the samtools/dupblaster pipeline timers.
+All commands use one pinned CPU and BAM compression level 5; FastDup's pinned
+source default is 5. Each tool gets one warm-up and alternating measured runs.
+An unordered mandatory-field/RG comparison is a separate diagnostic and never
+qualifies a tool for a full-contract speedup claim. The report retains failures,
+input/executable hashes, exact options, versions and per-run measurements.
+GNU time reports the maximum child RSS for pipelines; simultaneous aggregate
+pipeline memory is not established. The fixtures do not establish WGS accuracy,
+cohort reliability, variant-calling impact or universal superiority.
+
+.. code-block:: bash
+
+   python3 tools/bench_native_duplicate_landscape.py \
+     --candidate target/release/turbo-picard --candidate-source "$(git rev-parse HEAD)" \
+     --picard /path/to/picard --samtools /path/to/samtools \
+     --fastdup /path/to/fastdup --dupblaster /path/to/dupblaster \
+     --input sample=/path/to/coordinate.bam \
+     --output-dir /tmp/duplicate-landscape-new --repeats 3
+
+External sort memory
+--------------------
+
+The keyed and BAM external sorters count reserved vector capacity and record
+buffers in their resident-run budget. They spill before admitting a record that
+would exceed it and cap geometric vector growth to the remaining space. A single
+oversized record is isolated in its own run with one metadata slot.
+
+This is an allocation budget for the resident run, not a process RSS limit.
+The caller temporarily holds the incoming record; allocator overhead, HTSlib
+buffers, concurrent sorters and merge heads also use memory. Use measured peak
+RSS and a scheduler or cgroup memory limit when planning a whole-command run.
 
 Threading
 ---------
@@ -82,6 +138,11 @@ a dedicated application reader thread, such as large WGS/QC paths, use a smaller
 pipeline thread for the same CPU budget. Set
 ``TURBO_PICARD_PIPELINE_READER_THREADS`` only when profiling shows that this
 specialized path needs a different value from ``TURBO_PICARD_READER_THREADS``.
+
+These worker counts apply per HTSlib handle, not to the total process. Concurrent
+readers, writers and application threads add to them. Use explicit role counts
+when controlling CPU use; ``TURBO_PICARD_MAX_THREADS`` caps automatic defaults
+only and does not override explicit counts.
 
 This helps most when the command is spending real time in BAM or CRAM
 compression, decompression, reference-backed CRAM work, or BAI generation after

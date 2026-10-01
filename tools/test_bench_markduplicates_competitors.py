@@ -1,5 +1,7 @@
 import importlib.util
 import json
+import os
+import time
 import sys
 import tempfile
 import textwrap
@@ -17,6 +19,95 @@ SPEC.loader.exec_module(module)
 
 
 class CompetitorBenchmarkTests(unittest.TestCase):
+    def test_gnu_time_probe_accepts_capitalized_banner(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            fake_time = Path(tmp) / "time"
+            fake_time.write_text("#!/bin/sh\nprintf '(GNU Time) 1.9\\n'\n", encoding="utf-8")
+            fake_time.chmod(0o755)
+            with patch.object(module, "GNU_TIME", fake_time):
+                self.assertTrue(module.gnu_time_available())
+
+    @unittest.skipUnless(module.gnu_time_available(), "requires GNU time")
+    def test_gnu_time_timeout_kills_the_measured_child(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            output = root / "surviving-child"
+            script = "import pathlib,sys,time; time.sleep(0.5); pathlib.Path(sys.argv[1]).write_text('survived')"
+            with (root / "stdout").open("wb") as stdout, (root / "stderr").open("wb") as stderr:
+                code, resources, error, backend = module.run_metered(
+                    [sys.executable, "-c", script, str(output)], stdout, stderr,
+                    root / "resources", 0.1, os.environ.copy(),
+                )
+            self.assertIsNone(code)
+            self.assertIsNotNone(error)
+            self.assertEqual(backend, "gnu-time")
+            time.sleep(0.6)
+            self.assertFalse(output.exists())
+
+    def test_full_sam_contract_detects_data_changes_but_excludes_pg(self):
+        baseline = "read1\t0\tchr1\t1\t60\t1M\t*\t0\t0\tA\tF\tRG:Z:rg1\tZZ:i:1\n"
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            reference, candidate, metrics = root / "ref.sam", root / "out.sam", root / "metrics"
+            reference.write_text(baseline)
+            metrics.write_text("")
+            for old, new in (("\tA\t", "\tC\t"), ("\tF\t", "\t!\t"), ("RG:Z:rg1", "RG:Z:rg2"),
+                             ("\t0\tchr1", "\t256\tchr1"), ("\t60\t", "\t20\t"), ("ZZ:i:1", "ZZ:Z:1")):
+                with self.subTest(field=old):
+                    candidate.write_text(baseline.replace(old, new))
+                    self.assertEqual(module.compare_outputs(reference, candidate, metrics, metrics)["status"], "FAIL")
+            candidate.write_text(baseline.rstrip() + "\tPG:Z:tool\n")
+            self.assertEqual(module.compare_outputs(reference, candidate, metrics, metrics)["status"], "PASS")
+
+    def test_auxiliary_tag_order_does_not_change_parity(self):
+        record = "read1\t0\tchr1\t1\t60\t1M\t*\t0\t0\tA\tF"
+        self.assertEqual(module.parse_sam_fields(record + "\tRG:Z:rg1\tZZ:i:1\n"),
+                         module.parse_sam_fields(record + "\tZZ:i:1\tRG:Z:rg1\n"))
+
+    def test_later_repeat_mismatch_fails_candidate_and_reference(self):
+        record = "read1\t0\tchr1\t1\t60\t1M\t*\t0\t0\tA\tF\n"
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            for name, text in (("reference.sam", record), ("good.sam", record), ("bad.sam", record.replace("\t0\tchr1", "\t1024\tchr1")), ("metrics", "")):
+                (root / name).write_text(text)
+            reference = {"warmup": False, "status": "success", "repeat": 1, "output": "reference.sam", "metrics": "metrics"}
+            good = {**reference, "output": "good.sam"}
+            bad = {**reference, "repeat": 2, "output": "bad.sam"}
+            for first in (good, reference):
+                tool = {"runs": [{**bad, "warmup": True}, first, bad]}
+                result = module.check_measured_parity(tool, reference, root)
+                self.assertEqual(result["status"], "FAIL")
+                self.assertEqual(result["repeat"], 2)
+                self.assertEqual(result["checked_repeats"], 2)
+                self.assertEqual(result["alignment_mismatch"]["record_index"], 0)
+
+    def test_turbo_runs_remove_inherited_overrides_and_require_native(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            script = root / "fake.py"
+            script.write_text(textwrap.dedent("""
+                import os,pathlib,sys
+                assert os.environ['TURBO_PICARD_REQUIRE_NATIVE'] == '1'
+                assert os.environ['TURBO_PICARD_THREADS'] == '2'
+                assert 'TURBO_PICARD_WRITER_THREADS' not in os.environ
+                assert 'TURBO_PICARD_FALLBACK_COMMAND' not in os.environ
+                assert os.environ['TMPDIR'] == sys.argv[2]
+                pathlib.Path(sys.argv[1]).write_bytes(b'output')
+                """))
+            spec = module.ToolSpec("turbo-picard", (sys.executable, str(script), "{output}", "{tmp}"),
+                                   (sys.executable, "--version"), "picard", (("TURBO_PICARD_THREADS", "{threads}"),))
+            with patch.dict(os.environ, {"TURBO_PICARD_WRITER_THREADS": "999", "TURBO_PICARD_FALLBACK_COMMAND": "fake"}):
+                result = module.run_once(spec, root / "input.bam", root / "runs/turbo-picard/repeat-1", 1, False, 2, 0.01, 10)
+            self.assertEqual(result.status, "success", (root / result.stderr_log).read_text())
+            self.assertIn("TURBO_PICARD_WRITER_THREADS", result.removed_environment)
+            self.assertEqual(result.environment["TURBO_PICARD_REQUIRE_NATIVE"], "1")
+            self.assertTrue((root / "runs/turbo-picard/repeat-1/removed-environment.json").is_file())
+
+    def test_samtools_spill_prefix_is_inside_measured_tmp(self):
+        with patch.object(module, "executable_path", return_value="/fake/tool"):
+            command = module.preset_tools()["samtools"].command
+        self.assertEqual(command[command.index("-T") + 1], "{tmp}/samtools")
+
     def test_presets_cover_coordinate_sorted_markdup_tools(self):
         self.assertEqual(
             set(module.preset_tools()),

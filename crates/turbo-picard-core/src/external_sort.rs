@@ -23,6 +23,7 @@ const DEFAULT_MERGE_FAN_IN: usize = 32;
 pub struct ExternalSortConfig {
     pub tmp_dir: PathBuf,
     pub max_records_in_ram: usize,
+    /// Approximate run budget including reserved vector, key and payload buffers.
     pub max_bytes_in_ram: usize,
     pub merge_fan_in: usize,
     pub prefix: String,
@@ -104,14 +105,37 @@ impl ExternalSorter {
 
     pub fn push(&mut self, key: Vec<u8>, payload: Vec<u8>) -> Result<(), String> {
         let item = SortItem::new(key, self.next_ordinal, payload);
+        let item_bytes = item.estimated_bytes() - std::mem::size_of::<SortItem>();
+        let incoming_bytes = self
+            .resident_bytes
+            .saturating_add(item_bytes)
+            .saturating_add(
+                self.items
+                    .capacity()
+                    .max(self.items.len().saturating_add(1))
+                    .saturating_mul(std::mem::size_of::<SortItem>()),
+            );
+        if !self.items.is_empty() && incoming_bytes > self.config.max_bytes_in_ram.max(1) {
+            self.spill_current_run()?;
+        }
+        reserve_run_slot(
+            &mut self.items,
+            self.resident_bytes.saturating_add(item_bytes),
+            self.config.max_bytes_in_ram,
+            self.config.max_records_in_ram,
+        )?;
         self.next_ordinal = self.next_ordinal.wrapping_add(1);
-        self.resident_bytes = self.resident_bytes.saturating_add(item.estimated_bytes());
+        self.resident_bytes = self.resident_bytes.saturating_add(item_bytes);
         self.items.push(item);
+        let estimated_bytes = self.resident_bytes.saturating_add(
+            self.items
+                .capacity()
+                .saturating_mul(std::mem::size_of::<SortItem>()),
+        );
         self.metrics.max_resident_records = self.metrics.max_resident_records.max(self.items.len());
-        self.metrics.max_estimated_bytes =
-            self.metrics.max_estimated_bytes.max(self.resident_bytes);
+        self.metrics.max_estimated_bytes = self.metrics.max_estimated_bytes.max(estimated_bytes);
         if self.items.len() >= self.config.max_records_in_ram.max(1)
-            || self.resident_bytes >= self.config.max_bytes_in_ram.max(1)
+            || estimated_bytes >= self.config.max_bytes_in_ram.max(1)
         {
             self.spill_current_run()?;
         }
@@ -213,6 +237,37 @@ impl ExternalSorter {
             }
         }
     }
+}
+
+/// Keep amortized vector growth within the remaining run budget. Only a single
+/// oversized item may exceed it; release retained metadata for that singleton.
+pub(crate) fn reserve_run_slot<T>(
+    items: &mut Vec<T>,
+    buffer_bytes: usize,
+    max_bytes: usize,
+    max_records: usize,
+) -> Result<(), String> {
+    let item_size = std::mem::size_of::<T>().max(1);
+    let budget = max_bytes.max(1);
+    if items.is_empty()
+        && buffer_bytes.saturating_add(items.capacity().saturating_mul(item_size)) > budget
+    {
+        *items = Vec::new();
+    }
+    if items.len() == items.capacity() {
+        let required = items.len().saturating_add(1);
+        let capacity = items
+            .capacity()
+            .saturating_mul(2)
+            .max(4)
+            .min(max_records.max(1))
+            .min(budget.saturating_sub(buffer_bytes) / item_size)
+            .max(required);
+        items
+            .try_reserve_exact(capacity - items.len())
+            .map_err(|error| error.to_string())?;
+    }
+    Ok(())
 }
 
 fn sort_items(items: &mut [SortItem]) {
@@ -326,6 +381,68 @@ mod tests {
 
     fn test_dir(name: &str) -> PathBuf {
         std::env::temp_dir().join(format!("turbo-picard-{name}-{}", process::id()))
+    }
+
+    #[test]
+    fn run_budget_counts_vector_capacity_at_growth_boundaries() {
+        let dir = test_dir("sort-vector-budget");
+        let budget = 5 * (std::mem::size_of::<SortItem>() + 2);
+        let mut config = ExternalSortConfig::new(&dir);
+        config.max_bytes_in_ram = budget;
+        let mut sorter = ExternalSorter::new(config).unwrap();
+        for index in 0..40_u8 {
+            sorter.push(vec![1], vec![index]).unwrap();
+            let allocated = sorter
+                .items
+                .iter()
+                .map(|item| item.key.capacity() + item.payload.capacity())
+                .sum::<usize>()
+                + sorter.items.capacity() * std::mem::size_of::<SortItem>();
+            assert!(
+                allocated <= budget,
+                "allocated {allocated} with budget {budget}"
+            );
+            assert!(sorter.metrics().max_estimated_bytes <= budget);
+        }
+        let mut payloads = Vec::new();
+        sorter
+            .finish_into(|item| {
+                payloads.push(item.payload[0]);
+                Ok(())
+            })
+            .unwrap();
+        assert_eq!(payloads, (0..40_u8).collect::<Vec<_>>());
+        assert!(fs::read_dir(&dir).unwrap().next().is_none());
+        fs::remove_dir(&dir).unwrap();
+    }
+
+    #[test]
+    fn oversized_items_are_isolated_and_release_retained_metadata() {
+        let dir = test_dir("sort-oversized-isolation");
+        let mut config = ExternalSortConfig::new(&dir);
+        config.max_bytes_in_ram = 1024;
+        let mut sorter = ExternalSorter::new(config).unwrap();
+        for index in 0..4_u8 {
+            sorter.push(vec![1], vec![index]).unwrap();
+        }
+        sorter.push(vec![0], Vec::with_capacity(4096)).unwrap();
+        assert_eq!(sorter.metrics().max_resident_records, 4);
+        assert_eq!(
+            sorter.metrics().max_estimated_bytes,
+            4097 + std::mem::size_of::<SortItem>()
+        );
+        assert_eq!(sorter.metrics().spills, 2);
+        assert!(sorter.items.is_empty());
+        let mut ordinals = Vec::new();
+        sorter
+            .finish_into(|item| {
+                ordinals.push(item.ordinal);
+                Ok(())
+            })
+            .unwrap();
+        assert_eq!(ordinals, [4, 0, 1, 2, 3]);
+        assert!(fs::read_dir(&dir).unwrap().next().is_none());
+        fs::remove_dir(&dir).unwrap();
     }
 
     #[test]

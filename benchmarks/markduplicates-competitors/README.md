@@ -112,11 +112,17 @@ python3 tools/bench_markduplicates_competitors.py \
   --repeats 5
 ```
 
-The preset exports `TURBO_PICARD_THREADS={threads}` to constrain Turbo-Picard's
-global HTS worker budget. FastDup, samtools and Sambamba receive their documented
-thread arguments. Picard MarkDuplicates is principally single-threaded; the evidence
-bundle preserves this distinction rather than implying that every program can
-consume the requested thread budget identically.
+The preset exports `TURBO_PICARD_THREADS={threads}` to select HTS workers per
+reader/writer handle. This is not a process-wide thread limit: simultaneous
+handles and application threads add to it. FastDup, samtools and Sambamba receive
+their documented thread arguments; samtools compression workers exclude its
+main thread. Picard MarkDuplicates is principally single-threaded. The bundle
+preserves these distinctions instead of implying identical CPU budgets.
+
+The runner clears inherited `TURBO_PICARD_*` settings, applies the explicit tool
+environment and forces `TURBO_PICARD_REQUIRE_NATIVE=1`. Every run saves the removed
+variable names and effective overrides. `TMPDIR` and samtools' `-T` spill prefix
+point inside the monitored per-run temporary directory.
 
 A custom build or container launcher can be supplied without a shell:
 
@@ -159,15 +165,24 @@ GNU `time` is used where available. Minimal containers fall back to POSIX
 `time`, use a dedicated idle host, characterize the storage device/filesystem,
 and retain the raw bundle.
 
-The parity comparator checks records in order and includes read identity,
-alignment location/CIGAR, duplicate flag, `DT`, `DS`, `DI`, and `RX`/`BX`/`BY`
-tags. For BAM output it uses `pysam` when available and otherwise streams
+The **v2** parity comparator checks ordered records using all eleven mandatory
+SAM fields and all typed auxiliary tags except provenance-only `PG:Z`. This
+includes sequence, quality, mapping quality, all flags, read groups, duplicate
+tags and barcodes; auxiliary tag order is ignored. This named contract strengthens
+the former selected-field comparison, which omitted several of these fields.
+For BAM output it uses `pysam` when available and otherwise streams
 `samtools view -h`; if neither reader is available, required parity fails rather
 than silently dropping the comparison. When both tools emit Picard
 `DuplicationMetrics`, it also compares the normalized metrics table. A
 competitor with different winning-read stability therefore fails exact parity
 even if it identifies the same duplicate families. That distinction must remain
 visible in any publication.
+
+Every successful measured output, including later reference repeats, is checked
+against the first successful reference output. Per-repeat results are retained
+in `parity_runs`; a later mismatch fails the required-tool gate. Historical
+bundles without these fields used the selected-field, first-repeat contract and
+have not been retroactively revalidated.
 
 ## Claim gate
 

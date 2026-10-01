@@ -25,7 +25,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
-      BASE_SHA: '62ccb0ce436a8da6edfcf86e7f6921326e909709'
+      BASE_SHA: ${{ github.event.pull_request.base.sha }}
       HEAD_SHA: ${{ github.event.pull_request.head.sha }}
       CARGO_BUILD_JOBS: '4'
     steps:
@@ -36,7 +36,7 @@ jobs:
           persist-credentials: false
       - uses: actions/checkout@v5
         with:
-          ref: '62ccb0ce436a8da6edfcf86e7f6921326e909709'
+          ref: ${{ github.event.pull_request.base.sha }}
           path: baseline
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@stable
@@ -102,7 +102,7 @@ jobs:
             echo "Baseline and candidate executables are byte-identical; refusing to report a source comparison." >&2
             exit 1
           fi
-      - name: Compare nine adversarial cases against actual Picard
+      - name: Compare adversarial and paired-read cases against actual Picard
         run: |
           prefix="${MAMBA_ROOT_PREFIX}/envs/bounded-parity"
           python3 candidate/tools/bench_bounded_markduplicates.py \
@@ -116,13 +116,17 @@ jobs:
         if: always()
         run: |
           python3 - <<'PY'
-          import json, os
+          import json, os, sys
           from pathlib import Path
+          sys.path.insert(0, 'candidate/tools')
+          from bench_bounded_markduplicates import cases
           path = Path('evidence/report.json')
           if not path.exists():
               raise SystemExit('No command evidence was produced; inspect the build logs.')
           report = json.loads(path.read_text())
-          complete = len(report['summaries']) == 9
+          expected = {case.name for case in cases()}
+          completed = [summary['case'] for summary in report['summaries']]
+          complete = len(completed) == len(expected) and set(completed) == expected
           lines = ['# Bounded MarkDuplicates evidence', '', report['scope'], '',
                    report['comparison'], '', f"All cases completed: {complete}; required candidate checks: {complete and report['candidate_pass']}", '',
                    '| Case | Baseline seconds | Candidate seconds | Picard seconds | Baseline RSS bytes | Candidate RSS bytes | Candidate parity |',
