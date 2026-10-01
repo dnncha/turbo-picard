@@ -1,0 +1,59 @@
+{
+  "source_commit": "d14b74494dde26fe280f7bfac3531661e017cdce",
+  "source_tree": "649af81b448c9a9efc66f736204b104a669dc417",
+  "baseline_commit": "f04ba1810055bbbf78db6995f4bf6f7cfebfccc6",
+  "fastdup_commit": "7b3f62587283a257fd38c5c20ceeda0364c285ef",
+  "dupblaster_commit": "edb9efd1d5239bde7c88d9ed47397c80e3253d12",
+  "samtools": "1.24",
+  "picard": "3.4.0",
+  "rust": "1.99.0",
+  "compiler_flags": "Release profile; upstream FastDup CMake Release and samtools configure CFLAGS=-O3; no semantic competitor patches",
+  "cpu": "Architecture:                            x86_64\nCPU op-mode(s):                          32-bit, 64-bit\nAddress sizes:                           46 bits physical, 48 bits virtual\nByte Order:                              Little Endian\nCPU(s):                                  9\nOn-line CPU(s) list:                     0-8\nVendor ID:                               AuthenticAMD\nModel name:                              AMD EPYC 9V74 80-Core Processor\nBIOS Model name:                           CPU @ 0.0GHz\nBIOS CPU family:                         0\nCPU family:                              25\nModel:                                   17\nThread(s) per core:                      1\nCore(s) per socket:                      9\nSocket(s):                               1\nStepping:                                1\nBogoMIPS:                                5192.28\nFlags:                                   fpu vme de pse tsc msr pae mce cx8 apic sep mtrr pge mca cmov pat pse36 clflush mmx fxsr sse sse2 ht syscall nx mmxext fxsr_opt pdpe1gb rdtscp lm constant_tsc rep_good nopl xtopology nonstop_tsc cpuid extd_apicid tsc_known_freq pni pclmulqdq ssse3 fma cx16 pcid sse4_1 sse4_2 x2apic movbe popcnt tsc_deadline_timer aes xsave avx f16c rdrand hypervisor lahf_lm cmp_legacy cr8_legacy abm sse4a misalignsse 3dnowprefetch osvw topoext vmmcall fsgsbase tsc_adjust bmi1 avx2 smep bmi2 erms invpcid avx512f avx512dq rdseed adx smap avx512ifma clflushopt clwb avx512cd sha_ni avx512bw avx512vl xsaveopt xsavec xgetbv1 xsaves avx512_bf16 clzero xsaveerptr arat npt nrip_save tsc_scale vmcb_clean flushbyasid pausefilter pfthreshold v_vmsave_vmload avx512vbmi umip avx512_vbmi2 gfni vaes vpclmulqdq avx512_vnni avx512_bitalg avx512_vpopcntdq rdpid fsrm arch_capabilities\nHypervisor vendor:                       KVM\nVirtualization type:                     full\nL1d cache:                               160 KiB (5 instances)\nL1i cache:                               160 KiB (5 instances)\nL2 cache:                                5 MiB (5 instances)\nL3 cache:                                32 MiB (1 instance)\nNUMA node(s):                            1\nNUMA node0 CPU(s):                       0-8\nVulnerability Gather data sampling:      Not affected\nVulnerability Ghostwrite:                Not affected\nVulnerability Indirect target selection: Not affected\nVulnerability Itlb multihit:             Not affected\nVulnerability L1tf:                      Not affected\nVulnerability Mds:                       Not affected\nVulnerability Meltdown:                  Not affected\nVulnerability Mmio stale data:           Not affected\nVulnerability Old microcode:             Not affected\nVulnerability Reg file data sampling:    Not affected\nVulnerability Retbleed:                  Not affected\nVulnerability Spec rstack overflow:      Vulnerable\nVulnerability Spec store bypass:         Vulnerable\nVulnerability Spectre v1:                Vulnerable: __user pointer sanitization and usercopy barriers only; no swapgs barriers\nVulnerability Spectre v2:                Vulnerable; STIBP: disabled; PBRSB-eIBRS: Not affected; BHI: Not affected\nVulnerability Srbds:                     Not affected\nVulnerability Tsa:                       Vulnerable\nVulnerability Tsx async abort:           Not affected\nVulnerability Vmscape:                   Not affected\n",
+  "real_input_manifest": {
+    "description": "GATK public NA12878 mitochondrial test BAM.",
+    "evidence_json": "benchmarks/real-data/gatk-na12878-mito/evidence/real-data-comparison.json",
+    "evidence_markdown": "benchmarks/real-data/gatk-na12878-mito/evidence/real-data-comparison.md",
+    "expected_commands": {
+      "AddOrReplaceReadGroups": "SAM record digest plus read-group header digest",
+      "BuildBamIndex": "BAI binary digest",
+      "CleanSam": "post-command SAM record digest",
+      "CollectAlignmentSummaryMetrics": "stable metrics digest",
+      "CollectInsertSizeMetrics": "stable metrics digest with insert-size histogram",
+      "CollectQualityYieldMetrics": "stable metrics digest",
+      "MarkDuplicates": "duplicate-marking semantic digest plus stable metrics digest",
+      "RevertSam": "reverted SAM record digest",
+      "SamToFastq": "FASTQ trio digest",
+      "SortSam": "coordinate-sorted SAM record multiset digest",
+      "ValidateSamFile": "summary validation histogram plus exit code",
+      "ViewSam": "SAM record digest"
+    },
+    "id": "gatk-na12878-mito",
+    "input_path": "benchmarks/real-data/gatk-na12878-mito/input.bam",
+    "minimum_input_bytes": 1000000,
+    "release_tier": "release_candidate",
+    "scope_caveat": "GATK public NA12878 mitochondrial test BAM.",
+    "sha256": "70ea2e429805a75ce6007a32ba176ea7c697a398e0c39a9d58aaaa30e1ed86c3",
+    "source_commit": "e8c49f600b06c658e0fa9bf67256340ebb46bc48",
+    "source_url": "https://github.com/broadinstitute/gatk/blob/e8c49f600b06c658e0fa9bf67256340ebb46bc48/src/test/resources/org/broadinstitute/hellbender/tools/mutect/mito/NA12878.bam"
+  },
+  "paired_primary_transform": [
+    "samtools",
+    "view",
+    "-bh",
+    "-f",
+    "1",
+    "-o",
+    "paired-primary-600k.bam",
+    "paired-600k/input.bam"
+  ],
+  "discarded_timing_reports": [
+    "memory-v3",
+    "memory-v4",
+    "memory-v5",
+    "landscape-v2",
+    "landscape-final"
+  ],
+  "discard_reason": "Overlapping experimental jobs shared pinned CPU 0; retain correctness and memory results but exclude times from final claims.",
+  "raw_archive_sha256": "ad605f539a38a8b3d46e431bfaf4ec2e240c2b2558580aad1f3541c9349b4510",
+  "archive_scope": "Unmodified full sequential reports, command metrics, resources, stdout/stderr, and checks; excludes inputs, BAM outputs, scratch files, and generated plots."
+}

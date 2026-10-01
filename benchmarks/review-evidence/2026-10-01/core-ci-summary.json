@@ -1,0 +1,134 @@
+{
+  "source": "d14b74494dde26fe280f7bfac3531661e017cdce",
+  "baseline": "9ad15c17bb6179fca51520a7118e306e1157c6bd",
+  "run": "https://github.com/dnncha/turbo-picard/actions/runs/36926340497",
+  "artifact": "https://github.com/dnncha/turbo-picard/actions/runs/36926340497/artifacts/11193882661",
+  "summaries": [
+    {
+      "case": "memory-random",
+      "exact_output_pass": true,
+      "baseline": {
+        "median_seconds": 0.133830949,
+        "min_seconds": 0.129458511,
+        "max_seconds": 0.137406077,
+        "median_max_rss_bytes": 46051328,
+        "scratch_bytes_written": 0,
+        "run_count": 1
+      },
+      "candidate": {
+        "median_seconds": 0.133803811,
+        "min_seconds": 0.125868158,
+        "max_seconds": 0.137468234,
+        "median_max_rss_bytes": 46039040,
+        "scratch_bytes_written": 0,
+        "run_count": 1
+      },
+      "baseline_over_candidate_time": 1.000202819335243
+    },
+    {
+      "case": "memory-ordered",
+      "exact_output_pass": true,
+      "baseline": {
+        "median_seconds": 0.05368249,
+        "min_seconds": 0.053118874,
+        "max_seconds": 0.054047995,
+        "median_max_rss_bytes": 46034944,
+        "scratch_bytes_written": 0,
+        "run_count": 1
+      },
+      "candidate": {
+        "median_seconds": 0.053345869,
+        "min_seconds": 0.053029404,
+        "max_seconds": 0.054594389,
+        "median_max_rss_bytes": 46063616,
+        "scratch_bytes_written": 0,
+        "run_count": 1
+      },
+      "baseline_over_candidate_time": 1.0063101605861928
+    },
+    {
+      "case": "spill-random",
+      "exact_output_pass": true,
+      "baseline": {
+        "median_seconds": 0.154712931,
+        "min_seconds": 0.153588404,
+        "max_seconds": 0.169140546,
+        "median_max_rss_bytes": 3506176,
+        "scratch_bytes_written": 26214400,
+        "run_count": 32
+      },
+      "candidate": {
+        "median_seconds": 0.153277705,
+        "min_seconds": 0.152710438,
+        "max_seconds": 0.156765157,
+        "median_max_rss_bytes": 3514368,
+        "scratch_bytes_written": 26214400,
+        "run_count": 32
+      },
+      "baseline_over_candidate_time": 1.0093635666061154
+    },
+    {
+      "case": "spill-equal",
+      "exact_output_pass": true,
+      "baseline": {
+        "median_seconds": 0.110852042,
+        "min_seconds": 0.108728479,
+        "max_seconds": 0.111813234,
+        "median_max_rss_bytes": 3518464,
+        "scratch_bytes_written": 26214400,
+        "run_count": 32
+      },
+      "candidate": {
+        "median_seconds": 0.11125899,
+        "min_seconds": 0.110125743,
+        "max_seconds": 0.113912894,
+        "median_max_rss_bytes": 3489792,
+        "scratch_bytes_written": 26214400,
+        "run_count": 32
+      },
+      "baseline_over_candidate_time": 0.9963423360215655
+    },
+    {
+      "case": "spill-reversed",
+      "exact_output_pass": true,
+      "baseline": {
+        "median_seconds": 0.114395627,
+        "min_seconds": 0.112987865,
+        "max_seconds": 0.117981735,
+        "median_max_rss_bytes": 3493888,
+        "scratch_bytes_written": 26214400,
+        "run_count": 32
+      },
+      "candidate": {
+        "median_seconds": 0.113872133,
+        "min_seconds": 0.112442303,
+        "max_seconds": 0.119480454,
+        "median_max_rss_bytes": 3522560,
+        "scratch_bytes_written": 26214400,
+        "run_count": 32
+      },
+      "baseline_over_candidate_time": 1.0045972090467472
+    },
+    {
+      "case": "multi-pass-tail",
+      "exact_output_pass": true,
+      "baseline": {
+        "median_seconds": 0.1490448,
+        "min_seconds": 0.147752999,
+        "max_seconds": 0.156230278,
+        "median_max_rss_bytes": 3514368,
+        "scratch_bytes_written": 40140800,
+        "run_count": 22
+      },
+      "candidate": {
+        "median_seconds": 0.146219284,
+        "min_seconds": 0.144484262,
+        "max_seconds": 0.149214658,
+        "median_max_rss_bytes": 3506176,
+        "scratch_bytes_written": 40140800,
+        "run_count": 22
+      },
+      "baseline_over_candidate_time": 1.0193238259872754
+    }
+  ]
+}
