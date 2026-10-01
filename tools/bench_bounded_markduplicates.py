@@ -5,7 +5,8 @@ Requires real Picard, samtools and built Turbo Picard executables. Existing
 outputs are never overwritten. Comparisons cover every SAM alignment field and
 auxiliary tag except tool-specific PG provenance, record order, SQ/RG header
 content, normalized DuplicationMetrics tables, and numeric histogram columns
-and bins (bounded-v3). Plot rendering is not established by this runner.
+and bins (bounded-v4). RG run dates with explicit offsets are compared as exact
+instants; other header values are preserved. Plot rendering is not established.
 """
 from __future__ import annotations
 
@@ -22,7 +23,9 @@ import time
 import threading
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
+from datetime import datetime, timezone
 from pathlib import Path
+import re
 from typing import Iterator
 
 
@@ -114,6 +117,23 @@ def canonical_record(line: str) -> bytes:
     return ("\t".join(fields[:11] + tags) + "\n").encode()
 
 
+def canonical_header(line: str) -> list[str]:
+    values = line.rstrip("\n").split("\t")
+    if values[0] == "@RG":
+        for index, value in enumerate(values[1:], 1):
+            # Picard reformats ISO-8601 run dates in the JVM's local zone.
+            # Normalize only explicit-zone timestamps representable without
+            # precision loss. Different instants and malformed dates stay distinct.
+            if value.startswith("DT:") and re.fullmatch(
+                    r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?(?:Z|[+-](?:[01]\d|2[0-3]):?[0-5]\d)", value[3:]):
+                try:
+                    date = datetime.fromisoformat(value[3:])
+                except ValueError:
+                    continue
+                values[index] = "DT:" + date.astimezone(timezone.utc).isoformat()
+    return [values[0], *sorted(values[1:])]
+
+
 def summarize_bam(path: Path, samtools: str, log_dir: Path) -> dict:
     subprocess.run([samtools, "quickcheck", "-v", str(path)], check=True, timeout=60)
     digest = hashlib.sha256()
@@ -126,8 +146,7 @@ def summarize_bam(path: Path, samtools: str, log_dir: Path) -> dict:
             for line in process.stdout:
                 if line.startswith("@"):
                     if line.startswith(("@SQ\t", "@RG\t")):
-                        values = line.rstrip("\n").split("\t")
-                        headers.append([values[0], *sorted(values[1:])])
+                        headers.append(canonical_header(line))
                     continue
                 record = canonical_record(line)
                 digest.update(record)
@@ -235,7 +254,7 @@ def main() -> int:
     root = args.output_dir.resolve()
     root.mkdir(parents=True, exist_ok=False)
     report = {"scope": "adversarial synthetic whole MarkDuplicates commands; not WGS/cohort evidence",
-              "comparison": "ordered full alignment fields and tags excluding PG; SQ/RG headers; normalized DuplicationMetrics tables and numeric histograms (bounded-v3; not charts)",
+              "comparison": "ordered full alignment fields and tags excluding PG; SQ/RG headers with explicit-zone RG dates compared as exact instants; normalized DuplicationMetrics tables and numeric histograms (bounded-v4; not charts)",
               "candidate_source": os.environ.get("HEAD_SHA"), "baseline_source": os.environ.get("BASE_SHA"),
               "harness_sha256": digest_file(Path(__file__)),
               "host": platform.platform(), "cpu_affinity": sorted(os.sched_getaffinity(0)) if hasattr(os, "sched_getaffinity") else None,

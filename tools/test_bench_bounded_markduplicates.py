@@ -6,10 +6,25 @@ import sys
 import time
 import shutil
 from pathlib import Path
-from bench_bounded_markduplicates import Case, canonical_record, cases, sam_lines, read_histograms, measure
+from bench_bounded_markduplicates import Case, canonical_record, canonical_header, cases, sam_lines, read_histograms, measure
 
 
 class BoundedMarkduplicatesEvidenceTests(unittest.TestCase):
+    def test_run_dates_compare_exact_instants_without_masking_other_values(self):
+        original = '@RG\tID:r\tLB:lib\tDT:2016-01-23T00:00:00-0500\n'
+        pacific = original.replace('2016-01-23T00:00:00-0500', '2016-01-22T21:00:00-0800')
+        utc = original.replace('2016-01-23T00:00:00-0500', '2016-01-23T05:00:00Z')
+        self.assertEqual(canonical_header(original), canonical_header(pacific))
+        self.assertEqual(canonical_header(original), canonical_header(utc))
+        for changed in [original.replace('00:00:00', '00:00:01'), original.replace('LB:lib', 'LB:other'),
+                        original.replace('-0500', '-0600'), original.replace('-0500', ''),
+                        original.replace('00:00:00', '00:00:00.000001')]:
+            self.assertNotEqual(canonical_header(original), canonical_header(changed))
+        for value in ['2016-99-23T00:00:00-0500', '2016-01-23T00:00:00.0000001-0500',
+                      '2016-01-23T00:00:00+0060', 'bad']:
+            self.assertIn('DT:' + value, canonical_header('@RG\tID:r\tDT:' + value))
+        self.assertIn('DT:2016-01-23T00:00:00-0500', canonical_header(original.replace('@RG', '@SQ')))
+
     def test_canonical_record_only_ignores_program_provenance_and_tag_order(self):
         core = 'read\t99\tchr1\t101\t60\t20M\t=\t201\t120\tAAAA\tIIII'
         original = core + '\tRG:Z:rg1\tRX:Z:AAAA\tDS:i:2\tDI:i:0\tDT:Z:SQ\tPG:Z:first\n'

@@ -1,5 +1,5 @@
-Why Turbo Picard is faster than Picard
-======================================
+Native execution and measured performance
+=========================================
 
 ``turbo-picard`` gets most of its speed from avoiding JVM startup, running common
 Picard operations natively, and keeping BAM/CRAM I/O on mature HTSlib code.
@@ -20,7 +20,10 @@ are joined in a cache with at most 4,096 records and 4 MiB of owned buffers;
 metadata is bounded separately by that record limit. Evicted identities use the
 stable external QNAME join. A lazily allocated 1 MiB filter prevents an evicted
 identity from re-entering the cache; false positives defer additional records to
-the exact join. The QNAME and pair sort windows share one allocation budget.
+the exact join. The QNAME and pair sort windows share one allocation budget
+(160 MiB and 96 MiB respectively). When the scan finds no mapped primary
+unpaired candidate, the fragment stage cannot emit decisions; its buffers are
+released without sorting those runs.
 The bounded path includes ``BARCODE_TAG`` and
 ``READ_ONE_BARCODE_TAG``/``READ_TWO_BARCODE_TAG`` grouping, Picard-compatible
 optical-family discovery with the default or a validated three-capture-group
@@ -29,7 +32,8 @@ optical-family discovery with the default or a validated three-capture-group
 no-optical metrics behavior. Coverage-estimation histograms are emitted for a
 single library when its library-size estimate exists, including when optical
 detection is disabled. Distinct libraries do not receive a pooled ROI estimate;
-duplicate-family bins remain separate columns beside ROI where applicable. Duplicate-set tagging (``DS``/``DI``) is carried
+duplicate-family bins remain separate columns beside ROI where applicable.
+Duplicate-set tagging (``DS``/``DI``) is carried
 through bounded replay for paired duplicate families. Multiple streams that are
 not already globally coordinate-ordered fall back to the existing in-memory
 multi-input path so the output-order contract is preserved. A local adversarial
@@ -56,6 +60,39 @@ that every MarkDuplicates mode is constant-memory or production-approved.
 Production-scale WGS, WES, UMI, optical-heavy, CRAM, and multi-library evidence
 still belongs in the pinned evidence workflow described in
 :doc:`production-readiness`.
+
+Duplicate pipeline comparison
+-----------------------------
+
+``tools/bench_bounded_markduplicates.py`` checks ordered mandatory SAM fields,
+every typed auxiliary tag except PG provenance, SQ/RG headers, duplication
+metrics and every numeric histogram column and bin against actual Picard.
+The named ``bounded-v4`` contract compares explicitly zoned RG run dates as
+exact instants: Picard may rewrite their timezone without changing the date.
+Different instants, other header fields and alignment DT tags stay distinct.
+Malformed dates or dates with more than six fractional digits are preserved
+without normalization. Histogram normalization changes numeric spelling only.
+
+``tools/bench_native_duplicate_landscape.py`` measures current native tools
+from identical coordinate BAMs. Required name grouping, mate tags and final
+coordinate sorting are included in the samtools/dupblaster pipeline timers.
+All commands use one pinned CPU and BAM compression level 5; FastDup's pinned
+source default is 5. Each tool gets one warm-up and alternating measured runs.
+An unordered mandatory-field/RG comparison is a separate diagnostic and never
+qualifies a tool for a full-contract speedup claim. The report retains failures,
+input/executable hashes, exact options, versions and per-run measurements.
+GNU time reports the maximum child RSS for pipelines; simultaneous aggregate
+pipeline memory is not established. The fixtures do not establish WGS accuracy,
+cohort reliability, variant-calling impact or universal superiority.
+
+.. code-block:: bash
+
+   python3 tools/bench_native_duplicate_landscape.py \
+     --candidate target/release/turbo-picard --candidate-source "$(git rev-parse HEAD)" \
+     --picard /path/to/picard --samtools /path/to/samtools \
+     --fastdup /path/to/fastdup --dupblaster /path/to/dupblaster \
+     --input sample=/path/to/coordinate.bam \
+     --output-dir /tmp/duplicate-landscape-new --repeats 3
 
 External sort memory
 --------------------

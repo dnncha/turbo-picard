@@ -824,11 +824,14 @@ fn try_run_external_plan(
     };
     let temporary = external_plan_tempdir(config)?;
     // The two mate stages share the former QNAME window's allocation budget.
-    let mate_bytes = EXTERNAL_MARKDUP_MAX_BYTES_IN_RAM / 2;
+    // The pair window fills alongside the fragment window for nearby mates;
+    // reserve more of their shared budget for the distant-mate fallback.
+    let pair_bytes = EXTERNAL_MARKDUP_MAX_BYTES_IN_RAM / 8 * 3;
+    let qname_bytes = EXTERNAL_MARKDUP_MAX_BYTES_IN_RAM - pair_bytes;
     let mut qname_sorter =
-        external_sorter_with_bytes(temporary.path(), "turbo-picard-markdup-qname", mate_bytes)?;
+        external_sorter_with_bytes(temporary.path(), "turbo-picard-markdup-qname", qname_bytes)?;
     let mut pair_sorter =
-        external_sorter_with_bytes(temporary.path(), "turbo-picard-markdup-pair", mate_bytes)?;
+        external_sorter_with_bytes(temporary.path(), "turbo-picard-markdup-pair", pair_bytes)?;
     let mut mate_cache = external_mates::ExternalMateCache::new();
     let mut fragment_sorter = external_sorter(temporary.path(), "turbo-picard-markdup-fragment")?;
     let mut record_count = 0_u64;
@@ -923,6 +926,10 @@ fn try_run_external_plan(
         .flush(&mut qname_sorter)
         .map_err(MarkDuplicatesError::Operation)?;
     drop(mate_cache);
+    // Paired records only dominate unpaired candidates in the fragment stage.
+    // Without any mapped primary unpaired candidate, that stage cannot emit a
+    // decision or histogram entry. Release its resident buffers before joining.
+    let fragment_sorter = (summary.unpaired_reads_examined != 0).then_some(fragment_sorter);
     let mut decision_sorter = external_sorter(temporary.path(), "turbo-picard-markdup-decisions")?;
     external_mates::finish_spilled(qname_sorter, &mut pair_sorter)
         .map_err(MarkDuplicatesError::Operation)?;
@@ -936,15 +943,17 @@ fn try_run_external_plan(
         tracks_duplicate_set_histogram(config),
         &processing_config,
     )?;
-    process_external_duplicate_groups(
-        fragment_sorter,
-        &mut decision_sorter,
-        &mut summary,
-        &mut library_registry,
-        false,
-        tracks_duplicate_set_histogram(config),
-        &processing_config,
-    )?;
+    if let Some(fragment_sorter) = fragment_sorter {
+        process_external_duplicate_groups(
+            fragment_sorter,
+            &mut decision_sorter,
+            &mut summary,
+            &mut library_registry,
+            false,
+            tracks_duplicate_set_histogram(config),
+            &processing_config,
+        )?;
+    }
     let decision_path = temporary.path().join("duplicate-ordinals.bin");
     write_external_duplicate_ordinals(decision_sorter, &decision_path)?;
 
