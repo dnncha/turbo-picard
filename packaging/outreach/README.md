@@ -37,17 +37,18 @@ Ground rules:
 
 Current facts to keep consistent:
 
-- Live package and release source: `turbo-picard` 0.1.15
+- Release source and publication target: `turbo-picard` 0.1.16
 - Install: `python3 -m pip install turbo-picard`
-- Current PyPI files: Linux x86_64 and ARM64 wheels, macOS Intel and Apple Silicon wheels, and source distribution
-- The submitted Bioconda PR #65922 is being updated to target `0.1.15`. Do not advertise a
+- Target PyPI files: Linux x86_64 and ARM64 wheels, macOS Intel and Apple Silicon wheels, and source distribution
+- The local Bioconda recipe targets `0.1.16`; upstream PR #65922 remains pending. Do not advertise a
   Bioconda install until acceptance and package-index availability are verified.
-  Use PyPI `0.1.15` or the published container in the meantime.
+  Verify PyPI `0.1.16` or the versioned container before advertising availability.
 - Trial helper: `turbo-picard trial <PicardCommand> ...`
 - Benchmark evidence in the repo reports 32/32 parity-checked commands, 84.52x
   geometric mean speedup, and 272.12x top speedup versus Picard 3.4.0
-- The 0.1.15 MarkDuplicates gate matched nine adversarial synthetic cases;
-  spill fixtures used less peak RSS but ran slower than the previous checkpoint.
+- The 0.1.16 MarkDuplicates gate matched eleven bounded synthetic cases.
+  Paired CI spill fixtures measured 16–18% lower runtime and 8–13% lower RSS.
+  Some native competitors were faster; full output contracts differ.
   Keep that scope and trade-off visible; this is not WGS/cohort evidence.
 - Recommended first commands: `MarkDuplicates`, `SortSam`, `SamToFastq`,
   `FastqToSam`, `FixMateInformation`, `BuildBamIndex`, and metrics commands

@@ -104,7 +104,6 @@ def validate_github_release_assets_job(root: Path = ROOT) -> list[str]:
     errors: list[str] = []
     required = (
         ("needs: [publish]", "GitHub release assets must wait for successful PyPI publication"),
-        ("if: github.event_name == 'release' && github.ref_type == 'tag'", "GitHub release assets must run only for a published tag release"),
         ("contents: write", "GitHub release asset job must have permission to attach assets"),
         ("pattern: wheels-*", "GitHub release asset job must download the validated wheel artifacts"),
         ("name: sdist", "GitHub release asset job must download the source distribution"),
@@ -117,6 +116,12 @@ def validate_github_release_assets_job(root: Path = ROOT) -> list[str]:
     for needle, message in required:
         if needle not in job:
             errors.append(message)
+    guards = (
+        "if: github.event_name == 'release' && github.ref_type == 'tag'",
+        "if: (github.event_name == 'release' || (github.event_name == 'workflow_dispatch' && inputs.publish == 'true')) && github.ref_type == 'tag'",
+    )
+    if not any(guard in job for guard in guards):
+        errors.append("GitHub release assets must require a release or explicit publishing dispatch on a tag")
     if "id-token: write" in job:
         errors.append("GitHub release asset job must not receive PyPI OIDC publishing permission")
     if "softprops/action-gh-release" in job or "ncipollo/release-action" in job:
@@ -124,11 +129,30 @@ def validate_github_release_assets_job(root: Path = ROOT) -> list[str]:
     return errors
 
 
+def validate_ci_release_workflow(root: Path = ROOT) -> list[str]:
+    path = root / ".github" / "workflows" / "release-v0.1.16.yml"
+    if not path.is_file():
+        return ["Authorized CI release workflow is missing"]
+    text = path.read_text(encoding="utf-8")
+    required = (
+        "workflows: [CI]", "types: [completed]",
+        "github.event.workflow_run.conclusion == 'success'",
+        "github.event.workflow_run.event == 'push'",
+        "github.event.workflow_run.head_branch == 'main'",
+        "github.event.workflow_run.head_repository.full_name == github.repository",
+        "ref: ${{ github.event.workflow_run.head_sha }}",
+        "persist-credentials: false", "python3 tools/publish_ci_release.py",
+    )
+    return [f"CI release workflow is missing guard: {needle}"
+            for needle in required if needle not in text]
+
+
 def main() -> int:
     errors = (
         validate_docker_publish_workflow()
         + validate_pypi_publish_workflow()
         + validate_github_release_assets_job()
+        + validate_ci_release_workflow()
     )
     if errors:
         for error in errors:

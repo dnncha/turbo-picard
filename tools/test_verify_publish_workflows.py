@@ -172,6 +172,36 @@ class VerifyPublishWorkflowsTests(unittest.TestCase):
             errors,
         )
 
+    def test_accepts_explicit_publishing_dispatch_on_tag(self) -> None:
+        guard = "if: (github.event_name == 'release' || (github.event_name == 'workflow_dispatch' && inputs.publish == 'true')) && github.ref_type == 'tag'"
+        text = VALID_GITHUB_RELEASE_ASSETS_JOB.replace(
+            "if: github.event_name == 'release' && github.ref_type == 'tag'", guard)
+        root = self.write_pypi_workflow(text)
+        self.assertEqual([], verify_publish_workflows.validate_github_release_assets_job(root))
+        for unsafe in (guard.replace(" && github.ref_type == 'tag'", ""),
+                       guard.replace(" && inputs.publish == 'true'", "")):
+            with self.subTest(guard=unsafe):
+                root = self.write_pypi_workflow(text.replace(guard, unsafe))
+                self.assertTrue(verify_publish_workflows.validate_github_release_assets_job(root))
+
+    def test_ci_release_requires_every_trust_boundary(self) -> None:
+        source = verify_publish_workflows.ROOT / ".github/workflows/release-v0.1.16.yml"
+        text = source.read_text()
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        root = Path(temp.name)
+        path = root / ".github/workflows/release-v0.1.16.yml"
+        path.parent.mkdir(parents=True)
+        path.write_text(text)
+        self.assertEqual([], verify_publish_workflows.validate_ci_release_workflow(root))
+        for guard in ("github.event.workflow_run.event == 'push'",
+                      "github.event.workflow_run.head_branch == 'main'",
+                      "github.event.workflow_run.head_repository.full_name == github.repository",
+                      "ref: ${{ github.event.workflow_run.head_sha }}"):
+            with self.subTest(guard=guard):
+                path.write_text(text.replace(guard, ""))
+                self.assertTrue(verify_publish_workflows.validate_ci_release_workflow(root))
+
 
 if __name__ == "__main__":
     unittest.main()
