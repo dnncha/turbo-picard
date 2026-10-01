@@ -20,11 +20,13 @@
 
 ## Measured performance and scientific validation
 
-- Paired synthetic spill fixtures at 600,000 and 1,200,000 records, one CPU,
-  compression level 1, warm cache, one warm-up plus three alternating measured
+- Paired synthetic spill fixtures at approximately 600,000 and 1,200,000
+  records, one CPU, compression level 1, warm cache, one warm-up plus three
+  alternating measured
   repetitions: runtime fell from 2.8091 to 2.2947 seconds (18.3%) and from
-  5.44834 to 4.58571 seconds (15.8%) against the PR base. Peak RSS fell from
-  287.588 to 251.032 MiB (12.7%) and 288.776 to 264.298 MiB (8.5%).
+  5.44834 to 4.58571 seconds (15.8%) in [PR #39’s comparison run](https://github.com/dnncha/turbo-picard/actions/runs/36926340419)
+  against that run’s recorded baseline. Peak RSS fell from
+  287.588 to 251.032 MB (12.7%) and 288.776 to 264.298 MB (8.5%). MB denotes 1,000,000 bytes.
 - Eleven bounded whole-command cases pass the Picard 3.4.0 contract for ordered
   mandatory alignment fields, typed tags except PG, SQ/RG headers, numeric
   DuplicationMetrics, and numeric histograms. Explicitly zoned read-group DT
