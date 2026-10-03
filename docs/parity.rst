@@ -95,6 +95,29 @@ Shared comparison helpers live in ``tools/parity_compare.py``. Real-data
 audits accept CRAM inputs when ``--reference-fasta`` is supplied to
 ``tools/compare_real_data.py`` and ``tools/audit_real_data.py``.
 
+Picard 3.5.0
+------------
+
+The reference release is Picard 3.4.0. CI also runs the full parity suite
+against Picard 3.5.0, the version bundled with GATK 4.7.0.0. All 45 parity
+scripts pass, with two CRAM-specific adjustments that both come from HTSJDK 5.
+
+**CRAM decoding.** Picard 3.5.0 restores ``MD`` and ``NM`` tags when it
+decodes a CRAM against its reference. ``ValidateSamFile`` on a CRAM whose
+records lack stored ``NM`` tags therefore no longer reports
+``WARNING:MISSING_TAG_NM`` under Picard 3.5.0. Turbo Picard keeps the Picard
+3.4.0 behaviour and still reports it. The same input as BAM gives the same
+warning under both Picard versions. Record comparisons for CRAM commands
+already leave ``MD`` and ``NM`` out, so no other command is affected.
+
+**CRAM writing.** When Picard 3.5.0 writes CRAM, it sets the mate-unmapped flag
+(``0x8``) on unmapped reads whose mate is mapped. On the GATK mitochondrial
+fixture, ``MergeSamFiles`` to CRAM changes the flag on 424 records, for
+example from ``1157`` to ``1165``. The same merge written as BAM keeps the input
+flags, as does Picard 3.4.0. Turbo Picard keeps the input flags in both
+formats. Against Picard 3.5.0, that check compares Turbo Picard's CRAM output
+with Picard's BAM output.
+
 What Parity Does Not Prove
 --------------------------
 

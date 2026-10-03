@@ -287,6 +287,20 @@ class ParityCompareTests(unittest.TestCase):
             turbo.write_text("ERROR\tMISSING_READ_GROUP\t1\n", encoding="utf-8")
             parity_compare.compare_validate_summary(picard, turbo, "ValidateSamFile")
 
+    def test_compare_validate_summary_ignores_named_type(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            picard = Path(tempdir) / "picard.txt"
+            turbo = Path(tempdir) / "turbo.txt"
+            picard.write_text("ERROR:MATE_NOT_FOUND\t2\n", encoding="utf-8")
+            turbo.write_text(
+                "ERROR:MATE_NOT_FOUND\t2\nWARNING:MISSING_TAG_NM\t5\n", encoding="utf-8"
+            )
+            with self.assertRaises(SystemExit):
+                parity_compare.compare_validate_summary(picard, turbo, "ValidateSamFile")
+            parity_compare.compare_validate_summary(
+                picard, turbo, "ValidateSamFile", ("WARNING:MISSING_TAG_NM",)
+            )
+
     def test_compare_merge_multiset_reports_record_difference(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:
             picard = Path(tempdir) / "picard.sam"
