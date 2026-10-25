@@ -1,12 +1,64 @@
 from pathlib import Path
+import hashlib
+import json
+import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
-from bench_native_duplicate_landscape import pipeline_commands, run_pipeline
+from bench_native_duplicate_landscape import main, pipeline_commands, run_pipeline
 
 
 class NativeLandscapeTests(unittest.TestCase):
+    def test_validation_only_samtools_has_provenance_without_being_measured(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            binary = root / 'tool'
+            binary.write_bytes(b'fixture executable')
+            source = root / 'input.bam'
+            source.write_bytes(b'fixture input')
+            output = root / 'evidence'
+            argv = ['bench_native_duplicate_landscape.py',
+                    '--candidate', str(binary), '--picard', str(binary),
+                    '--samtools', str(binary), '--fastdup', str(binary),
+                    '--tools', 'fastdup', '--input', f'sample={source}',
+                    '--output-dir', str(output), '--candidate-source', 'test',
+                    '--repeats', '1']
+            version = subprocess.CompletedProcess([], 0, 'fixture version\n', '')
+            with patch.object(sys, 'argv', argv), \
+                    patch('bench_native_duplicate_landscape.os.sched_getaffinity',
+                          return_value={0}, create=True), \
+                    patch('bench_native_duplicate_landscape.subprocess.run', return_value=version), \
+                    patch('bench_native_duplicate_landscape.measure',
+                          side_effect=lambda *args: {'exit_code': 1, 'wall_seconds': 0.0}):
+                # Failed commands still retain the complete executable provenance.
+                self.assertEqual(main(), 1)
+            report = json.loads((output / 'report.json').read_text())
+            validator = report['executables']['samtools']
+            self.assertEqual(validator['path'], str(binary.resolve()))
+            self.assertEqual(validator['sha256'], hashlib.sha256(binary.read_bytes()).hexdigest())
+            self.assertEqual(validator['version'], 'fixture version\n')
+            self.assertEqual(validator['version_exit'], 0)
+            self.assertEqual(report['selected_competitors'], ['fastdup'])
+            self.assertNotIn('samtools', {row['tool'] for row in report['runs']})
+
+    def test_selected_competitors_are_required_before_creating_outputs(self):
+        script = Path(__file__).with_name('bench_native_duplicate_landscape.py')
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / 'evidence'
+            common = [sys.executable, str(script), '--candidate', 'candidate',
+                      '--picard', 'picard', '--samtools', 'samtools',
+                      '--input', 'sample=input.bam', '--output-dir', str(output),
+                      '--candidate-source', 'test']
+            for options, error in [([], '--tools fastdup requires --fastdup'),
+                                   (['--tools', 'dupblaster'], '--tools dupblaster requires --dupblaster'),
+                                   (['--tools', 'samtools', 'samtools'], '--tools must not contain duplicates')]:
+                result = subprocess.run([*common, *options], capture_output=True, text=True)
+                self.assertEqual(result.returncode, 2)
+                self.assertIn(error, result.stderr)
+                self.assertFalse(output.exists())
+
     def test_preparation_and_coordinate_output_are_inside_both_pipelines(self):
         for tool in ('samtools', 'dupblaster'):
             commands = pipeline_commands(tool, 'dupblaster', 'samtools', Path('original.bam'),

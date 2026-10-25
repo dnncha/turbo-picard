@@ -6,6 +6,12 @@ Picard operations natively, and keeping BAM/CRAM I/O on mature HTSlib code.
 Those choices matter more for current Picard-style preprocessing than sending
 work to a GPU just because one is present.
 
+In the source checkout, BAM BGZF compression and decompression use HTSlib's optional ``libdeflate``
+backend, enabled in the shared ``rust-htslib`` dependency. This applies to
+native commands using the common BAM I/O layer. Compression levels remain
+explicit benchmark settings; compressed bytes may differ between encoder
+builds, so output validation checks decoded alignment semantics.
+
 They also explain the scalability story. Faster wall time matters, but so does
 the ability to fan out many Picard-shaped tasks without paying Picard-scale JVM
 startup and memory costs on every shard. The saved benchmark suite currently
@@ -21,9 +27,20 @@ metadata is bounded separately by that record limit. Evicted identities use the
 stable external QNAME join. A lazily allocated 1 MiB filter prevents an evicted
 identity from re-entering the cache; false positives defer additional records to
 the exact join. The QNAME and pair sort windows share one allocation budget
-(160 MiB and 96 MiB respectively). When the scan finds no mapped primary
-unpaired candidate, the fragment stage cannot emit decisions; its buffers are
-released without sorting those runs.
+(160 MiB and 96 MiB respectively). Only unpaired candidates enter the fragment
+sort window during the first pass. When any exist, paired ends are recovered
+from the completed-pair payloads and unmatched QNAME records for fragment
+dominance checks. This preserves orphan handling without another input scan.
+Paired-only inputs build no fragment entries.
+Completed mates occupy one pair-sort entry with a length-framed payload for
+both original records. This follows the compact pair representation used in
+`FastDup's read-end generator <https://github.com/zzhofict/FastDup/blob/7b3f62587283a257fd38c5c20ceeda0364c285ef/src/markdup/md_pipeline.cpp>`_.
+Both input ordinals, scores, read groups, names and barcodes are retained;
+duplicate-group selection still uses the existing Picard comparison rules.
+Sort keys and payloads reserve their encoded length, including optional barcode
+and read-group fields, to avoid geometric buffer growth. The allocation budgets
+count the resulting reserved capacity; the pair sort's record limit now counts
+completed templates.
 The bounded path includes ``BARCODE_TAG`` and
 ``READ_ONE_BARCODE_TAG``/``READ_TWO_BARCODE_TAG`` grouping, Picard-compatible
 optical-family discovery with the default or a validated three-capture-group
@@ -94,6 +111,12 @@ cohort reliability, variant-calling impact or universal superiority.
      --input sample=/path/to/coordinate.bam \
      --output-dir /tmp/duplicate-landscape-new --repeats 3
 
+Use ``--tools fastdup samtools`` to measure only those two competitors when
+dupblaster is unavailable. Picard and Turbo Picard remain required, as does
+samtools for output validation. Every selected competitor must have an explicit
+executable path; omitted competitors are not measured. The report records the
+selected set, failures and semantic differences.
+
 External sort memory
 --------------------
 
@@ -155,13 +178,12 @@ parallelism. Reader defaults still cap at eight workers, writer and index
 defaults cap at twelve workers, and pipelined readers cap lower because the
 command is already overlapping I/O with application-level processing.
 
-``SortSam`` streams BAM/CRAM inputs without loading them into memory when the
-``@HD`` sort order already matches the requested ``SORT_ORDER``. Inputs with
-``SO:unsorted`` or a mismatched header still get verified (or sorted) the same
-way as before.
+``SortSam`` verifies actual record order before choosing a streaming or copy
+path, including when ``@HD`` already declares the requested ``SORT_ORDER``.
+Misordered inputs are sorted using the Picard tie rules.
 
-``MergeSamFiles`` uses the same header fast path when deciding whether every
-input shard is already sorted for k-way streaming merge.
+``MergeSamFiles`` likewise verifies input ordering before a k-way streaming
+merge, unless the caller explicitly supplies ``ASSUME_SORTED=true``.
 
 Metrics accumulation
 --------------------

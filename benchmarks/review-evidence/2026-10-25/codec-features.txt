@@ -1,0 +1,48 @@
+libdeflate-sys v1.26.1
+└── libdeflate-sys feature "default"
+    └── hts-sys v2.2.0
+        ├── hts-sys feature "bindgen"
+        │   └── rust-htslib v1.0.0
+        │       ├── rust-htslib feature "bzip2"
+        │       │   └── rust-htslib feature "default"
+        │       │       ├── turbo-picard-cli v0.1.16 (/workspace/turbo-picard/crates/turbo-picard-cli)
+        │       │       │   └── turbo-picard-cli feature "default" (command-line)
+        │       │       ├── turbo-picard-core v0.1.16 (/workspace/turbo-picard/crates/turbo-picard-core)
+        │       │       │   └── turbo-picard-core feature "default" (command-line)
+        │       │       │       ├── turbo-picard-cli v0.1.16 (/workspace/turbo-picard/crates/turbo-picard-cli) (*)
+        │       │       │       └── turbo-picard-markdup v0.1.16 (/workspace/turbo-picard/crates/turbo-picard-markdup)
+        │       │       │           └── turbo-picard-markdup feature "default" (command-line)
+        │       │       │               └── turbo-picard-cli v0.1.16 (/workspace/turbo-picard/crates/turbo-picard-cli) (*)
+        │       │       └── turbo-picard-markdup v0.1.16 (/workspace/turbo-picard/crates/turbo-picard-markdup) (*)
+        │       ├── rust-htslib feature "curl"
+        │       │   └── rust-htslib feature "default" (*)
+        │       ├── rust-htslib feature "default" (*)
+        │       ├── rust-htslib feature "libdeflate"
+        │       │   ├── turbo-picard-cli v0.1.16 (/workspace/turbo-picard/crates/turbo-picard-cli) (*)
+        │       │   ├── turbo-picard-core v0.1.16 (/workspace/turbo-picard/crates/turbo-picard-core) (*)
+        │       │   └── turbo-picard-markdup v0.1.16 (/workspace/turbo-picard/crates/turbo-picard-markdup) (*)
+        │       └── rust-htslib feature "lzma"
+        │           └── rust-htslib feature "default" (*)
+        ├── hts-sys feature "bzip2"
+        │   ├── hts-sys feature "default"
+        │   │   └── turbo-picard-cli v0.1.16 (/workspace/turbo-picard/crates/turbo-picard-cli) (*)
+        │   └── rust-htslib feature "bzip2" (*)
+        ├── hts-sys feature "bzip2-sys"
+        │   └── hts-sys feature "bzip2" (*)
+        ├── hts-sys feature "curl"
+        │   ├── hts-sys feature "default" (*)
+        │   └── rust-htslib feature "curl" (*)
+        ├── hts-sys feature "curl-sys"
+        │   └── hts-sys feature "curl" (*)
+        ├── hts-sys feature "default" (*)
+        ├── hts-sys feature "libdeflate"
+        │   └── rust-htslib feature "libdeflate" (*)
+        ├── hts-sys feature "libdeflate-sys"
+        │   └── hts-sys feature "libdeflate" (*)
+        ├── hts-sys feature "lzma"
+        │   ├── hts-sys feature "default" (*)
+        │   └── rust-htslib feature "lzma" (*)
+        ├── hts-sys feature "lzma-sys"
+        │   └── hts-sys feature "lzma" (*)
+        └── hts-sys feature "openssl-sys"
+            └── hts-sys feature "curl" (*)

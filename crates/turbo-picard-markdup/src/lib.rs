@@ -632,15 +632,12 @@ fn try_run_external_plan(
             }
 
             let plan = external_plan_record(ordinal, &record, library_id, config);
-            fragment_sorter
-                .push(
-                    external_fragment_key(&plan),
-                    encode_external_plan_record(&plan, true),
-                )
-                .map_err(MarkDuplicatesError::Operation)?;
             if duplicate_candidate_is_pair(flag) {
                 mate_cache
                     .push(plan, &mut qname_sorter, &mut pair_sorter)
+                    .map_err(MarkDuplicatesError::Operation)?;
+            } else {
+                push_external_fragment(&plan, &mut fragment_sorter)
                     .map_err(MarkDuplicatesError::Operation)?;
             }
         }
@@ -654,11 +651,12 @@ fn try_run_external_plan(
         .map_err(MarkDuplicatesError::Operation)?;
     drop(mate_cache);
     // Paired records only dominate unpaired candidates in the fragment stage.
-    // Without any mapped primary unpaired candidate, that stage cannot emit a
-    // decision or histogram entry. Release its resident buffers before joining.
-    let fragment_sorter = (summary.unpaired_reads_examined != 0).then_some(fragment_sorter);
+    // Only unpaired candidates have entered this sorter. Recover paired ends
+    // from the exact mate join and pair payloads only when they can dominate an
+    // unpaired candidate; paired-only inputs never build fragment entries.
+    let mut fragment_sorter = (summary.unpaired_reads_examined != 0).then_some(fragment_sorter);
     let mut decision_sorter = external_sorter(temporary.path(), "turbo-picard-markdup-decisions")?;
-    external_mates::finish_spilled(qname_sorter, &mut pair_sorter)
+    external_mates::finish_spilled(qname_sorter, &mut pair_sorter, fragment_sorter.as_mut())
         .map_err(MarkDuplicatesError::Operation)?;
 
     process_external_duplicate_groups(
@@ -669,6 +667,7 @@ fn try_run_external_plan(
         true,
         tracks_duplicate_set_histogram(config),
         &processing_config,
+        fragment_sorter.as_mut(),
     )?;
     if let Some(fragment_sorter) = fragment_sorter {
         process_external_duplicate_groups(
@@ -679,6 +678,7 @@ fn try_run_external_plan(
             false,
             tracks_duplicate_set_histogram(config),
             &processing_config,
+            None,
         )?;
     }
     let decision_path = temporary.path().join("duplicate-ordinals.bin");
@@ -716,7 +716,38 @@ fn try_run_external_plan(
 }
 
 fn encode_external_plan_record(record: &ExternalPlanRecord, include_qname: bool) -> Vec<u8> {
-    let mut payload = Vec::with_capacity(80 + record.qname.len());
+    let mut payload = Vec::with_capacity(external_plan_record_encoded_len(record, include_qname));
+    append_external_plan_record(&mut payload, record, include_qname);
+    payload
+}
+
+fn external_barcode_encoded_len(value: Option<&[u8]>) -> usize {
+    1 + value.map_or(0, |value| 8 + value.len())
+}
+
+fn external_plan_record_encoded_len(record: &ExternalPlanRecord, include_qname: bool) -> usize {
+    let qname_bytes = if include_qname {
+        4 + record.qname.len()
+    } else {
+        0
+    };
+    62 + qname_bytes
+        + [
+            record.barcode.primary.as_deref(),
+            record.barcode.read_one.as_deref(),
+            record.barcode.read_two.as_deref(),
+            record.read_group.as_deref(),
+        ]
+        .into_iter()
+        .map(external_barcode_encoded_len)
+        .sum::<usize>()
+}
+
+fn append_external_plan_record(
+    payload: &mut Vec<u8>,
+    record: &ExternalPlanRecord,
+    include_qname: bool,
+) {
     payload.extend_from_slice(&record.ordinal.to_le_bytes());
     payload.extend_from_slice(&record.library_id.to_le_bytes());
     payload.extend_from_slice(&record.flags.to_le_bytes());
@@ -735,9 +766,56 @@ fn encode_external_plan_record(record: &ExternalPlanRecord, include_qname: bool)
         );
         payload.extend_from_slice(&record.qname);
     }
-    encode_external_barcode_values(&mut payload, &record.barcode);
-    encode_external_barcode(&mut payload, record.read_group.as_deref());
+    encode_external_barcode_values(payload, &record.barcode);
+    encode_external_barcode(payload, record.read_group.as_deref());
+}
+
+// A completed template needs one pair key and one sort slot. Keep both original
+// records in the framed payload: scores, identities and input ordinals still
+// drive the same representative, optical and duplicate-set decisions.
+fn encode_external_pair(first: &ExternalPlanRecord, second: &ExternalPlanRecord) -> Vec<u8> {
+    let mut payload = Vec::with_capacity(
+        8 + external_plan_record_encoded_len(first, true)
+            + external_plan_record_encoded_len(second, true),
+    );
+    payload.extend_from_slice(&0_u64.to_le_bytes());
+    append_external_plan_record(&mut payload, first, true);
+    let first_length = (payload.len() - 8) as u64;
+    payload[..8].copy_from_slice(&first_length.to_le_bytes());
+    append_external_plan_record(&mut payload, second, true);
     payload
+}
+
+fn decode_borrowed_external_pair<'a>(
+    key: &'a [u8],
+    payload: &'a [u8],
+) -> Result<[BorrowedExternalPlanRecord<'a>; 2], String> {
+    let mut offset = 0;
+    let first_length = usize::try_from(read_external_u64(payload, &mut offset)?)
+        .map_err(|_| "external MarkDuplicates pair length is too large".to_string())?;
+    let first = read_external_bytes(payload, &mut offset, first_length)?;
+    let first = decode_borrowed_external_plan_record(key, first, true)?;
+    let second = decode_borrowed_external_plan_record(key, &payload[offset..], true)?;
+    if first.qname != second.qname || first.read_group != second.read_group {
+        return Err("external MarkDuplicates pair identities disagree".to_string());
+    }
+    Ok([first, second])
+}
+
+fn append_external_group_item(
+    group: &mut Vec<ExternalPlanRecord>,
+    item: &SortItem,
+    paired: bool,
+) -> Result<(), String> {
+    if paired {
+        group.extend(
+            decode_borrowed_external_pair(&item.key, &item.payload)?
+                .map(BorrowedExternalPlanRecord::into_owned),
+        );
+    } else {
+        group.push(decode_external_plan_record(&item.key, &item.payload, true)?);
+    }
+    Ok(())
 }
 
 fn encode_external_barcode_values(payload: &mut Vec<u8>, barcode: &ExternalBarcodeValues) {
@@ -949,7 +1027,15 @@ struct ExternalKey<'a> {
 }
 
 fn external_key(key_fields: ExternalKey<'_>) -> Vec<u8> {
-    let mut key = Vec::with_capacity(4 + 4 + 8 + 4 + 8 + 2);
+    let barcode_bytes = [
+        key_fields.barcode.primary.as_deref(),
+        key_fields.barcode.read_one.as_deref(),
+        key_fields.barcode.read_two.as_deref(),
+    ]
+    .into_iter()
+    .map(external_barcode_encoded_len)
+    .sum::<usize>();
+    let mut key = Vec::with_capacity(4 + 4 + 8 + 4 + 8 + 2 + barcode_bytes);
     key.extend_from_slice(&key_fields.library_id.to_le_bytes());
     key.extend_from_slice(&key_fields.reference_id.to_le_bytes());
     key.extend_from_slice(&key_fields.position.to_le_bytes());
@@ -999,6 +1085,26 @@ fn external_fragment_key(record: &ExternalPlanRecord) -> Vec<u8> {
     })
 }
 
+fn push_external_fragment(
+    plan: &ExternalPlanRecord,
+    fragments: &mut ExternalSorter,
+) -> Result<(), String> {
+    fragments.push(
+        external_fragment_key(plan),
+        encode_external_plan_record(plan, true),
+    )
+}
+
+fn push_external_pair_fragments(
+    item: &SortItem,
+    fragments: &mut ExternalSorter,
+) -> Result<(), String> {
+    for member in decode_borrowed_external_pair(&item.key, &item.payload)? {
+        push_external_fragment(&member.into_owned(), fragments)?;
+    }
+    Ok(())
+}
+
 fn process_external_duplicate_groups(
     sorter: ExternalSorter,
     decisions: &mut ExternalSorter,
@@ -1007,12 +1113,22 @@ fn process_external_duplicate_groups(
     paired_groups: bool,
     track_duplicate_set_histogram: bool,
     processing_config: &ExternalDuplicateProcessingConfig<'_>,
+    mut paired_fragments: Option<&mut ExternalSorter>,
 ) -> Result<(), MarkDuplicatesError> {
     let mut current_key = None::<Vec<u8>>;
     let mut pending = Vec::<SortItem>::with_capacity(2);
     let mut group = Vec::<ExternalPlanRecord>::new();
     let mut flush = |pending: &mut Vec<SortItem>, group: &mut Vec<ExternalPlanRecord>| {
         if group.is_empty() {
+            if paired_groups {
+                if let Some(item) = pending.first() {
+                    let [first, _second] = decode_borrowed_external_pair(&item.key, &item.payload)?;
+                    add_duplicate_set(summary, 1, Some(1));
+                    add_duplicate_set(library_registry.summary_mut(first.library_id), 1, Some(1));
+                }
+                pending.clear();
+                return Ok(());
+            }
             // Even groups that cannot produce a duplicate decision must reject
             // corrupt spill payloads. Compare framed identity (RG plus QNAME),
             // keeping missing and empty read groups distinct.
@@ -1028,14 +1144,6 @@ fn process_external_duplicate_groups(
                 (Some(first), Some(second))
                     if first.qname == second.qname && first.read_group == second.read_group =>
                 {
-                    if paired_groups {
-                        add_duplicate_set(summary, 1, Some(1));
-                        add_duplicate_set(
-                            library_registry.summary_mut(first.library_id),
-                            1,
-                            Some(1),
-                        );
-                    }
                     pending.clear();
                     return Ok(());
                 }
@@ -1046,7 +1154,7 @@ fn process_external_duplicate_groups(
                 _ => {}
             }
             for item in pending.drain(..) {
-                group.push(decode_external_plan_record(&item.key, &item.payload, true)?);
+                append_external_group_item(group, &item, paired_groups)?;
             }
         }
         process_external_duplicate_group(
@@ -1063,19 +1171,23 @@ fn process_external_duplicate_groups(
     };
     sorter
         .finish_into(|item: SortItem| {
+            if let Some(fragments) = paired_fragments.as_deref_mut() {
+                push_external_pair_fragments(&item, fragments)?;
+            }
             if current_key.as_deref() != Some(item.key.as_slice()) {
                 flush(&mut pending, &mut group)?;
                 let key = current_key.get_or_insert_with(Vec::new);
                 key.clear();
                 key.extend_from_slice(&item.key);
             }
-            if group.is_empty() && pending.len() < 2 {
+            let pending_limit = if paired_groups { 1 } else { 2 };
+            if group.is_empty() && pending.len() < pending_limit {
                 pending.push(item);
             } else {
                 for item in pending.drain(..) {
-                    group.push(decode_external_plan_record(&item.key, &item.payload, true)?);
+                    append_external_group_item(&mut group, &item, paired_groups)?;
                 }
-                group.push(decode_external_plan_record(&item.key, &item.payload, true)?);
+                append_external_group_item(&mut group, &item, paired_groups)?;
             }
             Ok(())
         })
@@ -3840,6 +3952,19 @@ mod tests {
                                 }
                                 families.push(family);
                             }
+                            if paired {
+                                for family in &mut families {
+                                    *family = family
+                                        .drain(..)
+                                        .flat_map(|first| {
+                                            let mut second = first.clone();
+                                            second.flags = 0x81;
+                                            second.ordinal += 100;
+                                            [first, second]
+                                        })
+                                        .collect();
+                                }
+                            }
                             let run = |lazy: bool| {
                                 let tmp = tempdir().unwrap();
                                 let mut sort_config = ExternalSortConfig::new(tmp.path());
@@ -3855,11 +3980,16 @@ mod tests {
                                 let mut summary = libraries.summary(id).clone();
                                 for (index, family) in families.iter().enumerate() {
                                     if lazy {
-                                        for member in family {
+                                        for members in family.chunks(if paired { 2 } else { 1 }) {
+                                            let payload = if paired {
+                                                encode_external_pair(&members[0], &members[1])
+                                            } else {
+                                                encode_external_plan_record(&members[0], true)
+                                            };
                                             groups
                                                 .push(
                                                     (index as u64).to_be_bytes().to_vec(),
-                                                    encode_external_plan_record(member, true),
+                                                    payload,
                                                 )
                                                 .unwrap();
                                         }
@@ -3885,6 +4015,7 @@ mod tests {
                                         paired,
                                         histogram,
                                         &processing,
+                                        None,
                                     )
                                     .unwrap();
                                 }
@@ -3949,7 +4080,74 @@ mod tests {
                     &mut libraries,
                     false,
                     false,
-                    &processing
+                    &processing,
+                    None
+                )
+                .is_err()
+            );
+        }
+    }
+
+    #[test]
+    fn packed_pair_rejects_truncation_lengths_trailing_bytes_and_identity_changes() {
+        let config = sam_markdup_config();
+        let first = external_plan_record(
+            7,
+            &record_with_name_and_qualities(b"paired", &[30], 99),
+            0,
+            &config,
+        );
+        let mut second = first.clone();
+        second.ordinal = 19;
+        second.flags = 147;
+        second.quality_score = 10;
+        let payload = encode_external_pair(&first, &second);
+        let [decoded_first, decoded_second] =
+            decode_borrowed_external_pair(b"key", &payload).unwrap();
+        assert_eq!(decoded_first.ordinal, 7);
+        assert_eq!(decoded_second.ordinal, 19);
+        assert_eq!(decoded_first.quality_score, 30);
+        assert_eq!(decoded_second.quality_score, 10);
+
+        let mut invalid: Vec<_> = (0..payload.len())
+            .map(|end| payload[..end].to_vec())
+            .collect();
+        let mut trailing = payload.clone();
+        trailing.push(0);
+        invalid.push(trailing);
+        for length in [0, 1, payload.len() as u64, u64::MAX] {
+            let mut changed = payload.clone();
+            changed[..8].copy_from_slice(&length.to_le_bytes());
+            invalid.push(changed);
+        }
+        second.qname = b"other".to_vec();
+        invalid.push(encode_external_pair(&first, &second));
+        second.qname = first.qname.clone();
+        second.read_group = Some(Vec::new());
+        invalid.push(encode_external_pair(&first, &second));
+        let parser = ReadNameLocationParser::from_config(&config).unwrap();
+        let processing = ExternalDuplicateProcessingConfig {
+            config: &config,
+            read_name_parser: &parser,
+        };
+        for payload in invalid {
+            let tmp = tempdir().unwrap();
+            let mut groups = external_sorter(tmp.path(), "pairs").unwrap();
+            groups.push(b"key".to_vec(), payload).unwrap();
+            let mut decisions = external_sorter(tmp.path(), "decisions").unwrap();
+            let mut libraries = LibraryRegistry::new();
+            let id = libraries.intern("library");
+            let mut summary = libraries.summary(id).clone();
+            assert!(
+                process_external_duplicate_groups(
+                    groups,
+                    &mut decisions,
+                    &mut summary,
+                    &mut libraries,
+                    true,
+                    true,
+                    &processing,
+                    None,
                 )
                 .is_err()
             );

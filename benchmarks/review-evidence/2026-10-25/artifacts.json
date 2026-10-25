@@ -1,0 +1,44 @@
+{
+  "bounded.json": {
+    "saved_as": "bounded.json.gz",
+    "uncompressed_sha256": "ee066168cd0cf9f2c69f1a403b7ea4fcfcd295dec5694c03377e9b8f15ecff13",
+    "gzip_sha256": "bc966a26a8af1280e4eb1f701e3d5306959d17479c33ff403ed31906e54f8e96",
+    "original_path": "benchmarks/runs/2026-10-25-final-bounded/report.json"
+  },
+  "native-competitors.json": {
+    "saved_as": "native-competitors.json.gz",
+    "uncompressed_sha256": "2c62bad177134956c6a977c492ce796886747c4880b0426c803fdcc178a0cb88",
+    "gzip_sha256": "5920d861217104298ad2ba8718328a5ee26a33b12664c1e5114b5cde7382803c",
+    "original_path": "benchmarks/runs/2026-10-25-final-native-competitors/report.json"
+  },
+  "bam-io.json": {
+    "saved_as": "bam-io.json.gz",
+    "uncompressed_sha256": "9844edf8e6fa6eb9cc245cccd59741c7c0c19b6be350a21f686afc8c5f6ee8b3",
+    "gzip_sha256": "0b78ae11431b64b427c7c2a8b2231ef735e7f22aacea44d8f9a06683d732d8e9",
+    "original_path": "benchmarks/runs/2026-10-25-final-bam-io/report.json"
+  },
+  "public-bam.json": {
+    "saved_as": "public-bam.json.gz",
+    "uncompressed_sha256": "d9cbbbdf4fb6cdc1225a862632d1e0d95643d1a58d4f6bee5965c00654b0f880",
+    "gzip_sha256": "d1ba9813b8dcecf087590b2d899d2af5050dd4880f0c932c1f0a068ab48a702c",
+    "original_path": "benchmarks/runs/2026-10-25-final-gatk-na12878-mito/real-data-comparison.json"
+  },
+  "public-cram.json": {
+    "saved_as": "public-cram.json.gz",
+    "uncompressed_sha256": "a57a3aca3c676005a6304416620e0111a5c3cc7c91d3b8b511ed509b75026509",
+    "gzip_sha256": "de11f2ee55270c412c63eba9be99d3ade729ae464660f4bb8f18efc5bc7ffb44",
+    "original_path": "benchmarks/runs/2026-10-25-final-gatk-na12878-mito-cram/real-data-comparison.json"
+  },
+  "intermediate-packed-only.json": {
+    "saved_as": "intermediate-packed-only.json.gz",
+    "uncompressed_sha256": "64d03a3cabc5b166f40ebc081418a9db435459963d17180ae889c41e712a9013",
+    "gzip_sha256": "c589358d0c89ac6eb6f0777b60fe72685c699089e653eb9c32a7dfd1393060dc",
+    "original_path": "benchmarks/runs/2026-10-25-paired-entries/report.json"
+  },
+  "intermediate-deferred.json": {
+    "saved_as": "intermediate-deferred.json.gz",
+    "uncompressed_sha256": "e535eaa8c0a09e956f2f4ec23f5f700b9c6c1d324dfebdfc84d949410675ca47",
+    "gzip_sha256": "c2fa5c89d233739912662004df382b86f1dc5449b9d42b91c51700f5e7a96d7d",
+    "original_path": "benchmarks/runs/2026-10-25-deferred-fragments/report.json"
+  }
+}
