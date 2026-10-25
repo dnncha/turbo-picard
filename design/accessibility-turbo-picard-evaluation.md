@@ -4,7 +4,7 @@ Scope: command catalogue, browser-local comparison builder and copy controls. Gu
 
 ## Findings and implementation
 
-- Each planner control has a visible label. Required input and JAR fields say required; CRAM requirements remain in persistent reference help, with the native required property updated when input changes.
+- Each planner control has an explicit visible label. Help and error text sit outside that label so they do not become part of the control’s accessible name. Required input and JAR fields say required; CRAM requirements remain in persistent reference help, with the native required property updated when input changes.
 - Validation focuses the relevant control, sets `aria-invalid`, and adds the inline error to `aria-describedby` while keeping its help association. Editing removes obsolete error associations without losing values.
 - Script and clipboard feedback use atomic status regions. Clipboard success is announced after completion. Recovery distinguishes text selection from selection failure.
 - Script blocks can receive keyboard focus. Manual-copy recovery focuses the block when selection is unavailable. Existing visible focus indicators remain.

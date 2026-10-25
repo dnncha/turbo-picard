@@ -53,7 +53,8 @@ for (const [changes,fieldId,code] of [
 check(()=>assert.doesNotThrow(()=>buildTrial({...base,input:'/'+'a'.repeat(4091)+'.bam'})));
 check(()=>assert.doesNotThrow(()=>buildTrial({...base,input:'/data/研究 🧬.BAM',reference:'   '})));
 const bash=cp.execFileSync('bash',['-c','printf %s "$BASH"'],{encoding:'utf8'});
-const python=cp.execFileSync(bash,['-c','command -v python3'],{encoding:'utf8'}).trim();
+// Resolve through pyenv/env wrappers before restricting PATH to the prerequisite sandbox.
+const python=cp.execFileSync('python3',['-c','import os,sys; print(os.path.realpath(sys.executable))'],{encoding:'utf8'}).trim();
 for (const [label,script] of [
  ['generated',buildTrial(base)],
  ['static',fs.readFileSync(__dirname+'/default-trial.sh','utf8').replace(/\{\{VERSION\}\}/g,base.version)],
