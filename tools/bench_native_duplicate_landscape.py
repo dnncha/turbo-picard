@@ -135,7 +135,8 @@ def main():
               'repeats': args.repeats, 'warmups': 1, 'cache': 'warm cache; no fsync or cache dropping',
               'harness_sha256': digest_file(Path(__file__)), 'executables': {},
               'inputs': [], 'runs': [], 'summaries': [], 'candidate_pass': True}
-    for name, binary in binaries.items():
+    # samtools validates every output even when it is not a timed competitor.
+    for name, binary in {**binaries, 'samtools': samtools}.items():
         version = subprocess.run([binary, '--version'], capture_output=True, text=True,
                                  errors='backslashreplace', timeout=60)
         report['executables'][name] = {'path': binary, 'sha256': digest_file(Path(binary)),
