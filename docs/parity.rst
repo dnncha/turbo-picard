@@ -153,7 +153,11 @@ decodes a CRAM against its reference. ``ValidateSamFile`` on a CRAM whose
 records lack stored ``NM`` tags therefore no longer reports
 ``WARNING:MISSING_TAG_NM`` under Picard 3.5.0. Turbo Picard keeps the Picard
 3.4.0 behaviour and still reports it. The same input as BAM gives the same
-warning under both Picard versions. Record comparisons for CRAM commands
+warning under both Picard versions. The 3.5 mitochondrial CRAM validation check
+passes ``IGNORE=MISSING_TAG_NM`` to both commands, then compares the complete
+reports and exact exit codes. This keeps their issue sets identical while
+preserving every other diagnostic, including ``INVALID_TAG_NM`` errors. The
+3.4 check uses the default warning behaviour. Record comparisons for CRAM commands
 already leave ``MD`` and ``NM`` out, so no other command is affected.
 
 **CRAM writing.** When Picard 3.5.0 writes CRAM, it sets the mate-unmapped flag

@@ -244,6 +244,19 @@ class ParityRun:
                     assert result.returncode == expected, f"{label}: expected exit {expected}, got {result.returncode}"
                     outputs.append(stable(output))
                 assert outputs[0] == outputs[1]
+            orphan = self.write("validation-missing-mate.sam", HEADER + PAIR)
+            for ignored in [False, True]:
+                outputs = []
+                for name, prefix in [("native", self.native), ("picard", self.upstream)]:
+                    label = f"validation-warning-ignore-{ignored}-{name}"
+                    output = self.root / f"{label}.txt"
+                    result = self.run(label, prefix, ["ValidateSamFile", f"I={orphan}", f"O={output}", "MODE=SUMMARY", "QUIET=true", *(["IGNORE=MISSING_TAG_NM"] if ignored else [])], success=False)
+                    assert result.returncode == (3 if ignored else 2)
+                    text = output.read_text()
+                    assert "ERROR:MATE_NOT_FOUND" in text
+                    assert ("WARNING:MISSING_TAG_NM" in text) == (not ignored)
+                    outputs.append(stable(output))
+                assert outputs[0] == outputs[1]
         self.case("validation exits preserve clean, warnings, mixed and errors categories", validation_categories)
 
         mate_rows = [

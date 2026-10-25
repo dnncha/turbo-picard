@@ -229,6 +229,8 @@ jobs:
         run: cargo test --workspace
 
       - name: Verify Picard parity
+        env:
+          TURBO_PICARD_PARITY_EVIDENCE_DIR: ${{ runner.temp }}/parity-evidence
         run: |
           ./tools/verify_basic_accelerationstatus_parity.sh
           ./tools/verify_basic_capabilities_parity.sh
@@ -293,4 +295,6 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: adversarial-parity-picard-${{ matrix.picard }}
-          path: ${{ runner.temp }}/adversarial-parity/
+          path: |
+            ${{ runner.temp }}/adversarial-parity/
+            ${{ runner.temp }}/parity-evidence/
