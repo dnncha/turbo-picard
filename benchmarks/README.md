@@ -4,6 +4,9 @@ Benchmark runs are written under `benchmarks/runs/` and are intentionally
 ignored by git. Large generated input BAMs should go under `benchmarks/inputs/`,
 which is also ignored.
 
+[Competitive process coverage](competitive-processes.md) tracks native rivals,
+the current optimization work and comparison gaps for each workload boundary.
+
 The current saved public benchmark story is straightforward: every one of the
 32 benchmarked, parity-checked commands is faster than Picard 3.4.0, with a
 `22.88x` floor speedup, an `84.52x` geometric mean speedup, and a `272.12x` top

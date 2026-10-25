@@ -1,0 +1,98 @@
+{
+  "baseline_source": "a4aeaa83659c581b7e2b7d587ad51faf4d48bc06",
+  "candidate_source": "a4aeaa83659c581b7e2b7d587ad51faf4d48bc06+patch-444751b8237a923b3bc666c8b2a1932916fc06d7c1bd76cfa877b61ac671c0c5",
+  "native_patch_sha256": "444751b8237a923b3bc666c8b2a1932916fc06d7c1bd76cfa877b61ac671c0c5",
+  "source_sha256": {
+    "Cargo.toml": "d72cfe525120d4c3648d0a20636a3e6409c90e97b33f68be4205150bed021ca0",
+    "Cargo.lock": "724a51b9986f80ece546827c71110b8f12437b0cd24b011340de66f9e490bf96",
+    "crates/turbo-picard-markdup/src/lib.rs": "ec0b593294a985645be02098667023a7d8a7b074493ca387f7c8c10dae9cc281",
+    "crates/turbo-picard-markdup/src/external_mates.rs": "8c76c8ccd362616d154e6d7b76b7bd02560c3f6ac798347a37571841158f9929",
+    "crates/turbo-picard-markdup/src/bounded_plan_tests.rs": "050b0919aa59e5879e7a39017e128302792e935842a1e82167b2c549b638cfae",
+    "tools/bench_bounded_markduplicates.py": "02dac4dd85d2721f986034b4a03f2677db207b0303d31d37448780c051fa5228",
+    "tools/bench_native_duplicate_landscape.py": "2c3f842647591750f942c9d11b8bfb52516359d2c6d75ec7d0cd404e5f024136"
+  },
+  "fastdup_source": "7b3f62587283a257fd38c5c20ceeda0364c285ef",
+  "picard_jar_sha256": "e76128c283889fc583c9dea33a3b7448974c067d102c9e35be152642d4d5f901",
+  "codec": "libdeflate-sys 1.26.1; statically linked into Turbo Picard and the matched FastDup source build",
+  "samtools_packages": {
+    "libhtscodecs2": {
+      "Version": "1.6.1-2",
+      "Filename": "pool/main/h/htscodecs/libhtscodecs2_1.6.1-2_amd64.deb",
+      "SHA256": "57748b2e62663a4b06e7549040366cf2c2593ad1099652c203f0f070b14bda8c",
+      "Depends": "libbz2-1.0, libc6 (>= 2.34)"
+    },
+    "libhts3t64": {
+      "Version": "1.21+ds-1",
+      "Filename": "pool/main/h/htslib/libhts3t64_1.21+ds-1_amd64.deb",
+      "SHA256": "25a071d1f81d3dfb5ec4d5e225a63fa07fd1d3c401a799566b338ee731c4fe5d",
+      "Depends": "libbz2-1.0, libc6 (>= 2.34), libcurl3t64-gnutls (>= 7.18.0), libdeflate0 (>= 1.0), libhtscodecs2 (>= 1.3.0), liblzma5 (>= 5.1.1alpha+20120614), libssl3t64 (>= 3.0.0), zlib1g (>= 1:1.1.4)"
+    },
+    "samtools": {
+      "Version": "1.21-1",
+      "Filename": "pool/main/s/samtools/samtools_1.21-1_amd64.deb",
+      "SHA256": "d3ec95f52ed0a68bb783f7a6f841991b43d3b431197da55654a80fb1de217c20",
+      "Depends": "libc6 (>= 2.34), libhts3t64 (>= 1.21), libncurses6 (>= 6), libtinfo6 (>= 6), zlib1g (>= 1:1.1.4)"
+    },
+    "time": {
+      "Version": "1.9-0.2",
+      "Filename": "pool/main/t/time/time_1.9-0.2_amd64.deb",
+      "SHA256": "10257c6fe888e6578550b1f20705d282dd630b76f8df0c006aec3031fefe5e23",
+      "Depends": "libc6 (>= 2.34)"
+    }
+  },
+  "fastdup_build": {
+    "argv": [
+      "g++",
+      "-O3",
+      "-DNDEBUG",
+      "-std=c++17",
+      "-Iext",
+      "-Iext/htslib",
+      "-Isrc",
+      "src/main.cpp",
+      "src/markdup/class_static_var.cpp",
+      "src/markdup/markdup.cpp",
+      "src/markdup/md_funcs.cpp",
+      "src/markdup/md_pipeline.cpp",
+      "src/util/bam_buf.cpp",
+      "src/util/profiling.cpp",
+      "src/util/yarn.cpp",
+      "/workspace/scratch/rival-tools/fastdup-build/kthread.o",
+      "/workspace/turbo-picard/target/release/build/hts-sys-b74dcf959869e620/out/libhts.a",
+      "/workspace/turbo-picard/target/release/build/libdeflate-sys-5df132436c1b61ed/out/lib/libdeflate.a",
+      "-o",
+      "/workspace/scratch/rival-tools/fastdup-libdeflate",
+      "-l:libbz2.so.1.0",
+      "-l:liblzma.so.5",
+      "-lcurl",
+      "-lz",
+      "-lssl",
+      "-lcrypto",
+      "-lpthread",
+      "-ldl",
+      "-lm"
+    ],
+    "cwd": "/workspace/scratch/fastdup-research",
+    "archives": {
+      "/workspace/turbo-picard/target/release/build/hts-sys-b74dcf959869e620/out/libhts.a": "e8524f6718ffe12e5a6629fbd6962e34238a95527729e30cdec79d607231b47e",
+      "/workspace/turbo-picard/target/release/build/libdeflate-sys-5df132436c1b61ed/out/lib/libdeflate.a": "2f810518360cb1cc4fb05396fccad1c0559912c6c01826a9c2769c0c74c16d1d"
+    }
+  },
+  "validation": {
+    "rust": "437 passed; one explicitly ignored release microbenchmark",
+    "python": "516 run; one optional test skipped",
+    "checks": [
+      "cargo fmt --all -- --check",
+      "cargo test --workspace --locked",
+      "Python tools discovery",
+      "CI and benchmark evidence coverage",
+      "README and site links",
+      "workflow starter static validation",
+      "MarkDuplicates guardrails",
+      "strict pinned Sphinx build",
+      "Linux package installation smoke",
+      "candidate binary in a pinned Debian runtime container"
+    ],
+    "limits": "Local Linux validation; the repository Dockerfile source build, macOS and workflow-engine execution were not rerun. Full CI remains required before merge."
+  }
+}

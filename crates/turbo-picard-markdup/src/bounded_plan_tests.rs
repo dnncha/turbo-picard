@@ -144,6 +144,30 @@ fn output_flags(config: &MarkDuplicatesConfig) -> Vec<u16> {
 }
 
 #[test]
+fn paired_ends_dominate_fragments_even_when_the_mate_is_absent() {
+    let dir = tempdir().unwrap();
+    let config = config(dir.path());
+    let mut writer =
+        bam::Writer::from_path(&config.input, &header("lib1"), bam::Format::Bam).unwrap();
+    for (name, flags, position, mate) in [
+        ("pair", 99, 100, 200),
+        ("fragment-at-pair", 0, 100, -1),
+        ("pair", 147, 200, 100),
+        ("orphan", 99, 300, 400),
+        ("fragment-at-orphan", 0, 300, -1),
+    ] {
+        writer
+            .write(&record(name.as_bytes(), "rg1", flags, position, mate, 30))
+            .unwrap();
+    }
+    drop(writer);
+    let summary = try_run_external_plan(&config).unwrap().unwrap();
+    assert_eq!(output_flags(&config), [99, 1024, 147, 99, 1024]);
+    assert_eq!(summary.unpaired_duplicate_records, 2);
+    assert_eq!(summary.duplicate_pair_records, 0);
+}
+
+#[test]
 fn external_plan_accepts_coordinate_ties_and_unplaced_tail_above_compact_cutoff() {
     let dir = tempdir().unwrap();
     let config = config(dir.path());

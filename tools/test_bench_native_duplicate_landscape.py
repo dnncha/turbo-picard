@@ -1,4 +1,5 @@
 from pathlib import Path
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -7,6 +8,22 @@ from bench_native_duplicate_landscape import pipeline_commands, run_pipeline
 
 
 class NativeLandscapeTests(unittest.TestCase):
+    def test_selected_competitors_are_required_before_creating_outputs(self):
+        script = Path(__file__).with_name('bench_native_duplicate_landscape.py')
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / 'evidence'
+            common = [sys.executable, str(script), '--candidate', 'candidate',
+                      '--picard', 'picard', '--samtools', 'samtools',
+                      '--input', 'sample=input.bam', '--output-dir', str(output),
+                      '--candidate-source', 'test']
+            for options, error in [([], '--tools fastdup requires --fastdup'),
+                                   (['--tools', 'dupblaster'], '--tools dupblaster requires --dupblaster'),
+                                   (['--tools', 'samtools', 'samtools'], '--tools must not contain duplicates')]:
+                result = subprocess.run([*common, *options], capture_output=True, text=True)
+                self.assertEqual(result.returncode, 2)
+                self.assertIn(error, result.stderr)
+                self.assertFalse(output.exists())
+
     def test_preparation_and_coordinate_output_are_inside_both_pipelines(self):
         for tool in ('samtools', 'dupblaster'):
             commands = pipeline_commands(tool, 'dupblaster', 'samtools', Path('original.bam'),

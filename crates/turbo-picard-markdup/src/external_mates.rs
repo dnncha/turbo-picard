@@ -147,8 +147,7 @@ pub(super) fn push_pair(
         );
     }
     let key = external_pair_key(first, second);
-    pairs.push(key.clone(), encode_external_plan_record(first, true))?;
-    pairs.push(key, encode_external_plan_record(second, true))
+    pairs.push(key, encode_external_pair(first, second))
 }
 
 // This is the original stable QNAME join, shared by the fallback and the
@@ -156,32 +155,38 @@ pub(super) fn push_pair(
 pub(super) fn finish_spilled(
     qnames: ExternalSorter,
     pairs: &mut ExternalSorter,
+    mut fragments: Option<&mut ExternalSorter>,
 ) -> Result<(), String> {
     let mut pending_pair = None::<ExternalPlanRecord>;
-    qnames
-        .finish_into(|item| {
-            if pending_pair
-                .as_ref()
-                .is_some_and(|pending| pending.template_key.as_slice() != item.key.as_slice())
-            {
-                pending_pair = None;
+    qnames.finish_into(|item| {
+        if pending_pair
+            .as_ref()
+            .is_some_and(|pending| pending.template_key.as_slice() != item.key.as_slice())
+        {
+            if let Some(fragments) = fragments.as_deref_mut() {
+                push_external_fragment(pending_pair.as_ref().unwrap(), fragments)?;
             }
-            let plan = decode_external_plan_record(&item.key, &item.payload, false)?;
-            if !duplicate_candidate_is_pair(plan.flags) {
-                return Ok(());
-            }
-            if let Some(first) = pending_pair.take() {
-                if first.template_key == plan.template_key {
-                    push_pair(&first, &plan, pairs)?;
-                } else {
-                    pending_pair = Some(plan);
-                }
+            pending_pair = None;
+        }
+        let plan = decode_external_plan_record(&item.key, &item.payload, false)?;
+        if !duplicate_candidate_is_pair(plan.flags) {
+            return Ok(());
+        }
+        if let Some(first) = pending_pair.take() {
+            if first.template_key == plan.template_key {
+                push_pair(&first, &plan, pairs)?;
             } else {
                 pending_pair = Some(plan);
             }
-            Ok(())
-        })
-        .map(|_| ())
+        } else {
+            pending_pair = Some(plan);
+        }
+        Ok(())
+    })?;
+    if let (Some(plan), Some(fragments)) = (pending_pair, fragments) {
+        push_external_fragment(&plan, fragments)?;
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -246,11 +251,17 @@ mod tests {
                 spill_record(record.clone(), &mut qnames)?;
             }
         }
-        finish_spilled(qnames, &mut pairs)?;
+        finish_spilled(qnames, &mut pairs, None)?;
         let mut result = Vec::new();
         pairs.finish_into(|item| {
-            let record = decode_external_plan_record(&item.key, &item.payload, true)?;
-            result.push((item.key, record.ordinal, item.payload));
+            for record in decode_borrowed_external_pair(&item.key, &item.payload)? {
+                let record = record.into_owned();
+                result.push((
+                    item.key.clone(),
+                    record.ordinal,
+                    encode_external_plan_record(&record, true),
+                ));
+            }
             Ok(())
         })?;
         // Completion order can differ; original input ordinals remain the
@@ -328,7 +339,7 @@ mod tests {
             .unwrap();
         assert!(cache.pending.is_empty());
         assert_eq!(cache.buffer_bytes, 0);
-        finish_spilled(qnames, &mut pairs).unwrap();
+        finish_spilled(qnames, &mut pairs, None).unwrap();
         let mut count = 0;
         pairs
             .finish_into(|_| {
@@ -336,7 +347,7 @@ mod tests {
                 Ok(())
             })
             .unwrap();
-        assert_eq!(count, 2);
+        assert_eq!(count, 1);
     }
 
     #[test]
@@ -362,6 +373,59 @@ mod tests {
                 join(&records, Some((1, 4096)), true, saturate).unwrap_err(),
                 expected
             );
+        }
+    }
+
+    #[test]
+    fn deferred_fragments_retain_completed_pairs_and_both_kinds_of_orphan() {
+        let records = [
+            plan(0, b"a-pair", None, 99),
+            plan(1, b"a-pair", None, 147),
+            plan(2, b"b-orphan", Some(b"rg1"), 99),
+            plan(3, b"c-pair", Some(b"rg1"), 99),
+            plan(4, b"d-last-orphan", None, 147),
+            plan(5, b"c-pair", Some(b"rg1"), 147),
+        ];
+        let mut expected: Vec<_> = records
+            .iter()
+            .map(|record| {
+                (
+                    external_fragment_key(record),
+                    record.ordinal,
+                    encode_external_plan_record(record, true),
+                )
+            })
+            .collect();
+        expected.sort();
+        for spill in [false, true] {
+            for max_pending in [1, MAX_PENDING_MATES] {
+                let tmp = tempdir().unwrap();
+                let mut config = ExternalSortConfig::new(tmp.path());
+                config.max_records_in_ram = if spill { 1 } else { 10_000 };
+                let mut qnames = ExternalSorter::new(config.clone()).unwrap();
+                let mut pairs = ExternalSorter::new(config.clone()).unwrap();
+                let mut fragments = ExternalSorter::new(config).unwrap();
+                let mut cache = ExternalMateCache::new();
+                cache.max_pending = max_pending;
+                for record in &records {
+                    cache.push(record.clone(), &mut qnames, &mut pairs).unwrap();
+                }
+                cache.flush(&mut qnames).unwrap();
+                finish_spilled(qnames, &mut pairs, Some(&mut fragments)).unwrap();
+                pairs
+                    .finish_into(|item| push_external_pair_fragments(&item, &mut fragments))
+                    .unwrap();
+                let mut actual = Vec::new();
+                fragments
+                    .finish_into(|item| {
+                        let plan = decode_external_plan_record(&item.key, &item.payload, true)?;
+                        actual.push((item.key, plan.ordinal, item.payload));
+                        Ok(())
+                    })
+                    .unwrap();
+                actual.sort();
+                assert_eq!(actual, expected, "spill={spill}, cache={max_pending}");
+            }
         }
     }
 }

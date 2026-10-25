@@ -98,12 +98,20 @@ def main():
                                              Path(output), Path(metrics), Path(scratch)))
     parser = argparse.ArgumentParser(description=__doc__)
     for tool in ('candidate', 'picard', 'samtools', 'fastdup', 'dupblaster'):
-        parser.add_argument('--' + tool, type=Path, required=True)
+        parser.add_argument('--' + tool, type=Path, required=tool in ('candidate', 'picard', 'samtools'))
+    parser.add_argument('--tools', nargs='+', choices=('fastdup', 'samtools', 'dupblaster'),
+                        default=['fastdup', 'samtools', 'dupblaster'],
+                        help='competitors to measure; every selected executable is required')
     parser.add_argument('--input', action='append', required=True, help='NAME=coordinate-input.bam')
     parser.add_argument('--output-dir', type=Path, required=True)
     parser.add_argument('--repeats', type=int, default=3)
     parser.add_argument('--candidate-source', required=True)
     args = parser.parse_args()
+    if len(set(args.tools)) != len(args.tools):
+        parser.error('--tools must not contain duplicates')
+    for tool in args.tools:
+        if getattr(args, tool) is None:
+            parser.error(f'--tools {tool} requires --{tool}')
     if args.repeats < 1:
         parser.error('repeats must be positive')
     inputs = [item.split('=', 1) for item in args.input]
@@ -115,19 +123,21 @@ def main():
     root.mkdir(parents=True, exist_ok=False)
     samtools = str(args.samtools.resolve())
     binaries = {name: str(getattr(args, name).resolve()) for name in
-                ('picard', 'candidate', 'fastdup', 'samtools', 'dupblaster')}
+                ('picard', 'candidate', *args.tools)}
     env = {key: value for key, value in os.environ.items() if not key.startswith('TURBO_PICARD_')}
     env.update(TURBO_PICARD_REQUIRE_NATIVE='1', TURBO_PICARD_THREADS='0',
                JAVA_TOOL_OPTIONS='-Xmx2g -XX:ActiveProcessorCount=1')
     affinity = ['taskset', '-c', str(min(os.sched_getaffinity(0)))]
     report = {'scope': __doc__, 'contract': 'bounded-v4 full output (exact RG date instants); mandatory/RG multiset is diagnostic only',
+              'selected_competitors': args.tools,
               'candidate_source': args.candidate_source, 'host': platform.platform(),
               'affinity': affinity, 'compression_level': 5, 'samtools_sort_memory': '256M',
               'repeats': args.repeats, 'warmups': 1, 'cache': 'warm cache; no fsync or cache dropping',
               'harness_sha256': digest_file(Path(__file__)), 'executables': {},
               'inputs': [], 'runs': [], 'summaries': [], 'candidate_pass': True}
     for name, binary in binaries.items():
-        version = subprocess.run([binary, '--version'], capture_output=True, text=True, timeout=60)
+        version = subprocess.run([binary, '--version'], capture_output=True, text=True,
+                                 errors='backslashreplace', timeout=60)
         report['executables'][name] = {'path': binary, 'sha256': digest_file(Path(binary)),
                                      'version': version.stdout + version.stderr, 'version_exit': version.returncode}
     def save():
