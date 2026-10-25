@@ -15,7 +15,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-14]
+        os: [ubuntu-24.04, macos-14]
 
     steps:
       - uses: actions/checkout@v5
@@ -100,7 +100,7 @@ jobs:
 
   docker:
     name: Docker image
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
       - name: Build reference container
@@ -129,7 +129,7 @@ jobs:
 
   nf-core-process:
     name: nf-core process candidate
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
 
     steps:
       - uses: actions/checkout@v5
@@ -169,7 +169,7 @@ jobs:
 
   snakemake-starter:
     name: Snakemake starter
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
 
     steps:
       - uses: actions/checkout@v5
@@ -198,7 +198,7 @@ jobs:
 
   picard-parity:
     name: Picard parity (${{ matrix.picard }})
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:

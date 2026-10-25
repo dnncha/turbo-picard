@@ -1,5 +1,90 @@
 # Turbo Picard work log
 
+## 2026-10-25 — complete the first CollectHsMetrics hillclimb batch
+
+- Four measured attempts ended with two accepted changes and two full
+  reverts. The final adapter-decoding candidate had overlapping ranges
+  despite a lower median, so it was rejected under the frozen acceptance
+  rule. The accepted runtime source remains `d7f7bed` plus its predecessor
+  `c9a281c`; the final release rebuild matches the measured binary exactly.
+- The retained result exceeds the provisional 10% elapsed-time target:
+  0.692672 s to 0.335400 s median on the synthetic 200,000-read BAM, a
+  51.58% reduction, with five alternating runs per side. This establishes
+  neither production WES performance nor a gain on the small guardrail.
+- Separate five-run-per-side GNU time measurements show no measurable RSS
+  change: baseline median 18.223 MB (18.149–18.256 MB), accepted median
+  18.227 MB (18.190–18.264 MB), using decimal MB.
+- Final local checks passed: 434 Rust tests (one intentionally ignored),
+  515 Python tooling tests (three optional skips), formatting, Python
+  compilation, required evidence/link/coverage/workflow verifiers,
+  Picard 3.4.0/3.5.0 overlap parity, package installation including installed
+  CollectHsMetrics outputs, Sphinx and built-site validation. The pinned
+  Rust 1.89 reference container also built and processed all 200,000 reads
+  with exact metrics/histogram and coverage-sidecar parity. Its local
+  Dockerfile adaptation mounts the existing proxy CA for Cargo; tracked
+  container configuration is unchanged.
+- Final report, protocol, host/resource limits, source/input/executable
+  hashes, all raw runs, rejected candidates and validation logs are retained
+  at `/workspace/performance-hillclimb-20261025/`. Start with `REPORT.md`,
+  `validation.md`, `result.json` and `decision.tsv`. Next useful evidence is
+  representative paired WES and reference-backed CRAM with the same strict
+  completed-work and parity checks. Full native CI remains required before
+  merge; no release or publication was performed.
+
+## 2026-10-25 — cache off-target gaps in CollectHsMetrics
+
+- Extended the per-read cache to retain a negative lookup until the next
+  target boundary. CIGAR traversal never decreases the reference position;
+  the cursor resets for each read. Added a linear coverage oracle for reads
+  starting in targets/gaps and a contig with no targets.
+- The same frozen synthetic protocol measured 0.428878 s median for the
+  previous accepted binary (range 0.417633–0.447348 s) versus 0.322602 s
+  (0.320521–0.359419 s), a further 24.78% reduction over five alternating
+  measurements per side. Comparing the original baseline directly with this
+  candidate measured 0.692672 s (0.680278–0.718021 s) versus 0.335400 s
+  (0.329804–0.364809 s), a 51.58% reduction. No excluded runs or errors;
+  all metrics, histograms and sidecars match exactly. The small workload has
+  overlapping timing ranges and supports no improvement claim.
+- Rejected the intervening hash-set removal attempt: its incremental
+  medians were 0.430412 s versus 0.426758 s, with overlapping ranges. The
+  unproven change was fully reverted and its raw evidence retained.
+- Workspace Rust tests and Picard 3.4.0/3.5.0 overlap-clipping parity pass.
+  Raw evidence remains in `/workspace/performance-hillclimb-20261025/` under
+  `attempt3/`, `attempt3-small/` and `incremental2/attempt3/`; `decision.tsv`
+  records both accepted and rejected attempts. These remain synthetic
+  command measurements, not production WES evidence.
+
+## 2026-10-25 — cache CollectHsMetrics target lookups within each read
+
+- Baseline `3de7050cff4b0123e69726fbe183c768305dec9c`. Reuse a target
+  index while the current reference position remains within its half-open
+  bounds. The cache is local to one read and falls back to the original
+  lookup across target boundaries and gaps.
+- Whole-command synthetic experiment: 200,000 coordinate-sorted, single-end
+  150-base BAM records, 4,096 targets, deterministic duplicate/mapQ/baseQ
+  filters, both coverage sidecars, `SAMPLE_SIZE=0`, one HTSlib worker. Rust
+  1.99.1 release build on Linux x86_64, four-core CPU quota, warm filesystem
+  cache. One warmup and five measurements per binary, alternating order.
+  Median elapsed time fell from 0.706404 s (range 0.684615–0.723672 s) to
+  0.432828 s (0.426853–0.475199 s), a 38.73% reduction. No outliers excluded.
+- Every run completed 200,000 reads and 30,000,000 input bases with zero
+  errors and identical complete metrics/histogram plus byte-identical
+  per-target/per-base sidecars. The baseline large fixture also matches
+  Picard 3.4.0. Existing overlap-clipping parity passes against Picard 3.4.0
+  and 3.5.0. Added a regression covering target gaps, adjacent targets,
+  CIGAR operations, indel inclusion and contig changes.
+- A separate Callgrind run attributes 47.07% of baseline executed
+  instructions to interval candidates; profiler timings are excluded.
+  The 2,000-read sidecar-heavy guardrail shows no measurable timing change.
+  This is synthetic command evidence, not production WES throughput.
+- Raw runs, immutable executables, input/source/harness hashes, protocol and
+  `decision.tsv` are retained outside the source tree at
+  `/workspace/performance-hillclimb-20261025/`. The frozen harness is
+  `bench.py` in that directory; `attempt1/summary.json` contains the result.
+  Workspace Rust tests, Python tooling tests (515 run, three optional skips),
+  formatting and required evidence/link/workflow verifiers passed. Complete
+  native CI remains required before merge.
+
 ## 2026-09-30 — remove interval-query allocations and whole-file parity reads
 
 - Based on `724cadc16bd7714454da4961b64a1e31a42e6f43`. HsMetrics interval
