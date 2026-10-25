@@ -55,7 +55,7 @@ class MarketingSiteTests(unittest.TestCase):
             for _ in range(2):
                 (out/'index.html').write_text('Sphinx default')
                 build.deploy_to_sphinx(app,None)
-                self.assertIn('Lose the wait.',(out/'index.html').read_text())
+                self.assertIn('Run your Picard task.',(out/'index.html').read_text())
                 self.assertEqual((out/'quickstart.html').read_text(),'docs are preserved')
                 self.assertTrue((out/'solutions/bam-to-fastq/index.html').is_file())
     def test_failed_or_non_html_build_does_not_publish(self):

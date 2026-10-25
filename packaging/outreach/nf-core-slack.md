@@ -14,8 +14,11 @@ change. The commands I would expect to be most relevant are `MarkDuplicates`,
 `SortSam`, `SamToFastq`, `FastqToSam`, `FixMateInformation`, and
 `BuildBamIndex`.
 
-The repo has parity and benchmark checks against Picard 3.4.0. Current numbers:
-32 checked commands, 84.52x geometric mean speedup, 272.12x top speedup.
+The historical 14 August 2026 suite covers 32 small-fixture comparisons
+against Picard 3.4.0, with an 84.52x geometric mean and 272.12x maximum
+saved ratio. JVM startup contributes to these short-task results; they
+do not predict a whole-genome or current-release speedup. Required
+outputs and full resource costs need a representative trial.
 
 Evaluation notes and workflow examples:
 
@@ -26,7 +29,9 @@ I am trying to work out which nf-core pipeline/module would make the best first
 real-world test case. Any suggestions?
 
 Packaging note: PyPI has Linux x86_64 and macOS Apple Silicon wheels plus a
-source tarball. The existing Bioconda PR (#65922) covers `0.1.11`
-metadata, so it is not yet a current `0.1.12` install path. Use the published
-PyPI package or container until the new candidate is tagged, reviewed, and
-published.
+source tarball. Bioconda accepted the initial recipes; the 25 October 2026 channel check lists
+`0.1.15`. Updates to `0.1.16` are open upstream. Use pinned PyPI or the
+container for `0.1.16`, and verify channel status before posting.
+
+Independent evaluation protocol and report checklist:
+https://turbo-picard.readthedocs.io/en/latest/independent-evaluation.html

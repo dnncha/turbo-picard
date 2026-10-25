@@ -16,7 +16,7 @@ body:
     attributes:
       label: turbo-picard version
       description: Paste the output of `turbo-picard --version`.
-      placeholder: "0.1.11"
+      placeholder: "0.1.16"
     validations:
       required: true
 
@@ -99,6 +99,26 @@ body:
       label: Measurements
       description: If available, include wall time, peak memory, shard count, and whether the runs used the same machine and inputs.
       placeholder: "Picard: 42 min; turbo-picard: 9 min; same 8-core runner; peak memory not measured."
+
+  - type: textarea
+    id: resource-context
+    attributes:
+      label: Resource and measurement context
+      description: Record CPU architecture/allocation, storage, compression, thread settings, repeats, peak RSS and scratch when measured. Say unmeasured for unavailable values.
+      placeholder: "Linux x86_64; 8 allocated CPUs; local NVMe; compression level 1; 5 measured repeats; peak RSS and scratch unmeasured."
+
+  - type: dropdown
+    id: rollout-state
+    attributes:
+      label: Workflow decision
+      options:
+        - Trial only; no workflow change
+        - Accepted one pinned task after required comparisons
+        - Retained the task after an upgrade comparison
+        - Kept Picard or another tool
+        - Decision pending
+    validations:
+      required: true
 
   - type: textarea
     id: adoption-blocker

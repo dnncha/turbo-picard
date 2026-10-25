@@ -69,9 +69,9 @@ August 14 data is explicitly dated, with absolute medians, input parameters,
 repetitions, raw logs and the entire comparison table. Keep the source evidence
 unchanged unless an actual new benchmark is run. The 0.1.13 release checks and
 platform notes describe that release only; do not silently relabel them as tests
-of a new package version. The 0.1.16 MarkDuplicates command comparison is a
-separate synthetic, warm-cache run; its release notes state both its lower peak
-RSS and its slower runtime relative to the previous checkpoint. No fake
+of a new package version. The 0.1.16 MarkDuplicates records are separate synthetic measurements. Retain
+the exact baseline and options for each run, including improvements against a
+previous release and losses against native competitors. No fake
 testimonials, affiliations, review ratings,
 production claims or upstream workflow adoption badges.
 
@@ -80,6 +80,21 @@ benchmark exclusions, distribution checks and citation notes live on `evidence/`
 Existing claim verifiers continue checking them there. The `llms.txt` file is a
 reading convenience, not a Google ranking mechanism or a substitute for indexed
 HTML. No rank or rich-result outcome is guaranteed.
+
+## Independent evaluations and distribution receipts
+
+The homepage, comparison guide and evidence hub link to
+`docs/independent-evaluation.rst`. It separates the historical suite, pinned
+small inputs, representative performance studies and independently reviewed
+workflow use. The trial form records resource context and rollout state; a
+passing trial must not be counted as retained adoption.
+
+`assets/distribution-status.json` is a dated observation of official Bioconda
+indexes with observed filenames and package hashes. It is separate from the
+workspace version: a pending update does not mean the channel is unavailable,
+and an accepted older package does not mean the current release is published.
+Recheck the official indexes and update the receipt before changing channel
+claims.
 
 ## Local-only planner
 
