@@ -3,7 +3,7 @@ set -euo pipefail
 # Review paths and fixed trial options before execution. No input is uploaded.
 # Set TMPDIR to suitable scratch storage before running, if needed.
 python3 -c 'import sys; assert sys.version_info >= (3, 11), "Python 3.11+ required"'
-for tool in git java samtools; do command -v "$tool" >/dev/null; done
+for tool in git java; do command -v "$tool" >/dev/null; done
 work="$(mktemp -d)"
 printf 'Trial directory: %s\n' "$work"
 python3 -m venv "$work/venv"

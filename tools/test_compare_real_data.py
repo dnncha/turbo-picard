@@ -1683,6 +1683,39 @@ class CompareRealDataTests(unittest.TestCase):
             self.assertNotIn("private-revision", text)
             self.assertNotIn("marked.bam", text)
 
+    def test_reports_distinguish_missing_measurements_from_recorded_zero(self):
+        # Use both report writers: neither may manufacture a runtime from absence.
+        import copy
+        rows = [
+            {"command": "SortSam", "status": "FAIL", "comparison": "SAM record digest"},
+            {"command": "ViewSam", "status": "PASS", "comparison": "SAM record digest",
+             "turbo_seconds": 0.0, "picard_seconds": 1.25, "speedup": None},
+        ]
+        summary = {"parity": "FAIL", "input": {"path": "/private/input.bam",
+                   "sha256": "private-hash", "size_bytes": 10},
+                   "picard_version": "3.4.0", "turbo_picard_version": "0.1.16", "commands": rows}
+        original = copy.deepcopy(summary)
+        with tempfile.TemporaryDirectory() as tmp:
+            for name, writer in [("full", compare_real_data.write_markdown),
+                                 ("shareable", compare_real_data.write_shareable_markdown)]:
+                with self.subTest(report=name):
+                    target = Path(tmp) / (name + ".md")
+                    writer(target, summary)
+                    text = target.read_text()
+                    self.assertIn("| SortSam | FAIL | SAM record digest | Not recorded | Not recorded | Not recorded |", text)
+                    self.assertIn("| ViewSam | PASS | SAM record digest | 0.000s | 1.250s | Not recorded |", text)
+                    self.assertIn("A failed comparison is not a speed result.", text)
+                    self.assertEqual(summary, original)
+
+    def test_report_measurements_reject_nonfinite_and_invalid_values(self):
+        for value in [None, "not measured", "0", True, -1, float("nan"), float("inf"), -float("inf"), 10 ** 1000]:
+            for ratio in [False, True]:
+                with self.subTest(value=value, ratio=ratio):
+                    self.assertEqual(compare_real_data.report_measurement(value, ratio=ratio), "Not recorded")
+        self.assertEqual(compare_real_data.report_measurement(0), "0.000s")
+        self.assertEqual(compare_real_data.report_measurement(0, ratio=True), "0.00x")
+        self.assertEqual(compare_real_data.report_measurement(4, ratio=True), "4.00x")
+
     def test_shareable_report_can_include_explicitly_public_source(self):
         with tempfile.TemporaryDirectory() as tmp:
             report = Path(tmp) / "shareable-trial-report.md"

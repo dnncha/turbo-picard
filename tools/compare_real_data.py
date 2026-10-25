@@ -14,6 +14,7 @@ import datetime as dt
 import decimal
 import hashlib
 import json
+import math
 import os
 import re
 import shutil
@@ -2406,6 +2407,20 @@ def optional_int_tag(fields: list[str], tag: str) -> int | None:
     return None
 
 
+def report_measurement(value: object, *, ratio: bool = False) -> str:
+    """Format a recorded measurement without inventing zero for absent data."""
+
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return "Not recorded"
+    try:
+        number = float(value)
+    except OverflowError:
+        return "Not recorded"
+    if not math.isfinite(number) or number < 0:
+        return "Not recorded"
+    return f"{number:.2f}x" if ratio else f"{number:.3f}s"
+
+
 def write_markdown(path: Path, summary: dict) -> None:
     lines = [
         "# turbo-picard real-data comparison",
@@ -2421,16 +2436,22 @@ def write_markdown(path: Path, summary: dict) -> None:
         "| --- | --- | --- | ---: | ---: | ---: |",
     ]
     for row in summary["commands"]:
-        speedup = f"{row['speedup']:.2f}x" if row["speedup"] is not None else "n/a"
+        speedup = report_measurement(row.get("speedup"), ratio=True)
         lines.append(
             f"| {row['command']} | {row['status']} | {row['comparison']} | "
-            f"{row['turbo_seconds']:.3f}s | {row['picard_seconds']:.3f}s | {speedup} |"
+            f"{report_measurement(row.get('turbo_seconds'))} | "
+            f"{report_measurement(row.get('picard_seconds'))} | {speedup} |"
         )
     lines.extend(
         [
             "",
             "A PASS means the command-specific stable digest matched Picard on this input. "
-            "Keep the JSON file with the raw digests when sharing results.",
+            "Keep the JSON file with the raw digests for your audit. Review it for private "
+            "paths and identifiers before sharing; use the reviewed shareable summary for a public report.",
+            "",
+            "FAIL means the comparison did not pass. Inspect exit codes and comparison "
+            "details before drawing a conclusion. A failed comparison is not a speed result. "
+            "Not recorded means no usable measurement is available; it does not mean zero.",
             "",
             "## Comparison details",
             "",
@@ -2508,14 +2529,13 @@ def write_shareable_markdown(
         ]
     )
     for row in summary.get("commands", []):
-        speedup = row.get("speedup")
-        speedup_text = "n/a" if speedup is None else f"{float(speedup):.2f}x"
+        speedup_text = report_measurement(row.get("speedup"), ratio=True)
         lines.append(
             f"| {markdown_cell(row.get('command', 'unknown'))} | "
             f"{markdown_cell(row.get('status', 'UNKNOWN'))} | "
             f"{markdown_cell(row.get('comparison', 'not recorded'))} | "
-            f"{float(row.get('turbo_seconds', 0.0)):.3f}s | "
-            f"{float(row.get('picard_seconds', 0.0)):.3f}s | {speedup_text} |"
+            f"{report_measurement(row.get('turbo_seconds'))} | "
+            f"{report_measurement(row.get('picard_seconds'))} | {speedup_text} |"
         )
     lines.extend(
         [
@@ -2523,6 +2543,13 @@ def write_shareable_markdown(
             "A PASS means the command-specific comparison digest matched Picard "
             "on this input. This is a command-level trial, not approval for a "
             "whole cohort or production workflow.",
+            "",
+            "FAIL means the comparison did not pass. Inspect both exit codes and comparison "
+            "details to find the cause. A failed comparison is not a speed result. "
+            "Not recorded means no usable measurement is available; it does not mean zero.",
+            "",
+            "The default runner records one timed invocation per side. Repeat the trial "
+            "with comparable resources before making a performance decision.",
             "",
             "If the trial did not match, report the command, input shape, "
             "comparison result, and next blocker without attaching private data.",

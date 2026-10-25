@@ -28,8 +28,8 @@ PAGES = [
     ('solutions/bam-to-fastq/', 'Paired BAM to FASTQ without unbounded mate buffering | Turbo Picard', 'Export paired, unpaired or gzipped FASTQ from BAM or CRAM. Understand queryname staging, read orientation and scratch storage before using native SamToFastq.', 'BAM to FASTQ, without the guesswork', 'fastq'),
     ('solutions/sequencing-qc/', 'Faster Picard sequencing QC with CollectMultipleMetrics | Turbo Picard', 'Reduce repeated sequencing-QC work with native CollectMultipleMetrics. Check supported programs, filters and output contracts before replacing a Picard task.', 'Sequencing QC without the repeated work', 'qc'),
     ('solutions/bam-sorting/', 'Picard SortSam: coordinate sorting, memory and temporary files | Turbo Picard', 'Understand BAM sorting, memory budgets and scratch I/O. Evaluate native SortSam with stable external merging and keep required index and checksum outputs.', 'BAM sorting that fits your workflow', 'sorting'),
-    ('commands/', 'Turbo Picard command support — native, scoped and fallback', 'Search the source-derived Turbo Picard command catalogue. See exact native scope, fallback boundaries and parity tests before changing your pipeline.', 'Find your command. Know the boundary.', 'commands'),
-    ('evaluate/', 'Compare Turbo Picard with Picard on your own BAM or CRAM', 'Build a local comparison script with separate outputs, a pinned release and native-only execution. Inspect parity and timing before switching a workflow step.', 'Prove the switch on your data.', 'evaluate'),
+    ('commands/', 'Turbo Picard command support — native, scoped and fallback', 'Search the source-derived Turbo Picard command catalogue. See exact native scope, fallback boundaries and parity tests before changing your pipeline.', 'Find support for your Picard command', 'commands'),
+    ('evaluate/', 'Compare Turbo Picard with Picard on your own BAM or CRAM', 'Build a local comparison script with separate outputs, a pinned release and native-only execution. Inspect parity and timing before switching a workflow step.', 'Create a Picard comparison script', 'evaluate'),
     ('install/', 'Install Turbo Picard on Linux or macOS — PyPI and Docker', 'Install Turbo Picard in an isolated environment or use the versioned container. Avoid shadowing upstream Picard and verify the executable you actually run.', 'One package. A familiar command.', 'install'),
     ('compare/', 'Picard alternatives: Turbo Picard, Riker, samtools and FastDup', 'Compare native Picard alternatives by required outputs, preparation, resource costs and workflow changes. Choose a tool for duplicate marking, QC or sorting.', 'Choose the tool for your workflow.', 'compare'),
     ('evidence/', 'Turbo Picard benchmarks, parity and release evidence', 'Inspect absolute benchmark timings, input sizes, provenance and compatibility limits. Separate small-fixture evidence from production-scale performance claims.', 'Evidence you can inspect.', 'evidence'),
@@ -45,7 +45,7 @@ def prefix(route: str) -> str:
 
 
 def code(text: str, label: str = 'Shell') -> str:
-    return f'<div class="codebox"><div class="codebar"><span>{esc(label)}</span><button type="button" data-copy aria-label="Copy {esc(label)} command">Copy</button></div><pre tabindex="0"><code>{esc(text)}</code></pre><span class="copy-status" role="status"></span></div>'
+    return f'<div class="codebox"><div class="codebar"><span>{esc(label)}</span><button type="button" data-copy data-copy-kind="command" disabled>Copy command</button></div><pre tabindex="0"><code>{esc(text)}</code></pre><span class="copy-status" role="status" aria-atomic="true"></span></div>'
 
 
 def command_catalogue(matrix: dict) -> str:
@@ -53,7 +53,7 @@ def command_catalogue(matrix: dict) -> str:
     cards = []
     for c in matrix['commands']:
         name, status = c['name'], c['status']
-        badge = 'Utility' if name in utility else {'native': 'Native', 'partial-native': 'Scoped native', 'fallback-only': 'Upstream only'}[status]
+        badge = 'Inspection utility' if name in utility else {'native': 'Native implementation', 'partial-native': 'Native within listed scope', 'fallback-only': 'Upstream Picard required'}[status]
         scope = c['native_scope'] if status != 'fallback-only' else 'No native implementation in this release. Keep upstream Picard for this task; delegation is not a speedup.'
         parity = f'<a href="{REPO}/blob/v{{{{VERSION}}}}/{esc(c["parity_script"])}">Read the parity test ↗</a>' if c.get('parity_script') else ''
         cards.append(f'<article class="command-row" id="{esc(name)}" data-command="{esc(name)}" data-status="{esc(status)}"><div><h2>{esc(name)}</h2><span class="badge {esc(status)}">{badge}</span></div><p>{esc(scope)}</p><details><summary>Scope and verification</summary><p><strong>Boundary:</strong> {esc(c["fallback_scope"])}</p>{parity}</details></article>')

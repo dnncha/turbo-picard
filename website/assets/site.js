@@ -3,28 +3,61 @@
   'use strict';
   const COMMANDS = new Set(['MarkDuplicates', 'SortSam', 'SamToFastq', 'CollectMultipleMetrics']);
   function quote(value) { return "'" + String(value).replace(/'/g, "'\"'\"'") + "'"; }
-  function path(value, label, required) {
+  class TrialInputError extends Error {
+    constructor(message, fieldId, code) {
+      super(message); this.name = 'TrialInputError'; this.fieldId = fieldId; this.code = code;
+    }
+  }
+  const PATH_ERRORS = {
+    input: {
+      field: 'trial-input',
+      required: 'Enter an input BAM or CRAM path, such as /data/sample.bam.',
+      relative: 'Use a full path starting with / for Input.',
+      length: 'The Input path is too long for this builder. Use a shorter path.',
+      controls: 'The Input path contains a hidden character or line break. Paste the path on one line.'
+    },
+    jar: {
+      field: 'trial-jar',
+      required: 'Enter the upstream Picard JAR path, such as /opt/picard/picard.jar.',
+      relative: 'Use a full path starting with / for Upstream Picard JAR.',
+      length: 'The Upstream Picard JAR path is too long for this builder. Use a shorter path.',
+      controls: 'The Upstream Picard JAR path contains a hidden character or line break. Paste the path on one line.'
+    },
+    reference: {
+      field: 'trial-reference',
+      required: 'Reference FASTA is required for CRAM. Enter its full path, such as /refs/GRCh38.fa.',
+      relative: 'Use a full path starting with / for Reference FASTA.',
+      length: 'The Reference FASTA path is too long for this builder. Use a shorter path.',
+      controls: 'The Reference FASTA path contains a hidden character or line break. Paste the path on one line.'
+    }
+  };
+  function path(value, kind, required) {
     value = String(value || '').trim();
     if (!value && !required) return '';
-    if (!value.startsWith('/') || value.length > 4096 || /[\x00-\x1f\x7f]/.test(value)) {
-      throw new Error(label + ' must be an absolute path without control characters or line breaks.');
-    }
+    const messages = PATH_ERRORS[kind];
+    const invalid = !value ? 'required' : !value.startsWith('/') ? 'relative' :
+      value.length > 4096 ? 'length' : /[\x00-\x1f\x7f]/.test(value) ? 'controls' : null;
+    if (invalid) throw new TrialInputError(messages[invalid], messages.field, kind + '.' + invalid);
     return value;
   }
   function buildTrial(values) {
-    if (!COMMANDS.has(values.command)) throw new Error('Choose one of the documented comparison tasks.');
-    if (!/^\d+\.\d+\.\d+$/.test(values.version)) throw new Error('The release version is invalid.');
-    const input = path(values.input, 'Input', true);
-    if (!/\.(bam|cram)$/i.test(input)) throw new Error('Choose a BAM or CRAM input path.');
-    const jar = path(values.jar, 'Picard jar', true);
-    if (!/\.jar$/i.test(jar)) throw new Error('The upstream Picard path must end in .jar.');
-    const reference = path(values.reference, 'Reference FASTA', /\.cram$/i.test(input));
+    if (!COMMANDS.has(values.command)) throw new TrialInputError(
+      'Choose a command from the list or use the full evaluation guide for another task.', 'trial-command', 'command.unsupported');
+    if (!/^\d+\.\d+\.\d+$/.test(values.version)) throw new TrialInputError(
+      'The release version on this page is invalid. Reload the page or use the command-line evaluation guide.', null, 'version.invalid');
+    const input = path(values.input, 'input', true);
+    if (!/\.(bam|cram)$/i.test(input)) throw new TrialInputError(
+      'Enter an input path ending in .bam or .cram.', 'trial-input', 'input.extension');
+    const jar = path(values.jar, 'jar', true);
+    if (!/\.jar$/i.test(jar)) throw new TrialInputError(
+      'Enter the upstream Picard file path ending in .jar.', 'trial-jar', 'jar.extension');
+    const reference = path(values.reference, 'reference', /\.cram$/i.test(input));
     const lines = [
       '#!/usr/bin/env bash', 'set -euo pipefail',
       '# Review paths and fixed trial options before execution. No input is uploaded.',
       '# Set TMPDIR to suitable scratch storage before running, if needed.',
       'python3 -c \'import sys; assert sys.version_info >= (3, 11), "Python 3.11+ required"\'',
-      'for tool in git java samtools; do command -v "$tool" >/dev/null; done',
+      'for tool in git java; do command -v "$tool" >/dev/null; done',
       'work="$(mktemp -d)"', 'printf \'Trial directory: %s\\n\' "$work"',
       'python3 -m venv "$work/venv"',
       '"$work/venv/bin/python" -m pip install --only-binary=:all: ' + quote('turbo-picard==' + values.version),
@@ -49,20 +82,70 @@
   if (typeof module !== 'undefined' && module.exports) module.exports = {quote, buildTrial};
   if (typeof document === 'undefined') return;
 
+  const COPY = {
+    command: {label: 'Copy command', pending: 'Copying command…', copied: 'Command copied. Review it before running.',
+      selected: "Command selected. Use your browser's Copy command.", manual: 'Clipboard access is unavailable. Select the command text and copy it using your browser.'},
+    commands: {label: 'Copy commands', pending: 'Copying commands…', copied: 'Commands copied. Review them before running.',
+      selected: "Commands selected. Use your browser's Copy command.", manual: 'Clipboard access is unavailable. Select the commands and copy them using your browser.'},
+    script: {label: 'Copy script', pending: 'Copying script…', copied: 'Script copied. Review it before running.',
+      selected: "Script selected. Use your browser's Copy command.", manual: 'Clipboard access is unavailable. Select the script text and copy it using your browser.'},
+    example: {label: 'Copy example script', pending: 'Copying example…', copied: 'Example script copied. Replace the example paths before running.',
+      selected: "Example script selected. Use your browser's Copy command.", manual: 'Clipboard access is unavailable. Select the example script and copy it using your browser.'}
+  };
+  const plan = {revision: 0, kind: 'example', state: 'example'};
+  const form = document.getElementById('evaluation-builder');
+  const scriptSource = document.getElementById('trial-script');
+  const scriptCopy = scriptSource ? scriptSource.closest('.codebox').querySelector('[data-copy]') : null;
+  function copyKind(button) { return button === scriptCopy ? plan.kind : button.dataset.copyKind || 'command'; }
+  function refreshCopy(button) {
+    const messages = COPY[copyKind(button)];
+    button.textContent = button.dataset.copying ? messages.pending : messages.label;
+    button.setAttribute('aria-label', button.textContent);
+    button.disabled = !!button.dataset.copying || (button === scriptCopy && !['example', 'ready'].includes(plan.state));
+  }
+  function oldCopyMessage() {
+    return plan.state === 'ready' ? 'An earlier script was copied. Copy the current script to use the latest values.' :
+      'An earlier script was copied. Create a new script for the current settings.';
+  }
   document.querySelectorAll('[data-copy]').forEach(button => {
+    refreshCopy(button);
     button.addEventListener('click', async () => {
       const box = button.closest('.codebox');
       const source = box.querySelector('pre code');
       const status = box.querySelector('.copy-status');
+      const messages = COPY[copyKind(button)];
+      const revision = plan.revision;
+      const text = source.textContent;
+      const isScript = button === scriptCopy;
+      const changed = () => isScript && revision !== plan.revision;
+      let timeout;
+      button.dataset.copying = 'true'; button.setAttribute('aria-busy', 'true'); refreshCopy(button);
+      status.textContent = messages.pending;
       try {
         if (!navigator.clipboard || !window.isSecureContext) throw new Error('Clipboard unavailable');
-        await navigator.clipboard.writeText(source.textContent);
-        status.textContent = 'Copied. Review the command before running it.';
+        await Promise.race([
+          navigator.clipboard.writeText(text),
+          new Promise((_, reject) => {timeout = setTimeout(() => reject(new Error('Clipboard timeout')), 8000);})
+        ]);
+        status.textContent = changed() ? oldCopyMessage() : messages.copied;
       } catch (_) {
-        const selection = window.getSelection();
-        const range = document.createRange(); range.selectNodeContents(source);
-        selection.removeAllRanges(); selection.addRange(range);
-        status.textContent = 'Clipboard access is unavailable. Command selected: use your browser’s Copy command.';
+        if (changed()) {
+          status.textContent = plan.state === 'ready' ? 'Settings changed during copying. Copy the current script.' :
+            'Settings changed during copying. Create a new script before copying.';
+        } else {
+          let selected = false;
+          try {
+            const selection = window.getSelection();
+            if (selection) {
+              const range = document.createRange(); range.selectNodeContents(source);
+              selection.removeAllRanges(); selection.addRange(range); selected = true;
+            }
+          } catch (_) { /* Keep the manual-copy recovery available. */ }
+          status.textContent = selected ? messages.selected : messages.manual;
+          if (!selected) source.closest('pre').focus();
+        }
+      } finally {
+        clearTimeout(timeout); delete button.dataset.copying; button.removeAttribute('aria-busy'); refreshCopy(button);
       }
     });
   });
@@ -70,6 +153,7 @@
   if (search) {
     const filter = document.getElementById('command-filter');
     const rows = Array.from(document.querySelectorAll('[data-command]'));
+    const number = new Intl.NumberFormat(document.documentElement.lang || 'en');
     const apply = () => {
       const q = search.value.trim().toLowerCase(); let count = 0;
       rows.forEach(row => {
@@ -78,40 +162,71 @@
           (filter.value === 'all' || (filter.value === 'accelerated' ? state !== 'fallback-only' : state === filter.value));
         row.hidden = !matches; if (matches) count++;
       });
-      document.getElementById('catalogue-count').textContent = count + ' of ' + rows.length + ' documented entries shown. Utility commands are included.';
+      document.getElementById('catalogue-count').textContent =
+        `${number.format(count)} of ${number.format(rows.length)} entries shown. Includes inspection utilities.`;
       document.getElementById('no-commands').hidden = count !== 0;
     };
     search.addEventListener('input', apply); filter.addEventListener('change', apply); apply();
   }
-  const form = document.getElementById('evaluation-builder');
   if (form) {
     const button = document.getElementById('generate-trial'); button.disabled = false;
-    // Never submit paths, including when Enter is pressed in a field.
+    const fields = Array.from(form.querySelectorAll('input,select'));
+    function clearErrors() {
+      document.getElementById('trial-error').textContent = '';
+      fields.forEach(field => {
+        field.removeAttribute('aria-invalid');
+        const errorId = field.id + '-error';
+        const described = (field.getAttribute('aria-describedby') || '').split(/\s+/).filter(id => id && id !== errorId);
+        if (described.length) field.setAttribute('aria-describedby', described.join(' '));
+        else field.removeAttribute('aria-describedby');
+        const error = document.getElementById(errorId);
+        if (error) {error.textContent = ''; error.hidden = true;}
+      });
+    }
+    function setState(state, message) {
+      plan.state = state; form.dataset.scriptState = state;
+      document.getElementById('trial-script-label').textContent = plan.kind === 'example' ? 'Example script' :
+        state === 'ready' ? 'Comparison script' : 'Previous script';
+      document.getElementById('trial-plan-status').textContent = message;
+      refreshCopy(scriptCopy);
+    }
+    function updateReference() {
+      document.getElementById('trial-reference').required = /\.cram$/i.test(document.getElementById('trial-input').value.trim());
+    }
+    const stale = () => {
+      plan.revision++; clearErrors(); updateReference();
+      scriptSource.closest('.codebox').querySelector('.copy-status').textContent = '';
+      setState('stale', 'The script below uses earlier values. Create a new script before copying.');
+    };
+    // Keep paths in this page only, including when Enter is pressed in a field.
     form.addEventListener('keydown', event => {
       if (event.key === 'Enter' && !event.isComposing && event.target.tagName === 'INPUT') {event.preventDefault(); button.click();}
     });
-    const copy = document.getElementById('trial-script').closest('.codebox').querySelector('[data-copy]');
-    const stale = () => {
-      copy.disabled = true;
-      document.getElementById('trial-script-label').textContent = 'Previous example · regenerate after changes';
-      document.getElementById('trial-plan-status').textContent = 'Settings changed. Generate a new script before copying.';
-    };
-    form.querySelectorAll('input,select').forEach(field => {field.addEventListener('input', stale);field.addEventListener('change', stale);});
+    fields.forEach(field => {field.addEventListener('input', stale); field.addEventListener('change', stale);});
+    updateReference(); form.dataset.scriptState = 'example';
     button.addEventListener('click', () => {
-      const error = document.getElementById('trial-error'); error.textContent = '';
+      plan.revision++; clearErrors();
+      scriptSource.closest('.codebox').querySelector('.copy-status').textContent = '';
       try {
         const script = buildTrial({version: document.body.dataset.version,
           command: document.getElementById('trial-command').value,
           input: document.getElementById('trial-input').value,
           jar: document.getElementById('trial-jar').value,
           reference: document.getElementById('trial-reference').value});
-        document.getElementById('trial-script').textContent = script;
-        copy.disabled = false;
-        document.getElementById('trial-script-label').textContent = 'Generated plan · not executed';
-        document.getElementById('trial-plan-status').textContent = 'Script updated locally. Paths have not been inspected. Review prerequisites, task options and scratch capacity before executing.';
+        scriptSource.textContent = script; plan.kind = 'script';
+        setState('ready', 'Created in this browser. Review paths, task options and temporary storage before running it. This builder has not opened your files.');
       } catch (e) {
-        error.textContent = e.message; copy.disabled = true;
-        document.getElementById('trial-plan-status').textContent = 'No new script generated. The previous example below has not changed.';
+        const message = e instanceof TrialInputError ? e.message :
+          'The script could not be created. Try again or use the command-line evaluation guide.';
+        const field = e instanceof TrialInputError && e.fieldId ? document.getElementById(e.fieldId) : null;
+        if (field) {
+          const errorId = field.id + '-error';
+          const error = document.getElementById(errorId); error.textContent = message; error.hidden = false;
+          field.setAttribute('aria-invalid', 'true');
+          field.setAttribute('aria-describedby', ((field.getAttribute('aria-describedby') || '') + ' ' + errorId).trim());
+        } else document.getElementById('trial-error').textContent = message;
+        setState('invalid', 'Script not updated. Fix the error above, then create a new script.');
+        if (field) field.focus();
       }
     });
   }
