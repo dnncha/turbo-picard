@@ -62,9 +62,11 @@ Additional turbo-picard commands
    ``FixMateInformation``, and selected VCF utilities. Check :doc:`commands`
    before treating any command or option as native.
 
-Saved speedups against Picard
-   The current saved suite reports ``CollectWgsMetrics`` at ``22.42x`` against
-   Picard 3.4.0 on its documented fixture. It is not a comparison against riker.
+Saved comparisons against Picard
+   The historical suite records command-level output checks and absolute
+   timings against Picard 3.4.0. Read the dated :doc:`benchmark record
+   <benchmarks>` for the original input and result. Those comparisons do not
+   establish a performance ranking against riker.
 
 Small direct comparison fixtures
    ``benchmarks/riker-comparison/`` includes small-input overlap profiles. They
@@ -83,6 +85,22 @@ Current turbo-picard limits
    Metrics chart sidecars are lightweight PDFs rather than Picard-equivalent
    rendered charts. See :doc:`fallback` and :doc:`commands`.
 
+Riker's current QC model
+------------------------
+
+As reviewed on 25 October 2026, riker documents single-pass multi-collector QC,
+RNA-seq metrics, plots and simplified TSV outputs. Its README publishes
+authored benchmarks on WGS, exome and RNA-seq inputs. Those results have not
+been independently reproduced by this project. Rust and single-pass metrics
+collection are shared implementation choices rather than unique distinctions.
+
+Riker documents intentional changes to metric definitions in its
+`errata <https://github.com/fulcrumgenomics/riker/blob/main/ERRATA.md>`_.
+It also describes file-level aggregation rather than per-read-group or library
+breakdowns. Review the definitions and accumulation levels your workflow needs.
+A different metric or selected output format is a contract difference, not by
+itself evidence of inferior scientific results.
+
 How to benchmark them fairly
 ----------------------------
 
@@ -92,9 +110,15 @@ Use the repository helper:
 
    python3 tools/bench_qc_vs_riker.py --smoke --skip-build --allow-missing-riker
 
-Smoke runs now default to ``5`` repeats and report the median so the tiny mito
-fixture reflects steady-state overlap performance instead of one-shot startup
-noise.
+Smoke runs default to ``5`` repeats and report the median to reduce one-shot
+timing noise. Repetition does not make the tiny mitochondrial input
+representative of WGS or remove startup effects. The helper measures time; it
+does not establish cross-tool output agreement. Audit metric definitions,
+filters, required outputs and downstream interpretation separately.
+
+The retained direct comparison uses a 2,097,008-byte mitochondrial BAM, has
+no peak-RSS measurements and incomplete per-row thread information. It is a
+historical timing result, not a current-release or WGS ordering.
 
 For larger inputs, follow ``benchmarks/riker-comparison/README.md`` and retain
 the exact input, commands, versions, and hardware in the comparison record.

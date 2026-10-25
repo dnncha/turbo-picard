@@ -25,9 +25,11 @@ Example:
 turbo-picard MarkDuplicates I=input.bam O=marked.bam M=metrics.txt
 ```
 
-The repo includes parity fixtures, real-data checks, and benchmark verification
-scripts. The current benchmark table covers 32 commands against Picard 3.4.0,
-with an 84.52x geometric mean speedup and 272.12x top speedup.
+The historical 14 August 2026 suite covers 32 small-fixture comparisons
+against Picard 3.4.0, with an 84.52x geometric mean and 272.12x maximum
+saved ratio. JVM startup contributes to these short-task results; they
+do not predict a whole-genome or current-release speedup. Required
+outputs and full resource costs need a representative trial.
 
 The Rust side is a workspace with CLI/core crates plus a dedicated
 `MarkDuplicates` crate. HTS file I/O uses `rust-htslib`.
@@ -35,7 +37,7 @@ The Rust side is a workspace with CLI/core crates plus a dedicated
 Install:
 
 ```bash
-python3 -m pip install turbo-picard
+python3 -m pip install turbo-picard==0.1.16
 ```
 
 or from source:

@@ -40,12 +40,15 @@ Current facts to keep consistent:
 - Release source and publication target: `turbo-picard` 0.1.16
 - Install: `python3 -m pip install turbo-picard`
 - Target PyPI files: Linux x86_64 and ARM64 wheels, macOS Intel and Apple Silicon wheels, and source distribution
-- The local Bioconda recipe targets `0.1.16`; upstream PR #65922 remains pending. Do not advertise a
-  Bioconda install until acceptance and package-index availability are verified.
-  Verify PyPI `0.1.16` or the versioned container before advertising availability.
+- Bioconda accepted the initial recipes on 4 October 2026. The 25 October
+  channel receipt lists `0.1.15`; the `0.1.16` main-package and shim updates
+  remain open as PRs #69890 and #69891. Use the pinned PyPI wheel or container
+  for `0.1.16`, and recheck the channel before publishing install guidance.
 - Trial helper: `turbo-picard trial <PicardCommand> ...`
-- Benchmark evidence in the repo reports 32/32 parity-checked commands, 84.52x
-  geometric mean speedup, and 272.12x top speedup versus Picard 3.4.0
+- The historical 14 August 2026 suite reports 32/32 parity-checked small-fixture
+  command comparisons, 84.52x geometric mean and 272.12x maximum saved ratio
+  versus Picard 3.4.0. Startup contributes; keep the date and fixture scope
+  beside any quoted ratio. These are not current-release or WGS predictions.
 - The 0.1.16 MarkDuplicates gate matched eleven bounded synthetic cases.
   Paired CI spill fixtures measured 16–18% lower runtime and 8–13% lower RSS.
   Some native competitors were faster; full output contracts differ.

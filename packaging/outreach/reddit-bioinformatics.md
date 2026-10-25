@@ -31,21 +31,22 @@ I would test it one command at a time, not by replacing Picard across a whole
 pipeline. Pick a real input, run both tools, compare the outputs you care about,
 and only switch that command if the comparison is boring.
 
-The repo has parity and benchmark checks against Picard 3.4.0. Current numbers:
-32 checked commands, 84.52x geometric mean speedup, and 272.12x top speedup. The
-`MarkDuplicates` benchmark also shows much lower memory use than Picard on the
-same input.
+The historical 14 August 2026 suite covers 32 small-fixture comparisons
+against Picard 3.4.0, with an 84.52x geometric mean and 272.12x maximum
+saved ratio. JVM startup contributes to these short-task results; they
+do not predict a whole-genome or current-release speedup. Required
+outputs and full resource costs need a representative trial.
 
 Install:
 
 ```bash
-python3 -m pip install turbo-picard
+python3 -m pip install turbo-picard==0.1.16
 ```
 
-PyPI has Linux x86_64 and macOS Apple Silicon wheels plus a source tarball. The
-existing Bioconda PR (#65922) covers `0.1.11` metadata, so Bioconda is not
-yet a current `0.1.12` install path. Use the published PyPI package or
-container until the new candidate is tagged, reviewed, and published.
+PyPI publishes platform wheels and a source distribution. Bioconda accepted
+the initial recipes; the 25 October 2026 channel check lists `0.1.15`. The
+`0.1.16` main-package and shim updates are open upstream. Use a pinned
+PyPI wheel or container for `0.1.16`; check the current channel before posting.
 
 Docs:
 

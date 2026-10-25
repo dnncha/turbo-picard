@@ -13,9 +13,11 @@ redesigning the task:
 turbo-picard MarkDuplicates I=input.bam O=marked.bam M=metrics.txt
 ```
 
-The repo includes parity checks, benchmark logs, real-data checks, and examples
-for WDL, Nextflow, and Snakemake. Current benchmark table: 32 checked commands,
-84.52x geometric mean speedup, and 272.12x top speedup versus Picard 3.4.0.
+The historical 14 August 2026 suite covers 32 small-fixture comparisons
+against Picard 3.4.0, with an 84.52x geometric mean and 272.12x maximum
+saved ratio. JVM startup contributes to these short-task results; they
+do not predict a whole-genome or current-release speedup. Required
+outputs and full resource costs need a representative trial.
 
 My suggested adoption path is one command at a time: run both tools on the same
 representative input, compare the outputs, and only switch the command that

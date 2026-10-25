@@ -75,6 +75,7 @@ Packaging, detailed benchmarks and migration references are in the guide below.
    first-command
    evaluation-playbook
    real-data-evaluation
+   independent-evaluation
    picard-markduplicates-slow-memory-alternatives
    picard-markduplicates-errors
    use-cases
