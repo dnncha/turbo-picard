@@ -1,0 +1,54 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="420" height="1247" viewBox="0 0 420 1247" role="img" aria-labelledby="title desc">
+  <title id="title">The fastest Picard-identical MarkDuplicates. Faster tools here change the output.</title>
+  <desc id="desc">The fastest Picard-identical MarkDuplicates. Faster tools here change the output. Turbo Picard 2.57 s versus Picard 5.48 s; FastDup 1.23 s (output differs from Picard); dupblaster 1.64 s (output differs from Picard); samtools markdup 2.08 s (output differs from Picard).</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" x2="1" y1="0" y2="1">
+      <stop offset="0" stop-color="#071013"/>
+      <stop offset="0.55" stop-color="#10212a"/>
+      <stop offset="1" stop-color="#0b1117"/>
+    </linearGradient>
+    <linearGradient id="turbo" x1="0" x2="1">
+      <stop offset="0" stop-color="#2fcfc2"/>
+      <stop offset="1" stop-color="#9ef8f1"/>
+    </linearGradient>
+    <filter id="glow" x="-10%" y="-60%" width="120%" height="220%">
+      <feGaussianBlur stdDeviation="6" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+  <style>
+    text { font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", "Helvetica Neue", Arial, sans-serif; }
+    .brand { font-weight: 700; font-size: 13px; letter-spacing: 2px; fill: #36d7c9; }
+    .title { font-weight: 800; font-size: 31px; fill: #f4fbfb; }
+    .sub { font-weight: 500; font-size: 15.5px; fill: #b7c9cf; }
+    .groupOn { font-weight: 700; font-size: 12px; letter-spacing: 1.5px; fill: #36d7c9; }
+    .groupOff { font-weight: 700; font-size: 12px; letter-spacing: 1.5px; fill: #6d8189; }
+    .toolOn { font-weight: 800; font-size: 17px; fill: #f4fbfb; }
+    .tool { font-weight: 600; font-size: 16px; fill: #d9e7ea; }
+    .toolOff { font-weight: 600; font-size: 16px; fill: #7d9098; }
+    .valueOn { font-weight: 800; font-size: 16px; fill: #9ef8f1; }
+    .value { font-weight: 700; font-size: 15px; fill: #d9e7ea; }
+    .valueOff { font-weight: 600; font-size: 15px; fill: #7d9098; }
+    .track { fill: rgba(255,255,255,0.05); }
+    .tile { fill: rgba(255,255,255,0.045); stroke: rgba(158,248,241,0.14); }
+    .bigOn { font-weight: 800; font-size: 30px; fill: #9ef8f1; }
+    .big { font-weight: 800; font-size: 30px; fill: #f4fbfb; }
+    .tileText { font-weight: 600; font-size: 15px; fill: #d9e7ea; }
+    .tileFine { font-weight: 500; font-size: 13px; fill: #8ba4ad; }
+    .foot { font-weight: 500; font-size: 10.5px; fill: #6d8189; }
+    .cmd { font-family: ui-monospace, "SF Mono", Menlo, Consolas, "DejaVu Sans Mono", monospace; font-weight: 600; font-size: 17px; fill: #f4fbfb; }
+    .prompt { fill: #36d7c9; }
+  </style>
+  <rect width="420" height="1247" fill="url(#bg)"/>
+  <text x="24" y="44" class="brand">TURBO PICARD</text>
+  <text x="24" y="86" class="title">The fastest</text><text x="24" y="122" class="title">Picard-identical</text><text x="24" y="158" class="title">MarkDuplicates.</text>
+  <text x="24" y="188" class="sub">Faster tools here change the output.</text><text x="24" y="209" class="sub">Same commands, same arguments, no JVM.</text>
+  <text x="24" y="253" class="groupOn">PICARD-IDENTICAL OUTPUT</text><text x="24" y="287" class="toolOn">Turbo Picard</text><rect x="24" y="295" width="308" height="22" rx="7" class="track"/><rect x="24" y="295" width="144.7" height="22" rx="7" fill="url(#turbo)" filter="url(#glow)"/><text x="178.7" y="311" class="valueOn">2.57 s</text><text x="24" y="345" class="tool">Picard 3.4.0</text><rect x="24" y="353" width="308" height="22" rx="7" class="track"/><rect x="24" y="353" width="308.0" height="22" rx="7" fill="#3a5a63"/><text x="342.0" y="369" class="value">5.48 s</text><text x="24" y="403" class="groupOff">OUTPUT DIFFERS FROM PICARD</text><text x="24" y="437" class="toolOff">FastDup</text><rect x="24" y="445" width="308" height="22" rx="7" class="track"/><rect x="24" y="445" width="68.9" height="22" rx="7" fill="#2a3a40"/><text x="102.9" y="461" class="valueOff">1.23 s</text><text x="24" y="495" class="toolOff">dupblaster</text><rect x="24" y="503" width="308" height="22" rx="7" class="track"/><rect x="24" y="503" width="92.5" height="22" rx="7" fill="#2a3a40"/><text x="126.5" y="519" class="valueOff">1.64 s</text><text x="24" y="553" class="toolOff">samtools markdup</text><rect x="24" y="561" width="308" height="22" rx="7" class="track"/><rect x="24" y="561" width="116.6" height="22" rx="7" fill="#2a3a40"/><text x="150.6" y="577" class="valueOff">2.08 s</text>
+  <rect x="24" y="615" width="372" height="68" rx="14" class="tile"/><text x="42" y="661" class="bigOn">2.1x</text><text x="162" y="645" class="tileText">faster than Picard</text><text x="162" y="665" class="tileFine">600k paired reads</text>
+  <rect x="24" y="695" width="372" height="68" rx="14" class="tile"/><text x="42" y="741" class="big">4.4x</text><text x="162" y="725" class="tileText">less memory than Picard</text><text x="162" y="745" class="tileFine">600k paired reads</text>
+  <rect x="24" y="775" width="372" height="68" rx="14" class="tile"/><text x="42" y="821" class="bigOn">10.2x</text><text x="162" y="805" class="tileText">faster than Picard</text><text x="162" y="825" class="tileFine">real NA12878 chrM, identical</text>
+  <rect x="24" y="855" width="372" height="68" rx="14" class="tile"/><text x="42" y="901" class="big">32/32</text><text x="162" y="885" class="tileText">commands match Picard</text><text x="162" y="905" class="tileFine">85x geo-mean speedup</text>
+  <rect x="24" y="939" width="372" height="136" rx="14" class="tile"/><text x="42" y="967" class="groupOn">GETTING FASTER ON MAIN</text><polyline points="42.0,995.0 98.0,977.0" fill="none" stroke="#36d7c9" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/><circle cx="98.0" cy="977.0" r="3.5" fill="#9ef8f1"/><text x="114" y="997" class="tileText">MarkDuplicates spill, 600k</text><text x="114" y="1014" class="tileFine">0.1.15 → 0.1.16</text><text x="378" y="997" text-anchor="end" class="valueOn">−18%</text><polyline points="42.0,1041.0 98.0,1023.0" fill="none" stroke="#36d7c9" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/><circle cx="98.0" cy="1023.0" r="3.5" fill="#9ef8f1"/><text x="114" y="1043" class="tileText">MarkDuplicates spill, 1.2M</text><text x="114" y="1060" class="tileFine">0.1.15 → 0.1.16</text><text x="378" y="1043" text-anchor="end" class="valueOn">−16%</text>
+  <rect x="24" y="1091" width="372" height="48" rx="12" class="tile"/><text x="44" y="1122" class="cmd"><tspan class="prompt">$</tspan><tspan dx="12">pip install turbo-picard</tspan></text>
+  <text x="24" y="1171" class="foot">MarkDuplicates, 600k paired reads, 1 CPU, median of 3. Turbo</text><text x="24" y="1187" class="foot">Picard 0.1.15 (d14b744), measured 2026-10-01. Command suite</text><text x="24" y="1203" class="foot">2026-08-14. Evidence:</text><text x="24" y="1219" class="foot">github.com/dnncha/turbo-picard/tree/main/benchmarks</text>
+</svg>

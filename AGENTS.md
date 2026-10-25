@@ -48,6 +48,7 @@ python3 tools/verify_benchmark_log_evidence.py
 python3 tools/verify_benchmark_suite_coverage.py
 python3 tools/verify_readme_links.py
 python3 tools/verify_site_links.py
+python3 tools/render_competitor_card.py --check
 ```
 
 The CI workflow discovers `tools/test_*.py` tests and compiles the entire tools
@@ -57,6 +58,26 @@ Run the full CI workflow before merging. Native changes require Rust tests,
 Picard parity, package/container checks and workflow-starter checks; a Python
 benchmark is not a substitute. Build Sphinx documentation using the repository's
 pinned docs requirements when documentation changes.
+
+## Keep the competitor card current
+
+`docs/site/assets/competitor-card{,-mobile}.{svg,png}` (landscape and portrait
+phone layouts) are the first graphic visitors see
+(README, PyPI, site home, link previews). They are rendered only from evidence:
+the newest `benchmarks/markduplicates-competitors/landscape-YYYY-MM-DD.json`,
+`docs/site/assets/benchmark-data.json` and `benchmarks/progress.json`. Never
+edit the SVG or PNG by hand, and never type a number into the renderer.
+
+- When an accepted hill-climb change lands on main, append its frozen-workload
+  median with `python3 tools/render_competitor_card.py record --series <id>
+  --version <release-or-short-sha> --value <seconds> --evidence <immutable URL>`.
+  This re-renders the card. Add a new series with `--label` and `--protocol`.
+- After a new competitor run, save its summary as a new dated `landscape-*.json`
+  and re-render. The headline changes itself: it says "fastest" only for the
+  set of tools the evidence shows Turbo Picard beating, and only among
+  Picard-identical outputs unless it beats every tool.
+- Commit all four regenerated SVG and PNG files with the evidence that changed
+  them.
 
 ## Describe only what was measured
 

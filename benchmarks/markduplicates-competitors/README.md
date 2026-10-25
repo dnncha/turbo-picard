@@ -5,6 +5,17 @@ bundle for Turbo-Picard, Picard, samtools, Sambamba and FastDup. It is an eviden
 generator, not a claim generator: unavailable programs, failed commands and
 parity failures remain visible in `report.json` and `report.md`.
 
+## Competitor card
+
+`landscape-YYYY-MM-DD.json` files are matched-pipeline summaries across
+Picard, Turbo Picard, FastDup, samtools and dupblaster. The newest one feeds
+`docs/site/assets/competitor-card.svg` through
+`tools/render_competitor_card.py`. Save each new landscape run under a new
+date rather than overwriting an old one, then re-render the card.
+`landscape-2026-10-01.json` is copied verbatim from
+`benchmarks/review-evidence/2026-10-01/landscape-summary.json` at commit
+`03a655fb`.
+
 ## Input contract
 
 Use one immutable, coordinate-sorted BAM or reference-backed CRAM which is
