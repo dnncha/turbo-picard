@@ -13,6 +13,11 @@ from pathlib import Path
 from typing import Iterable
 from urllib.parse import urlparse
 
+if __package__:
+    from .sam_contract import COMPARISON as MARKDUP_V2_COMPARISON, header_digest, metrics_digest
+else:
+    from sam_contract import COMPARISON as MARKDUP_V2_COMPARISON, header_digest, metrics_digest
+
 
 ROOT = Path(__file__).resolve().parents[1]
 MANIFEST = ROOT / "benchmarks" / "real-data" / "manifest.json"
@@ -58,6 +63,7 @@ RELEASE_CANDIDATE_PORTFOLIO_COMMAND_TEXT = ", ".join(
 )
 EXPECTED_PICARD_VERSION = "Version:3.4.0"
 KNOWN_COMPARISONS = {
+    MARKDUP_V2_COMPARISON,
     "BAI binary digest",
     "FASTQ trio digest",
     "SAM record digest",
@@ -74,6 +80,7 @@ KNOWN_COMPARISONS = {
     "summary validation histogram plus exit code",
 }
 COMPARISON_MARKDOWN_NOTES = {
+    MARKDUP_V2_COMPARISON: ("full scientific SAM fields", "MarkDuplicates v2 contract explanation"),
     "BAI binary digest": ("exact BAM index bytes", "BAI binary digest explanation"),
     "FASTQ trio digest": ("FASTQ outputs byte-for-byte", "FASTQ trio digest explanation"),
     "SAM record digest": ("ignores headers", "SAM record digest explanation"),
@@ -361,6 +368,16 @@ def recomputable_artifact_digest(
         view_sam, metrics = markduplicates_sidecars(path)
         if view_sam.exists() and metrics.exists():
             return f"{digest_markduplicates_semantics(view_sam)};metrics={digest_stable_text(metrics)}"
+    if comparison == MARKDUP_V2_COMPARISON:
+        # Legacy evidence above deliberately keeps its frozen v1 projection.
+        # Newly generated v2 evidence uses the shared scientific record contract.
+        if __package__:
+            from .compare_real_data import digest_markduplicates_semantics as digest_v2
+        else:
+            from compare_real_data import digest_markduplicates_semantics as digest_v2
+        view_sam, metrics = markduplicates_sidecars(path)
+        if view_sam.exists() and metrics.exists():
+            return f"{digest_v2(view_sam)};headers={header_digest(view_sam)};metrics={metrics_digest(metrics)}"
     if path.suffix == ".sam" and comparison in {
         "stable SAM digest after queryname sort and mate fixing",
         "stable SAM digest with NM/MD/UQ tags",
@@ -743,7 +760,7 @@ def validate_dataset(
                     continue
                 errors.append(f"{dataset_id} {command} missing {label} file: {artifact}")
                 continue
-            if comparison == "duplicate-marking semantic digest plus stable metrics digest":
+            if comparison in {"duplicate-marking semantic digest plus stable metrics digest", MARKDUP_V2_COMPARISON}:
                 view_sam, metrics = markduplicates_sidecars(artifact_path)
                 for sidecar_path, sidecar_label in [
                     (view_sam, "view-SAM sidecar"),

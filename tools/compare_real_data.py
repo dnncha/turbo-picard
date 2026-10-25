@@ -68,22 +68,10 @@ class CommandEvidence:
     picard_exit_code: int | None = None
 
 
-@dataclass(frozen=True, order=True)
-class MarkDuplicateRecord:
-    query_name: str
-    duplicate: bool
-    duplicate_type: str | None
-    duplicate_set_size: int | None
-    duplicate_set_index: int | None
-    rx_barcode: str | None
-    bx_barcode: str | None
-    by_barcode: str | None
-    reference_name: str
-    position: int
-    mate_reference_name: str
-    mate_position: int
-    cigar: str
-    template_length: int
+if __package__:
+    from .sam_contract import AlignmentRecord as MarkDuplicateRecord, record_from_fields, header_digest, metrics_digest, COMPARISON as MARKDUP_COMPARISON, VERSION as MARKDUP_COMPARATOR_VERSION, DESCRIPTION as MARKDUP_COMPARATOR_DESCRIPTION
+else:
+    from sam_contract import AlignmentRecord as MarkDuplicateRecord, record_from_fields, header_digest, metrics_digest, COMPARISON as MARKDUP_COMPARISON, VERSION as MARKDUP_COMPARATOR_VERSION, DESCRIPTION as MARKDUP_COMPARATOR_DESCRIPTION
 
 
 def parse_args() -> argparse.Namespace:
@@ -1338,15 +1326,15 @@ def compare_bam_output(
     picard_digest = digest_sam_records(picard_sam)
     comparison = "post-command SAM record digest"
     if command == "MarkDuplicates":
-        turbo_metric_digest = digest_stable_text(turbo_metrics)
-        picard_metric_digest = digest_stable_text(picard_metrics)
+        turbo_metric_digest = metrics_digest(turbo_metrics)
+        picard_metric_digest = metrics_digest(picard_metrics)
         turbo_digest = (
-            f"{digest_markduplicates_semantics(turbo_sam)};metrics={turbo_metric_digest}"
+            f"{digest_markduplicates_semantics(turbo_sam)};headers={header_digest(turbo_sam)};metrics={turbo_metric_digest}"
         )
         picard_digest = (
-            f"{digest_markduplicates_semantics(picard_sam)};metrics={picard_metric_digest}"
+            f"{digest_markduplicates_semantics(picard_sam)};headers={header_digest(picard_sam)};metrics={picard_metric_digest}"
         )
-        comparison = "duplicate-marking semantic digest plus stable metrics digest"
+        comparison = MARKDUP_COMPARISON
     return evidence(command, turbo_seconds, picard_seconds, comparison, turbo_bam, picard_bam, turbo_digest, picard_digest)
 
 
@@ -2365,29 +2353,8 @@ def digest_markduplicates_semantics(path: Path) -> str:
 def parse_markduplicates_records(path: Path) -> Iterable[MarkDuplicateRecord]:
     with path.open("r", encoding="utf-8") as handle:
         for raw in handle:
-            if not raw.strip() or raw.startswith("@"):
-                continue
-            fields = raw.rstrip("\n").split("\t")
-            if len(fields) < 11:
-                raise ValueError(f"malformed SAM record in {path}: {raw.rstrip()}")
-            flag = int(fields[1])
-            tags = fields[11:]
-            yield MarkDuplicateRecord(
-                query_name=fields[0],
-                duplicate=bool(flag & 0x400),
-                duplicate_type=optional_tag(tags, "DT"),
-                duplicate_set_size=optional_int_tag(tags, "DS"),
-                duplicate_set_index=optional_int_tag(tags, "DI"),
-                rx_barcode=optional_tag(tags, "RX"),
-                bx_barcode=optional_tag(tags, "BX"),
-                by_barcode=optional_tag(tags, "BY"),
-                reference_name=fields[2],
-                position=int(fields[3]),
-                mate_reference_name=fields[6],
-                mate_position=int(fields[7]),
-                cigar=fields[5],
-                template_length=int(fields[8]),
-            )
+            if raw.strip() and not raw.startswith("@"):
+                yield record_from_fields(raw.rstrip("\r\n").split("\t"))
 
 
 def optional_tag(fields: list[str], tag: str) -> str | None:
@@ -2578,6 +2545,8 @@ def comparison_detail_lines(rows: list[dict]) -> list[str]:
         details.append(
             "- `duplicate-marking semantic digest plus stable metrics digest` compares duplicate flags, duplicate tags, duplicate-set metadata, barcode tags, key coordinates, and duplicate metrics."
         )
+    if any(isinstance(comparison, str) and comparison.startswith(f"{MARKDUP_COMPARATOR_VERSION}:") for comparison in comparisons):
+        details.append(f"- `{MARKDUP_COMPARATOR_VERSION}` compares {MARKDUP_COMPARATOR_DESCRIPTION}. This v2 contract supersedes the historical selected-field projection; saved older evidence retains its original comparison label.")
     if "summary validation histogram plus exit code" in comparisons:
         details.append(
             "- `summary validation histogram plus exit code` compares the ValidateSamFile summary histogram and requires the same Picard and turbo-picard exit code."

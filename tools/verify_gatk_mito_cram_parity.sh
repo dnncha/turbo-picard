@@ -4,8 +4,18 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck source=tools/cram_compat.sh
 source "$repo_root/tools/cram_compat.sh"
-workdir="$(mktemp -d)"
-trap 'rm -rf "$workdir"' EXIT
+evidence_root="${TURBO_PICARD_PARITY_EVIDENCE_DIR:-${TMPDIR:-/tmp}}"
+mkdir -p "$evidence_root"
+workdir="$(mktemp -d "$evidence_root/gatk-mito-cram.XXXXXX")"
+cleanup() {
+  local status=$?
+  if ((status == 0)) && [[ -z "${TURBO_PICARD_PARITY_EVIDENCE_DIR:-}" ]]; then
+    rm -rf "$workdir"
+  else
+    echo "GATK mito CRAM parity evidence retained in $workdir" >&2
+  fi
+}
+trap cleanup EXIT
 parity_conda_setup "$repo_root" "$workdir"
 
 input_bam="$repo_root/benchmarks/real-data/gatk-na12878-mito/input.bam"
@@ -109,28 +119,32 @@ view_to_sam "$workdir/turbo-sorted.cram" "$workdir/turbo-sorted.sam"
 python3 "$compare" merge-multiset --label "GATK mito CRAM SortSam" \
   --picard "$workdir/picard-sorted.sam" --turbo "$workdir/turbo-sorted.sam"
 
+# HTSJDK 5 restores NM during CRAM decode; Picard 3.4/native preserve missing
+# tags. Apply the documented exception to both commands so the complete report
+# and exit code remain comparable. INVALID_TAG_NM errors are still checked.
+validate_options=()
+if [[ "${TURBO_PICARD_PICARD_VERSION:-3.4.0}" == 3.5.* ]]; then
+  validate_options=(IGNORE=MISSING_TAG_NM)
+fi
 picard_validate_exit=0
 picard ValidateSamFile \
   "I=$input_cram" "O=$workdir/picard-validate.txt" "R=$reference" MODE=SUMMARY \
+  "${validate_options[@]}" \
   || picard_validate_exit=$?
 turbo_validate_exit=0
 turbo ValidateSamFile \
   "I=$input_cram" "O=$workdir/turbo-validate.txt" "R=$reference" MODE=SUMMARY \
+  "${validate_options[@]}" \
   || turbo_validate_exit=$?
+printf 'Picard=%s\nTurbo=%s\nOptions=%s\n' \
+  "$picard_validate_exit" "$turbo_validate_exit" "${validate_options[*]}" \
+  > "$workdir/validation-exits.txt"
 if ! parity_validate_samfile_exit_matches "$picard_validate_exit" "$turbo_validate_exit"; then
   echo "GATK mito CRAM ValidateSamFile exit differs from Picard: Picard=$picard_validate_exit turbo=$turbo_validate_exit" >&2
   exit 1
 fi
-# Picard 3.5.0 (HTSJDK 5) restores MD/NM when decoding CRAM against a reference,
-# so it no longer reports MISSING_TAG_NM for this input. Turbo Picard follows
-# Picard 3.4.0 here; see docs/parity.rst.
-validate_ignore=()
-if [[ "${TURBO_PICARD_PICARD_VERSION:-3.4.0}" != 3.4.* ]]; then
-  validate_ignore=(--ignore-type WARNING:MISSING_TAG_NM)
-fi
 python3 "$compare" validate-summary --label "GATK mito CRAM ValidateSamFile" \
-  --picard "$workdir/picard-validate.txt" --turbo "$workdir/turbo-validate.txt" \
-  "${validate_ignore[@]}"
+  --picard "$workdir/picard-validate.txt" --turbo "$workdir/turbo-validate.txt"
 
 picard CollectQualityYieldMetrics \
   "I=$input_cram" "O=$workdir/picard-quality-yield.txt" "R=$reference"

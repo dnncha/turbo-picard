@@ -1,4 +1,4 @@
-name: Release v0.1.16 after CI
+name: Release v0.1.17 after CI
 
 on:
   workflow_run:
@@ -9,7 +9,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: release-v0.1.16
+  group: release-v0.1.17
   cancel-in-progress: false
 
 jobs:

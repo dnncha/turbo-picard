@@ -130,7 +130,7 @@ def validate_github_release_assets_job(root: Path = ROOT) -> list[str]:
 
 
 def validate_ci_release_workflow(root: Path = ROOT) -> list[str]:
-    path = root / ".github" / "workflows" / "release-v0.1.16.yml"
+    path = root / ".github" / "workflows" / "release-v0.1.17.yml"
     if not path.is_file():
         return ["Authorized CI release workflow is missing"]
     text = path.read_text(encoding="utf-8")

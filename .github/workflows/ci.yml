@@ -229,12 +229,16 @@ jobs:
         run: cargo test --workspace
 
       - name: Verify Picard parity
+        env:
+          TURBO_PICARD_PARITY_EVIDENCE_DIR: ${{ runner.temp }}/parity-evidence
         run: |
           ./tools/verify_basic_accelerationstatus_parity.sh
           ./tools/verify_basic_capabilities_parity.sh
           ./tools/verify_basic_doctor_parity.sh
           ./tools/verify_basic_explain_parity.sh
           ./tools/verify_basic_trial_parity.sh
+          # Workload parity must fail if the native implementation rejects a case.
+          export TURBO_PICARD_REQUIRE_NATIVE=1
           TURBO_PICARD_CONDA_PREFIX="${MAMBA_ROOT_PREFIX}/envs/turbo-picard-ci" ./tools/verify_basic_cram_parity.sh
           TURBO_PICARD_CONDA_PREFIX="${MAMBA_ROOT_PREFIX}/envs/turbo-picard-ci" ./tools/verify_markdup_cram_parity.sh
           TURBO_PICARD_CONDA_PREFIX="${MAMBA_ROOT_PREFIX}/envs/turbo-picard-ci" ./tools/verify_gatk_preprocessing_combo_parity.sh
@@ -276,3 +280,21 @@ jobs:
           TURBO_PICARD_CONDA_PREFIX="${MAMBA_ROOT_PREFIX}/envs/turbo-picard-ci" ./tools/verify_basic_gathervcfs_parity.sh
           TURBO_PICARD_CONDA_PREFIX="${MAMBA_ROOT_PREFIX}/envs/turbo-picard-ci" ./tools/verify_basic_sortvcf_parity.sh
           TURBO_PICARD_CONDA_PREFIX="${MAMBA_ROOT_PREFIX}/envs/turbo-picard-ci" ./tools/verify_basic_mergevcfs_parity.sh
+
+      - name: Verify adversarial scientific boundaries
+        run: |
+          cargo build --workspace --locked
+          export PATH="${MAMBA_ROOT_PREFIX}/envs/turbo-picard-ci/bin:$PATH"
+          python3 tools/verify_adversarial_parity.py \
+            --picard-command "micromamba run -p ${MAMBA_ROOT_PREFIX}/envs/turbo-picard-ci picard" \
+            --expected-picard-version "${{ matrix.picard }}" \
+            --output-dir "${RUNNER_TEMP}/adversarial-parity"
+
+      - name: Retain adversarial parity evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: adversarial-parity-picard-${{ matrix.picard }}
+          path: |
+            ${{ runner.temp }}/adversarial-parity/
+            ${{ runner.temp }}/parity-evidence/

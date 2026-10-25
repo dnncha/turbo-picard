@@ -336,6 +336,17 @@ turbo_verbose_max_output_status=$?
 picard_verbose_max_output_status=$?
 set -e
 
+for status_name in status ignore_status ignore_warning_status missing_platform_status \
+  ignore_missing_platform_status invalid_mapq_status ignore_invalid_mapq_status \
+  orphan_status verbose_status verbose_max_output_status; do
+  native_status_name="turbo_${status_name}"
+  reference_status_name="picard_${status_name}"
+  if [[ "${!native_status_name}" != "${!reference_status_name}" ]]; then
+    echo "ValidateSamFile ${status_name} differs: native=${!native_status_name}, Picard=${!reference_status_name}" >&2
+    exit 1
+  fi
+done
+
 if [[ "$turbo_status" -eq 0 || "$picard_status" -eq 0 ]]; then
   echo "ValidateSamFile warning fixture should fail for both implementations" >&2
   exit 1

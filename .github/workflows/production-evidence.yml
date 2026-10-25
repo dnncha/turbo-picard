@@ -170,7 +170,8 @@ jobs:
     name: Measure pinned production evidence
     if: github.event_name == 'workflow_dispatch'
     needs: validate
-    runs-on: ubuntu-latest
+    # Use the same clang/HTSlib toolchain as native CI and bounded evidence.
+    runs-on: ubuntu-24.04
     timeout-minutes: 360
     env:
       DATASET_ID: ${{ inputs.dataset_id }}
