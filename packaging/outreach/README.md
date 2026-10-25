@@ -37,12 +37,12 @@ Ground rules:
 
 Current facts to keep consistent:
 
-- Release source and publication target: `turbo-picard` 0.1.16
+- Release source and publication target: `turbo-picard` 0.1.17
 - Install: `python3 -m pip install turbo-picard`
 - Target PyPI files: Linux x86_64 and ARM64 wheels, macOS Intel and Apple Silicon wheels, and source distribution
-- The local Bioconda recipe targets `0.1.16`; upstream PR #65922 remains pending. Do not advertise a
+- The local Bioconda recipe targets `0.1.17`; upstream PR #65922 remains pending. Do not advertise a
   Bioconda install until acceptance and package-index availability are verified.
-  Verify PyPI `0.1.16` or the versioned container before advertising availability.
+  Verify PyPI `0.1.17` or the versioned container before advertising availability.
 - Trial helper: `turbo-picard trial <PicardCommand> ...`
 - Benchmark evidence in the repo reports 32/32 parity-checked commands, 84.52x
   geometric mean speedup, and 272.12x top speedup versus Picard 3.4.0

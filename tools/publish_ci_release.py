@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Publish the authorized v0.1.16 once, from successful immutable main CI."""
+"""Publish the authorized v0.1.17 once, from successful immutable main CI."""
 
 from __future__ import annotations
 
@@ -11,10 +11,10 @@ import subprocess
 import tomllib
 
 ROOT = Path(__file__).resolve().parents[1]
-VERSION = "0.1.16"
+VERSION = "0.1.17"
 TAG = f"v{VERSION}"
 REPOSITORY = "dnncha/turbo-picard"
-AUTHORIZED_BASE = "3e571f973f7f8b62ae0c0302e67635d1922e3a6d"
+AUTHORIZED_BASE = "a4aeaa83659c581b7e2b7d587ad51faf4d48bc06"
 
 
 def validate_run(run: dict, repository: str) -> str:

@@ -1,7 +1,9 @@
 # Changelog
 
-## Unreleased
+## 0.1.17 — 2026-10-25
 
+- Reuse CollectHsMetrics interval lookups within alignment blocks, including
+  off-target gaps, while preserving metrics and coverage outputs.
 - Use shared SAM/BAM/CRAM duplicate selection, validate multi-input dictionaries,
   preserve colliding read-group identities, and check mixed fragment/pair
   candidates before accepting the no-duplicate fast path.

@@ -34,11 +34,15 @@ selection rule and safe substitution pattern.
 
 ### Compact, native-only automation
 
-Version 0.1.16 corrects MarkDuplicates numeric histograms, bounds speculative
-mate storage, and reduces allocation and sorting work on paired inputs.
-The retained paired spill benchmarks measured 16–18% lower runtime and
-8–13% lower peak memory in CI. See the [release notes](CHANGELOG.md) for
-exact conditions, competitor results, and the evidence limits.
+Version 0.1.17 repairs scientific correctness across duplicate marking,
+quality metrics, sorting, validation, mate repair, and VCF processing. Native
+workload parity now runs against Picard 3.4.0 and 3.5.0 with complete scientific
+comparison and independent mutation checks.
+
+The retained 0.1.16 paired spill benchmarks measured 16–18% lower runtime and
+8–13% lower peak memory in CI. These historical measurements are unchanged.
+See the [release notes](CHANGELOG.md) for exact conditions, competitor results,
+and the evidence limits.
 
 Version 0.1.13 adds `capabilities --json --command MarkDuplicates` for compact
 discovery, executable argument arrays in trial JSON, and the strict
@@ -51,13 +55,13 @@ command scope, not proof that a particular input or option is validated.
 Install from PyPI:
 
 ```bash
-python3 -m pip install turbo-picard==0.1.16
+python3 -m pip install turbo-picard==0.1.17
 ```
 
 For a containerized trial, use the published release image:
 
 ```bash
-docker run --rm ghcr.io/dnncha/turbo-picard:0.1.16 --version
+docker run --rm ghcr.io/dnncha/turbo-picard:0.1.17 --version
 ```
 
 Installing from PyPI currently gives you both commands:
@@ -302,11 +306,11 @@ A command-level speedup is not a universal replacement claim. Keep upstream Pica
 
 ## Packaging Status
 
-The current source release is `0.1.16`. Release builds target Linux x86_64 and
+The current source release is `0.1.17`. Release builds target Linux x86_64 and
 ARM64, macOS Intel and Apple Silicon, plus a source distribution. Publication
 is gated on artifact validation and installation smoke tests; the
-[release page](https://github.com/dnncha/turbo-picard/releases/tag/v0.1.16)
-and [PyPI](https://pypi.org/project/turbo-picard/0.1.16/) identify the published
+[release page](https://github.com/dnncha/turbo-picard/releases/tag/v0.1.17)
+and [PyPI](https://pypi.org/project/turbo-picard/0.1.17/) identify the published
 artifacts. The Linux ARM64 wheel is cross-built and artifact-validated.
 
 Read the [release notes](CHANGELOG.md) for the release scope and evidence
