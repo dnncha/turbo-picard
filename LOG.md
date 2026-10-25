@@ -1,5 +1,36 @@
 # Turbo Picard work log
 
+## 2026-10-25 — cache CollectHsMetrics target lookups within each read
+
+- Baseline `3de7050cff4b0123e69726fbe183c768305dec9c`. Reuse a target
+  index while the current reference position remains within its half-open
+  bounds. The cache is local to one read and falls back to the original
+  lookup across target boundaries and gaps.
+- Whole-command synthetic experiment: 200,000 coordinate-sorted, single-end
+  150-base BAM records, 4,096 targets, deterministic duplicate/mapQ/baseQ
+  filters, both coverage sidecars, `SAMPLE_SIZE=0`, one HTSlib worker. Rust
+  1.99.1 release build on Linux x86_64, four-core CPU quota, warm filesystem
+  cache. One warmup and five measurements per binary, alternating order.
+  Median elapsed time fell from 0.706404 s (range 0.684615–0.723672 s) to
+  0.432828 s (0.426853–0.475199 s), a 38.73% reduction. No outliers excluded.
+- Every run completed 200,000 reads and 30,000,000 input bases with zero
+  errors and identical complete metrics/histogram plus byte-identical
+  per-target/per-base sidecars. The baseline large fixture also matches
+  Picard 3.4.0. Existing overlap-clipping parity passes against Picard 3.4.0
+  and 3.5.0. Added a regression covering target gaps, adjacent targets,
+  CIGAR operations, indel inclusion and contig changes.
+- A separate Callgrind run attributes 47.07% of baseline executed
+  instructions to interval candidates; profiler timings are excluded.
+  The 2,000-read sidecar-heavy guardrail shows no measurable timing change.
+  This is synthetic command evidence, not production WES throughput.
+- Raw runs, immutable executables, input/source/harness hashes, protocol and
+  `decision.tsv` are retained outside the source tree at
+  `/workspace/performance-hillclimb-20261025/`. The frozen harness is
+  `bench.py` in that directory; `attempt1/summary.json` contains the result.
+  Workspace Rust tests, Python tooling tests (515 run, three optional skips),
+  formatting and required evidence/link/workflow verifiers passed. Complete
+  native CI remains required before merge.
+
 ## 2026-09-30 — remove interval-query allocations and whole-file parity reads
 
 - Based on `724cadc16bd7714454da4961b64a1e31a42e6f43`. HsMetrics interval
