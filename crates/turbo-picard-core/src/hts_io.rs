@@ -7,6 +7,17 @@ use rust_htslib::{
 };
 use std::path::Path;
 
+/// Measured base qualities, excluding BAM's all-0xff missing-value encoding.
+/// Keep sequence length separate: a read can have bases without measurements.
+pub fn base_qualities(record: &bam::Record) -> &[u8] {
+    let qualities = record.qual();
+    if qualities.first() == Some(&255) {
+        &[]
+    } else {
+        qualities
+    }
+}
+
 pub fn path_extension_lower(path: &str) -> Option<String> {
     Path::new(path)
         .extension()
@@ -181,6 +192,16 @@ pub fn writer_format_for_output(output: &str) -> Result<Format, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn missing_quality_sentinel_is_not_a_phred_measurement() {
+        let mut record = bam::Record::new();
+        record.set(b"read", None, b"ACGT", &[255; 4]);
+        assert_eq!(record.seq_len(), 4);
+        assert!(base_qualities(&record).is_empty());
+        record.set(b"read", None, b"ACGT", &[0, 15, 30, 40]);
+        assert_eq!(base_qualities(&record), &[0, 15, 30, 40]);
+    }
 
     #[test]
     fn detects_supported_extensions() {

@@ -38,7 +38,7 @@ as Python wheel scripts:
 
    python3 -m pip install turbo-picard
 
-Version ``0.1.16`` targets Linux x86_64 and ARM64 wheels, macOS Intel and
+Version ``0.1.17`` targets Linux x86_64 and ARM64 wheels, macOS Intel and
 Apple Silicon wheels, and a source distribution. Publishing workflows validate
 artifacts and run installation smoke tests before uploading. Confirm publication
 on the versioned GitHub release and PyPI pages; source metadata alone is not a
@@ -52,7 +52,7 @@ Bioconda accepted the `initial recipes
 <https://github.com/bioconda/bioconda-recipes/pull/65922>`_ on 4 October 2026.
 The channel indexes checked on 25 October list version ``0.1.15`` of the main
 package for Linux x86_64/ARM64 and macOS Intel/Apple Silicon. Use PyPI or the
-versioned container when the task requires ``0.1.16``. The `main package update
+versioned container when the task requires ``0.1.17``. The `main package update
 <https://github.com/bioconda/bioconda-recipes/pull/69890>`_ and `shim update
 <https://github.com/bioconda/bioconda-recipes/pull/69891>`_ are open upstream;
 their presence does not establish channel publication.
@@ -139,8 +139,8 @@ on the package index.
 Container image
 ---------------
 
-The versioned ``0.1.16`` container publication target is
-``ghcr.io/dnncha/turbo-picard:0.1.16``. For digest pinning, use the immutable
+The versioned ``0.1.17`` container publication target is
+``ghcr.io/dnncha/turbo-picard:0.1.17``. For digest pinning, use the immutable
 digest reported by the successful container publishing workflow.
 It contains both ``turbo-picard`` and the ``picard`` shim, with
 ``turbo-picard`` as the container entrypoint. Use the release tag or digest for
@@ -149,7 +149,7 @@ without a Conda solve.
 
 .. code-block:: bash
 
-   docker run --rm ghcr.io/dnncha/turbo-picard:0.1.16 --version
+   docker run --rm ghcr.io/dnncha/turbo-picard:0.1.17 --version
 
 The container publication workflow supports manual dispatch for operational
 convenience, but it fails before GHCR login unless the selected ref is the
@@ -209,7 +209,7 @@ the immutable tagged archive:
 
    python3 tools/bioconda_release_preflight.py
    python3 tools/prepare_bioconda_release.py \
-     --archive ~/Downloads/turbo-picard-0.1.16.tar.gz
+     --archive ~/Downloads/turbo-picard-0.1.17.tar.gz
 
 The preflight command summarizes the checks that are already green and calls out
 the expected wait state while the recipes still use ``source.path`` or a source
@@ -223,8 +223,8 @@ version, contains the expected release files, and carries the citation,
 benchmark, and real-data metadata used by the PR body. If the digest was
 computed elsewhere, pass it with ``--sha256`` only when it came from the
 downloaded GitHub source archive. That fallback skips archive filename and
-content validation. For ``0.1.16``, use ``turbo-picard-0.1.16.tar.gz`` or
-GitHub's ``v0.1.16.tar.gz``.
+content validation. For ``0.1.17``, use ``turbo-picard-0.1.17.tar.gz`` or
+GitHub's ``v0.1.17.tar.gz``.
 
 Then run the release checks:
 

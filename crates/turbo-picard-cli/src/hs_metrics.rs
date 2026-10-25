@@ -496,7 +496,7 @@ impl HsMetricsCollector {
         let mut target_cursor = TargetCursor::default();
         let mut read_offset = 0usize;
         let mut reference_offset = record.pos().max(0) as u64;
-        let qualities = record.qual();
+        let qualities = super::hts_io::base_qualities(record);
 
         for cigar in record.cigar().iter().copied() {
             let (length, op) = match cigar {

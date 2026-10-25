@@ -10,6 +10,7 @@ permissions:
   contents: read
 jobs:
   website:
+    # Playwright 1.55 supports Ubuntu 24.04, not the newer ubuntu-latest image.
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:

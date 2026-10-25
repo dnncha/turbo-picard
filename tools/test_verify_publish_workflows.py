@@ -185,12 +185,12 @@ class VerifyPublishWorkflowsTests(unittest.TestCase):
                 self.assertTrue(verify_publish_workflows.validate_github_release_assets_job(root))
 
     def test_ci_release_requires_every_trust_boundary(self) -> None:
-        source = verify_publish_workflows.ROOT / ".github/workflows/release-v0.1.16.yml"
+        source = verify_publish_workflows.ROOT / ".github/workflows/release-v0.1.17.yml"
         text = source.read_text()
         temp = tempfile.TemporaryDirectory()
         self.addCleanup(temp.cleanup)
         root = Path(temp.name)
-        path = root / ".github/workflows/release-v0.1.16.yml"
+        path = root / ".github/workflows/release-v0.1.17.yml"
         path.parent.mkdir(parents=True)
         path.write_text(text)
         self.assertEqual([], verify_publish_workflows.validate_ci_release_workflow(root))

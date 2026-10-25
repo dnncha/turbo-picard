@@ -37,13 +37,14 @@ Ground rules:
 
 Current facts to keep consistent:
 
-- Release source and publication target: `turbo-picard` 0.1.16
+- Release source and publication target: `turbo-picard` 0.1.17
 - Install: `python3 -m pip install turbo-picard`
 - Target PyPI files: Linux x86_64 and ARM64 wheels, macOS Intel and Apple Silicon wheels, and source distribution
 - Bioconda accepted the initial recipes on 4 October 2026. The 25 October
   channel receipt lists `0.1.15`; the `0.1.16` main-package and shim updates
-  remain open as PRs #69890 and #69891. Use the pinned PyPI wheel or container
-  for `0.1.16`, and recheck the channel before publishing install guidance.
+  remain open as PRs #69890 and #69891. The local recipes target `0.1.17`.
+  Verify the pinned `0.1.17` PyPI wheel or container before publishing install
+  guidance, and recheck the channel before advertising a Bioconda version.
 - Trial helper: `turbo-picard trial <PicardCommand> ...`
 - The historical 14 August 2026 suite reports 32/32 parity-checked small-fixture
   command comparisons, 84.52x geometric mean and 272.12x maximum saved ratio
