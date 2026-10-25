@@ -1,5 +1,28 @@
 # Turbo Picard work log
 
+## 2026-10-25 — cache off-target gaps in CollectHsMetrics
+
+- Extended the per-read cache to retain a negative lookup until the next
+  target boundary. CIGAR traversal never decreases the reference position;
+  the cursor resets for each read. Added a linear coverage oracle for reads
+  starting in targets/gaps and a contig with no targets.
+- The same frozen synthetic protocol measured 0.428878 s median for the
+  previous accepted binary (range 0.417633–0.447348 s) versus 0.322602 s
+  (0.320521–0.359419 s), a further 24.78% reduction over five alternating
+  measurements per side. Comparing the original baseline directly with this
+  candidate measured 0.692672 s (0.680278–0.718021 s) versus 0.335400 s
+  (0.329804–0.364809 s), a 51.58% reduction. No excluded runs or errors;
+  all metrics, histograms and sidecars match exactly. The small workload has
+  overlapping timing ranges and supports no improvement claim.
+- Rejected the intervening hash-set removal attempt: its incremental
+  medians were 0.430412 s versus 0.426758 s, with overlapping ranges. The
+  unproven change was fully reverted and its raw evidence retained.
+- Workspace Rust tests and Picard 3.4.0/3.5.0 overlap-clipping parity pass.
+  Raw evidence remains in `/workspace/performance-hillclimb-20261025/` under
+  `attempt3/`, `attempt3-small/` and `incremental2/attempt3/`; `decision.tsv`
+  records both accepted and rejected attempts. These remain synthetic
+  command measurements, not production WES evidence.
+
 ## 2026-10-25 — cache CollectHsMetrics target lookups within each read
 
 - Baseline `3de7050cff4b0123e69726fbe183c768305dec9c`. Reuse a target

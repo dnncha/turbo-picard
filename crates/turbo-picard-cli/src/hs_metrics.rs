@@ -67,6 +67,13 @@ struct IntervalIndex {
     by_contig: BTreeMap<String, Vec<IndexedSpan>>,
 }
 
+// A single read visits nondecreasing reference positions on one contig.
+#[derive(Debug, Default)]
+struct TargetCursor {
+    index: Option<usize>,
+    end: u64,
+}
+
 impl IntervalIndex {
     fn from_spans(spans: &[Span]) -> Self {
         let mut by_contig = BTreeMap::<String, Vec<IndexedSpan>>::new();
@@ -486,7 +493,7 @@ impl HsMetricsCollector {
         mut overlap_mode: Option<OverlapMode<'_>>,
     ) -> Result<(), String> {
         let mut covered_targets = FxHashSet::default();
-        let mut cached_target = None;
+        let mut target_cursor = TargetCursor::default();
         let mut read_offset = 0usize;
         let mut reference_offset = record.pos().max(0) as u64;
         let qualities = record.qual();
@@ -514,7 +521,7 @@ impl HsMetricsCollector {
                             mapped_in_pair,
                             true,
                             &mut covered_targets,
-                            &mut cached_target,
+                            &mut target_cursor,
                             &mut overlap_mode,
                         );
                     }
@@ -532,7 +539,7 @@ impl HsMetricsCollector {
                                 mapped_in_pair,
                                 false,
                                 &mut covered_targets,
-                                &mut cached_target,
+                                &mut target_cursor,
                                 &mut overlap_mode,
                             );
                         }
@@ -550,7 +557,7 @@ impl HsMetricsCollector {
                                 mapped_in_pair,
                                 false,
                                 &mut covered_targets,
-                                &mut cached_target,
+                                &mut target_cursor,
                                 &mut overlap_mode,
                             );
                         }
@@ -573,7 +580,7 @@ impl HsMetricsCollector {
         mapped_in_pair: bool,
         contributes_coverage: bool,
         covered_targets: &mut FxHashSet<usize>,
-        cached_target: &mut Option<usize>,
+        target_cursor: &mut TargetCursor,
         overlap_mode: &mut Option<OverlapMode<'_>>,
     ) {
         if overlap_mode
@@ -588,13 +595,18 @@ impl HsMetricsCollector {
             mode.mark_first_read_position(reference_position);
         }
 
-        let on_target = cached_target
-            .filter(|&index| {
-                let span = &self.targets[index].span;
-                span.start <= reference_position && reference_position < span.end
-            })
-            .or_else(|| self.target_index.index_at(contig, reference_position));
-        *cached_target = on_target;
+        if reference_position >= target_cursor.end {
+            target_cursor.index = self.target_index.index_at(contig, reference_position);
+            target_cursor.end = if let Some(index) = target_cursor.index {
+                self.targets[index].span.end
+            } else {
+                self.target_index
+                    .candidates(contig, reference_position, u64::MAX)
+                    .next()
+                    .map_or(u64::MAX, |span| span.start)
+            };
+        }
+        let on_target = target_cursor.index;
         if quality < self.config.minimum_base_quality {
             self.excluded_baseq += 1;
         } else if on_target.is_none() {
@@ -1465,7 +1477,7 @@ mod tests {
                 true,
                 true,
                 &mut FxHashSet::default(),
-                &mut None,
+                &mut TargetCursor::default(),
                 &mut None,
             );
         }
@@ -1473,6 +1485,51 @@ mod tests {
         assert_eq!(collector.targets[0].high_quality_depths[0], 3);
         assert_eq!(collector.baseq_histogram[30], 2);
         assert_eq!(collector.uncapped_baseq_histogram[30], 3);
+    }
+
+    #[test]
+    fn coverage_matches_linear_oracle_for_reads_starting_in_targets_and_gaps() {
+        use rust_htslib::bam::record::CigarString;
+
+        let mut config = test_config();
+        config.reference_lengths.insert("chr2".into(), 10);
+        config.target_intervals = [(3, 4), (8, 9)]
+            .into_iter()
+            .map(|(start, end)| GenomicInterval {
+                contig: "chr1".into(),
+                start,
+                end,
+                name: format!("{start}-{end}"),
+            })
+            .collect();
+        let mut collector = HsMetricsCollector::new(&config).expect("collector");
+        let names = vec!["chr1".into(), "chr2".into()];
+        for tid in 0..2 {
+            for start in 0..10 {
+                let length = 10 - start;
+                let mut record = bam::Record::new();
+                record.set(
+                    b"target-or-gap",
+                    Some(&CigarString(vec![Cigar::Match(length as u32)])),
+                    &vec![b'A'; length],
+                    &vec![30; length],
+                );
+                record.set_flags(0);
+                record.set_tid(tid);
+                record.set_pos(start as i64);
+                record.set_mapq(60);
+                collector.observe(&record, &names).expect("read");
+            }
+        }
+        for target in &collector.targets {
+            let expected: Vec<u32> = (target.span.start..target.span.end)
+                .map(|position| (0..10).filter(|&start| start <= position).count() as u32)
+                .collect();
+            assert_eq!(target.high_quality_depths, expected);
+            assert_eq!(target.read_count, target.span.end);
+        }
+        assert_eq!(collector.on_target_bases, 24);
+        assert_eq!(collector.excluded_off_target, 86);
     }
 
     #[test]
