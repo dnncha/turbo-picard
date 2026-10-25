@@ -12,25 +12,10 @@ from pathlib import Path
 from typing import Iterable
 
 
-DUPLICATE_FLAG = 0x400
-
-
-@dataclass(frozen=True, order=True)
-class RecordKey:
-    query_name: str
-    duplicate: bool
-    duplicate_type: str | None
-    duplicate_set_size: int | None
-    duplicate_set_index: int | None
-    rx_barcode: str | None
-    bx_barcode: str | None
-    by_barcode: str | None
-    reference_name: str
-    position: int
-    mate_reference_name: str
-    mate_position: int
-    cigar: str
-    template_length: int
+if __package__:
+    from .sam_contract import AlignmentRecord as RecordKey, VERSION, DESCRIPTION, record_from_fields, header_digest, complete_metrics
+else:
+    from sam_contract import AlignmentRecord as RecordKey, VERSION, DESCRIPTION, record_from_fields, header_digest, complete_metrics
 
 
 def parse_args() -> argparse.Namespace:
@@ -53,8 +38,15 @@ def main() -> int:
     args = parse_args()
     differences: list[str] = []
 
-    picard_records = sorted(read_alignment_records(args.picard_bam))
-    turbo_picard_records = sorted(read_alignment_records(args.turbo_picard_bam))
+    # Optional values must have a total order; a missing DT is not comparable
+    # with a string in Python's default dataclass ordering.
+    def record_key(record):
+        from dataclasses import astuple
+        return tuple((value is not None, value) for value in astuple(record))
+    picard_records = sorted(read_alignment_records(args.picard_bam), key=record_key)
+    turbo_picard_records = sorted(read_alignment_records(args.turbo_picard_bam), key=record_key)
+    if header_digest(args.picard_bam) != header_digest(args.turbo_picard_bam):
+        differences.append("sequence/read-group header definitions differ")
 
     if picard_records != turbo_picard_records:
         differences.append(
@@ -75,6 +67,8 @@ def main() -> int:
 
     result = {
         "ok": not differences,
+        "comparator": VERSION,
+        "contract": DESCRIPTION,
         "differences": differences,
         "picard_records": len(picard_records),
         "turbo_picard_records": len(turbo_picard_records),
@@ -110,6 +104,8 @@ def metric_differences(
         )
     if picard_metrics and turbo_picard_metrics and picard_metrics != turbo_picard_metrics:
         differences.append("metrics files differ after comment/header normalization")
+    if picard_metrics and turbo_picard_metrics and complete_metrics(picard_metrics_path) != complete_metrics(turbo_picard_metrics_path):
+        differences.append("complete metrics or histogram blocks differ")
     return differences
 
 
@@ -121,74 +117,19 @@ def read_alignment_records(path: Path) -> Iterable[RecordKey]:
 
 
 def read_sam_records(path: Path) -> list[RecordKey]:
-    records = []
-    with path.open("r", encoding="utf-8") as handle:
-        for line in handle:
-            if not line.strip() or line.startswith("@"):
-                continue
-            fields = line.rstrip("\n").split("\t")
-            if len(fields) < 11:
-                raise ValueError(f"malformed SAM record in {path}: {line.rstrip()}")
-            flag = int(fields[1])
-            records.append(
-                RecordKey(
-                    query_name=fields[0],
-                    duplicate=bool(flag & DUPLICATE_FLAG),
-                    duplicate_type=optional_tag(fields[11:], "DT"),
-                    duplicate_set_size=optional_int_tag(fields[11:], "DS"),
-                    duplicate_set_index=optional_int_tag(fields[11:], "DI"),
-                    rx_barcode=optional_tag(fields[11:], "RX"),
-                    bx_barcode=optional_tag(fields[11:], "BX"),
-                    by_barcode=optional_tag(fields[11:], "BY"),
-                    reference_name=fields[2],
-                    position=int(fields[3]),
-                    mate_reference_name=fields[6],
-                    mate_position=int(fields[7]),
-                    cigar=fields[5],
-                    template_length=int(fields[8]),
-                )
-            )
-    return records
+    with path.open(encoding="utf-8") as handle:
+        return [record_from_fields(line.rstrip("\r\n").split("\t"))
+                for line in handle if line.strip() and not line.startswith("@")]
 
 
 def read_hts_records(path: Path) -> list[RecordKey]:
     try:
-        import pysam  # type: ignore[import-not-found]
+        import pysam
     except ImportError as error:
-        raise SystemExit(
-            "Reading BAM/CRAM requires pysam. Install pysam or provide SAM files."
-        ) from error
-
-    records = []
-    with pysam.AlignmentFile(str(path), "rb") as handle:
-        for record in handle.fetch(until_eof=True):
-            records.append(
-                RecordKey(
-                    query_name=record.query_name,
-                    duplicate=record.is_duplicate,
-                    duplicate_type=record.get_tag("DT") if record.has_tag("DT") else None,
-                    duplicate_set_size=record.get_tag("DS") if record.has_tag("DS") else None,
-                    duplicate_set_index=record.get_tag("DI") if record.has_tag("DI") else None,
-                    rx_barcode=record.get_tag("RX") if record.has_tag("RX") else None,
-                    bx_barcode=record.get_tag("BX") if record.has_tag("BX") else None,
-                    by_barcode=record.get_tag("BY") if record.has_tag("BY") else None,
-                    reference_name=handle.get_reference_name(record.reference_id)
-                    if record.reference_id >= 0
-                    else "*",
-                    position=record.reference_start + 1
-                    if record.reference_start >= 0
-                    else 0,
-                    mate_reference_name=handle.get_reference_name(record.next_reference_id)
-                    if record.next_reference_id >= 0
-                    else "*",
-                    mate_position=record.next_reference_start + 1
-                    if record.next_reference_start >= 0
-                    else 0,
-                    cigar=record.cigarstring or "*",
-                    template_length=record.template_length,
-                )
-            )
-    return records
+        raise SystemExit("Reading BAM/CRAM requires pysam. Install pysam or provide SAM files.") from error
+    with pysam.AlignmentFile(str(path), "rc" if path.suffix.lower() == ".cram" else "rb") as handle:
+        return [record_from_fields(record.to_string().split("\t"))
+                for record in handle.fetch(until_eof=True)]
 
 
 def optional_tag(fields: list[str], tag: str) -> str | None:

@@ -14,6 +14,11 @@ import tarfile
 
 import yaml
 
+if __package__:
+    from .sam_contract import COMPARISON as MARKDUP_V2_COMPARISON
+else:
+    from sam_contract import COMPARISON as MARKDUP_V2_COMPARISON
+
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 RECIPE_DIRS = [
@@ -39,6 +44,7 @@ RELEASE_CANDIDATE_PORTFOLIO_REQUIRED_COMMANDS = {
     "ViewSam",
 }
 KNOWN_COMPARISONS = {
+    MARKDUP_V2_COMPARISON,
     "BAI binary digest",
     "FASTQ trio digest",
     "SAM record digest",

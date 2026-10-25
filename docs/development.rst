@@ -8,7 +8,24 @@ Run Rust tests:
 
 .. code-block:: bash
 
-   cargo test --workspace
+   cargo fmt --all -- --check
+   cargo test --workspace --locked
+
+Run the scientific boundary gate against a selected upstream JAR:
+
+.. code-block:: bash
+
+   cargo build --workspace --locked
+   python3 tools/verify_adversarial_parity.py \
+     --picard-jar /path/to/picard.jar \
+     --expected-picard-version 3.4.0 \
+     --output-dir /path/to/new-evidence-directory
+
+Repeat with Picard 3.5.0 and a fresh output directory. Java, Rscript and samtools must be
+available for upstream metrics collection. The script retains failed runs and
+requires native execution for Turbo Picard. Python mutation tests run through
+``python3 -m unittest discover -s tools``; CI separately executes the live gate
+in both Picard version jobs and uploads its evidence.
 
 Run command matrix validation:
 

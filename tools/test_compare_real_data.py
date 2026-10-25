@@ -1615,7 +1615,7 @@ class CompareRealDataTests(unittest.TestCase):
             self.assertEqual(metadata["reference_fasta"], str(reference))
             self.assertIn("reference_sha256", metadata)
 
-    def test_markduplicates_semantic_digest_ignores_incidental_tags(self):
+    def test_markduplicates_semantic_digest_protects_tags_other_than_pg(self):
         with tempfile.TemporaryDirectory() as tmp:
             first = Path(tmp) / "first.sam"
             second = Path(tmp) / "second.sam"
@@ -1636,7 +1636,7 @@ class CompareRealDataTests(unittest.TestCase):
                 compare_real_data.digest_sam_records(first),
                 compare_real_data.digest_sam_records(second),
             )
-            self.assertEqual(
+            self.assertNotEqual(
                 compare_real_data.digest_markduplicates_semantics(first),
                 compare_real_data.digest_markduplicates_semantics(second),
             )

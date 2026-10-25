@@ -1,5 +1,27 @@
 # Changelog
 
+## Unreleased
+
+- Use shared SAM/BAM/CRAM duplicate selection, validate multi-input dictionaries,
+  preserve colliding read-group identities, and check mixed fragment/pair
+  candidates before accepting the no-duplicate fast path.
+- Preserve sequence yield with absent qualities, paired and unpaired alignment
+  metrics/histograms, and noise counts in standalone and combined collectors.
+- Verify actual sort order, use references in SAM summary validation, check
+  common structural SAM errors, merge VCF field definitions, and reject invalid
+  gather ordering before writing output.
+- Share Picard sort tie rules across SAM and BAM, classify validation exits by
+  errors and warnings, and repair primary/supplementary mate groups natively,
+  including missing-primary groups and tandem insert sizes.
+- Introduce the independently mutation-tested `markduplicates-v2` comparison
+  contract for all scientific SAM fields, typed tags except PG, SQ/RG headers,
+  metrics and histograms. Run the adversarial gate against both Picard versions
+  in CI with native-only execution and retained failure evidence. Historical
+  benchmark evidence keeps its original comparator and measurements.
+- Execute the selected Picard version on the BAM fixtures with identical
+  arguments, replacing comparisons to stored outputs from different options;
+  require exact validation exit categories in parity helpers.
+
 ## 0.1.16 — 2026-10-01
 
 ## Correctness and bounded memory

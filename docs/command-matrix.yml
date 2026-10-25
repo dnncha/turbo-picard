@@ -309,8 +309,8 @@ commands:
   - name: FixMateInformation
     status: partial-native
     parity_script: tools/verify_basic_fixmateinformation_parity.sh
-    native_scope: "Mate fixing for queryname-sorted one or more SAM/BAM/CRAM inputs with REFERENCE_SEQUENCE, supplementary mate updates, default output sort-order preservation, optional coordinate sorting/indexing, and MD5 sidecar."
-    fallback_scope: "Non-queryname inputs and read groups without exactly two primary records should use upstream Picard."
+    native_scope: "Mate fixing for queryname-sorted one or more SAM/BAM/CRAM inputs with REFERENCE_SEQUENCE, supplementary mate updates, default output sort-order preservation, optional coordinate sorting/indexing, and MD5 sidecar. Missing-primary groups honor IGNORE_MISSING_MATES, secondary records remain intact while primaries are repaired, mapped/unmapped mates have Picard-compatible coordinates/tags, and insert sizes use five-prime ends."
+    fallback_scope: "Non-queryname input sorting remains an upstream Picard case. Repeated primary alignments for the same pair end fail explicitly."
   - name: FixVcfHeader
     status: fallback-only
     native_scope: "Delegated to upstream Picard 3.4.0. turbo-picard runs the native accelerated implementation when one exists; otherwise it transparently forwards to upstream Picard when fallback is configured or auto-discovered."
@@ -322,7 +322,7 @@ commands:
   - name: GatherVcfs
     status: partial-native
     parity_script: tools/verify_basic_gathervcfs_parity.sh
-    native_scope: "Streaming concatenation of compatible VCF shards with matching samples and sequence dictionaries, common Picard runtime option acceptance, and VCF index sidecar creation when requested."
+    native_scope: "Streaming concatenation of compatible VCF shards with matching samples and sequence dictionaries, common Picard runtime option acceptance, and VCF index sidecar creation when requested. Shard order, overlap boundaries, and required output-header definitions are checked before writing."
     fallback_scope: Dictionary/sample reconciliation and nontrivial VCF compatibility handling should use upstream Picard.
   - name: GenotypeConcordance
     status: fallback-only
@@ -377,7 +377,7 @@ commands:
   - name: MarkDuplicates
     status: partial-native
     parity_script: tools/verify_basic_picard_parity.sh
-    native_scope: "SAM/BAM/CRAM duplicate marking/removal with REFERENCE_SEQUENCE, metrics, barcode grouping, optical duplicate tagging, sidecars, multi-BAM input, and release-candidate real-data parity. Single-BAM, explicit-reference single-CRAM, or already globally coordinate-ordered multi-input runs use a bounded disk-backed two-pass plan, including BARCODE_TAG, READ_ONE_BARCODE_TAG/READ_TWO_BARCODE_TAG, default or validated three-capture-group READ_NAME_REGEX optical-family discovery, REMOVE_SEQUENCING_DUPLICATES, and paired duplicate-set DS/DI tagging; explicit READ_NAME_REGEX=null selects the no-optical variant."
+    native_scope: "SAM/BAM/CRAM duplicate marking/removal with REFERENCE_SEQUENCE, metrics, barcode grouping, optical duplicate tagging, sidecars, multi-BAM input, and release-candidate real-data parity. Single-SAM/BAM, explicit-reference single-CRAM, or already globally coordinate-ordered multi-input runs use a bounded disk-backed two-pass plan, including BARCODE_TAG, READ_ONE_BARCODE_TAG/READ_TWO_BARCODE_TAG, default or validated three-capture-group READ_NAME_REGEX optical-family discovery, REMOVE_SEQUENCING_DUPLICATES, and paired duplicate-set DS/DI tagging; explicit READ_NAME_REGEX=null selects the no-optical variant. SAM, BAM, and CRAM share selection and output semantics; incompatible multi-input sequence dictionaries are rejected before writing and conflicting read-group definitions receive consistent header/record renames."
     fallback_scope: Unsupported Picard MarkDuplicates options should use upstream Picard.
   - name: MarkDuplicatesWithMateCigar
     status: fallback-only
@@ -408,7 +408,7 @@ commands:
   - name: MergeVcfs
     status: partial-native
     parity_script: tools/verify_basic_mergevcfs_parity.sh
-    native_scope: "Merge compatible VCF inputs by dictionary order with optional explicit sequence dictionary replacement, bounded external sorting controlled by TMP_DIR and MAX_RECORDS_IN_RAM, common Picard runtime option acceptance, and VCF index sidecar creation when requested."
+    native_scope: "Merge compatible VCF inputs by dictionary order with optional explicit sequence dictionary replacement, bounded external sorting controlled by TMP_DIR and MAX_RECORDS_IN_RAM, common Picard runtime option acceptance, and VCF index sidecar creation when requested. Metadata from every input is merged, including later INFO, FORMAT and FILTER definitions; incompatible field types fail explicitly."
     fallback_scope: "Inputs with incompatible samples, missing dictionaries, or advanced merge semantics should use upstream Picard."
   - name: NonNFastaSize
     status: fallback-only
@@ -492,7 +492,7 @@ commands:
   - name: SortVcf
     status: partial-native
     parity_script: tools/verify_basic_sortvcf_parity.sh
-    native_scope: "Sort compatible VCF inputs by sequence dictionary order with optional explicit dictionary replacement and bounded external sorting controlled by TMP_DIR and MAX_RECORDS_IN_RAM, plus common Picard runtime option acceptance and VCF index sidecar creation when requested."
+    native_scope: "Sort compatible VCF inputs by sequence dictionary order with optional explicit dictionary replacement and bounded external sorting controlled by TMP_DIR and MAX_RECORDS_IN_RAM, plus common Picard runtime option acceptance and VCF index sidecar creation when requested. Metadata from every input is merged, including later INFO, FORMAT and FILTER definitions; incompatible field types fail explicitly."
     fallback_scope: "Inputs with incompatible samples, missing dictionaries, or advanced VCF normalization should use upstream Picard."
   - name: SplitSamByLibrary
     status: fallback-only
@@ -523,7 +523,7 @@ commands:
   - name: ValidateSamFile
     status: partial-native
     parity_script: tools/verify_basic_validatesamfile_parity.sh
-    native_scope: "SUMMARY and VERBOSE validation for SAM/BAM/CRAM with REFERENCE_SEQUENCE for CRAM paths, supported mate, missing-mate, read-group, missing-platform, record, unmapped-MAPQ, and warning issue types with IGNORE filtering, SKIP_MATE_VALIDATION handling, common runtime option acceptance, and GATK NA12878 mitochondrial real-data parity for summary histogram plus exit code."
+    native_scope: "SUMMARY and VERBOSE validation for SAM/BAM/CRAM with REFERENCE_SEQUENCE for CRAM paths, supported mate, missing-mate, read-group, missing-platform, record, unmapped-MAPQ, and warning issue types with IGNORE filtering, SKIP_MATE_VALIDATION handling, common runtime option acceptance, and GATK NA12878 mitochondrial real-data parity for summary histogram plus exit code. Supplied references are used for SAM SUMMARY NM checks; common CIGAR/sequence and sequence/quality length, coordinate order, alignment-start, and reference-overhang checks share structural validation across formats."
     fallback_scope: "Unsupported validation modes, IGNORE values, and full Picard validator issue coverage should use upstream Picard."
   - name: VcfFormatConverter
     status: fallback-only

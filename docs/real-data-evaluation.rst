@@ -83,6 +83,12 @@ ordering rather than sampling. Coordinate order is checked while streaming.
 Read-group comparison streams alignment records instead of collecting all of
 them in memory.
 
+New duplicate comparisons are labeled ``markduplicates-v2``. They protect all
+mandatory SAM fields and typed tags except incidental ``PG``, sequence/read-group
+definitions, and complete metrics/histograms. Earlier evidence retains its
+original comparator label. See :doc:`parity` for the versioned contract and the
+adversarial CI gate.
+
 The default chunk budget is 8 MiB of estimated byte-record storage, with at most
 50,000 records in a chunk and 32 input runs per merge. These are **not** total
 process RSS limits: interpreter state, sort keys, file buffers, read-group

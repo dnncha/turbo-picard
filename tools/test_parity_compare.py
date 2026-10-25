@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import importlib.util
 import shutil
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -22,6 +23,14 @@ SPEC.loader.exec_module(parity_compare)
 
 
 class ParityCompareTests(unittest.TestCase):
+    def test_validation_exit_contract_protects_every_picard_category(self):
+        helper = Path(__file__).with_name("cram_compat.sh")
+        for reference in range(4):
+            for native in range(4):
+                with self.subTest(reference=reference, native=native):
+                    result = subprocess.run(["bash", "-c", 'source "$1"; parity_validate_samfile_exit_matches "$2" "$3"', "bash", str(helper), str(reference), str(native)])
+                    self.assertEqual(result.returncode == 0, reference == native)
+
     def test_binary_comparison_streams_equal_files_and_checks_both_eofs(self):
         with tempfile.TemporaryDirectory() as directory:
             left, right = Path(directory) / "left", Path(directory) / "right"

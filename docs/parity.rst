@@ -21,8 +21,15 @@ The comparison target depends on the command:
   ignored only when the command semantics do not require exact header identity.
 * ``SortSam`` compares a coordinate-sorted record multiset so harmless tie
   ordering differences do not hide real record changes.
-* ``MarkDuplicates`` compares duplicate flags and duplicate-related tags as
-  semantic record data, and also compares the stable metrics table.
+* New ``MarkDuplicates`` comparisons use ``markduplicates-v2``: all eleven
+  scientific SAM fields, all typed auxiliary tags except ``PG``, sequence and
+  read-group header definitions, and complete metrics and histogram blocks.
+  Incidental record tie ordering, generated program records and numeric float
+  spelling may differ; record multiplicity must match. Reference file URIs and
+  synthesized ``AS:null`` are incidental; other sequence metadata is protected.
+  Explicit-zone RG run
+  dates compare as exact instants, including fractional seconds. Ambiguous or
+  malformed dates remain exact strings; different instants fail comparison.
 * Metrics commands compare stable metrics rows after removing generated comment
   headers.
 * ``BuildBamIndex`` compares the exact BAI binary digest.
@@ -36,6 +43,45 @@ The comparison target depends on the command:
 Those rules are encoded in ``tools/verify_real_data_evidence.py`` and the
 command-specific parity scripts under ``tools/``. The saved evidence names the
 comparison method for each command so reviewers can see the boundary.
+
+Adversarial scientific boundaries
+---------------------------------
+
+The source checkout includes ``tools/verify_adversarial_parity.py``. CI runs it
+against both reference versions and retains the exact commands, exit codes,
+versions, hashes and outputs, including failed runs. Workload parity runs with
+``TURBO_PICARD_REQUIRE_NATIVE=1`` so an unsupported native case cannot pass by
+silently executing upstream Picard.
+
+The BAM fixture gate executes the selected upstream version with the same
+arguments as the native command and compares headers as well as records and
+complete metrics. Stored fixture outputs remain historical evidence; they are
+not substituted for a live run with different options. Validation exit codes
+must match exactly, including the distinction between warnings and errors.
+
+The gate checks conflicting dictionaries and read groups, representative
+selection and fragment-versus-pair duplicates across SAM/BAM and different
+native planners, missing qualities, mixed paired/unpaired and noise metrics,
+reference-dependent validation, stale sort declarations, VCF header union and
+invalid gather ordering, including exact validation exit categories and native
+mate repair. Standalone and combined collectors are compared where
+they share scientific logic. Mutation tests independently change each mandatory
+SAM field, auxiliary tags, headers and histogram data and require comparison
+failure.
+
+``markduplicates-v2`` replaces the historical projection of selected duplicate
+fields. Arbitrary tags, sequence, quality, strand and histogram deletion are no
+longer accepted differences. Saved evidence keeps its original comparison label
+and hashes; it is not retroactively described as v2 evidence. The existing
+competitor benchmark has its own named contract and retained measurements.
+
+SAM duplicate marking now uses the same native selection and output engine as
+BAM/CRAM. Input sequence names, order, lengths and any supplied MD5 checksums
+are checked before planning. Conflicting
+read groups are renamed consistently in headers and records; only affected
+inputs require bounded-memory temporary staging. Sorting checks actual records
+before selecting a copy path. Missing quality measurements never become Phred
+255, and sequence yield remains independent of quality availability.
 
 CRAM preprocessing parity
 -------------------------
