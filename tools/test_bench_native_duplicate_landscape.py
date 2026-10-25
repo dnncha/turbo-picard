@@ -27,6 +27,8 @@ class NativeLandscapeTests(unittest.TestCase):
                     '--repeats', '1']
             version = subprocess.CompletedProcess([], 0, 'fixture version\n', '')
             with patch.object(sys, 'argv', argv), \
+                    patch('bench_native_duplicate_landscape.os.sched_getaffinity',
+                          return_value={0}, create=True), \
                     patch('bench_native_duplicate_landscape.subprocess.run', return_value=version), \
                     patch('bench_native_duplicate_landscape.measure',
                           side_effect=lambda *args: {'exit_code': 1, 'wall_seconds': 0.0}):
