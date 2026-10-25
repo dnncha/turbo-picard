@@ -1,5 +1,36 @@
 # Turbo Picard work log
 
+## 2026-10-25 — complete the first CollectHsMetrics hillclimb batch
+
+- Four measured attempts ended with two accepted changes and two full
+  reverts. The final adapter-decoding candidate had overlapping ranges
+  despite a lower median, so it was rejected under the frozen acceptance
+  rule. The accepted runtime source remains `d7f7bed` plus its predecessor
+  `c9a281c`; the final release rebuild matches the measured binary exactly.
+- The retained result exceeds the provisional 10% elapsed-time target:
+  0.692672 s to 0.335400 s median on the synthetic 200,000-read BAM, a
+  51.58% reduction, with five alternating runs per side. This establishes
+  neither production WES performance nor a gain on the small guardrail.
+- Separate five-run-per-side GNU time measurements show no measurable RSS
+  change: baseline median 18.223 MB (18.149–18.256 MB), accepted median
+  18.227 MB (18.190–18.264 MB), using decimal MB.
+- Final local checks passed: 434 Rust tests (one intentionally ignored),
+  515 Python tooling tests (three optional skips), formatting, Python
+  compilation, required evidence/link/coverage/workflow verifiers,
+  Picard 3.4.0/3.5.0 overlap parity, package installation including installed
+  CollectHsMetrics outputs, Sphinx and built-site validation. The pinned
+  Rust 1.89 reference container also built and processed all 200,000 reads
+  with exact metrics/histogram and coverage-sidecar parity. Its local
+  Dockerfile adaptation mounts the existing proxy CA for Cargo; tracked
+  container configuration is unchanged.
+- Final report, protocol, host/resource limits, source/input/executable
+  hashes, all raw runs, rejected candidates and validation logs are retained
+  at `/workspace/performance-hillclimb-20261025/`. Start with `REPORT.md`,
+  `validation.md`, `result.json` and `decision.tsv`. Next useful evidence is
+  representative paired WES and reference-backed CRAM with the same strict
+  completed-work and parity checks. Full native CI remains required before
+  merge; no release or publication was performed.
+
 ## 2026-10-25 — cache off-target gaps in CollectHsMetrics
 
 - Extended the per-read cache to retain a negative lookup until the next
