@@ -68,14 +68,18 @@ the newest `benchmarks/markduplicates-competitors/landscape-YYYY-MM-DD.json`,
 `docs/site/assets/benchmark-data.json` and `benchmarks/progress.json`. Never
 edit the SVG or PNG by hand, and never type a number into the renderer.
 
-- When an accepted hill-climb change lands on main, append its frozen-workload
-  median with `python3 tools/render_competitor_card.py record --series <id>
-  --version <release-or-short-sha> --value <seconds> --evidence <immutable URL>`.
-  This re-renders the card. Add a new series with `--label` and `--protocol`.
-- After a new competitor run, save its summary as a new dated `landscape-*.json`
-  and re-render. The headline changes itself: it says "fastest" only for the
-  set of tools the evidence shows Turbo Picard beating, and only among
-  Picard-identical outputs unless it beats every tool.
+- When an accepted hill-climb change lands on main, record its before/after
+  medians from the same run with `python3 tools/render_competitor_card.py
+  record --series <id> --version <release, #PR or short sha> --before <s>
+  --after <s> --evidence <immutable URL or repo path>`. This re-renders the
+  card. Steps chain as ratios, so runs on different hosts never share an
+  absolute axis. Add a new series with `--label`, `--protocol` and
+  `--baseline`.
+- After a new competitor run, copy its report unchanged to a new dated
+  `landscape-YYYY-MM-DD.json` (or `.json.gz`) and re-render. The headline
+  changes itself: "fastest we've measured" only when Turbo Picard beats every
+  tool in that run, "fastest Picard-identical" when it beats only the tools
+  that match Picard's output, and no speed claim otherwise.
 - Commit all four regenerated SVG and PNG files with the evidence that changed
   them.
 

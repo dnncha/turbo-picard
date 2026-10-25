@@ -12,9 +12,13 @@ Picard, Turbo Picard, FastDup, samtools and dupblaster. The newest one feeds
 `docs/site/assets/competitor-card.svg` through
 `tools/render_competitor_card.py`. Save each new landscape run under a new
 date rather than overwriting an old one, then re-render the card.
-`landscape-2026-10-01.json` is copied verbatim from
-`benchmarks/review-evidence/2026-10-01/landscape-summary.json` at commit
-`03a655fb`.
+Each landscape file is a byte-identical copy of a retained report:
+
+- `landscape-2026-10-01.json`: `benchmarks/review-evidence/2026-10-01/landscape-summary.json`
+  at commit `03a655fb` (Turbo Picard 0.1.15 source).
+- `landscape-2026-10-25.json.gz`: `benchmarks/review-evidence/2026-10-25/native-competitors.json.gz`
+  (the pre-rebase PR #46 patch on `a4aeaa8`; see that directory's README for
+  scope). dupblaster was not part of this run, so it is absent from the card.
 
 ## Input contract
 

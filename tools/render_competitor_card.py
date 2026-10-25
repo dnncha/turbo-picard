@@ -15,13 +15,14 @@ output passed the full Picard comparison.
     python3 tools/render_competitor_card.py            # re-render SVG + PNG
     python3 tools/render_competitor_card.py --check    # fail if stale
     python3 tools/render_competitor_card.py record --series ID --version V \\
-        --value SECONDS --evidence URL                 # add a progress point
+        --before S --after S --evidence URL            # add a same-run step
 """
 
 from __future__ import annotations
 
 import argparse
 import datetime
+import gzip
 import hashlib
 import html
 import json
@@ -50,36 +51,58 @@ WIDTH = 1280
 HEIGHT = 640
 MOBILE_WIDTH = 420
 MOBILE_PNG_SCALE = 2
-PRIMARY_CASE = "paired-primary-600k"
+PRIMARY_CASES = ("paired-600k", "paired-primary-600k")
 REAL_CASE = "gatk-na12878-mito"
 TURBO = "candidate"
 REFERENCE = "picard"
 TOOL_NAMES = {
     "candidate": "Turbo Picard",
-    "picard": "Picard 3.4.0",
     "fastdup": "FastDup",
     "samtools": "samtools markdup",
     "dupblaster": "dupblaster",
 }
 CASE_LABELS = {
+    "paired-600k": "600k paired reads",
     "paired-primary-600k": "600k paired reads",
     "gatk-na12878-mito": "real NA12878 chrM",
 }
 FONT = 'ui-sans-serif, system-ui, -apple-system, "Segoe UI", "Helvetica Neue", Arial, sans-serif'
 
 
+def landscape_date(path: pathlib.Path) -> str:
+    match = re.fullmatch(r"landscape-(\d{4}-\d{2}-\d{2})\.json(\.gz)?", path.name)
+    if not match:
+        raise ValueError(f"landscape file must be named landscape-YYYY-MM-DD.json[.gz]: {path.name}")
+    return match.group(1)
+
+
 def latest_landscape() -> pathlib.Path:
-    paths = sorted(LANDSCAPE_DIR.glob("landscape-*.json"))
+    paths = sorted(LANDSCAPE_DIR.glob("landscape-*.json*"), key=landscape_date)
     if not paths:
         raise SystemExit(f"no landscape-*.json evidence in {LANDSCAPE_DIR}")
     return paths[-1]
 
 
-def landscape_date(path: pathlib.Path) -> str:
-    match = re.fullmatch(r"landscape-(\d{4}-\d{2}-\d{2})\.json", path.name)
-    if not match:
-        raise ValueError(f"landscape file must be named landscape-YYYY-MM-DD.json: {path.name}")
-    return match.group(1)
+def load_landscape(path: pathlib.Path) -> dict:
+    raw = path.read_bytes()
+    return json.loads(gzip.decompress(raw) if path.suffix == ".gz" else raw)
+
+
+def primary_case(landscape: dict) -> str:
+    cases = {summary["case"] for summary in landscape["summaries"]}
+    for case in PRIMARY_CASES:
+        if case in cases:
+            return case
+    raise ValueError(f"landscape has none of the primary cases {PRIMARY_CASES}")
+
+
+def tool_names(landscape: dict) -> dict[str, str]:
+    """Display names, with the measured Picard version taken from the evidence."""
+    names = dict(TOOL_NAMES)
+    picard = landscape["executables"].get(REFERENCE, {}).get("version", "")
+    match = re.search(r"\d+(\.\d+)+", picard)
+    names[REFERENCE] = f"Picard {match.group(0)}" if match else "Picard"
+    return names
 
 
 def case_results(landscape: dict, case: str) -> dict[str, dict]:
@@ -104,19 +127,31 @@ def headline(results: dict[str, dict]) -> tuple[str, str]:
     if turbo >= results[REFERENCE]["median_wall_seconds"]:
         raise ValueError("Turbo Picard is not faster than Picard on this case")
     if all(turbo < r["median_wall_seconds"] for t, r in results.items() if t != TURBO):
-        return "The fastest MarkDuplicates.", "Output identical to Picard."
+        rivals = [r for t, r in results.items() if t not in {TURBO, REFERENCE}]
+        if rivals and not any(r.get("full_parity") for r in rivals):
+            return "The fastest MarkDuplicates we've measured.", "And the only one with Picard-identical output."
+        return "The fastest MarkDuplicates we've measured.", "Output identical to Picard."
     exact = [t for t, r in results.items() if t != TURBO and r.get("full_parity")]
     if all(turbo < results[t]["median_wall_seconds"] for t in exact):
         return "The fastest Picard-identical MarkDuplicates.", "Faster tools here change the output."
     return "Picard-identical MarkDuplicates, natively.", "Measured against every tool we could run."
 
 
-def series_change(series: dict) -> tuple[float, float, float] | None:
-    points = series["points"]
-    if len(points) < 2:
+def series_change(series: dict) -> tuple[list[float], float] | None:
+    """Cumulative wall-time ratio after each step, and the total % reduction."""
+    steps = series["steps"]
+    if not steps:
         return None
-    first, last = points[0]["value"], points[-1]["value"]
-    return first, last, (first - last) / first * 100
+    ratios = [1.0]
+    for step in steps:
+        ratios.append(ratios[-1] * step["after"] / step["before"])
+    return ratios, (1 - ratios[-1]) * 100
+
+
+def source_label(source: str) -> str:
+    """Short commit, marking a measured patch on top of it."""
+    commit, _, patch = source.partition("+")
+    return commit[:7] + ("+patch" if patch else "")
 
 
 def fmt_ratio(value: float) -> str:
@@ -140,8 +175,8 @@ def text_lines(lines: list[str], x: int, y: int, leading: int, cls: str) -> str:
     )
 
 
-def render_bars(results: dict[str, dict], x: int, y: int, *, label_w: int, plot_w: int,
-                stacked: bool = False) -> tuple[str, int]:
+def render_bars(results: dict[str, dict], names: dict[str, str], x: int, y: int, *, label_w: int,
+                plot_w: int, stacked: bool = False) -> tuple[str, int]:
     """Bars grouped by Picard parity; returns (svg, y below the last group)."""
     exact = sorted(
         (t for t, r in results.items() if r.get("full_parity")),
@@ -172,7 +207,7 @@ def render_bars(results: dict[str, dict], x: int, y: int, *, label_w: int, plot_
                 fill, label_cls, value_cls = "#3a5a63", "tool", "value"
             else:
                 fill, label_cls, value_cls = "#2a3a40", "toolOff", "valueOff"
-            name = TOOL_NAMES.get(tool, tool)
+            name = names.get(tool, tool)
             if stacked:
                 label_y, bar_x, bar_y = cursor + 20, x, cursor + 28
             else:
@@ -220,9 +255,8 @@ def render_progress(progress: dict, x: int, y: int, *, width: int, spark_w: int)
         f'<rect x="{x}" y="{y}" width="{width}" height="{height}" rx="14" class="tile"/>',
         f'<text x="{x + 18}" y="{y + 28}" class="groupOn">GETTING FASTER ON MAIN</text>',
     ]
-    for index, (series, (first, last, pct)) in enumerate(rows):
+    for index, (series, (values, pct)) in enumerate(rows):
         row_y = y + 58 + index * 46
-        values = [p["value"] for p in series["points"]]
         lo, hi = min(values), max(values)
         span = hi - lo or 1.0
         step = spark_w / (len(values) - 1)
@@ -231,7 +265,7 @@ def render_progress(progress: dict, x: int, y: int, *, width: int, spark_w: int)
             for i, v in enumerate(values)
         )
         label = series.get("short_label", series["label"])
-        span_text = f'{series["points"][0]["version"]} \u2192 {series["points"][-1]["version"]}'
+        span_text = f'{series["baseline"]} \u2192 {series["steps"][-1]["version"]}'
         end_x, end_y = points.split()[-1].split(",")
         parts.append(
             f'<polyline points="{points}" fill="none" stroke="#36d7c9" stroke-width="2.5" '
@@ -255,12 +289,14 @@ def install_pill(x: int, y: int, width: int) -> str:
 def card_content() -> dict:
     """Every claim on the card, derived from evidence; layouts only place it."""
     landscape_path = latest_landscape()
-    landscape = json.loads(landscape_path.read_text(encoding="utf-8"))
+    landscape = load_landscape(landscape_path)
     suite = json.loads(SUITE_DATA.read_text(encoding="utf-8"))
     progress = json.loads(PROGRESS.read_text(encoding="utf-8"))
     measured = landscape_date(landscape_path)
 
-    primary = case_results(landscape, PRIMARY_CASE)
+    case = primary_case(landscape)
+    names = tool_names(landscape)
+    primary = case_results(landscape, case)
     title, qualifier = headline(primary)
     turbo = primary[TURBO]
     picard = primary[REFERENCE]
@@ -268,8 +304,8 @@ def card_content() -> dict:
     memory = picard["median_peak_rss_bytes"] / turbo["median_peak_rss_bytes"]
 
     tiles = [
-        (fmt_ratio(speed), "faster than Picard", CASE_LABELS[PRIMARY_CASE], True),
-        (fmt_ratio(memory), "less memory than Picard", CASE_LABELS[PRIMARY_CASE], False),
+        (fmt_ratio(speed), "faster than Picard", CASE_LABELS[case], True),
+        (fmt_ratio(memory), "less memory than Picard", CASE_LABELS[case], False),
     ]
     try:
         real = case_results(landscape, REAL_CASE)
@@ -288,15 +324,15 @@ def card_content() -> dict:
 
     version = landscape["executables"][TURBO]["version"].strip().removeprefix("turbo-picard ")
     footer = (
-        f"MarkDuplicates, {CASE_LABELS[PRIMARY_CASE]}, 1 CPU, median of {landscape['repeats']}. "
-        f"Turbo Picard {version} ({landscape['candidate_source'][:7]}), measured {measured}. "
+        f"MarkDuplicates, {CASE_LABELS[case]}, 1 CPU, median of {landscape['repeats']}. "
+        f"Turbo Picard {version} ({source_label(landscape['candidate_source'])}), measured {measured}. "
         f"Command suite {suite['date']}. Evidence: github.com/dnncha/turbo-picard/tree/main/benchmarks"
     )
     desc = (
         f"{title} {qualifier} Turbo Picard {turbo['median_wall_seconds']:.2f} s versus Picard "
         f"{picard['median_wall_seconds']:.2f} s; "
         + "; ".join(
-            f"{TOOL_NAMES.get(t, t)} {r['median_wall_seconds']:.2f} s"
+            f"{names.get(t, t)} {r['median_wall_seconds']:.2f} s"
             + ("" if r.get("full_parity") else " (output differs from Picard)")
             for t, r in sorted(primary.items(), key=lambda kv: kv[1]["median_wall_seconds"])
             if t not in {TURBO, REFERENCE}
@@ -305,7 +341,7 @@ def card_content() -> dict:
     )
     return {
         "title": title, "qualifier": qualifier, "subtitle": f"{qualifier} Same commands, same arguments, no JVM.",
-        "desc": desc, "primary": primary, "tiles": tiles, "progress": progress, "footer": footer,
+        "desc": desc, "primary": primary, "names": names, "tiles": tiles, "progress": progress, "footer": footer,
     }
 
 
@@ -361,7 +397,7 @@ def svg_document(content: dict, width: int, height: int, body: str, sizes: dict[
 def build_card(content: dict | None = None) -> str:
     """Landscape 1280x640: README, site home, link previews."""
     c = content or card_content()
-    bars, _ = render_bars(c["primary"], 56, 182, label_w=168, plot_w=404)
+    bars, _ = render_bars(c["primary"], c["names"], 56, 182, label_w=168, plot_w=404)
     tiles = "".join(
         render_tile(800 + (i % 2) * 220, 140 + (i // 2) * 128, tile, width=204)
         for i, tile in enumerate(c["tiles"])
@@ -389,7 +425,7 @@ def build_mobile_card(content: dict | None = None) -> str:
     sub = wrap(c["subtitle"], 40)
     parts.append(text_lines(sub, x, cursor, 21, "sub"))
     cursor += 21 * (len(sub) - 1) + 44
-    bars, cursor = render_bars(c["primary"], x, cursor, label_w=0, plot_w=inner - 64, stacked=True)
+    bars, cursor = render_bars(c["primary"], c["names"], x, cursor, label_w=0, plot_w=inner - 64, stacked=True)
     parts.append(bars)
     cursor += 4
     for tile in c["tiles"]:
@@ -469,26 +505,29 @@ def check_card() -> list[str]:
 
 
 def record_point(args: argparse.Namespace) -> None:
-    if not math.isfinite(args.value) or args.value <= 0:
-        raise SystemExit("--value must be a positive, finite measurement")
+    for name in ("before", "after"):
+        value = getattr(args, name)
+        if not math.isfinite(value) or value <= 0:
+            raise SystemExit(f"--{name} must be a positive, finite measurement")
     progress = json.loads(PROGRESS.read_text(encoding="utf-8"))
     series = next((s for s in progress["series"] if s["id"] == args.series), None)
     if series is None:
-        if not (args.label and args.protocol):
-            raise SystemExit(f"new series {args.series!r} needs --label and --protocol")
+        if not (args.label and args.protocol and args.baseline):
+            raise SystemExit(f"new series {args.series!r} needs --label, --protocol and --baseline")
         series = {
-            "id": args.series, "label": args.label, "metric": "median_wall_seconds",
-            "protocol": args.protocol, "points": [],
+            "id": args.series, "label": args.label, "short_label": args.label,
+            "baseline": args.baseline, "protocol": args.protocol, "steps": [],
         }
         progress["series"].append(series)
-    series["points"].append({
+    series["steps"].append({
         "date": args.date or datetime.date.today().isoformat(),
         "version": args.version,
-        "value": args.value,
+        "before": args.before,
+        "after": args.after,
         "evidence": args.evidence,
     })
     PROGRESS.write_text(json.dumps(progress, indent=2) + "\n", encoding="utf-8")
-    print(f"recorded {args.series} {args.version} = {args.value}")
+    print(f"recorded {args.series} {args.version}: {args.before} -> {args.after}")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -497,12 +536,14 @@ def main(argv: list[str] | None = None) -> int:
     sub = parser.add_subparsers(dest="command")
     record = sub.add_parser("record", help="append an accepted measurement to benchmarks/progress.json")
     record.add_argument("--series", required=True)
-    record.add_argument("--version", required=True, help="release or short commit on main")
-    record.add_argument("--value", required=True, type=float, help="median wall seconds")
+    record.add_argument("--version", required=True, help="release, PR (#46) or short commit on main")
+    record.add_argument("--before", required=True, type=float, help="median wall seconds before the change")
+    record.add_argument("--after", required=True, type=float, help="median wall seconds after, same run")
     record.add_argument("--evidence", required=True, help="immutable URL or repo path to raw runs")
     record.add_argument("--date")
     record.add_argument("--label")
     record.add_argument("--protocol")
+    record.add_argument("--baseline", help="version the series starts from (new series only)")
     args = parser.parse_args(argv)
 
     if args.command == "record":
