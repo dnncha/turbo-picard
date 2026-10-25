@@ -2,6 +2,7 @@
 const assert=require('node:assert/strict');
 const fs=require('node:fs');
 const cp=require('node:child_process');
+const os=require('node:os');
 const {quote,buildTrial}=require('./assets/site.js');
 const base={version:'0.1.14',command:'MarkDuplicates',input:'/data/sample.bam',jar:'/opt/picard/picard.jar',reference:''};
 let checks=0;
@@ -31,4 +32,29 @@ check(()=>assert.throws(()=>buildTrial({...base,command:'CollectRnaSeqMetrics'})
 check(()=>assert.throws(()=>buildTrial({...base,version:base.version+'; touch bad'})));
 check(()=>assert.throws(()=>buildTrial({...base,jar:'https://example.com/picard.jar'})));
 check(()=>assert.equal(quote("a'b"),"'a'\"'\"'b'"));
-console.log(JSON.stringify({planner_checks:checks,status:'PASS',commands_executed:false}));
+const bash=cp.execFileSync('bash',['-c','printf %s "$BASH"'],{encoding:'utf8'});
+const python=cp.execFileSync(bash,['-c','command -v python3'],{encoding:'utf8'}).trim();
+for (const [label,script] of [
+ ['generated',buildTrial(base)],
+ ['static',fs.readFileSync(__dirname+'/default-trial.sh','utf8').replace(/\{\{VERSION\}\}/g,base.version)],
+]) {
+ const bin=fs.mkdtempSync(os.tmpdir()+'/turbo-picard-prereqs-');
+ try {
+  fs.symlinkSync(python,bin+'/python3');
+  for (const tool of ['git','java']) fs.writeFileSync(bin+'/'+tool,'#!/bin/sh\nexit 97\n',{mode:0o755});
+  fs.writeFileSync(bin+'/mktemp','#!/bin/sh\nexit 37\n',{mode:0o755});
+  const run=()=>cp.spawnSync(bash,['-c',script],{env:{...process.env,PATH:bin},encoding:'utf8'});
+  check(()=>assert.equal(run().status,37,label+' must reach workspace creation without samtools'));
+  for (const tool of ['python3','git','java']) {
+   fs.renameSync(bin+'/'+tool,bin+'/'+tool+'.disabled');
+   check(()=>{
+    const result=run();
+    assert.equal(result.error,undefined);
+    assert.notEqual(result.status,0,label+' must reject missing '+tool);
+    assert.notEqual(result.status,37,label+' must reject missing '+tool+' before creating a workspace');
+   });
+   fs.renameSync(bin+'/'+tool+'.disabled',bin+'/'+tool);
+  }
+ } finally {fs.rmSync(bin,{recursive:true,force:true});}
+}
+console.log(JSON.stringify({planner_checks:checks,status:'PASS',workload_commands_executed:false}));
