@@ -22,7 +22,9 @@ concurrency:
 
 jobs:
   compare:
-    runs-on: ubuntu-latest
+    # Match native CI: the Ubuntu 26.04 clang/bindgen combination makes
+    # HTSlib structs opaque when compiling the immutable baseline.
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     env:
       BASE_SHA: ${{ github.event.pull_request.base.sha }}
