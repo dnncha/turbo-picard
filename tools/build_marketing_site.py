@@ -23,7 +23,7 @@ ROOT = Path(__file__).resolve().parents[1]
 BASE = 'https://turbo-picard.readthedocs.io/en/latest/'
 REPO = 'https://github.com/dnncha/turbo-picard'
 PAGES = [
-    ('', 'Turbo Picard — native speed for Picard workflows', 'Run selected Picard commands in Rust with the same KEY=VALUE arguments: MarkDuplicates, SortSam and QC. Picard fallback covers unsupported commands.', 'Picard workflows. Native speed.', 'home'),
+    ('', 'Turbo Picard | Native tools for existing Picard workflows', 'Run selected Picard commands natively with familiar KEY=VALUE arguments. Compare required outputs on your data; Picard fallback covers unsupported commands.', 'Run your Picard task natively.', 'home'),
     ('solutions/markduplicates-memory/', 'Picard MarkDuplicates slow or out of memory? | Turbo Picard', 'Fix MarkDuplicates java heap space, GC overhead and scratch-space failures. See when Turbo Picard’s bounded native path fits your BAM.', 'MarkDuplicates: slow runs and memory failures', 'markduplicates'),
     ('solutions/bam-to-fastq/', 'Paired BAM to FASTQ without unbounded mate buffering | Turbo Picard', 'Export paired, unpaired or gzipped FASTQ from BAM or CRAM. Understand queryname staging, read orientation and scratch storage before using native SamToFastq.', 'BAM to FASTQ, without the guesswork', 'fastq'),
     ('solutions/sequencing-qc/', 'Faster Picard sequencing QC with CollectMultipleMetrics | Turbo Picard', 'Reduce repeated sequencing-QC work with native CollectMultipleMetrics. Check supported programs, filters and output contracts before replacing a Picard task.', 'Sequencing QC without the repeated work', 'qc'),
@@ -31,7 +31,7 @@ PAGES = [
     ('commands/', 'Turbo Picard command support — native, scoped and fallback', 'Search the source-derived Turbo Picard command catalogue. See exact native scope, fallback boundaries and parity tests before changing your pipeline.', 'Find your command. Know the boundary.', 'commands'),
     ('evaluate/', 'Compare Turbo Picard with Picard on your own BAM or CRAM', 'Build a local comparison script with separate outputs, a pinned release and native-only execution. Inspect parity and timing before switching a workflow step.', 'Prove the switch on your data.', 'evaluate'),
     ('install/', 'Install Turbo Picard on Linux or macOS — PyPI and Docker', 'Install Turbo Picard in an isolated environment or use the versioned container. Avoid shadowing upstream Picard and verify the executable you actually run.', 'One package. A familiar command.', 'install'),
-    ('compare/', 'Turbo Picard vs Picard, samtools and Riker: choose by task', 'Choose a Picard alternative by command semantics, workflow changes and evidence—not a universal speed claim. Compare Turbo Picard, Picard, samtools and Riker.', 'Choose by workflow. Not by the biggest number.', 'compare'),
+    ('compare/', 'Picard alternatives: Turbo Picard, Riker, samtools and FastDup', 'Compare native Picard alternatives by required outputs, preparation, resource costs and workflow changes. Choose a tool for duplicate marking, QC or sorting.', 'Choose the tool for your workflow.', 'compare'),
     ('evidence/', 'Turbo Picard benchmarks, parity and release evidence', 'Inspect absolute benchmark timings, input sizes, provenance and compatibility limits. Separate small-fixture evidence from production-scale performance claims.', 'Evidence you can inspect.', 'evidence'),
 ]
 
@@ -131,7 +131,7 @@ def render_all(root: Path = ROOT) -> dict[str, bytes]:
         el=ET.SubElement(xml,'url');ET.SubElement(el,'loc').text=BASE+path
     files['sitemap.xml']=ET.tostring(xml,encoding='utf-8',xml_declaration=True)
     files['robots.txt']=('User-agent: *\nAllow: /\nSitemap: '+BASE+'sitemap.xml\n').encode()
-    files['llms.txt']=(f'# Turbo Picard {version}\n\nNative implementations of selected Picard {matrix["picard_reference"]} commands, not the entire upstream suite.\n\n'+''.join(f'- [{h}]({BASE+r})\n' for r,_,_,h,_ in PAGES)+'\n## Machine interface\n\n`turbo-picard capabilities --json --command MarkDuplicates`\n`turbo-picard trial --json MarkDuplicates I=input.bam O=turbo.bam M=turbo.txt`\nInspection is not input validation. Prefer argv arrays and shell=False.\nSet TURBO_PICARD_REQUIRE_NATIVE=1 to prohibit upstream fallback.\nPyPI installs a picard shim as well: isolate the environment.\nBenchmarks describe saved fixtures, not universal production speedups.\n').encode()
+    files['llms.txt']=(f'# Turbo Picard {version}\n\nNative implementations of selected Picard {matrix["picard_reference"]} commands, not the entire upstream suite.\n\n'+''.join(f'- [{h}]({BASE+r})\n' for r,_,_,h,_ in PAGES)+'\n## Independent evaluation\n\n[Protocol and report checklist]('+BASE+'independent-evaluation.html)\n[Channel versions and package checksums]('+BASE+'assets/distribution-status.json)\n\n## Machine interface\n\n`turbo-picard capabilities --json --command MarkDuplicates`\n`turbo-picard trial --json MarkDuplicates I=input.bam O=turbo.bam M=turbo.txt`\nInspection is not input validation. Prefer argv arrays and shell=False.\nSet TURBO_PICARD_REQUIRE_NATIVE=1 to prohibit upstream fallback.\nPyPI installs a picard shim as well: isolate the environment.\nBenchmarks describe saved fixtures, not universal production speedups.\n').encode()
     return files
 
 

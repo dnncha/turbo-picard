@@ -75,6 +75,27 @@ Comparison by workflow
      - It does not replace Picard duplicate marking, sorting or general
        SAM/VCF utility commands
 
+Specialized preprocessing alternatives
+--------------------------------------
+
+As reviewed on 25 October 2026, `fgumi
+<https://github.com/fulcrumgenomics/fgumi>`_ provides UMI processing and
+consensus workflows alongside FASTQ conversion, sorting and deduplication.
+Its comparison tooling and migration guide describe intentional differences.
+Turbo Picard's explicit barcode-tag grouping is narrower than a complete
+UMI correction or consensus pipeline.
+
+`mako <https://github.com/fg-labs/mako>`_ is a focused SAM/BAM sorter built from
+the fgumi sorting engine. It documents coordinate, queryname and
+template-coordinate orders, external merging and verification. Include it when
+a sorting task can adopt its interface; no direct performance advantage over
+mako is established here.
+
+FastDup's README advertises Picard-compatible duplicate marking while noting
+that sort stability can change which representative is retained. Compare
+duplicate-family agreement, exact record identity and downstream scientific
+impact separately. Familiar output formats alone do not establish equivalence.
+
 Which tool should replace Picard?
 ---------------------------------
 
@@ -106,10 +127,11 @@ The current saved results range from ``22.88x`` to ``272.12x`` faster on those
 fixtures, with an ``84.52x`` geometric mean. These are fixture-specific results,
 not a claim that every dataset or option has the same speedup.
 
-For direct QC overlap with riker, the repository contains two small-input smoke
-profiles. They place ``turbo-picard`` ``2.10x`` and ``2.14x`` ahead on the saved
-WGS-only and WGS-bundle runs. Use the WGS-scale protocol before drawing a
-production conclusion.
+For direct QC overlap with riker, the repository retains two historical smoke
+profiles on a 2,097,008-byte mitochondrial BAM. Those timing records omit peak
+RSS and do not establish cross-tool output agreement or WGS performance. See
+:doc:`turbo-picard-vs-riker` for the contract differences and the work needed
+before drawing a workflow conclusion.
 
 For duplicate marking, ``tools/bench_markduplicates_competitors.py`` records
 commands, versions, executable digests, wall and CPU time, peak RSS, temporary

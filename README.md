@@ -4,12 +4,13 @@
 [![PyPI](https://img.shields.io/pypi/v/turbo-picard.svg)](https://pypi.org/project/turbo-picard/)
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.20541927.svg)](https://doi.org/10.5281/zenodo.20541927)
 
-[Documentation](https://turbo-picard.readthedocs.io/en/latest/) · [Command coverage](docs/commands.rst) · [Evaluate on your data](docs/real-data-evaluation.rst) · [Research](https://cheerfulduck.com/research)
+[Documentation](https://turbo-picard.readthedocs.io/en/latest/) · [Command coverage](docs/commands.rst) · [Evaluate on your data](docs/real-data-evaluation.rst) · [Research](https://cheerfulduck.com/research) · [Independent evaluations](https://turbo-picard.readthedocs.io/en/latest/independent-evaluation.html)
 
-## Run a selected Picard step in Rust
+## Run your Picard task natively
 
-Run selected Picard tools in Rust, using the command names and arguments your
-pipelines already understand. Evaluate one command before changing a pipeline.
+Keep familiar Picard commands for duplicate marking, sorting, FASTQ conversion
+and QC. Check native support, compare the outputs your workflow needs, and
+improve one task at a time.
 
 Turbo Picard is built for teams maintaining SAM/BAM/CRAM, VCF and sequencing-QC
 steps in Nextflow, WDL, Snakemake and shell workflows. Native commands avoid the
@@ -316,11 +317,15 @@ artifacts. The Linux ARM64 wheel is cross-built and artifact-validated.
 Read the [release notes](CHANGELOG.md) for the release scope and evidence
 boundaries.
 
-The submitted [Bioconda recipe PR](https://github.com/bioconda/bioconda-recipes/pull/65922)
-covers the main package and an optional shim. Use PyPI or the container image
-until Bioconda accepts the PR and the packages appear in its indexes. The main
-package installs `turbo-picard`; the separate shim package installs the
-`picard` command only for environments that choose it.
+Bioconda accepted the [initial recipes](https://github.com/bioconda/bioconda-recipes/pull/65922)
+on 4 October 2026. The channel indexes checked on 25 October list **0.1.15**
+for the main package on Linux x86_64/ARM64 and macOS Intel/Apple Silicon.
+The main package installs `turbo-picard`; a separate optional shim installs
+`picard`. The [main-package 0.1.16 update](https://github.com/bioconda/bioconda-recipes/pull/69890)
+and [shim update](https://github.com/bioconda/bioconda-recipes/pull/69891) remain
+open. Use the pinned PyPI wheel or container above for 0.1.17.
+See the [dated channel receipt](website/assets/distribution-status.json) for
+observed builds and checksums; a recipe update is not a published package.
 
 ## Citation
 

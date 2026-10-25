@@ -42,8 +42,26 @@ Version ``0.1.17`` targets Linux x86_64 and ARM64 wheels, macOS Intel and
 Apple Silicon wheels, and a source distribution. Publishing workflows validate
 artifacts and run installation smoke tests before uploading. Confirm publication
 on the versioned GitHub release and PyPI pages; source metadata alone is not a
-provider receipt. Bioconda remains pending maintainer acceptance. The release
-scope and evidence boundaries are summarized in ``CHANGELOG.md``.
+provider receipt. The release scope and evidence boundaries are summarized in
+``CHANGELOG.md``.
+
+Bioconda channel status
+~~~~~~~~~~~~~~~~~~~~~~~
+
+Bioconda accepted the `initial recipes
+<https://github.com/bioconda/bioconda-recipes/pull/65922>`_ on 4 October 2026.
+The channel indexes checked on 25 October list version ``0.1.15`` of the main
+package for Linux x86_64/ARM64 and macOS Intel/Apple Silicon. Use PyPI or the
+versioned container when the task requires ``0.1.17``. The `main package update
+<https://github.com/bioconda/bioconda-recipes/pull/69890>`_ and `shim update
+<https://github.com/bioconda/bioconda-recipes/pull/69891>`_ are open upstream;
+their presence does not establish channel publication.
+
+The `dated distribution receipt
+<https://turbo-picard.readthedocs.io/en/latest/assets/distribution-status.json>`_
+records queried indexes, observed builds and package SHA-256 values. The
+Bioconda main package installs only ``turbo-picard``. The optional shim is a
+separate package and must be selected deliberately.
 
 The current wheel exposes both commands from the CLI crate:
 

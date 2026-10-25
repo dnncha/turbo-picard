@@ -1,0 +1,100 @@
+{
+  "checked_on": "2026-10-25",
+  "bioconda": {
+    "merged_pr": "https://github.com/bioconda/bioconda-recipes/pull/65922",
+    "merged_on": "2026-10-04",
+    "observations": [
+      {
+        "subdir": "linux-64",
+        "index_url": "https://conda.anaconda.org/bioconda/linux-64/current_repodata.json",
+        "index_sha256": "4dbb14119d0a9e6a43b918efa4ff079da9876353f4aa3f0f78a23446c0558531",
+        "packages": [
+          {
+            "filename": "turbo-picard-0.1.15-hf5b135f_0.conda",
+            "name": "turbo-picard",
+            "version": "0.1.15",
+            "build": "hf5b135f_0",
+            "sha256": "1689fd7432f1f2f2194cf022d57a25e504684ef906b612c94676438157159d5a"
+          },
+          {
+            "filename": "turbo-picard-picard-shim-0.1.15-hf5b135f_0.conda",
+            "name": "turbo-picard-picard-shim",
+            "version": "0.1.15",
+            "build": "hf5b135f_0",
+            "sha256": "eae2f8482900b46c1bd8a24cb65d0bb42ea4bc13adc1ed9e9455a9b08f898368"
+          }
+        ]
+      },
+      {
+        "subdir": "linux-aarch64",
+        "index_url": "https://conda.anaconda.org/bioconda/linux-aarch64/current_repodata.json",
+        "index_sha256": "5947c25ffe67b22f6c680c807bd20c2ab2cbb0b45b6fc2bac56d18f4b1462255",
+        "packages": [
+          {
+            "filename": "turbo-picard-0.1.15-hffe9ff9_0.conda",
+            "name": "turbo-picard",
+            "version": "0.1.15",
+            "build": "hffe9ff9_0",
+            "sha256": "acb235c8de9fc4bded99f6454643fecbfa6293814111e84dbb4514569f60621f"
+          }
+        ]
+      },
+      {
+        "subdir": "osx-64",
+        "index_url": "https://conda.anaconda.org/bioconda/osx-64/current_repodata.json",
+        "index_sha256": "f5e79296dda2d4c1b6b3ac9d4f8df1360dc9541c0bfc7c14edf6e8442be71946",
+        "packages": [
+          {
+            "filename": "turbo-picard-0.1.15-h2fc4897_0.conda",
+            "name": "turbo-picard",
+            "version": "0.1.15",
+            "build": "h2fc4897_0",
+            "sha256": "337d7b49c62eafd4c02efa96eee9d89dccc8fd682c338e63b5740044eb7d487d"
+          },
+          {
+            "filename": "turbo-picard-picard-shim-0.1.15-h2fc4897_0.conda",
+            "name": "turbo-picard-picard-shim",
+            "version": "0.1.15",
+            "build": "h2fc4897_0",
+            "sha256": "561a3d3d26f90c59730d5b27a5594fed6ee8932279c74c0017602fa2f4f721e7"
+          }
+        ]
+      },
+      {
+        "subdir": "osx-arm64",
+        "index_url": "https://conda.anaconda.org/bioconda/osx-arm64/current_repodata.json",
+        "index_sha256": "534fbbb5a36a01d4e4fcf6dc145a7c58d00fee62dc7e99baca3c5efcc6817a3e",
+        "packages": [
+          {
+            "filename": "turbo-picard-0.1.15-hba3a903_0.conda",
+            "name": "turbo-picard",
+            "version": "0.1.15",
+            "build": "hba3a903_0",
+            "sha256": "81a0b7d741408c5959fd874c392756d3dae4f0fa465e9c370887adb9eefa09cf"
+          },
+          {
+            "filename": "turbo-picard-picard-shim-0.1.15-hba3a903_0.conda",
+            "name": "turbo-picard-picard-shim",
+            "version": "0.1.15",
+            "build": "hba3a903_0",
+            "sha256": "14bb72b41f61e5902161704e578f8a8cd5b12990e4e7d6bf3e706f931ad4b733"
+          }
+        ]
+      }
+    ],
+    "version_updates": [
+      {
+        "package": "turbo-picard",
+        "version": "0.1.16",
+        "pull_request": "https://github.com/bioconda/bioconda-recipes/pull/69890",
+        "state": "open"
+      },
+      {
+        "package": "turbo-picard-picard-shim",
+        "version": "0.1.16",
+        "pull_request": "https://github.com/bioconda/bioconda-recipes/pull/69891",
+        "state": "open"
+      }
+    ]
+  }
+}

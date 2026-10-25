@@ -2,7 +2,7 @@
 
 Native implementations of selected Picard 3.4.0 commands, not the entire upstream suite.
 
-- [Picard workflows. Native speed.](https://turbo-picard.readthedocs.io/en/latest/)
+- [Run your Picard task natively.](https://turbo-picard.readthedocs.io/en/latest/)
 - [MarkDuplicates: slow runs and memory failures](https://turbo-picard.readthedocs.io/en/latest/solutions/markduplicates-memory/)
 - [BAM to FASTQ, without the guesswork](https://turbo-picard.readthedocs.io/en/latest/solutions/bam-to-fastq/)
 - [Sequencing QC without the repeated work](https://turbo-picard.readthedocs.io/en/latest/solutions/sequencing-qc/)
@@ -10,8 +10,13 @@ Native implementations of selected Picard 3.4.0 commands, not the entire upstrea
 - [Find your command. Know the boundary.](https://turbo-picard.readthedocs.io/en/latest/commands/)
 - [Prove the switch on your data.](https://turbo-picard.readthedocs.io/en/latest/evaluate/)
 - [One package. A familiar command.](https://turbo-picard.readthedocs.io/en/latest/install/)
-- [Choose by workflow. Not by the biggest number.](https://turbo-picard.readthedocs.io/en/latest/compare/)
+- [Choose the tool for your workflow.](https://turbo-picard.readthedocs.io/en/latest/compare/)
 - [Evidence you can inspect.](https://turbo-picard.readthedocs.io/en/latest/evidence/)
+
+## Independent evaluation
+
+[Protocol and report checklist](https://turbo-picard.readthedocs.io/en/latest/independent-evaluation.html)
+[Channel versions and package checksums](https://turbo-picard.readthedocs.io/en/latest/assets/distribution-status.json)
 
 ## Machine interface
 
