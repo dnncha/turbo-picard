@@ -6,7 +6,7 @@ Picard operations natively, and keeping BAM/CRAM I/O on mature HTSlib code.
 Those choices matter more for current Picard-style preprocessing than sending
 work to a GPU just because one is present.
 
-BAM BGZF compression and decompression use HTSlib's optional ``libdeflate``
+In the source checkout, BAM BGZF compression and decompression use HTSlib's optional ``libdeflate``
 backend, enabled in the shared ``rust-htslib`` dependency. This applies to
 native commands using the common BAM I/O layer. Compression levels remain
 explicit benchmark settings; compressed bytes may differ between encoder
@@ -178,13 +178,12 @@ parallelism. Reader defaults still cap at eight workers, writer and index
 defaults cap at twelve workers, and pipelined readers cap lower because the
 command is already overlapping I/O with application-level processing.
 
-``SortSam`` streams BAM/CRAM inputs without loading them into memory when the
-``@HD`` sort order already matches the requested ``SORT_ORDER``. Inputs with
-``SO:unsorted`` or a mismatched header still get verified (or sorted) the same
-way as before.
+``SortSam`` verifies actual record order before choosing a streaming or copy
+path, including when ``@HD`` already declares the requested ``SORT_ORDER``.
+Misordered inputs are sorted using the Picard tie rules.
 
-``MergeSamFiles`` uses the same header fast path when deciding whether every
-input shard is already sorted for k-way streaming merge.
+``MergeSamFiles`` likewise verifies input ordering before a k-way streaming
+merge, unless the caller explicitly supplies ``ASSUME_SORTED=true``.
 
 Metrics accumulation
 --------------------

@@ -22,6 +22,9 @@ the codec and linked libraries as well as each executable.
 [Retained measurements and reproduction details](review-evidence/2026-10-25/README.md)
 include all eleven synthetic parity cases, the two native competitor profiles,
 the shared BAM I/O profiles, neutral results and competitor output differences.
+They identify the measured pre-v0.1.17 source. The shipping branch preserves the
+subsequent correctness release and is checked by fresh benchmark and strict parity
+jobs in [PR #46](https://github.com/dnncha/turbo-picard/pull/46).
 
 The bounded harness measures the original checkout, the candidate and actual
 Picard on eleven adversarial whole-command cases, with one warm-up and three

@@ -1,5 +1,11 @@
 # Competitive performance evidence — October 25, 2026
 
+This is a historical snapshot of the exact pre-v0.1.17 source patch identified below.
+The shipping branch was subsequently rebased onto the v0.1.17 scientific-correctness
+changes. These timings and comparator results have not been relabeled as measurements
+of that rebased tree; its fresh CI benchmark and strict parity gates are linked from
+[PR #46](https://github.com/dnncha/turbo-picard/pull/46).
+
 Turbo Picard now stores a completed pair in one sort entry, reserves encoded key and payload sizes, and recovers paired fragment candidates only when mapped unpaired candidates exist. The shared HTSlib dependency enables libdeflate. Both original mate ordinals and all selection, barcode and optical metadata are retained. The FastDup pair representation was the initial public implementation lead; its pinned source and exact matched build are in `provenance.json`.
 
 ## Before and after: whole MarkDuplicates commands
