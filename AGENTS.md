@@ -48,6 +48,7 @@ python3 tools/verify_benchmark_log_evidence.py
 python3 tools/verify_benchmark_suite_coverage.py
 python3 tools/verify_readme_links.py
 python3 tools/verify_site_links.py
+python3 tools/render_competitor_card.py --check
 ```
 
 The CI workflow discovers `tools/test_*.py` tests and compiles the entire tools
@@ -57,6 +58,30 @@ Run the full CI workflow before merging. Native changes require Rust tests,
 Picard parity, package/container checks and workflow-starter checks; a Python
 benchmark is not a substitute. Build Sphinx documentation using the repository's
 pinned docs requirements when documentation changes.
+
+## Keep the competitor card current
+
+`docs/site/assets/competitor-card{,-mobile}.{svg,png}` (landscape and portrait
+phone layouts) are the first graphic visitors see
+(README, PyPI, site home, link previews). They are rendered only from evidence:
+the newest `benchmarks/markduplicates-competitors/landscape-YYYY-MM-DD.json`,
+`docs/site/assets/benchmark-data.json` and `benchmarks/progress.json`. Never
+edit the SVG or PNG by hand, and never type a number into the renderer.
+
+- When an accepted hill-climb change lands on main, record its before/after
+  medians from the same run with `python3 tools/render_competitor_card.py
+  record --series <id> --version <release, #PR or short sha> --before <s>
+  --after <s> --evidence <immutable URL or repo path>`. This re-renders the
+  card. Steps chain as ratios, so runs on different hosts never share an
+  absolute axis. Add a new series with `--label`, `--protocol` and
+  `--baseline`.
+- After a new competitor run, copy its report unchanged to a new dated
+  `landscape-YYYY-MM-DD.json` (or `.json.gz`) and re-render. The headline
+  changes itself: "fastest we've measured" only when Turbo Picard beats every
+  tool in that run, "fastest Picard-identical" when it beats only the tools
+  that match Picard's output, and no speed claim otherwise.
+- Commit all four regenerated SVG and PNG files with the evidence that changed
+  them.
 
 ## Describe only what was measured
 

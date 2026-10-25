@@ -4,3 +4,8 @@
 
 /* Copy recovery and field errors remain readable at narrow widths and text zoom. */
 .codebar{flex-wrap:wrap;gap:10px}.codebar button{min-height:44px;max-width:100%;white-space:normal}.field .field-error{color:#913122;font-size:13px}.field [aria-invalid="true"]{border:2px solid #913122}.field small[hidden]{display:none}
+
+.proof-section{padding-top:0}
+.proof-card{margin:0 auto 1.5rem;max-width:1280px}
+.proof-card img{display:block;width:100%;height:auto;border-radius:18px;box-shadow:0 24px 60px rgba(4,12,16,.28)}
+.proof-card figcaption{margin-top:.6rem;font-size:.85rem;color:var(--muted,#5b6b70);text-align:center}

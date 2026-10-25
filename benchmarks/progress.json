@@ -1,0 +1,52 @@
+{
+  "schema_version": 2,
+  "description": "Accepted performance changes on main, one series per frozen workload. Each step is a before/after pair measured in the same run, so steps from different hosts chain as ratios rather than mixing absolute times. Append with tools/render_competitor_card.py record, which re-renders the competitor card.",
+  "series": [
+    {
+      "id": "markduplicates-paired-600k",
+      "label": "MarkDuplicates, paired, ~600k records",
+      "short_label": "MarkDuplicates paired, 600k",
+      "baseline": "0.1.15",
+      "protocol": "one CPU, compression level 1, warm cache, one warm-up plus three alternating measured repetitions; before and after measured in the same run",
+      "steps": [
+        {
+          "date": "2026-10-01",
+          "version": "0.1.16",
+          "before": 2.8091,
+          "after": 2.2947,
+          "evidence": "https://github.com/dnncha/turbo-picard/tree/140fd90848e3f60675244925f77712139cd337aa/benchmarks/review-evidence/2026-10-01/ci-pr39"
+        },
+        {
+          "date": "2026-10-25",
+          "version": "#46",
+          "before": 2.38324043800003,
+          "after": 1.059856630000013,
+          "evidence": "benchmarks/review-evidence/2026-10-25/bounded.json.gz"
+        }
+      ]
+    },
+    {
+      "id": "markduplicates-paired-spill-1200k",
+      "label": "MarkDuplicates, paired spill, ~1.2M records",
+      "short_label": "MarkDuplicates paired, 1.2M",
+      "baseline": "0.1.15",
+      "protocol": "one CPU, compression level 1, warm cache, one warm-up plus three alternating measured repetitions; before and after measured in the same run",
+      "steps": [
+        {
+          "date": "2026-10-01",
+          "version": "0.1.16",
+          "before": 5.44834,
+          "after": 4.58571,
+          "evidence": "https://github.com/dnncha/turbo-picard/tree/140fd90848e3f60675244925f77712139cd337aa/benchmarks/review-evidence/2026-10-01/ci-pr39"
+        },
+        {
+          "date": "2026-10-25",
+          "version": "#46",
+          "before": 4.458828788999881,
+          "after": 2.105093816000135,
+          "evidence": "benchmarks/review-evidence/2026-10-25/bounded.json.gz"
+        }
+      ]
+    }
+  ]
+}
