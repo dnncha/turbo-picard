@@ -16,8 +16,9 @@ Ferris.
 | Wordmark | Where the mascot already appears nearby | `export/lockups/wordmark-*.svg` |
 | One colour | Single-ink print, embroidery, watermarks | `export/mascot/turbo-pika-{black,white,mono-*}.svg` |
 
-Every file has `-color` (for light backgrounds) and `-reversed` (for forest)
-versions. PNGs at 512 and 1024 px sit next to each SVG.
+Colour artwork has `-color` (for light backgrounds) and `-reversed` (for forest)
+versions. Mascot PNGs are 512 and 1024 px wide; lockup PNGs are 512 px high.
+Icon variants are 64, 256 and 512 px wide.
 
 ## 2. Clear space
 
@@ -84,11 +85,28 @@ type the wordmark; use the SVG.
 All art is generated from one geometry file, `tools/build_pika.py`. Edit the
 coordinates there and rerun it instead of editing exported SVGs by hand.
 
+Run from the repository root with Inter 4.1's `extras/ttf` directory. Pin
+fonttools 4.55.3 in the environment and retain `rsvg-convert --version` with the
+regeneration evidence. Rendering uses librsvg, so use the same recorded version
+when checking PNG drift.
+
 ```sh
-python3 -m venv .venv && .venv/bin/pip install fonttools==4.55.3
-# Inter 4.1 from https://github.com/rsms/inter/releases/tag/v4.1
-.venv/bin/python tools/build_pika.py src /path/to/Inter-4.1/extras/ttf
+python3 -m venv .venv-pika
+.venv-pika/bin/pip install fonttools==4.55.3
+rsvg-convert --version
+/home/donncha/.codex/bin/resource-run .venv-pika/bin/python branding/mascot/kit/tools/build_pika.py branding/mascot/kit/src /path/to/Inter-4.1/extras/ttf --export
+git diff -- branding/mascot/kit/src branding/mascot/kit/export website/assets docs/site/assets
 ```
+
+`--export` is the authoritative full pipeline. It regenerates source SVGs,
+all colour and mono exports, square variants, lockups and their PNGs, the
+16/32/48 px favicons and ICO, 192/512 px web icons, the 512 px maskable icon,
+the 180 px Apple touch icon, and both deployed asset directories. SVG widths control PNG widths while
+preserving aspect ratio. Review and commit every changed artifact together.
+Run the same command again with unchanged inputs; `git diff` must show no new
+changes. Without `--export`, the command only writes source SVGs and does not
+refresh the deployed kit.
+
 
 The site uses `export/icon/favicon.svg` as both `website/assets/favicon.svg` and
 `website/assets/pika-mark.svg` (the header and footer mark), plus
