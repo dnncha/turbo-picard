@@ -7,19 +7,73 @@ Neither mode submits form values or executes generated genomics commands.
 """
 from __future__ import annotations
 import argparse
+import base64
+import mimetypes
 import contextlib
 import functools
 import http.server
+import html as html_module
 import json
 from pathlib import Path
 import re
 import threading
-from playwright.sync_api import expect, sync_playwright
+from urllib.parse import unquote, urlsplit
 
 ROOT=Path(__file__).resolve().parents[1]
 
 
+def offline_css(asset_dir):
+    def embed(match):
+        url = match.group(1).strip('\"\'')
+        if url.startswith(('data:', 'http:', 'https:', '#')):
+            return match.group(0)
+        asset = (asset_dir / url).resolve()
+        asset.relative_to(asset_dir.resolve())
+        mime = mimetypes.guess_type(asset.name)[0] or 'application/octet-stream'
+        payload = base64.b64encode(asset.read_bytes()).decode('ascii')
+        return f'url("data:{mime};base64,{payload}")'
+    return re.sub(r'url\(([^)]+)\)', embed, (asset_dir / 'site.css').read_text())
+
+
+def offline_html(site, route):
+    site = site.resolve()
+    document = site / route / 'index.html'
+
+    def embed_url(url):
+        url = html_module.unescape(url)
+        if url.startswith('data:'):
+            return url
+        parsed = urlsplit(url)
+        if parsed.scheme or parsed.netloc:
+            raise ValueError(f'Offline image must be local: {url}')
+        asset = ((site if parsed.path.startswith('/') else document.parent)
+                 / unquote(parsed.path).lstrip('/')).resolve()
+        asset.relative_to(site)
+        mime = mimetypes.guess_type(asset.name)[0] or 'application/octet-stream'
+        payload = base64.b64encode(asset.read_bytes()).decode('ascii')
+        return f'data:{mime};base64,{payload}'
+
+    def embed_tag(match):
+        def embed_attribute(attribute):
+            name, quote, value = attribute.groups()
+            if name.lower() == 'srcset':
+                # Generated srcsets contain local URLs and optional w/x descriptors.
+                value = re.sub(r'(^|,\s*)([^,\s]+)',
+                               lambda candidate: candidate[1] + embed_url(candidate[2]), value)
+            else:
+                value = embed_url(value)
+            return name + '=' + quote + value + quote
+        return re.sub(
+            r"(?<![\w:-])(srcset|src)=([\"'])(.*?)\2", embed_attribute, match[0], flags=re.I)
+
+    html = re.sub(r'<(?:img|source)\b[^>]*>', embed_tag, document.read_text(), flags=re.I)
+    html = re.sub(r'<link rel="stylesheet"[^>]+>',
+                  lambda m: '<style>' + offline_css(site / 'assets') + '</style>', html)
+    return re.sub(r'<script src="[^\"]+" defer></script>', '', html)
+
+
 def main():
+    from playwright.sync_api import expect, sync_playwright
     ap=argparse.ArgumentParser(description=__doc__)
     ap.add_argument('--site',type=Path,default=ROOT/'docs/site')
     ap.add_argument('--output',type=Path,required=True)
@@ -39,13 +93,30 @@ def main():
         browser=p.chromium.launch(**kwargs)
         page=browser.new_page(viewport={'width':1440,'height':1000})
         page.on('pageerror',lambda e:report['errors'].append(str(e)))
+        offline_requests = []
+        if args.offline_render:
+            def block_request(request_route):
+                offline_requests.append(request_route.request.url)
+                request_route.abort()
+            page.route('**/*', block_request)
         def visit(route,js=True):
             if args.offline_render:
-                html=(args.site/route/'index.html').read_text()
-                html=re.sub(r'<link rel="stylesheet"[^>]+>',lambda m:'<style>'+(args.site/'assets/site.css').read_text()+'</style>',html)
-                html=re.sub(r'<script src="[^"]+" defer></script>','',html)
+                html=offline_html(args.site, route)
                 page.set_content(html,wait_until='domcontentloaded')
                 if js:page.add_script_tag(content=(args.site/'assets/site.js').read_text())
+                page.evaluate("""async () => {
+                    for (const image of document.images) {
+                        await image.decode();
+                        if (!image.naturalWidth) throw new Error('Document image did not load: ' + image.currentSrc);
+                    }
+                    for (const mark of document.querySelectorAll('.brand-mark')) {
+                        const url = getComputedStyle(mark).backgroundImage.slice(5, -2);
+                        const image = new Image();
+                        image.src = url;
+                        await image.decode();
+                        if (!image.naturalWidth) throw new Error('Mascot image did not load');
+                    }
+                }""")
             else:page.goto(f'http://127.0.0.1:{server.server_port}/'+route,wait_until='networkidle')
         for width in (1440,820,390,320):
             page.set_viewport_size({'width':width,'height':1000 if width>700 else 844})
@@ -164,6 +235,7 @@ def main():
             assert nojs.locator('#trial-script').inner_text().startswith('#!/usr/bin/env bash')
             assert nojs.locator('noscript').is_visible();context.close()
         report['checks'].append('progressive enhancement: complete catalogue remains without JavaScript')
+        assert not offline_requests,offline_requests
         assert not report['errors'],report['errors']
         browser.close()
     if server:server.shutdown()
