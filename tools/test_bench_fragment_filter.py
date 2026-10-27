@@ -39,20 +39,38 @@ class FragmentFilterHarnessTests(unittest.TestCase):
         with patch.object(bench.platform, "system", return_value="Linux"):
             self.assertEqual(bench.parse_peak_rss(linux), 1024 * 1024)
 
+    def test_parse_cpu_seconds_handles_both_formats(self) -> None:
+        macos = "  0.97 real  1.21 user  0.14 sys\n"
+        linux = "\tUser time (seconds): 1.21\n\tSystem time (seconds): 0.14\n"
+        self.assertAlmostEqual(bench.parse_cpu_seconds(macos), 1.35)
+        self.assertAlmostEqual(bench.parse_cpu_seconds(linux), 1.35)
+        self.assertIsNone(bench.parse_cpu_seconds("no timings\n"))
+
     def test_parse_wall_seconds_reads_real_line(self) -> None:
         self.assertEqual(bench.parse_wall_seconds("  1.08 real  1.52 user  0.36 sys\n"), 1.08)
         self.assertIsNone(bench.parse_wall_seconds("no timing here\n"))
 
     def test_summarize_reports_median_and_digest_sets(self) -> None:
         runs = [
-            {"wall_seconds": 2.0, "peak_rss_bytes": 200, "bam_sha256": "a", "metrics_sha256": "m"},
-            {"wall_seconds": 1.0, "peak_rss_bytes": 100, "bam_sha256": "a", "metrics_sha256": "m"},
-            {"wall_seconds": 3.0, "peak_rss_bytes": 300, "bam_sha256": "a", "metrics_sha256": "m"},
+            {"wall_seconds": 2.0, "cpu_seconds": 2.0, "peak_rss_bytes": 200, "bam_sha256": "a", "metrics_sha256": "m"},
+            {"wall_seconds": 1.0, "cpu_seconds": 1.0, "peak_rss_bytes": 100, "bam_sha256": "a", "metrics_sha256": "m"},
+            {"wall_seconds": 3.0, "cpu_seconds": 3.0, "peak_rss_bytes": 300, "bam_sha256": "a", "metrics_sha256": "m"},
         ]
         summary = bench.summarize("base", runs)
         self.assertEqual(summary["median_wall_seconds"], 2.0)
+        self.assertEqual(summary["median_cpu_seconds"], 2.0)
         self.assertEqual(summary["median_peak_rss_bytes"], 200)
         self.assertEqual(summary["bam_sha256"], ["a"])
+
+    def test_paired_ratio_cancels_shared_drift(self) -> None:
+        base = [{"cpu_seconds": 2.0}, {"cpu_seconds": 3.0}, {"cpu_seconds": 4.0}]
+        candidate = [{"cpu_seconds": 1.0}, {"cpu_seconds": 1.5}, {"cpu_seconds": 2.0}]
+        self.assertEqual(bench.paired_ratio(base, candidate, "cpu_seconds"), 2.0)
+
+    def test_paired_ratio_skips_missing_values(self) -> None:
+        base = [{"cpu_seconds": 2.0}, {"cpu_seconds": None}]
+        candidate = [{"cpu_seconds": 1.0}, {"cpu_seconds": 1.0}]
+        self.assertEqual(bench.paired_ratio(base, candidate, "cpu_seconds"), 2.0)
 
     def test_rejects_nonpositive_inputs(self) -> None:
         with self.assertRaises(ValueError):
