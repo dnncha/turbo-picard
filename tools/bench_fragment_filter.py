@@ -17,6 +17,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import platform
 import re
 import statistics
@@ -98,6 +99,32 @@ def parse_peak_rss(text: str) -> int | None:
     return None
 
 
+def parse_cpu_seconds(text: str) -> float | None:
+    """CPU seconds from macOS (`-l`) or Linux (`-v`) output."""
+    user = system = None
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("User time (seconds):"):
+            user = float(stripped.split(":")[-1].strip())
+        elif stripped.startswith("System time (seconds):"):
+            system = float(stripped.split(":")[-1].strip())
+        else:
+            parts = stripped.split()
+            if "user" in parts:
+                try:
+                    user = float(parts[parts.index("user") - 1])
+                except ValueError:
+                    pass
+            if "sys" in parts:
+                try:
+                    system = float(parts[parts.index("sys") - 1])
+                except ValueError:
+                    pass
+    if user is None and system is None:
+        return None
+    return (user or 0.0) + (system or 0.0)
+
+
 def parse_wall_seconds(text: str) -> float | None:
     for line in text.splitlines():
         parts = line.split()
@@ -139,7 +166,7 @@ def run_once(
         capture_output=True,
         text=True,
         timeout=timeout_s,
-        env={"TMPDIR": str(workdir), "PATH": "/usr/bin:/bin"},
+        env={**os.environ, "TMPDIR": str(workdir), "PATH": "/usr/bin:/bin"},
     )
     if completed.returncode != 0:
         raise RuntimeError(
@@ -147,6 +174,7 @@ def run_once(
         )
     return {
         "wall_seconds": parse_wall_seconds(completed.stderr),
+        "cpu_seconds": parse_cpu_seconds(completed.stderr),
         "peak_rss_bytes": parse_peak_rss(completed.stderr),
         "bam_sha256": digest(out_bam),
         "metrics_sha256": digest(metrics),
@@ -178,15 +206,31 @@ def build_input(candidate: Path, workdir: Path, pairs: int, unpaired_loci: int) 
 
 def summarize(label: str, runs: list[dict]) -> dict:
     walls = [run["wall_seconds"] for run in runs if run["wall_seconds"] is not None]
+    cpus = [run["cpu_seconds"] for run in runs if run["cpu_seconds"] is not None]
     rss = [run["peak_rss_bytes"] for run in runs if run["peak_rss_bytes"] is not None]
     return {
         "label": label,
         "repeats": len(runs),
         "median_wall_seconds": statistics.median(walls) if walls else None,
+        "median_cpu_seconds": statistics.median(cpus) if cpus else None,
         "median_peak_rss_bytes": int(statistics.median(rss)) if rss else None,
         "bam_sha256": sorted({run["bam_sha256"] for run in runs}),
         "metrics_sha256": sorted({run["metrics_sha256"] for run in runs}),
     }
+
+
+def paired_ratio(base_runs: list[dict], candidate_runs: list[dict], key: str) -> float | None:
+    """Median of per-repetition base/candidate ratios.
+
+    Base and candidate run next to each other, so a slow thermal or cache
+    drift cancels instead of biasing one median against the other.
+    """
+    ratios = [
+        base[key] / candidate[key]
+        for base, candidate in zip(base_runs, candidate_runs)
+        if base.get(key) and candidate.get(key)
+    ]
+    return statistics.median(ratios) if ratios else None
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -229,7 +273,10 @@ def main(argv: list[str] | None = None) -> int:
         for index in range(args.warmups):
             run_once(binary, bam, workdir / f"{label}-warmup-{index}", args.timeout_seconds)
     for index in range(args.repeats):
-        for label, binary in order:
+        # Alternate which binary runs first: a fixed order lets a slow drift in
+        # CPU frequency or cache state bias every pair the same way.
+        ordered = order if index % 2 == 0 else list(reversed(order))
+        for label, binary in ordered:
             runs[label].append(
                 run_once(binary, bam, workdir / f"{label}-{index}", args.timeout_seconds)
             )
@@ -258,6 +305,13 @@ def main(argv: list[str] | None = None) -> int:
             if base["median_wall_seconds"] and candidate["median_wall_seconds"]
             else None
         ),
+        "cpu_speedup": (
+            base["median_cpu_seconds"] / candidate["median_cpu_seconds"]
+            if base["median_cpu_seconds"] and candidate["median_cpu_seconds"]
+            else None
+        ),
+        "paired_cpu_speedup": paired_ratio(runs["base"], runs["candidate"], "cpu_seconds"),
+        "paired_wall_speedup": paired_ratio(runs["base"], runs["candidate"], "wall_seconds"),
         "rss_reduction_fraction": (
             1 - candidate["median_peak_rss_bytes"] / base["median_peak_rss_bytes"]
             if base["median_peak_rss_bytes"] and candidate["median_peak_rss_bytes"]
