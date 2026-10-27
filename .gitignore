@@ -7,3 +7,6 @@
 /docs/_build/
 __pycache__/
 *.py[cod]
+
+# Local documentation virtualenv
+/.venv-docs/

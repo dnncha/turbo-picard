@@ -277,7 +277,7 @@ class CommandMatrixTests(unittest.TestCase):
             root = Path(tmp)
             script = root / "tools" / "present.sh"
             script.parent.mkdir()
-            script.write_text("#!/usr/bin/env sh\n", encoding="utf-8")
+            script.write_text("#!/usr/bin/env sh\nset -eu\n", encoding="utf-8")
 
             self.assertEqual(
                 verify_command_matrix.validate_parity_script_files(

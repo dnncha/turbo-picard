@@ -42,6 +42,22 @@ Run documentation locally:
    pip install -r docs/requirements.txt
    sphinx-build -b html docs docs/_build/html
 
+Contract expect tests
+---------------------
+
+The CLI and shared-boundary tests record the whole observed contract instead of
+a hand-picked field, so a changed default, ordering rule, or error message
+appears as a diff. When a change is intentional, accept it explicitly and review
+the diff before committing:
+
+.. code-block:: bash
+
+   UPDATE_EXPECT=1 cargo test -p turbo-picard-core --test expectations
+   UPDATE_EXPECT=1 cargo test -p turbo-picard-cli --test expectations
+
+Never run ``UPDATE_EXPECT=1`` as part of a routine test command: an unreviewed
+overwrite turns a contract change into a silent one.
+
 Documentation rules of thumb
 ----------------------------
 

@@ -20,6 +20,10 @@ different Picard commands.
 
 ## Preserve scientific and execution semantics
 
+A `native` or `partial-native` status is an obligation, not a label: the
+matrix entry must name a parity script that exists and fails closed, so
+`tools/verify_command_matrix.py` rejects an accelerated claim without a gate.
+
 Do not weaken parity checks to make optimisations pass. Keep duplicate flags,
 representative selection, read groups, libraries, barcodes, optical decisions,
 metrics and downstream-consumed sidecars inside the tested contract. A changed
@@ -43,6 +47,7 @@ Install the existing Python test dependency and run:
 ```sh
 python3 -m pip install PyYAML==6.0.3
 python3 -m unittest discover -s tools
+python3 tools/verify_command_matrix.py
 python3 tools/verify_ci_coverage.py
 python3 tools/verify_benchmark_log_evidence.py
 python3 tools/verify_benchmark_suite_coverage.py

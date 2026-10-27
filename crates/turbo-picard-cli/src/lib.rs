@@ -4984,7 +4984,20 @@ fn run_collectmultiplemetrics_single_pass(
         // Quality collectors each own their own ALIGNED_READS_ONLY / PF_READS_ONLY flags.
         // Use conservative pre-filters here and keep per-collector filtering in the
         // collector logic via each command's captured settings.
-        cmm_pipeline::CmmWorkerPool::new(handlers).run_parallel_bam_pass(
+        //
+        // The plan records which collector families are active, so the reader
+        // never evaluates predicates for collectors this run does not have.
+        let plan = cmm_pipeline::CmmPlan {
+            alignment: alignment_worker.is_some(),
+            insert_size: insert_size_worker.is_some(),
+            base_distribution: base_distribution_worker.is_some(),
+            quality_distribution: quality_distribution_worker.is_some(),
+            mean_quality: mean_quality_worker.is_some(),
+            quality_yield: quality_yield_worker.is_some(),
+            gc_bias: gc_bias_worker.is_some(),
+            wgs: wgs_worker.is_some(),
+        };
+        cmm_pipeline::CmmWorkerPool::with_plan(handlers, plan).run_parallel_bam_pass(
             reader,
             stop_after,
             false,
