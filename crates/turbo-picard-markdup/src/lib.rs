@@ -1436,19 +1436,21 @@ fn process_external_pair_groups(
         )
         .map_err(MarkDuplicatesError::Operation)
     };
-    sorter
-        .finish_into(|item: SortItem| {
-            if current_key.as_deref() != Some(item.key.as_slice()) {
-                flush(&mut group).map_err(|error| error.to_string())?;
-                let key = current_key.get_or_insert_with(Vec::new);
-                key.clear();
-                key.extend_from_slice(&item.key);
-            }
-            group.push(item);
-            Ok(())
-        })
-        .map_err(MarkDuplicatesError::Operation)?;
-    flush(&mut group)?;
+    let sort_result = sorter.finish_into(|item: SortItem| {
+        if current_key.as_deref() != Some(item.key.as_slice()) {
+            flush(&mut group).map_err(|error| error.to_string())?;
+            let key = current_key.get_or_insert_with(Vec::new);
+            key.clear();
+            key.extend_from_slice(&item.key);
+        }
+        group.push(item);
+        Ok(())
+    });
+    let flush_result = if sort_result.is_ok() {
+        flush(&mut group)
+    } else {
+        Ok(())
+    };
     drop(flush);
     drop(job_tx);
     for handle in handles {
@@ -1456,6 +1458,8 @@ fn process_external_pair_groups(
             MarkDuplicatesError::Operation("MarkDuplicates pair worker panicked".to_string())
         })?;
     }
+    sort_result.map_err(MarkDuplicatesError::Operation)?;
+    flush_result?;
     for result in result_rx {
         match result {
             Ok(library_id) => {
