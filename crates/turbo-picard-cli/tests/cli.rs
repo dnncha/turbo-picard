@@ -625,6 +625,77 @@ fn markduplicates_marks_duplicate_sam_records() {
 }
 
 #[test]
+fn markduplicates_parallel_pair_groups_match_sequential() {
+    let tempdir = tempfile::tempdir().expect("tempdir exists");
+    let input = tempdir.path().join("input.sam");
+    let bam = tempdir.path().join("input.bam");
+    fs::write(
+        &input,
+        concat!(
+            "@HD\tVN:1.6\tSO:coordinate\n",
+            "@SQ\tSN:chr1\tLN:2000\n",
+            "@RG\tID:rg1\tSM:sample\tLB:lib1\n",
+            "cand\t9\tchr1\t100\t60\t10M\t*\t0\t0\tAAAAAAAAAA\tFFFFFFFFFF\tRG:Z:rg1\n",
+            "a1\t99\tchr1\t100\t60\t10M\t=\t250\t150\tAAAAAAAAAA\tFFFFFFFFFF\tRG:Z:rg1\n",
+            "a2\t99\tchr1\t100\t60\t10M\t=\t250\t150\tAAAAAAAAAA\tFFFFFFFFFF\tRG:Z:rg1\n",
+            "a3\t99\tchr1\t100\t60\t10M\t=\t250\t150\tAAAAAAAAAA\tFFFFFFFFFF\tRG:Z:rg1\n",
+            "a1\t147\tchr1\t250\t60\t10M\t=\t100\t-150\tAAAAAAAAAA\tFFFFFFFFFF\tRG:Z:rg1\n",
+            "a2\t147\tchr1\t250\t60\t10M\t=\t100\t-150\tAAAAAAAAAA\tFFFFFFFFFF\tRG:Z:rg1\n",
+            "a3\t147\tchr1\t250\t60\t10M\t=\t100\t-150\tAAAAAAAAAA\tFFFFFFFFFF\tRG:Z:rg1\n",
+            "dupA\t99\tchr1\t200\t60\t10M\t=\t350\t150\tAAAAAAAAAA\tFFFFFFFFFF\tRG:Z:rg1\n",
+            "dupB\t99\tchr1\t200\t60\t10M\t=\t350\t150\tAAAAAAAAAA\tFFFFFFFFFF\tRG:Z:rg1\n",
+            "dupA\t147\tchr1\t350\t60\t10M\t=\t200\t-150\tAAAAAAAAAA\tFFFFFFFFFF\tRG:Z:rg1\n",
+            "dupB\t147\tchr1\t350\t60\t10M\t=\t200\t-150\tAAAAAAAAAA\tFFFFFFFFFF\tRG:Z:rg1\n",
+            "uniq\t99\tchr1\t400\t60\t10M\t=\t550\t150\tAAAAAAAAAA\tFFFFFFFFFF\tRG:Z:rg1\n",
+            "uniq\t147\tchr1\t550\t60\t10M\t=\t400\t-150\tAAAAAAAAAA\tFFFFFFFFFF\tRG:Z:rg1\n",
+        ),
+    )
+    .expect("input fixture is written");
+
+    let mut sort = Command::cargo_bin("turbo-picard").expect("binary exists");
+    sort.args([
+        "SortSam",
+        &format!("I={}", input.display()),
+        &format!("O={}", bam.display()),
+        "SO=coordinate",
+    ])
+    .assert()
+    .success();
+
+    let mut outputs = Vec::new();
+    for threads in ["1", "4"] {
+        let out = tempdir.path().join(format!("out-{threads}.bam"));
+        let metrics = tempdir.path().join(format!("metrics-{threads}.txt"));
+        let mut cmd = Command::cargo_bin("turbo-picard").expect("binary exists");
+        cmd.env("TURBO_PICARD_MARKDUP_THREADS", threads)
+            .args([
+                "MarkDuplicates",
+                &format!("I={}", bam.display()),
+                &format!("O={}", out.display()),
+                &format!("M={}", metrics.display()),
+                "READ_NAME_REGEX=null",
+                "TAG_DUPLICATE_SET_MEMBERS=true",
+                "VALIDATION_STRINGENCY=LENIENT",
+            ])
+            .assert()
+            .success();
+        outputs.push((
+            fs::read(&out).expect("output BAM exists"),
+            fs::read_to_string(&metrics).expect("metrics file exists"),
+        ));
+    }
+
+    assert_eq!(
+        outputs[0].0, outputs[1].0,
+        "parallel BAM differs from sequential"
+    );
+    assert_eq!(
+        outputs[0].1, outputs[1].1,
+        "parallel metrics differ from sequential"
+    );
+}
+
+#[test]
 fn sortsam_sorts_sam_by_coordinate() {
     let tempdir = tempfile::tempdir().expect("tempdir exists");
     let input = tempdir.path().join("input.sam");
