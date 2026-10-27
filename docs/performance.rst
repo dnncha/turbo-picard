@@ -48,23 +48,6 @@ same mix measured ``1.22`` s and ``198.0`` MB against ``0.79`` s and
 ``125.2`` MB. MB denotes 1,000,000 bytes. These are synthetic native-path
 numbers, not a Picard comparison or a whole-genome guarantee; reproduce them
 with ``tools/bench_fragment_filter.py`` and the two binaries under test.
-Completed pair groups are processed by up to four worker threads by default on
-inputs of at least 100,000 records. A worker decodes the pair, applies the
-fragment filter and returns the library id it already decoded; the main thread
-adds the size-1 duplicate-set entry and keeps every optical and duplicate-set
-decision on its existing single-threaded path. Set
-``TURBO_PICARD_MARKDUP_THREADS=1`` to force the sequential path, or another
-count from 1 to 16 to tune it. The workers move decode and payload free off the
-reader thread.
-
-A synthetic native-path check at 800,000 pair-only pairs plus 10,000 tainted
-loci, one host (macOS arm64), nine alternating repetitions, measured a median
-``11.6`` percent lower wall time (range 9.4 to 17.4 percent) and about ``20``
-percent higher peak RSS, with identical output BAM and metrics. The worker
-threads retain freed payload memory in their allocator zones, which is the RSS
-cost. These are synthetic native-path numbers, not a Picard comparison or a
-whole-genome guarantee.
-
 Completed mates occupy one pair-sort entry with a length-framed payload for
 both original records. This follows the compact pair representation used in
 `FastDup's read-end generator <https://github.com/zzhofict/FastDup/blob/7b3f62587283a257fd38c5c20ceeda0364c285ef/src/markdup/md_pipeline.cpp>`_.

@@ -1146,7 +1146,6 @@ dependencies = [
 name = "turbo-picard-markdup"
 version = "0.1.17"
 dependencies = [
- "crossbeam-channel",
  "expect-test",
  "md5",
  "regex",

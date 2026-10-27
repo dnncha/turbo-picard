@@ -10,7 +10,6 @@ homepage.workspace = true
 description = "Native accelerated MarkDuplicates engine for turbo-picard."
 
 [dependencies]
-crossbeam-channel.workspace = true
 turbo-picard-core = { path = "../turbo-picard-core", version = "0.1.17" }
 md5.workspace = true
 regex.workspace = true
