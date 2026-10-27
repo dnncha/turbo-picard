@@ -2,14 +2,6 @@
 
 ## Unreleased
 
-- Process completed MarkDuplicates pair groups with up to four worker threads
-  for inputs of at least 100,000 records. Workers decode, apply the fragment
-  filter, and return the decoded library id; summaries, optical decisions and
-  duplicate-set tagging stay on the main thread. `TURBO_PICARD_MARKDUP_THREADS`
-  overrides the worker count, and `1` forces the sequential path. A synthetic
-  800,000-pair native-path check measured a median 11.6 percent lower wall time
-  (9.4 to 17.4 percent across runs) with about 20 percent higher peak RSS and
-  identical output. Not a Picard comparison or a WGS guarantee.
 ## Engineering
 
 - Add a per-run collector plan to the single-pass metrics pipeline. The plan

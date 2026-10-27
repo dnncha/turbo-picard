@@ -17,7 +17,6 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
-import os
 import platform
 import re
 import statistics
@@ -166,7 +165,7 @@ def run_once(
         capture_output=True,
         text=True,
         timeout=timeout_s,
-        env={**os.environ, "TMPDIR": str(workdir), "PATH": "/usr/bin:/bin"},
+        env={"TMPDIR": str(workdir), "PATH": "/usr/bin:/bin"},
     )
     if completed.returncode != 0:
         raise RuntimeError(

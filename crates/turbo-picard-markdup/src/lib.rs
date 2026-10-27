@@ -321,27 +321,6 @@ fn run_hts_container(
 // small fraction of the production-scale memory budget rather than becoming a
 // whole-file retention strategy.
 const EXTERNAL_MARKDUP_MAX_RECORDS_IN_RAM: usize = 500_000;
-const PARALLEL_PAIR_MIN_RECORDS: u64 = 100_000;
-
-fn markdup_pair_workers(record_count: u64) -> usize {
-    let default = if record_count < PARALLEL_PAIR_MIN_RECORDS {
-        1
-    } else {
-        std::thread::available_parallelism()
-            .map(|count| count.get().min(4))
-            .unwrap_or(1)
-    };
-    match std::env::var("TURBO_PICARD_MARKDUP_THREADS") {
-        Ok(value) => value
-            .trim()
-            .parse::<usize>()
-            .ok()
-            .filter(|count| *count >= 1)
-            .map(|count| count.min(16))
-            .unwrap_or(default),
-        Err(_) => default,
-    }
-}
 const EXTERNAL_MARKDUP_MAX_BYTES_IN_RAM: usize = 256 * 1024 * 1024;
 const DEFAULT_MAX_OPTICAL_DUPLICATE_SET_SIZE: usize = 300_000;
 const EXTERNAL_DECISION_OPTICAL: u8 = 0x01;
@@ -693,60 +672,27 @@ fn try_run_external_plan(
     )
     .map_err(MarkDuplicatesError::Operation)?;
 
-    let workers = markdup_pair_workers(record_count);
-    if workers > 1 {
-        let filter = has_fragments.then(|| {
-            let taint = std::mem::replace(&mut fragment_stage.taint, FragmentTaint::new());
-            std::sync::Arc::new(PairFragmentFilter {
-                taint,
-                sorter: std::sync::Mutex::new(fragment_stage.take_sorter()),
-            })
-        });
-        process_external_pair_groups(
-            pair_sorter,
-            &mut decision_sorter,
-            &mut summary,
-            &mut library_registry,
-            tracks_duplicate_set_histogram(config),
-            &processing_config,
-            filter.clone(),
-            workers,
-        )?;
-        if let Some(fragment_sorter) = filter.as_ref().and_then(|filter| filter.take_sorter()) {
-            process_external_duplicate_groups(
-                fragment_sorter,
-                &mut decision_sorter,
-                &mut summary,
-                &mut library_registry,
-                false,
-                tracks_duplicate_set_histogram(config),
-                &processing_config,
-                None,
-            )?;
-        }
-    } else {
+    process_external_duplicate_groups(
+        pair_sorter,
+        &mut decision_sorter,
+        &mut summary,
+        &mut library_registry,
+        true,
+        tracks_duplicate_set_histogram(config),
+        &processing_config,
+        has_fragments.then_some(&mut fragment_stage),
+    )?;
+    if let Some(fragment_sorter) = fragment_stage.take_sorter() {
         process_external_duplicate_groups(
-            pair_sorter,
+            fragment_sorter,
             &mut decision_sorter,
             &mut summary,
             &mut library_registry,
-            true,
+            false,
             tracks_duplicate_set_histogram(config),
             &processing_config,
-            has_fragments.then_some(&mut fragment_stage),
+            None,
         )?;
-        if let Some(fragment_sorter) = fragment_stage.take_sorter() {
-            process_external_duplicate_groups(
-                fragment_sorter,
-                &mut decision_sorter,
-                &mut summary,
-                &mut library_registry,
-                false,
-                tracks_duplicate_set_histogram(config),
-                &processing_config,
-                None,
-            )?;
-        }
     }
     let decision_path = temporary.path().join("duplicate-ordinals.bin");
     write_external_duplicate_ordinals(decision_sorter, &decision_path)?;
@@ -909,7 +855,6 @@ fn encode_external_barcode(payload: &mut Vec<u8>, barcode: Option<&[u8]>) {
 // Views into a sort payload let singleton reads and ordinary pairs pass without
 // allocating QNAME, read-group, barcode, or template-key copies. All fields are
 // still decoded and validated before a no-decision group can be discarded.
-#[derive(Clone, Copy)]
 struct BorrowedExternalPlanRecord<'a> {
     ordinal: u64,
     library_id: LibraryId,
@@ -927,20 +872,6 @@ struct BorrowedExternalPlanRecord<'a> {
 }
 
 impl BorrowedExternalPlanRecord<'_> {
-    fn fragment_key_into(&self, key: &mut Vec<u8>) {
-        append_external_key(
-            key,
-            self.library_id,
-            self.reference_id,
-            self.unclipped_position,
-            -1,
-            -1,
-            0,
-            self.flags & 0x10 != 0,
-            self.barcode,
-        );
-    }
-
     fn into_owned(self) -> ExternalPlanRecord {
         ExternalPlanRecord {
             ordinal: self.ordinal,
@@ -1109,52 +1040,26 @@ struct ExternalKey<'a> {
 }
 
 fn external_key(key_fields: ExternalKey<'_>) -> Vec<u8> {
-    let mut key = Vec::new();
-    append_external_key(
-        &mut key,
-        key_fields.library_id,
-        key_fields.reference_id,
-        key_fields.position,
-        key_fields.mate_reference_id,
-        key_fields.mate_position,
-        key_fields.orientation,
-        key_fields.reverse_strand,
-        [
-            key_fields.barcode.primary.as_deref(),
-            key_fields.barcode.read_one.as_deref(),
-            key_fields.barcode.read_two.as_deref(),
-        ],
-    );
+    let barcode_bytes = [
+        key_fields.barcode.primary.as_deref(),
+        key_fields.barcode.read_one.as_deref(),
+        key_fields.barcode.read_two.as_deref(),
+    ]
+    .into_iter()
+    .map(external_barcode_encoded_len)
+    .sum::<usize>();
+    let mut key = Vec::with_capacity(4 + 4 + 8 + 4 + 8 + 2 + barcode_bytes);
+    key.extend_from_slice(&key_fields.library_id.to_le_bytes());
+    key.extend_from_slice(&key_fields.reference_id.to_le_bytes());
+    key.extend_from_slice(&key_fields.position.to_le_bytes());
+    key.extend_from_slice(&key_fields.mate_reference_id.to_le_bytes());
+    key.extend_from_slice(&key_fields.mate_position.to_le_bytes());
+    key.push(key_fields.orientation);
+    key.push(u8::from(key_fields.reverse_strand));
+    encode_external_barcode(&mut key, key_fields.barcode.primary.as_deref());
+    encode_external_barcode(&mut key, key_fields.barcode.read_one.as_deref());
+    encode_external_barcode(&mut key, key_fields.barcode.read_two.as_deref());
     key
-}
-
-fn append_external_key(
-    key: &mut Vec<u8>,
-    library_id: LibraryId,
-    reference_id: i32,
-    position: i64,
-    mate_reference_id: i32,
-    mate_position: i64,
-    orientation: u8,
-    reverse_strand: bool,
-    barcode: [Option<&[u8]>; 3],
-) {
-    let barcode_bytes = barcode
-        .into_iter()
-        .map(external_barcode_encoded_len)
-        .sum::<usize>();
-    key.clear();
-    key.reserve(4 + 4 + 8 + 4 + 8 + 2 + barcode_bytes);
-    key.extend_from_slice(&library_id.to_le_bytes());
-    key.extend_from_slice(&reference_id.to_le_bytes());
-    key.extend_from_slice(&position.to_le_bytes());
-    key.extend_from_slice(&mate_reference_id.to_le_bytes());
-    key.extend_from_slice(&mate_position.to_le_bytes());
-    key.push(orientation);
-    key.push(u8::from(reverse_strand));
-    for value in barcode {
-        encode_external_barcode(key, value);
-    }
 }
 
 fn external_pair_key(first: &ExternalPlanRecord, second: &ExternalPlanRecord) -> Vec<u8> {
@@ -1287,187 +1192,6 @@ fn push_external_pair_fragments_filtered(
 ) -> Result<(), String> {
     for member in decode_borrowed_external_pair(&item.key, &item.payload)? {
         stage.push_paired(&member.into_owned())?;
-    }
-    Ok(())
-}
-
-/// Fragment sorter shared by the parallel pair workers.
-///
-/// The taint set is immutable after the input scan, so a worker checks it
-/// without a lock. Only a tainted pair takes the sorter lock, and those are
-/// the pairs that were going to be written anyway.
-struct PairFragmentFilter {
-    taint: FragmentTaint,
-    sorter: std::sync::Mutex<Option<ExternalSorter>>,
-}
-
-impl PairFragmentFilter {
-    fn take_sorter(&self) -> Option<ExternalSorter> {
-        self.sorter.lock().ok().and_then(|mut guard| guard.take())
-    }
-}
-
-struct PairFragmentWorker<'a> {
-    filter: &'a PairFragmentFilter,
-    key: Vec<u8>,
-}
-
-impl<'a> PairFragmentWorker<'a> {
-    fn new(filter: &'a PairFragmentFilter) -> Self {
-        Self {
-            filter,
-            key: Vec::new(),
-        }
-    }
-
-    fn push_paired(&mut self, fields: &BorrowedExternalPlanRecord<'_>) -> Result<(), String> {
-        fields.fragment_key_into(&mut self.key);
-        if !self.filter.taint.contains(&self.key) {
-            return Ok(());
-        }
-        let plan = (*fields).into_owned();
-        let key = self.key.clone();
-        let mut guard = self
-            .filter
-            .sorter
-            .lock()
-            .map_err(|_| "fragment sorter lock poisoned".to_string())?;
-        let Some(sorter) = guard.as_mut() else {
-            return Ok(());
-        };
-        sorter.push(key, encode_external_plan_record(&plan, true))
-    }
-}
-
-fn push_pair_item_fragments(
-    item: &SortItem,
-    worker: &mut PairFragmentWorker<'_>,
-) -> Result<(), String> {
-    for member in decode_borrowed_external_pair(&item.key, &item.payload)? {
-        worker.push_paired(&member)?;
-    }
-    Ok(())
-}
-
-/// Process completed-pair groups with decode and the fragment filter on worker
-/// threads.
-///
-/// A group of one pair keeps the summary and decision work on the main thread:
-/// the worker returns the library id it already decoded, and the main thread
-/// adds the size-1 duplicate-set entry. Groups with more than one pair are
-/// rare and stay sequential so optical and duplicate-set decisions keep their
-/// existing single-threaded path.
-fn process_external_pair_groups(
-    sorter: ExternalSorter,
-    decisions: &mut ExternalSorter,
-    summary: &mut MarkDuplicatesSummary,
-    library_registry: &mut LibraryRegistry,
-    track_duplicate_set_histogram: bool,
-    processing_config: &ExternalDuplicateProcessingConfig<'_>,
-    filter: Option<std::sync::Arc<PairFragmentFilter>>,
-    workers: usize,
-) -> Result<(), MarkDuplicatesError> {
-    let (job_tx, job_rx) =
-        crossbeam_channel::bounded::<SortItem>(workers.saturating_mul(64).max(16));
-    let (result_tx, result_rx) = crossbeam_channel::unbounded::<Result<LibraryId, String>>();
-    let mut handles = Vec::with_capacity(workers);
-    for _ in 0..workers {
-        let job_rx = job_rx.clone();
-        let result_tx = result_tx.clone();
-        let filter = filter.clone();
-        handles.push(std::thread::spawn(move || {
-            let mut worker = filter.as_deref().map(PairFragmentWorker::new);
-            while let Ok(item) = job_rx.recv() {
-                let mut result = Ok(0);
-                if let Some(worker) = worker.as_mut()
-                    && let Err(error) = push_pair_item_fragments(&item, worker)
-                {
-                    result = Err(error);
-                }
-                if result.is_ok() {
-                    result = decode_borrowed_external_pair(&item.key, &item.payload)
-                        .map(|pair| pair[0].library_id);
-                }
-                if result_tx.send(result).is_err() {
-                    break;
-                }
-            }
-        }));
-    }
-    drop(result_tx);
-
-    let mut current_key: Option<Vec<u8>> = None;
-    let mut group = Vec::<SortItem>::new();
-    let mut duplicate_worker = filter.as_deref().map(PairFragmentWorker::new);
-    let mut flush = |group: &mut Vec<SortItem>| -> Result<(), MarkDuplicatesError> {
-        if group.is_empty() {
-            return Ok(());
-        }
-        if group.len() == 1 {
-            let item = group.pop().expect("singleton pair group");
-            job_tx.send(item).map_err(|_| {
-                MarkDuplicatesError::Operation(
-                    "MarkDuplicates pair workers stopped early".to_string(),
-                )
-            })?;
-            return Ok(());
-        }
-        if let Some(worker) = duplicate_worker.as_mut() {
-            for item in group.iter() {
-                push_pair_item_fragments(item, worker).map_err(MarkDuplicatesError::Operation)?;
-            }
-        }
-        let mut owned = Vec::with_capacity(group.len());
-        for item in group.drain(..) {
-            owned.extend(
-                decode_borrowed_external_pair(&item.key, &item.payload)
-                    .map_err(MarkDuplicatesError::Operation)?
-                    .map(BorrowedExternalPlanRecord::into_owned),
-            );
-        }
-        process_external_duplicate_group(
-            &owned,
-            decisions,
-            summary,
-            library_registry,
-            true,
-            track_duplicate_set_histogram,
-            processing_config,
-        )
-        .map_err(MarkDuplicatesError::Operation)
-    };
-    let sort_result = sorter.finish_into(|item: SortItem| {
-        if current_key.as_deref() != Some(item.key.as_slice()) {
-            flush(&mut group).map_err(|error| error.to_string())?;
-            let key = current_key.get_or_insert_with(Vec::new);
-            key.clear();
-            key.extend_from_slice(&item.key);
-        }
-        group.push(item);
-        Ok(())
-    });
-    let flush_result = if sort_result.is_ok() {
-        flush(&mut group)
-    } else {
-        Ok(())
-    };
-    drop(flush);
-    drop(job_tx);
-    for handle in handles {
-        handle.join().map_err(|_| {
-            MarkDuplicatesError::Operation("MarkDuplicates pair worker panicked".to_string())
-        })?;
-    }
-    sort_result.map_err(MarkDuplicatesError::Operation)?;
-    flush_result?;
-    for result in result_rx {
-        match result {
-            Ok(library_id) => {
-                add_duplicate_set(summary, 1, Some(1));
-                add_duplicate_set(library_registry.summary_mut(library_id), 1, Some(1));
-            }
-            Err(error) => return Err(MarkDuplicatesError::Operation(error)),
-        }
     }
     Ok(())
 }
