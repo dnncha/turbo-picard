@@ -4,8 +4,10 @@ mod bounded_plan;
 #[cfg(test)]
 mod bounded_plan_tests;
 mod external_mates;
+mod fragment_taint;
 mod input_headers;
 
+use fragment_taint::FragmentTaint;
 use regex::Regex;
 use rust_htslib::bam::header::HeaderRecord;
 use rust_htslib::bam::record::Aux;
@@ -560,7 +562,10 @@ fn try_run_external_plan(
     let mut pair_sorter =
         external_sorter_with_bytes(temporary.path(), "turbo-picard-markdup-pair", pair_bytes)?;
     let mut mate_cache = external_mates::ExternalMateCache::new();
-    let mut fragment_sorter = external_sorter(temporary.path(), "turbo-picard-markdup-fragment")?;
+    let mut fragment_stage = FragmentStage::new(external_sorter(
+        temporary.path(),
+        "turbo-picard-markdup-fragment",
+    )?);
     let mut record_count = 0_u64;
     let mut last_output_order = None::<(i32, i64, Vec<u8>, u16)>;
     let mut last_coordinate = None::<(i32, i64)>;
@@ -637,7 +642,8 @@ fn try_run_external_plan(
                     .push(plan, &mut qname_sorter, &mut pair_sorter)
                     .map_err(MarkDuplicatesError::Operation)?;
             } else {
-                push_external_fragment(&plan, &mut fragment_sorter)
+                fragment_stage
+                    .push_required(&plan)
                     .map_err(MarkDuplicatesError::Operation)?;
             }
         }
@@ -654,10 +660,17 @@ fn try_run_external_plan(
     // Only unpaired candidates have entered this sorter. Recover paired ends
     // from the exact mate join and pair payloads only when they can dominate an
     // unpaired candidate; paired-only inputs never build fragment entries.
-    let mut fragment_sorter = (summary.unpaired_reads_examined != 0).then_some(fragment_sorter);
+    if summary.unpaired_reads_examined == 0 {
+        fragment_stage.release();
+    }
     let mut decision_sorter = external_sorter(temporary.path(), "turbo-picard-markdup-decisions")?;
-    external_mates::finish_spilled(qname_sorter, &mut pair_sorter, fragment_sorter.as_mut())
-        .map_err(MarkDuplicatesError::Operation)?;
+    let has_fragments = fragment_stage.has_sorter();
+    external_mates::finish_spilled(
+        qname_sorter,
+        &mut pair_sorter,
+        has_fragments.then_some(&mut fragment_stage),
+    )
+    .map_err(MarkDuplicatesError::Operation)?;
 
     process_external_duplicate_groups(
         pair_sorter,
@@ -667,9 +680,9 @@ fn try_run_external_plan(
         true,
         tracks_duplicate_set_histogram(config),
         &processing_config,
-        fragment_sorter.as_mut(),
+        has_fragments.then_some(&mut fragment_stage),
     )?;
-    if let Some(fragment_sorter) = fragment_sorter {
+    if let Some(fragment_sorter) = fragment_stage.take_sorter() {
         process_external_duplicate_groups(
             fragment_sorter,
             &mut decision_sorter,
@@ -1085,6 +1098,7 @@ fn external_fragment_key(record: &ExternalPlanRecord) -> Vec<u8> {
     })
 }
 
+#[cfg(test)]
 fn push_external_fragment(
     plan: &ExternalPlanRecord,
     fragments: &mut ExternalSorter,
@@ -1095,12 +1109,89 @@ fn push_external_fragment(
     )
 }
 
+/// The fragment stage plus the set of keys an unpaired candidate has claimed.
+///
+/// A pair read end only changes a duplicate decision when it shares its
+/// fragment key with an unpaired candidate: the fragment stage then marks every
+/// non-pair member of that group. Pair ends with an untouched key can only join
+/// a group that holds pairs alone, which marks nothing. The taint filter
+/// answers that question with false positives only, so a false positive adds a
+/// pair to a group that marks nothing and duplicate decisions are unchanged.
+struct FragmentStage {
+    sorter: Option<ExternalSorter>,
+    taint: FragmentTaint,
+}
+
+impl FragmentStage {
+    fn new(sorter: ExternalSorter) -> Self {
+        Self {
+            sorter: Some(sorter),
+            taint: FragmentTaint::new(),
+        }
+    }
+
+    fn has_sorter(&self) -> bool {
+        self.sorter.is_some()
+    }
+
+    /// Release the sorter when the input has no unpaired candidate. Pair-only
+    /// inputs cannot produce a fragment decision.
+    fn release(&mut self) {
+        self.sorter = None;
+    }
+
+    fn take_sorter(&mut self) -> Option<ExternalSorter> {
+        self.sorter.take()
+    }
+
+    /// An unpaired candidate, or a pair candidate whose mate is absent. It
+    /// always participates and taints its fragment key.
+    fn push_required(&mut self, plan: &ExternalPlanRecord) -> Result<(), String> {
+        if self.sorter.is_none() {
+            return Ok(());
+        }
+        let key = external_fragment_key(plan);
+        self.taint.insert(&key);
+        let Some(sorter) = self.sorter.as_mut() else {
+            return Ok(());
+        };
+        sorter.push(key, encode_external_plan_record(plan, true))
+    }
+
+    /// A pair read end that only matters when an unpaired candidate shares its
+    /// fragment key.
+    fn push_paired(&mut self, plan: &ExternalPlanRecord) -> Result<(), String> {
+        if self.sorter.is_none() {
+            return Ok(());
+        }
+        let key = external_fragment_key(plan);
+        if !self.taint.contains(&key) {
+            return Ok(());
+        }
+        let Some(sorter) = self.sorter.as_mut() else {
+            return Ok(());
+        };
+        sorter.push(key, encode_external_plan_record(plan, true))
+    }
+}
+
+#[cfg(test)]
 fn push_external_pair_fragments(
     item: &SortItem,
     fragments: &mut ExternalSorter,
 ) -> Result<(), String> {
     for member in decode_borrowed_external_pair(&item.key, &item.payload)? {
         push_external_fragment(&member.into_owned(), fragments)?;
+    }
+    Ok(())
+}
+
+fn push_external_pair_fragments_filtered(
+    item: &SortItem,
+    stage: &mut FragmentStage,
+) -> Result<(), String> {
+    for member in decode_borrowed_external_pair(&item.key, &item.payload)? {
+        stage.push_paired(&member.into_owned())?;
     }
     Ok(())
 }
@@ -1113,7 +1204,7 @@ fn process_external_duplicate_groups(
     paired_groups: bool,
     track_duplicate_set_histogram: bool,
     processing_config: &ExternalDuplicateProcessingConfig<'_>,
-    mut paired_fragments: Option<&mut ExternalSorter>,
+    mut paired_fragments: Option<&mut FragmentStage>,
 ) -> Result<(), MarkDuplicatesError> {
     let mut current_key = None::<Vec<u8>>;
     let mut pending = Vec::<SortItem>::with_capacity(2);
@@ -1171,8 +1262,8 @@ fn process_external_duplicate_groups(
     };
     sorter
         .finish_into(|item: SortItem| {
-            if let Some(fragments) = paired_fragments.as_deref_mut() {
-                push_external_pair_fragments(&item, fragments)?;
+            if let Some(stage) = paired_fragments.as_deref_mut() {
+                push_external_pair_fragments_filtered(&item, stage)?;
             }
             if current_key.as_deref() != Some(item.key.as_slice()) {
                 flush(&mut pending, &mut group)?;
@@ -3798,6 +3889,50 @@ mod tests {
         record.set(qname, None, &sequence, qualities);
         record.set_flags(flags);
         record
+    }
+
+    #[test]
+    fn fragment_stage_keeps_only_pairs_that_can_change_a_decision() {
+        let tmp = tempdir().unwrap();
+        let config = sam_markdup_config();
+        let mut stage = FragmentStage::new(external_sorter(tmp.path(), "fragment").unwrap());
+
+        // An unpaired candidate taints the fragment key at position 100.
+        let mut candidate = record_with_name_and_qualities(b"candidate", &[30], 0);
+        candidate.set_tid(0);
+        candidate.set_pos(100);
+        let candidate_plan = external_plan_record(0, &candidate, 0, &config);
+        stage.push_required(&candidate_plan).unwrap();
+
+        // A pair sharing that fragment key can join the group the candidate
+        // would mark, so it must be retained.
+        let mut same_key = record_with_name_and_qualities(b"same-key", &[30], 0x1);
+        same_key.set_tid(0);
+        same_key.set_pos(100);
+        let same_key_plan = external_plan_record(1, &same_key, 0, &config);
+        stage.push_paired(&same_key_plan).unwrap();
+
+        // A pair at a different fragment key can only ever join a group that
+        // holds pairs alone, which marks nothing, so it must be dropped.
+        let mut other_key = record_with_name_and_qualities(b"other-key", &[30], 0x1);
+        other_key.set_tid(0);
+        other_key.set_pos(500);
+        let other_key_plan = external_plan_record(2, &other_key, 0, &config);
+        stage.push_paired(&other_key_plan).unwrap();
+
+        let sorter = stage.take_sorter().expect("fragment sorter is present");
+        let mut keys = Vec::new();
+        sorter
+            .finish_into(|item| {
+                keys.push(item.key);
+                Ok::<(), String>(())
+            })
+            .unwrap();
+        assert_eq!(
+            keys.len(),
+            2,
+            "expected the candidate and the tainted pair only"
+        );
     }
 
     fn read_ends_for_records(records: &[bam::Record]) -> Vec<ReadEndMetadata> {

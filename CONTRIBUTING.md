@@ -46,6 +46,29 @@ python3 tools/verify_benchmarks.py
 python3 tools/verify_real_data_evidence.py
 ```
 
+### Expect tests and examples
+
+Pure boundaries use Jane Street-style expect tests. The whole normalised map,
+config struct, or error list is stored next to the assertion, so a changed
+default or ordering rule is visible in review:
+
+```bash
+cargo test -p turbo-picard-core --test expectations
+cargo test -p turbo-picard-cli --test expectations
+```
+
+After an intentional change, rewrite the inline expectations and read the
+resulting diff before committing:
+
+```bash
+UPDATE_EXPECT=1 cargo test -p turbo-picard-core --test expectations
+UPDATE_EXPECT=1 cargo test -p turbo-picard-cli --test expectations
+```
+
+The `tests/examples.rs` targets and the `///` examples in public APIs are
+runnable usage checks. `cargo test --workspace` executes the doctests; keep the
+examples small enough to read and keep them compiling.
+
 If the change affects documentation or the paper, also run:
 
 ```bash

@@ -155,7 +155,7 @@ pub(super) fn push_pair(
 pub(super) fn finish_spilled(
     qnames: ExternalSorter,
     pairs: &mut ExternalSorter,
-    mut fragments: Option<&mut ExternalSorter>,
+    mut fragments: Option<&mut FragmentStage>,
 ) -> Result<(), String> {
     let mut pending_pair = None::<ExternalPlanRecord>;
     qnames.finish_into(|item| {
@@ -163,8 +163,8 @@ pub(super) fn finish_spilled(
             .as_ref()
             .is_some_and(|pending| pending.template_key.as_slice() != item.key.as_slice())
         {
-            if let Some(fragments) = fragments.as_deref_mut() {
-                push_external_fragment(pending_pair.as_ref().unwrap(), fragments)?;
+            if let Some(stage) = fragments.as_deref_mut() {
+                stage.push_required(pending_pair.as_ref().unwrap())?;
             }
             pending_pair = None;
         }
@@ -183,8 +183,8 @@ pub(super) fn finish_spilled(
         }
         Ok(())
     })?;
-    if let (Some(plan), Some(fragments)) = (pending_pair, fragments) {
-        push_external_fragment(&plan, fragments)?;
+    if let (Some(plan), Some(stage)) = (pending_pair, fragments) {
+        stage.push_required(&plan)?;
     }
     Ok(())
 }
@@ -404,7 +404,7 @@ mod tests {
                 config.max_records_in_ram = if spill { 1 } else { 10_000 };
                 let mut qnames = ExternalSorter::new(config.clone()).unwrap();
                 let mut pairs = ExternalSorter::new(config.clone()).unwrap();
-                let mut fragments = ExternalSorter::new(config).unwrap();
+                let mut fragments = FragmentStage::new(ExternalSorter::new(config).unwrap());
                 let mut cache = ExternalMateCache::new();
                 cache.max_pending = max_pending;
                 for record in &records {
@@ -412,11 +412,16 @@ mod tests {
                 }
                 cache.flush(&mut qnames).unwrap();
                 finish_spilled(qnames, &mut pairs, Some(&mut fragments)).unwrap();
-                pairs
-                    .finish_into(|item| push_external_pair_fragments(&item, &mut fragments))
-                    .unwrap();
+                {
+                    let sorter = fragments.sorter.as_mut().expect("fragment sorter");
+                    pairs
+                        .finish_into(|item| push_external_pair_fragments(&item, sorter))
+                        .unwrap();
+                }
                 let mut actual = Vec::new();
                 fragments
+                    .take_sorter()
+                    .expect("fragment sorter")
                     .finish_into(|item| {
                         let plan = decode_external_plan_record(&item.key, &item.payload, true)?;
                         actual.push((item.key, plan.ordinal, item.payload));

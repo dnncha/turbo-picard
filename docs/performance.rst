@@ -32,6 +32,22 @@ sort window during the first pass. When any exist, paired ends are recovered
 from the completed-pair payloads and unmatched QNAME records for fragment
 dominance checks. This preserves orphan handling without another input scan.
 Paired-only inputs build no fragment entries.
+Paired ends recovered from completed pairs also pass a lazily allocated 4 MiB
+bloom filter over the fragment keys an unpaired candidate owns. A pair is
+sorted only when an unpaired candidate shares its key. A false positive adds a
+pair to a group that holds pairs alone, which marks nothing either way, so
+duplicate decisions are unchanged; a false negative cannot occur. The filter
+allocates nothing until the first unpaired candidate is inserted.
+
+A synthetic native-path check measures the filter directly: 200,000 pair-only
+read pairs plus 5,000 tainted loci, one host (macOS arm64), one warm-up and
+three alternating measured repetitions. Without the filter, MarkDuplicates took
+a median ``0.33`` s and ``157.1`` MB peak RSS; with it, ``0.28`` s and
+``91.4`` MB, with identical output BAM and metrics hashes. At 400,000 pairs the
+same mix measured ``1.22`` s and ``198.0`` MB against ``0.79`` s and
+``125.2`` MB. MB denotes 1,000,000 bytes. These are synthetic native-path
+numbers, not a Picard comparison or a whole-genome guarantee; reproduce them
+with ``tools/bench_fragment_filter.py`` and the two binaries under test.
 Completed mates occupy one pair-sort entry with a length-framed payload for
 both original records. This follows the compact pair representation used in
 `FastDup's read-end generator <https://github.com/zzhofict/FastDup/blob/7b3f62587283a257fd38c5c20ceeda0364c285ef/src/markdup/md_pipeline.cpp>`_.
@@ -213,6 +229,11 @@ asynchronously. The default now scales up to six collector workers when CPUs and
 active collectors are available. Override with ``TURBO_PICARD_CMM_THREADS=N`` or
 set ``TURBO_PICARD_CMM_THREADS=auto`` to force the built-in policy. SAM inputs
 still use per-program passes so the existing SAM-text fast paths stay available.
+Before a batch is dispatched, a per-run plan records which collector families
+are active. The reader evaluates only the gate families in that plan, so the
+quality skip scan, mate checks, and insert-size predicate are not paid when the
+corresponding collector is not selected. The declarations are made once at
+startup and compiled into a plan, not inferred per record.
 
 ``SetNmMdAndUqTags`` obtains one borrowed reference slice per CIGAR operation
 when the segment fits the active 4 MiB reference window. Oversized or
@@ -247,6 +268,32 @@ For focused regression work, run only the command family under investigation:
 repeated or comma-separated. This is the preferred loop when auditing the saved
 suite floor, because it preserves Picard parity checks while avoiding unrelated
 benchmark setup and runtime.
+
+Retroactive tail traces
+-----------------------
+
+Aggregate profiles answer where time goes on average. They do not answer what
+one slow record or batch did. For that, capture the last few milliseconds of
+control flow around the event instead of sampling throughout the run:
+
+.. code-block:: bash
+
+   tools/retro-trace.sh <pid> /tmp/turbo-picard-tail.ftf
+
+The wrapper drives `magic-trace <https://github.com/janestreet/magic-trace>`_,
+which snapshots Intel Processor Trace into a ring buffer and renders it as a
+timeline. Open the result in ``https://ui.perfetto.dev`` and zoom to a single
+record. This is the right lens for "one call took ten times longer" or "this
+loop ran ten times more often" failures that a geometric-mean benchmark
+averages away.
+
+Requirements and limits: x86-64 Linux with Intel Processor Trace, a symbolised
+native binary, and the ``magic-trace`` executable on ``PATH``. The wrapper
+fails with a clear message when the tool is absent. Capture is retrospective,
+so start it before the slow event and trigger the snapshot from the event
+itself: attach with ``-symbol`` to snapshot on a chosen function, or attach
+without one and copy the trace after the event. Do not treat a trace as a
+throughput measurement; it is evidence about one interval.
 
 The MarkDuplicates synthetic benchmark now defaults to BAM so it exercises the
 native production path. Stress large duplicate families and optical-name

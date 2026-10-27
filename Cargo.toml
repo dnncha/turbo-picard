@@ -18,6 +18,7 @@ homepage = "https://github.com/dnncha/turbo-picard"
 [workspace.dependencies]
 assert_cmd = "2.2.2"
 crossbeam-channel = "0.5"
+expect-test = "1.5.1"
 flate2 = "1.1.5"
 hts-sys = "2.2.0"
 md5 = "0.8.0"

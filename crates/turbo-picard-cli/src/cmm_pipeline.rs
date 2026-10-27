@@ -8,11 +8,50 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::thread::{self, JoinHandle};
 
+/// Which per-record gate families the active collectors can observe.
+///
+/// Declared once when the pool is built instead of re-deriving every
+/// predicate for every record. This is the planner step from Flex Model: a
+/// feature declares the events and values it reads, and the engine compiles
+/// that into a plan. A collector that is not part of the run contributes no
+/// bits here, so its predicate is never evaluated.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct CmmPlan {
+    pub alignment: bool,
+    pub insert_size: bool,
+    pub base_distribution: bool,
+    pub quality_distribution: bool,
+    pub mean_quality: bool,
+    pub quality_yield: bool,
+    pub gc_bias: bool,
+    pub wgs: bool,
+}
+
+impl CmmPlan {
+    /// Every collector family, used when the caller has no plan.
+    #[cfg(test)]
+    pub const ALL: Self = Self {
+        alignment: true,
+        insert_size: true,
+        base_distribution: true,
+        quality_distribution: true,
+        mean_quality: true,
+        quality_yield: true,
+        gc_bias: true,
+        wgs: true,
+    };
+
+    #[inline]
+    fn needs_quality_scan(&self) -> bool {
+        self.base_distribution || self.quality_distribution || self.mean_quality
+    }
+}
+
 /// Per-collector fast reject gates for a single BAM record.
 ///
 /// Mirrors riker's `field_needs` union at the dispatch layer: skip collectors
 /// that cannot observe this record before taking their mutex.
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct CmmRecordGates {
     pub alignment: bool,
     pub insert_size: bool,
@@ -25,6 +64,7 @@ pub struct CmmRecordGates {
 }
 
 impl CmmRecordGates {
+    #[cfg(test)]
     #[inline]
     pub fn for_record(
         record: &bam::Record,
@@ -33,27 +73,53 @@ impl CmmRecordGates {
         include_secondary_yield: bool,
         include_supplemental_yield: bool,
     ) -> Self {
+        Self::for_plan(
+            record,
+            CmmPlan::ALL,
+            aligned_reads_only,
+            pf_reads_only,
+            include_secondary_yield,
+            include_supplemental_yield,
+        )
+    }
+
+    /// Compute only the gates the active plan can observe.
+    ///
+    /// A gate outside the plan stays false, so the record is not dispatched for
+    /// that collector and its predicate (including the quality skip scan and
+    /// mate checks) is never evaluated.
+    #[inline]
+    pub fn for_plan(
+        record: &bam::Record,
+        plan: CmmPlan,
+        aligned_reads_only: bool,
+        pf_reads_only: bool,
+        include_secondary_yield: bool,
+        include_supplemental_yield: bool,
+    ) -> Self {
         let secondary = record.is_secondary();
         let supplementary = record.is_supplementary();
         let unmapped = record.is_unmapped();
-        let captures_quality =
-            !super::skip_quality_metric_record(record, aligned_reads_only, pf_reads_only);
+        let captures_quality = plan.needs_quality_scan()
+            && !super::skip_quality_metric_record(record, aligned_reads_only, pf_reads_only);
         Self {
-            alignment: !secondary && !supplementary,
-            insert_size: record.is_paired()
+            alignment: plan.alignment && !secondary && !supplementary,
+            insert_size: plan.insert_size
+                && record.is_paired()
                 && !unmapped
                 && !record.is_mate_unmapped()
                 && !secondary
                 && !supplementary
                 && record.is_last_in_template()
                 && record.insert_size() != 0,
-            base_distribution: captures_quality,
-            quality_distribution: captures_quality,
-            mean_quality: captures_quality,
-            quality_yield: (!secondary || include_secondary_yield)
+            base_distribution: plan.base_distribution && captures_quality,
+            quality_distribution: plan.quality_distribution && captures_quality,
+            mean_quality: plan.mean_quality && captures_quality,
+            quality_yield: plan.quality_yield
+                && (!secondary || include_secondary_yield)
                 && (!supplementary || include_supplemental_yield),
-            gc_bias: !secondary && !supplementary && !unmapped,
-            wgs: !unmapped && !secondary && !supplementary,
+            gc_bias: plan.gc_bias && !secondary && !supplementary && !unmapped,
+            wgs: plan.wgs && !unmapped && !secondary && !supplementary,
         }
     }
 
@@ -102,10 +168,18 @@ pub struct CmmWorkerPool {
     error_tx: Sender<String>,
     error_rx: Receiver<String>,
     poison: Arc<AtomicBool>,
+    plan: CmmPlan,
 }
 
 impl CmmWorkerPool {
+    /// Build a pool that evaluates every gate family.
+    #[cfg(test)]
     pub fn new(handlers: Vec<CmmBatchHandler>) -> Self {
+        Self::with_plan(handlers, CmmPlan::ALL)
+    }
+
+    /// Build a pool whose planner evaluates only the declared gate families.
+    pub fn with_plan(handlers: Vec<CmmBatchHandler>, plan: CmmPlan) -> Self {
         let worker_count = handlers.len();
         let (batch_return, batch_pool) = bounded(BATCH_POOL_DEPTH);
         let (completion_tx, completion_rx) = crossbeam_channel::unbounded::<Vec<CmmBatchRecord>>();
@@ -181,6 +255,7 @@ impl CmmWorkerPool {
             error_tx,
             error_rx,
             poison,
+            plan,
         }
     }
 
@@ -294,8 +369,9 @@ impl CmmWorkerPool {
                             seen += 1;
                         }
                         let record = record.map_err(|error| error.to_string())?;
-                        let gates = CmmRecordGates::for_record(
+                        let gates = CmmRecordGates::for_plan(
                             &record,
+                            worker_pool.plan,
                             aligned_reads_only,
                             pf_reads_only,
                             include_secondary_quality_yield,
@@ -372,6 +448,53 @@ mod tests {
         record.set(b"read", None, b"ACGT", b"FFFF");
         record.set_flags(flags);
         record
+    }
+
+    #[test]
+    fn cmm_plan_keeps_all_gates_identical_to_the_unplanned_path() {
+        for flags in [
+            0_u16,
+            0x1 | 0x2 | 0x40,
+            0x4,
+            0x200,
+            0x100 | 0x800,
+            0x1 | 0x8 | 0x80,
+        ] {
+            let record = record_with_flags(flags);
+            assert_eq!(
+                CmmRecordGates::for_plan(&record, CmmPlan::ALL, true, true, false, false),
+                CmmRecordGates::for_record(&record, true, true, false, false),
+                "flags={flags:#x}"
+            );
+        }
+    }
+
+    #[test]
+    fn cmm_plan_skips_gate_families_no_collector_reads() {
+        let paired = record_with_flags(0x1 | 0x2 | 0x40);
+        let alignment_only = CmmRecordGates::for_plan(
+            &paired,
+            CmmPlan {
+                alignment: true,
+                ..CmmPlan::default()
+            },
+            true,
+            true,
+            false,
+            false,
+        );
+        assert!(alignment_only.alignment);
+        assert!(!alignment_only.insert_size);
+        assert!(!alignment_only.base_distribution);
+        assert!(!alignment_only.quality_distribution);
+        assert!(!alignment_only.mean_quality);
+        assert!(!alignment_only.quality_yield);
+        assert!(!alignment_only.gc_bias);
+        assert!(!alignment_only.wgs);
+
+        let unplanned =
+            CmmRecordGates::for_plan(&paired, CmmPlan::default(), true, true, false, false);
+        assert!(!unplanned.has_any());
     }
 
     #[test]

@@ -127,7 +127,11 @@ def canonical_header(line: str) -> list[str]:
             if value.startswith("DT:") and re.fullmatch(
                     r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?(?:Z|[+-](?:[01]\d|2[0-3]):?[0-5]\d)", value[3:]):
                 try:
-                    date = datetime.fromisoformat(value[3:])
+                    # Python before 3.11 requires a colon in the UTC offset and
+                    # does not accept a trailing Z.
+                    raw = re.sub(r"([+-]\d{2})(\d{2})$", r"\1:\2", value[3:])
+                    raw = raw[:-1] + "+00:00" if raw.endswith("Z") else raw
+                    date = datetime.fromisoformat(raw)
                 except ValueError:
                     continue
                 values[index] = "DT:" + date.astimezone(timezone.utc).isoformat()

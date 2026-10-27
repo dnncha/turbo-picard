@@ -1,5 +1,35 @@
 # Changelog
 
+## Unreleased
+
+## Engineering
+
+- Add a per-run collector plan to the single-pass metrics pipeline. The plan
+  records which collector families are active, and the reader evaluates only
+  those gate families, so unused quality, mate and insert-size predicates are
+  not computed per record. The unplanned path is retained and tested for
+  identical gates.
+- Filter paired fragment entries through a lazily allocated 4 MiB bloom filter
+  over the fragment keys an unpaired candidate owns. A false positive adds a
+  pair to a group that marks nothing, so duplicate decisions are unchanged; a
+  regression test pins the retained and dropped cases. A synthetic native-path
+  mix (200,000 pair-only read pairs plus 5,000 tainted loci, one host, one
+  warm-up and three alternating repetitions) moved from 0.33 s / 157.1 MB to
+  0.28 s / 91.4 MB with identical BAM and metrics hashes; at 400,000 pairs it
+  moved from 1.22 s / 198.0 MB to 0.79 s / 125.2 MB. This is not a Picard
+  comparison or a WGS guarantee. Reproduce with
+  ``tools/bench_fragment_filter.py``.
+- Record the CLI and core contract with expect tests so a changed default,
+  ordering rule, or error message appears as a reviewed diff.
+- Harden command obligations: an accelerated matrix entry must name a parity
+  script that exists, fails closed, and is not reused by another command.
+- Add ``tools/retro-trace.sh`` and document retroactive tail tracing with
+  magic-trace for one slow record or batch.
+- Strip a Python-version dependency from the evidence comparator: explicit-zone
+  read-group DT timestamps normalize on Python versions that reject a colon-less
+  offset or a trailing ``Z``.
+
+
 ## 0.1.17 — 2026-10-25
 
 - Reuse CollectHsMetrics interval lookups within alignment blocks, including

@@ -135,6 +135,7 @@ def validate_scope_notes(entries):
 def validate_matrix_entry_structure(entries):
     errors = []
     seen = set()
+    parity_owners = {}
     for entry in entries:
         name = entry.get("name", "").strip()
         if not name:
@@ -151,6 +152,13 @@ def validate_matrix_entry_structure(entries):
             errors.append(f"{name} missing parity_script")
         if status == "fallback-only" and parity_script not in {"", "null"}:
             errors.append(f"{name} fallback-only entry should not declare parity_script")
+        if parity_script not in {"", "null"}:
+            if parity_script in parity_owners:
+                errors.append(
+                    f"{name} reuses parity script {parity_script} already gating {parity_owners[parity_script]}"
+                )
+            else:
+                parity_owners[parity_script] = name
     return errors
 
 
@@ -328,13 +336,20 @@ def validate_picard_reference_coverage(entries):
 
 
 def validate_parity_script_files(scripts, root=ROOT):
+    errors = []
     missing_scripts = [script for script in scripts if not (root / script).is_file()]
     if missing_scripts:
         return [
             "matrix parity scripts missing from repository: "
             + ", ".join(missing_scripts)
         ]
-    return []
+    for script in scripts:
+        text = (root / script).read_text(encoding="utf-8")
+        if not text.startswith("#!"):
+            errors.append(f"matrix parity script is not a shell program: {script}")
+        if "set -" not in text:
+            errors.append(f"matrix parity script does not fail closed: {script}")
+    return errors
 
 
 def validate_parity_script_ci_coverage(scripts, ci_text):
