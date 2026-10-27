@@ -50,7 +50,7 @@ use turbo_picard_core::bam_external_sort::{BamExternalSortConfig, BamExternalSor
 use turbo_picard_core::external_sort::{ExternalSortConfig, ExternalSorter};
 use turbo_picard_core::hts_io;
 use turbo_picard_core::markdup_config::MarkDuplicatesConfig;
-use turbo_picard_core::picard_args::normalize_picard_args_for_command;
+use turbo_picard_core::picard_args::{PicardArgs, SortOrder, normalize_picard_args_for_command};
 
 type IntervalFilter = BTreeMap<i32, Vec<(u64, u64)>>;
 
@@ -2324,37 +2324,90 @@ fn run_markduplicates(args: &[String]) -> Result<(), String> {
     Ok(())
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum SortOrder {
-    Coordinate,
-    QueryName,
-    Unsorted,
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SortSamConfig {
+    input: String,
+    output: String,
+    compression_level: Option<u32>,
+    max_records_in_ram: usize,
+    tmp_dir: Option<std::path::PathBuf>,
+    create_index: bool,
+    create_md5_file: bool,
+    sort_order: SortOrder,
+}
+
+impl SortSamConfig {
+    fn try_from_args(args: &PicardArgs) -> Result<Self, String> {
+        let typed = args.typed();
+        let input = typed
+            .required_string("INPUT")
+            .map_err(|error| error.to_string())?;
+        let output = typed
+            .required_string("OUTPUT")
+            .map_err(|error| error.to_string())?;
+        let compression_level = typed
+            .optional_u32("COMPRESSION_LEVEL")
+            .map_err(|error| error.to_string())?;
+        let max_records_in_ram = typed
+            .optional_u32("MAX_RECORDS_IN_RAM")
+            .map_err(|error| error.to_string())?
+            .map(|value| value as usize)
+            .unwrap_or(500_000);
+        let tmp_dir = typed
+            .optional_string("TMP_DIR")
+            .map_err(|error| error.to_string())?
+            .filter(|value| !value.trim().is_empty())
+            .map(std::path::PathBuf::from);
+        let create_index = typed
+            .optional_bool("CREATE_INDEX")
+            .map_err(|error| error.to_string())?
+            .unwrap_or(false);
+        let create_md5_file = typed
+            .optional_bool("CREATE_MD5_FILE")
+            .map_err(|error| error.to_string())?
+            .unwrap_or(false);
+        let sort_order_value = typed
+            .required_string("SORT_ORDER")
+            .map_err(|error| error.to_string())?;
+        let sort_order = match SortOrder::parse(&sort_order_value) {
+            Some(SortOrder::Coordinate) => SortOrder::Coordinate,
+            Some(SortOrder::QueryName) => SortOrder::QueryName,
+            _ => {
+                return Err(format!(
+                    "unsupported SortSam SORT_ORDER: {sort_order_value}"
+                ));
+            }
+        };
+
+        Ok(Self {
+            input,
+            output,
+            compression_level,
+            max_records_in_ram,
+            tmp_dir,
+            create_index,
+            create_md5_file,
+            sort_order,
+        })
+    }
 }
 
 fn run_sortsam(args: &[String]) -> Result<(), String> {
     let args =
         normalize_picard_args_for_command("SortSam", args).map_err(|error| error.to_string())?;
     reject_unsupported_sortsam_args(&args)?;
-    let input = required_scalar(&args, "INPUT")?;
-    let output = required_scalar(&args, "OUTPUT")?;
-    let compression_level = optional_u32(&args, "COMPRESSION_LEVEL")?;
-    let max_records_in_ram = optional_u32(&args, "MAX_RECORDS_IN_RAM")?
-        .map(|value| value as usize)
-        .unwrap_or(500_000);
-    let tmp_dir = optional_scalar(&args, "TMP_DIR")?
-        .filter(|value| !value.trim().is_empty())
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(env::temp_dir);
-    let create_index = optional_bool(&args, "CREATE_INDEX")?.unwrap_or(false);
-    let create_md5_file = optional_bool(&args, "CREATE_MD5_FILE")?.unwrap_or(false);
-    let sort_order = match required_scalar(&args, "SORT_ORDER")?.as_str() {
-        "coordinate" => SortOrder::Coordinate,
-        "queryname" => SortOrder::QueryName,
-        value => return Err(format!("unsupported SortSam SORT_ORDER: {value}")),
-    };
-    if create_index && sort_order != SortOrder::Coordinate {
+    let config = SortSamConfig::try_from_args(&args)?;
+    if config.create_index && config.sort_order != SortOrder::Coordinate {
         return Err("SortSam CREATE_INDEX=true requires SORT_ORDER=coordinate".to_string());
     }
+    let input = config.input;
+    let output = config.output;
+    let compression_level = config.compression_level;
+    let max_records_in_ram = config.max_records_in_ram;
+    let create_index = config.create_index;
+    let create_md5_file = config.create_md5_file;
+    let sort_order = config.sort_order;
+    let tmp_dir = config.tmp_dir.unwrap_or_else(env::temp_dir);
     let reference = picard_reference(&args)?;
 
     if try_raw_copy_sortsam(
@@ -2451,12 +2504,10 @@ fn try_raw_copy_sortsam(
         return Ok(false);
     }
     let reader = open_bam_reader_with_reference(input, reference)?;
-    let expected = match sort_order {
-        SortOrder::Coordinate => "coordinate",
-        SortOrder::QueryName => "queryname",
-        SortOrder::Unsorted => return Ok(false),
-    };
-    if header_sort_order(reader.header()).as_deref() != Some(expected) {
+    if sort_order == SortOrder::Unsorted {
+        return Ok(false);
+    }
+    if header_sort_order(reader.header()).as_deref() != Some(sort_order.as_picard_str()) {
         return Ok(false);
     }
     let mut reader = reader;
@@ -4195,7 +4246,7 @@ fn default_cmm_collector_thread_count(active_collectors: usize) -> usize {
 }
 
 fn run_collectmultiplemetrics_single_pass(
-    args: &BTreeMap<String, Vec<String>>,
+    args: &PicardArgs,
     input: &str,
     output: &str,
     file_extension: &str,
@@ -7577,7 +7628,7 @@ fn run_mergevcfs(args: &[String]) -> Result<(), String> {
     output_writer.finish()
 }
 
-fn reject_unsupported_viewsam_args(args: &BTreeMap<String, Vec<String>>) -> Result<(), String> {
+fn reject_unsupported_viewsam_args(args: &PicardArgs) -> Result<(), String> {
     let supported = [
         "INPUT",
         "OUTPUT",
@@ -7723,9 +7774,7 @@ fn record_overlaps_intervals(
     })
 }
 
-fn reject_unsupported_updatevcfsequencedictionary_args(
-    args: &BTreeMap<String, Vec<String>>,
-) -> Result<(), String> {
+fn reject_unsupported_updatevcfsequencedictionary_args(args: &PicardArgs) -> Result<(), String> {
     let supported = [
         "INPUT",
         "OUTPUT",
@@ -7764,7 +7813,7 @@ fn reject_unsupported_updatevcfsequencedictionary_args(
     Ok(())
 }
 
-fn reject_unsupported_liftovervcf_args(args: &BTreeMap<String, Vec<String>>) -> Result<(), String> {
+fn reject_unsupported_liftovervcf_args(args: &PicardArgs) -> Result<(), String> {
     let supported = [
         "INPUT",
         "OUTPUT",
@@ -7802,7 +7851,7 @@ fn reject_unsupported_liftovervcf_args(args: &BTreeMap<String, Vec<String>>) -> 
     Ok(())
 }
 
-fn reject_unsupported_gathervcfs_args(args: &BTreeMap<String, Vec<String>>) -> Result<(), String> {
+fn reject_unsupported_gathervcfs_args(args: &PicardArgs) -> Result<(), String> {
     let supported = [
         "INPUT",
         "OUTPUT",
@@ -7837,7 +7886,7 @@ fn reject_unsupported_gathervcfs_args(args: &BTreeMap<String, Vec<String>>) -> R
     Ok(())
 }
 
-fn reject_unsupported_sortvcf_args(args: &BTreeMap<String, Vec<String>>) -> Result<(), String> {
+fn reject_unsupported_sortvcf_args(args: &PicardArgs) -> Result<(), String> {
     let supported = [
         "INPUT",
         "OUTPUT",
@@ -7867,7 +7916,7 @@ fn reject_unsupported_sortvcf_args(args: &BTreeMap<String, Vec<String>>) -> Resu
     Ok(())
 }
 
-fn reject_unsupported_mergevcfs_args(args: &BTreeMap<String, Vec<String>>) -> Result<(), String> {
+fn reject_unsupported_mergevcfs_args(args: &PicardArgs) -> Result<(), String> {
     let supported = [
         "INPUT",
         "OUTPUT",
@@ -8627,9 +8676,7 @@ fn replace_vcf_contig_header(input_text: &str, contig_lines: &[String]) -> Resul
     Ok(output)
 }
 
-fn reject_unsupported_replacesamheader_args(
-    args: &BTreeMap<String, Vec<String>>,
-) -> Result<(), String> {
+fn reject_unsupported_replacesamheader_args(args: &PicardArgs) -> Result<(), String> {
     let supported = [
         "INPUT",
         "OUTPUT",
@@ -8666,9 +8713,7 @@ fn reject_unsupported_replacesamheader_args(
     Ok(())
 }
 
-fn reject_unsupported_createsequencedictionary_args(
-    args: &BTreeMap<String, Vec<String>>,
-) -> Result<(), String> {
+fn reject_unsupported_createsequencedictionary_args(args: &PicardArgs) -> Result<(), String> {
     let supported = [
         "REFERENCE_SEQUENCE",
         "OUTPUT",
@@ -8717,9 +8762,7 @@ fn reject_unsupported_createsequencedictionary_args(
     Ok(())
 }
 
-fn reject_unsupported_normalizefasta_args(
-    args: &BTreeMap<String, Vec<String>>,
-) -> Result<(), String> {
+fn reject_unsupported_normalizefasta_args(args: &PicardArgs) -> Result<(), String> {
     let supported = [
         "INPUT",
         "OUTPUT",
@@ -8758,9 +8801,7 @@ fn reject_unsupported_normalizefasta_args(
     Ok(())
 }
 
-fn reject_unsupported_bedtointervallist_args(
-    args: &BTreeMap<String, Vec<String>>,
-) -> Result<(), String> {
+fn reject_unsupported_bedtointervallist_args(args: &PicardArgs) -> Result<(), String> {
     let supported = [
         "INPUT",
         "OUTPUT",
@@ -8804,9 +8845,7 @@ fn reject_unsupported_bedtointervallist_args(
     Ok(())
 }
 
-fn reject_unsupported_intervallisttools_args(
-    args: &BTreeMap<String, Vec<String>>,
-) -> Result<(), String> {
+fn reject_unsupported_intervallisttools_args(args: &PicardArgs) -> Result<(), String> {
     let supported = [
         "INPUT",
         "OUTPUT",
@@ -8850,7 +8889,7 @@ fn reject_unsupported_intervallisttools_args(
     Ok(())
 }
 
-fn reject_unsupported_revertsam_args(args: &BTreeMap<String, Vec<String>>) -> Result<(), String> {
+fn reject_unsupported_revertsam_args(args: &PicardArgs) -> Result<(), String> {
     let supported = [
         "INPUT",
         "OUTPUT",
@@ -8915,16 +8954,11 @@ fn reject_unsupported_revertsam_args(args: &BTreeMap<String, Vec<String>>) -> Re
     Ok(())
 }
 
-fn attributes_to_clear_for_revertsam(
-    args: &BTreeMap<String, Vec<String>>,
-) -> Result<Vec<[u8; 2]>, String> {
+fn attributes_to_clear_for_revertsam(args: &PicardArgs) -> Result<Vec<[u8; 2]>, String> {
     attributes_for_revertsam(args, "ATTRIBUTE_TO_CLEAR")
 }
 
-fn attributes_for_revertsam(
-    args: &BTreeMap<String, Vec<String>>,
-    key: &str,
-) -> Result<Vec<[u8; 2]>, String> {
+fn attributes_for_revertsam(args: &PicardArgs, key: &str) -> Result<Vec<[u8; 2]>, String> {
     let mut attributes = Vec::new();
     for attribute in args.get(key).into_iter().flatten() {
         let bytes = attribute.as_bytes();
@@ -8936,9 +8970,7 @@ fn attributes_for_revertsam(
     Ok(attributes)
 }
 
-fn reject_unsupported_setnmmdanduqtags_args(
-    args: &BTreeMap<String, Vec<String>>,
-) -> Result<(), String> {
+fn reject_unsupported_setnmmdanduqtags_args(args: &PicardArgs) -> Result<(), String> {
     let supported = [
         "INPUT",
         "OUTPUT",
@@ -8978,9 +9010,7 @@ fn reject_unsupported_setnmmdanduqtags_args(
     Ok(())
 }
 
-fn reject_unsupported_validatesamfile_args(
-    args: &BTreeMap<String, Vec<String>>,
-) -> Result<(), String> {
+fn reject_unsupported_validatesamfile_args(args: &PicardArgs) -> Result<(), String> {
     let supported = [
         "INPUT",
         "OUTPUT",
@@ -9923,9 +9953,7 @@ fn expected_record_nm(
     Ok(Some(nm))
 }
 
-fn validate_sam_ignored_summary_keys(
-    args: &BTreeMap<String, Vec<String>>,
-) -> Result<BTreeSet<String>, String> {
+fn validate_sam_ignored_summary_keys(args: &PicardArgs) -> Result<BTreeSet<String>, String> {
     let mut ignored = BTreeSet::new();
     for value in args.get("IGNORE").into_iter().flatten() {
         let key = match value.as_str() {
@@ -9951,7 +9979,7 @@ fn validate_sam_ignored_summary_keys(
     Ok(ignored)
 }
 
-fn validate_sam_mode(args: &BTreeMap<String, Vec<String>>) -> Result<ValidateSamMode, String> {
+fn validate_sam_mode(args: &PicardArgs) -> Result<ValidateSamMode, String> {
     match optional_scalar(args, "MODE")?
         .unwrap_or_else(|| "SUMMARY".to_string())
         .to_ascii_uppercase()
@@ -10630,9 +10658,7 @@ fn read_bed_intervals(
     Ok(intervals)
 }
 
-fn reject_unsupported_collectalignment_args(
-    args: &BTreeMap<String, Vec<String>>,
-) -> Result<(), String> {
+fn reject_unsupported_collectalignment_args(args: &PicardArgs) -> Result<(), String> {
     let supported = [
         "INPUT",
         "OUTPUT",
@@ -10684,9 +10710,7 @@ fn reject_unsupported_collectalignment_args(
     Ok(())
 }
 
-fn reject_unsupported_collectqualityyield_args(
-    args: &BTreeMap<String, Vec<String>>,
-) -> Result<(), String> {
+fn reject_unsupported_collectqualityyield_args(args: &PicardArgs) -> Result<(), String> {
     let supported = [
         "INPUT",
         "OUTPUT",
@@ -10725,9 +10749,7 @@ fn reject_unsupported_collectqualityyield_args(
     Ok(())
 }
 
-fn reject_unsupported_collectinsertsize_args(
-    args: &BTreeMap<String, Vec<String>>,
-) -> Result<(), String> {
+fn reject_unsupported_collectinsertsize_args(args: &PicardArgs) -> Result<(), String> {
     let supported = [
         "INPUT",
         "OUTPUT",
@@ -10778,9 +10800,7 @@ fn reject_unsupported_collectinsertsize_args(
     Ok(())
 }
 
-fn reject_unsupported_collectmultiplemetrics_args(
-    args: &BTreeMap<String, Vec<String>>,
-) -> Result<(), String> {
+fn reject_unsupported_collectmultiplemetrics_args(args: &PicardArgs) -> Result<(), String> {
     let supported = [
         "INPUT",
         "OUTPUT",
@@ -10899,9 +10919,7 @@ fn reject_unsupported_collectmultiplemetrics_args(
     Ok(())
 }
 
-fn collectmultiplemetrics_programs(
-    args: &BTreeMap<String, Vec<String>>,
-) -> Result<Vec<String>, String> {
+fn collectmultiplemetrics_programs(args: &PicardArgs) -> Result<Vec<String>, String> {
     if !args.contains_key("PROGRAM") {
         return Ok(default_collectmultiplemetrics_programs());
     }
@@ -10934,7 +10952,7 @@ fn collectmultiplemetrics_programs(
 }
 
 fn collectmultiplemetrics_extra_argument(
-    args: &BTreeMap<String, Vec<String>>,
+    args: &PicardArgs,
     program: &str,
     key: &str,
 ) -> Option<String> {
@@ -10946,7 +10964,7 @@ fn collectmultiplemetrics_extra_argument(
 }
 
 fn extend_collectmultiplemetrics_extra_arguments(
-    args: &BTreeMap<String, Vec<String>>,
+    args: &PicardArgs,
     program: &str,
     keys: &[&str],
     child_args: &mut Vec<String>,
@@ -10971,9 +10989,7 @@ fn default_collectmultiplemetrics_programs() -> Vec<String> {
     .collect()
 }
 
-fn reject_unsupported_collectbasedistributionbycycle_args(
-    args: &BTreeMap<String, Vec<String>>,
-) -> Result<(), String> {
+fn reject_unsupported_collectbasedistributionbycycle_args(args: &PicardArgs) -> Result<(), String> {
     let supported = [
         "INPUT",
         "OUTPUT",
@@ -11011,9 +11027,7 @@ fn reject_unsupported_collectbasedistributionbycycle_args(
     Ok(())
 }
 
-fn reject_unsupported_collectgcbiasmetrics_args(
-    args: &BTreeMap<String, Vec<String>>,
-) -> Result<(), String> {
+fn reject_unsupported_collectgcbiasmetrics_args(args: &PicardArgs) -> Result<(), String> {
     let supported = [
         "INPUT",
         "OUTPUT",
@@ -11067,9 +11081,7 @@ fn reject_unsupported_collectgcbiasmetrics_args(
     Ok(())
 }
 
-fn reject_unsupported_collecthsmetrics_args(
-    args: &BTreeMap<String, Vec<String>>,
-) -> Result<(), String> {
+fn reject_unsupported_collecthsmetrics_args(args: &PicardArgs) -> Result<(), String> {
     let supported = [
         "INPUT",
         "OUTPUT",
@@ -11129,9 +11141,7 @@ fn reject_unsupported_collecthsmetrics_args(
     Ok(())
 }
 
-fn reject_unsupported_collectwgsmetrics_args(
-    args: &BTreeMap<String, Vec<String>>,
-) -> Result<(), String> {
+fn reject_unsupported_collectwgsmetrics_args(args: &PicardArgs) -> Result<(), String> {
     let supported = [
         "INPUT",
         "OUTPUT",
@@ -11183,9 +11193,7 @@ fn reject_unsupported_collectwgsmetrics_args(
     Ok(())
 }
 
-fn reject_unsupported_fixmateinformation_args(
-    args: &BTreeMap<String, Vec<String>>,
-) -> Result<(), String> {
+fn reject_unsupported_fixmateinformation_args(args: &PicardArgs) -> Result<(), String> {
     let supported = [
         "INPUT",
         "OUTPUT",
@@ -11233,9 +11241,7 @@ fn reject_unsupported_fixmateinformation_args(
     Ok(())
 }
 
-fn reject_unsupported_qualityscoredistribution_args(
-    args: &BTreeMap<String, Vec<String>>,
-) -> Result<(), String> {
+fn reject_unsupported_qualityscoredistribution_args(args: &PicardArgs) -> Result<(), String> {
     let supported = [
         "INPUT",
         "OUTPUT",
@@ -11277,9 +11283,7 @@ fn reject_unsupported_qualityscoredistribution_args(
     Ok(())
 }
 
-fn reject_unsupported_meanqualitybycycle_args(
-    args: &BTreeMap<String, Vec<String>>,
-) -> Result<(), String> {
+fn reject_unsupported_meanqualitybycycle_args(args: &PicardArgs) -> Result<(), String> {
     let supported = [
         "INPUT",
         "OUTPUT",
@@ -11334,9 +11338,7 @@ enum AlignmentAccumulation {
     ReadGroup,
 }
 
-fn alignment_accumulation_level(
-    args: &BTreeMap<String, Vec<String>>,
-) -> Result<AlignmentAccumulation, String> {
+fn alignment_accumulation_level(args: &PicardArgs) -> Result<AlignmentAccumulation, String> {
     match optional_scalar(args, "METRIC_ACCUMULATION_LEVEL")?
         .unwrap_or_else(|| "ALL_READS".to_string())
         .as_str()
@@ -15819,9 +15821,7 @@ enum InsertSizeAccumulation {
     ReadGroup,
 }
 
-fn insert_size_accumulation_level(
-    args: &BTreeMap<String, Vec<String>>,
-) -> Result<InsertSizeAccumulation, String> {
+fn insert_size_accumulation_level(args: &PicardArgs) -> Result<InsertSizeAccumulation, String> {
     match optional_scalar(args, "METRIC_ACCUMULATION_LEVEL")?
         .unwrap_or_else(|| "ALL_READS".to_string())
         .as_str()
@@ -17268,9 +17268,7 @@ fn fastqtosam_header(read_group: &FastqReadGroup) -> bam::Header {
     header
 }
 
-fn reject_unsupported_addorreplacereadgroups_args(
-    args: &std::collections::BTreeMap<String, Vec<String>>,
-) -> Result<(), String> {
+fn reject_unsupported_addorreplacereadgroups_args(args: &PicardArgs) -> Result<(), String> {
     let supported = [
         "INPUT",
         "OUTPUT",
@@ -17396,9 +17394,7 @@ fn set_record_read_group(record: &mut bam::Record, read_group_id: &str) -> Resul
         .map_err(|error| error.to_string())
 }
 
-fn reject_unsupported_samtofastq_args(
-    args: &std::collections::BTreeMap<String, Vec<String>>,
-) -> Result<(), String> {
+fn reject_unsupported_samtofastq_args(args: &PicardArgs) -> Result<(), String> {
     let supported = [
         "INPUT",
         "FASTQ",
@@ -17514,9 +17510,7 @@ fn reject_unsupported_samtofastq_args(
     Ok(())
 }
 
-fn reject_unsupported_fastqtosam_args(
-    args: &std::collections::BTreeMap<String, Vec<String>>,
-) -> Result<(), String> {
+fn reject_unsupported_fastqtosam_args(args: &PicardArgs) -> Result<(), String> {
     let supported = [
         "FASTQ",
         "FASTQ2",
@@ -18316,9 +18310,7 @@ impl SamToFastqTransform {
     }
 }
 
-fn samtofastq_clipping(
-    args: &BTreeMap<String, Vec<String>>,
-) -> Result<Option<SamToFastqClipping>, String> {
+fn samtofastq_clipping(args: &PicardArgs) -> Result<Option<SamToFastqClipping>, String> {
     let Some(attribute) = optional_scalar(args, "CLIPPING_ATTRIBUTE")? else {
         return Ok(None);
     };
@@ -18699,9 +18691,7 @@ fn reverse_complement(sequence: &mut [u8]) {
     }
 }
 
-fn reject_unsupported_sortsam_args(
-    args: &std::collections::BTreeMap<String, Vec<String>>,
-) -> Result<(), String> {
+fn reject_unsupported_sortsam_args(args: &PicardArgs) -> Result<(), String> {
     let supported = [
         "INPUT",
         "OUTPUT",
@@ -18735,7 +18725,7 @@ fn reject_unsupported_sortsam_args(
     Ok(())
 }
 
-fn reject_unsupported_cleansam_args(args: &BTreeMap<String, Vec<String>>) -> Result<(), String> {
+fn reject_unsupported_cleansam_args(args: &PicardArgs) -> Result<(), String> {
     let supported = [
         "INPUT",
         "OUTPUT",
@@ -18768,9 +18758,7 @@ fn reject_unsupported_cleansam_args(args: &BTreeMap<String, Vec<String>>) -> Res
     Ok(())
 }
 
-fn reject_unsupported_mergesamfiles_args(
-    args: &std::collections::BTreeMap<String, Vec<String>>,
-) -> Result<(), String> {
+fn reject_unsupported_mergesamfiles_args(args: &PicardArgs) -> Result<(), String> {
     let supported = [
         "INPUT",
         "OUTPUT",
@@ -18811,9 +18799,7 @@ fn reject_unsupported_mergesamfiles_args(
     Ok(())
 }
 
-fn reject_unsupported_buildbamindex_args(
-    args: &std::collections::BTreeMap<String, Vec<String>>,
-) -> Result<(), String> {
+fn reject_unsupported_buildbamindex_args(args: &PicardArgs) -> Result<(), String> {
     let supported = [
         "INPUT",
         "OUTPUT",
@@ -18839,81 +18825,45 @@ fn reject_unsupported_buildbamindex_args(
     Ok(())
 }
 
-fn required_scalar(
-    args: &std::collections::BTreeMap<String, Vec<String>>,
-    key: &'static str,
-) -> Result<String, String> {
-    required_scalar_for(args, key, "SortSam")
-}
-
 fn required_scalar_for(
-    args: &std::collections::BTreeMap<String, Vec<String>>,
+    args: &PicardArgs,
     key: &'static str,
     command: &'static str,
 ) -> Result<String, String> {
-    let values = args
-        .get(key)
-        .ok_or_else(|| format!("missing required {command} argument: {key}"))?;
-    scalar_value(values, key)
+    args.typed_for(command)
+        .required_string(key)
+        .map_err(|error| error.to_string())
 }
 
 fn required_values_for(
-    args: &std::collections::BTreeMap<String, Vec<String>>,
+    args: &PicardArgs,
     key: &'static str,
     command: &'static str,
 ) -> Result<Vec<String>, String> {
-    let values = args
-        .get(key)
-        .ok_or_else(|| format!("missing required {command} argument: {key}"))?;
-    if values.is_empty() {
-        return Err(format!("missing required {command} argument: {key}"));
-    }
-    Ok(values.clone())
+    args.typed_for(command)
+        .required_values(key)
+        .map_err(|error| error.to_string())
 }
 
-fn optional_scalar(
-    args: &std::collections::BTreeMap<String, Vec<String>>,
-    key: &str,
-) -> Result<Option<String>, String> {
-    let Some(values) = args.get(key) else {
-        return Ok(None);
-    };
-    scalar_value(values, key).map(Some)
+fn optional_scalar(args: &PicardArgs, key: &str) -> Result<Option<String>, String> {
+    args.typed()
+        .optional_string(key)
+        .map_err(|error| error.to_string())
 }
 
-fn optional_bool(
-    args: &std::collections::BTreeMap<String, Vec<String>>,
-    key: &str,
-) -> Result<Option<bool>, String> {
-    let Some(value) = optional_scalar(args, key)? else {
-        return Ok(None);
-    };
-    match value.to_ascii_lowercase().as_str() {
-        "true" => Ok(Some(true)),
-        "false" => Ok(Some(false)),
-        _ => Err(format!(
-            "invalid boolean for SortSam argument {key}: {value}"
-        )),
-    }
+fn optional_bool(args: &PicardArgs, key: &str) -> Result<Option<bool>, String> {
+    args.typed()
+        .optional_bool(key)
+        .map_err(|error| error.to_string())
 }
 
-fn optional_u32(
-    args: &std::collections::BTreeMap<String, Vec<String>>,
-    key: &str,
-) -> Result<Option<u32>, String> {
-    let Some(value) = optional_scalar(args, key)? else {
-        return Ok(None);
-    };
-    value
-        .parse::<u32>()
-        .map(Some)
-        .map_err(|_| format!("unsupported SortSam argument {key}={value}"))
+fn optional_u32(args: &PicardArgs, key: &str) -> Result<Option<u32>, String> {
+    args.typed()
+        .optional_u32(key)
+        .map_err(|error| error.to_string())
 }
 
-fn reject_unsupported_compression_level(
-    args: &std::collections::BTreeMap<String, Vec<String>>,
-    command: &str,
-) -> Result<(), String> {
+fn reject_unsupported_compression_level(args: &PicardArgs, command: &str) -> Result<(), String> {
     if let Some(level) = optional_u32(args, "COMPRESSION_LEVEL")?
         && level > 9
     {
@@ -18922,37 +18872,16 @@ fn reject_unsupported_compression_level(
     Ok(())
 }
 
-fn optional_i64(
-    args: &std::collections::BTreeMap<String, Vec<String>>,
-    key: &str,
-) -> Result<Option<i64>, String> {
-    let Some(value) = optional_scalar(args, key)? else {
-        return Ok(None);
-    };
-    value
-        .parse::<i64>()
-        .map(Some)
-        .map_err(|_| format!("unsupported SortSam argument {key}={value}"))
+fn optional_i64(args: &PicardArgs, key: &str) -> Result<Option<i64>, String> {
+    args.typed()
+        .optional_i64(key)
+        .map_err(|error| error.to_string())
 }
 
-fn optional_f64(
-    args: &std::collections::BTreeMap<String, Vec<String>>,
-    key: &str,
-) -> Result<Option<f64>, String> {
-    let Some(value) = optional_scalar(args, key)? else {
-        return Ok(None);
-    };
-    value
-        .parse::<f64>()
-        .map(Some)
-        .map_err(|_| format!("unsupported SortSam argument {key}={value}"))
-}
-
-fn scalar_value(values: &[String], key: &str) -> Result<String, String> {
-    if values.len() != 1 {
-        return Err(format!("duplicate scalar SortSam argument: {key}"));
-    }
-    Ok(values[0].clone())
+fn optional_f64(args: &PicardArgs, key: &str) -> Result<Option<f64>, String> {
+    args.typed()
+        .optional_f64(key)
+        .map_err(|error| error.to_string())
 }
 
 fn limited_records<'a>(
@@ -19089,7 +19018,7 @@ fn push_merged_cigar(cigars: &mut Vec<Cigar>, cigar: Cigar) {
     cigars.push(cigar);
 }
 
-fn picard_reference(args: &BTreeMap<String, Vec<String>>) -> Result<Option<String>, String> {
+fn picard_reference(args: &PicardArgs) -> Result<Option<String>, String> {
     optional_scalar(args, "REFERENCE_SEQUENCE")
 }
 
@@ -19127,7 +19056,7 @@ fn open_bam_reader_for_validate_sam_file(
 
 fn open_bam_reader_for_args(
     path: impl AsRef<Path>,
-    args: &BTreeMap<String, Vec<String>>,
+    args: &PicardArgs,
 ) -> Result<bam::Reader, String> {
     let reference = picard_reference(args)?;
     open_bam_reader_with_reference(path, reference.as_deref())
@@ -20538,10 +20467,7 @@ impl MergeHeaderBuilder {
         }
 
         if !seen_hd {
-            lines.insert(
-                0,
-                format!("@HD\tVN:1.6\tSO:{}", sort_order.as_picard_value()),
-            );
+            lines.insert(0, format!("@HD\tVN:1.6\tSO:{}", sort_order.as_picard_str()));
         }
 
         Ok(Self {
@@ -20595,29 +20521,19 @@ impl MergeHeaderBuilder {
     }
 }
 
-impl SortOrder {
-    fn as_picard_value(self) -> &'static str {
-        match self {
-            SortOrder::Coordinate => "coordinate",
-            SortOrder::QueryName => "queryname",
-            SortOrder::Unsorted => "unsorted",
-        }
-    }
-}
-
 fn header_line_with_sort_order(line: &str, sort_order: SortOrder) -> String {
     let mut fields = Vec::new();
     let mut saw_sort_order = false;
     for field in line.split('\t') {
         if field.starts_with("SO:") {
-            fields.push(format!("SO:{}", sort_order.as_picard_value()));
+            fields.push(format!("SO:{}", sort_order.as_picard_str()));
             saw_sort_order = true;
         } else {
             fields.push(field.to_string());
         }
     }
     if !saw_sort_order {
-        fields.push(format!("SO:{}", sort_order.as_picard_value()));
+        fields.push(format!("SO:{}", sort_order.as_picard_str()));
     }
     fields.join("\t")
 }
@@ -21581,6 +21497,96 @@ mod tests {
                 "-jar".to_string(),
                 "C:/tools/picard \"be'ta\".jar".to_string(),
             ]
+        );
+    }
+
+    fn sortsam_args(sort_order: &str, extra: &[&str]) -> PicardArgs {
+        let mut raw = vec![
+            "I=in.bam".to_string(),
+            "O=out.bam".to_string(),
+            format!("SORT_ORDER={sort_order}"),
+        ];
+        raw.extend(extra.iter().map(|value| value.to_string()));
+        normalize_picard_args_for_command("SortSam", &raw).expect("SortSam args parse")
+    }
+
+    #[test]
+    fn sortsam_config_applies_typed_defaults() {
+        let config =
+            SortSamConfig::try_from_args(&sortsam_args("coordinate", &[])).expect("config parses");
+
+        assert_eq!(config.input, "in.bam");
+        assert_eq!(config.output, "out.bam");
+        assert_eq!(config.sort_order, SortOrder::Coordinate);
+        assert_eq!(config.max_records_in_ram, 500_000);
+        assert_eq!(config.compression_level, None);
+        assert_eq!(config.tmp_dir, None);
+        assert!(!config.create_index);
+        assert!(!config.create_md5_file);
+    }
+
+    #[test]
+    fn sortsam_config_parses_overrides_without_touching_the_filesystem() {
+        let config = SortSamConfig::try_from_args(&sortsam_args(
+            "queryname",
+            &[
+                "CREATE_MD5_FILE=true",
+                "COMPRESSION_LEVEL=5",
+                "MAX_RECORDS_IN_RAM=1000",
+                "TMP_DIR=/tmp/work",
+            ],
+        ))
+        .expect("config parses");
+
+        assert_eq!(config.sort_order, SortOrder::QueryName);
+        assert!(config.create_md5_file);
+        assert_eq!(config.compression_level, Some(5));
+        assert_eq!(config.max_records_in_ram, 1000);
+        assert_eq!(config.tmp_dir, Some(std::path::PathBuf::from("/tmp/work")));
+    }
+
+    #[test]
+    fn sortsam_config_rejects_unsupported_sort_orders() {
+        let err = SortSamConfig::try_from_args(&sortsam_args("unsorted", &[]))
+            .expect_err("unsorted is rejected");
+
+        assert_eq!(err, "unsupported SortSam SORT_ORDER: unsorted");
+    }
+
+    #[test]
+    fn sortsam_config_names_the_command_in_value_errors() {
+        let err =
+            SortSamConfig::try_from_args(&sortsam_args("coordinate", &["CREATE_INDEX=sometimes"]))
+                .expect_err("invalid boolean");
+
+        assert_eq!(
+            err,
+            "invalid boolean for SortSam argument CREATE_INDEX: sometimes"
+        );
+    }
+
+    #[test]
+    fn sortsam_config_reports_missing_required_arguments() {
+        let args = normalize_picard_args_for_command(
+            "SortSam",
+            &["I=in.bam".to_string(), "SORT_ORDER=coordinate".to_string()],
+        )
+        .expect("SortSam args parse");
+
+        let err = SortSamConfig::try_from_args(&args).expect_err("OUTPUT is required");
+
+        assert_eq!(err, "missing required SortSam argument: OUTPUT");
+    }
+
+    #[test]
+    fn shared_helpers_name_the_actual_command() {
+        let args =
+            normalize_picard_args_for_command("CleanSam", &["CREATE_INDEX=sometimes".to_string()])
+                .expect("CleanSam args parse");
+
+        assert_eq!(
+            optional_bool(&args, "CREATE_INDEX").expect_err("invalid boolean"),
+            "invalid boolean for CleanSam argument CREATE_INDEX: sometimes"
         );
     }
 }

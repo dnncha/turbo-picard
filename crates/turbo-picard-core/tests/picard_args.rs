@@ -1,5 +1,5 @@
 use turbo_picard_core::picard_args::{
-    PicardArgError, normalize_picard_args, normalize_picard_args_for_command,
+    PicardArgError, SortOrder, normalize_picard_args, normalize_picard_args_for_command,
 };
 
 #[test]
@@ -400,4 +400,101 @@ fn rejects_long_option_without_value() {
     let err = normalize_picard_args(&args).unwrap_err();
 
     assert_eq!(err, PicardArgError::MissingValue("INPUT".to_string()));
+}
+
+#[test]
+fn typed_reader_names_the_arguments_own_command() {
+    let args = normalize_picard_args_for_command("CleanSam", &["CREATE_INDEX=maybe".to_string()])
+        .expect("arguments parse");
+
+    let err = args
+        .typed()
+        .optional_bool("CREATE_INDEX")
+        .expect_err("invalid boolean");
+
+    assert_eq!(
+        err.to_string(),
+        "invalid boolean for CleanSam argument CREATE_INDEX: maybe"
+    );
+}
+
+#[test]
+fn typed_reader_reports_missing_and_duplicate_scalars() {
+    let args = normalize_picard_args_for_command("SortSam", &[]).expect("arguments parse");
+
+    assert_eq!(
+        args.typed()
+            .required_string("INPUT")
+            .expect_err("missing input")
+            .to_string(),
+        "missing required SortSam argument: INPUT"
+    );
+
+    let args = normalize_picard_args_for_command(
+        "SortSam",
+        &["INPUT=a.bam".to_string(), "INPUT=b.bam".to_string()],
+    )
+    .expect("arguments parse");
+
+    assert_eq!(
+        args.typed()
+            .required_string("INPUT")
+            .expect_err("duplicate input")
+            .to_string(),
+        "duplicate scalar SortSam argument: INPUT"
+    );
+}
+
+#[test]
+fn typed_reader_parses_numbers_and_reports_bad_values() {
+    let args = normalize_picard_args_for_command(
+        "CollectWgsMetrics",
+        &[
+            "COVERAGE_CAP=250".to_string(),
+            "MINIMUM_MAPPING_QUALITY=not-a-number".to_string(),
+        ],
+    )
+    .expect("arguments parse");
+
+    assert_eq!(
+        args.typed().optional_u32("COVERAGE_CAP").unwrap(),
+        Some(250)
+    );
+    assert_eq!(
+        args.typed()
+            .optional_u32("MINIMUM_MAPPING_QUALITY")
+            .expect_err("bad number")
+            .to_string(),
+        "unsupported CollectWgsMetrics argument MINIMUM_MAPPING_QUALITY=not-a-number"
+    );
+}
+
+#[test]
+fn typed_reader_rejects_unknown_keys_with_the_command_name() {
+    let args = normalize_picard_args_for_command("CleanSam", &["UNEXPECTED=value".to_string()])
+        .expect("arguments parse");
+
+    assert_eq!(
+        args.reject_unknown(&["INPUT", "OUTPUT"])
+            .expect_err("unknown key")
+            .to_string(),
+        "unsupported CleanSam argument: UNEXPECTED"
+    );
+    assert!(
+        args.reject_unknown(&["INPUT", "OUTPUT", "UNEXPECTED"])
+            .is_ok()
+    );
+}
+
+#[test]
+fn sort_order_round_trips_picard_values() {
+    for (value, order) in [
+        ("coordinate", SortOrder::Coordinate),
+        ("queryname", SortOrder::QueryName),
+        ("unsorted", SortOrder::Unsorted),
+    ] {
+        assert_eq!(SortOrder::parse(value), Some(order));
+        assert_eq!(order.as_picard_str(), value);
+    }
+    assert_eq!(SortOrder::parse("Coordinate"), None);
 }

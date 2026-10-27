@@ -1,5 +1,26 @@
+//! Picard-style `KEY=VALUE` argument normalisation.
+//!
+//! Picard accepts short aliases (`-I`), long options (`--INPUT`), and bare
+//! key/value pairs (`INPUT=in.bam`). Some short names mean different fields in
+//! different commands, so command-aware normalisation exists alongside the
+//! generic form.
+//!
+//! # Example
+//!
+//! ```
+//! use turbo_picard_core::picard_args::normalize_picard_args;
+//!
+//! let args = ["I=in.bam".to_string(), "O=out.bam".to_string()];
+//! let parsed = normalize_picard_args(&args)?;
+//!
+//! assert_eq!(parsed["INPUT"], vec!["in.bam".to_string()]);
+//! assert_eq!(parsed["OUTPUT"], vec!["out.bam".to_string()]);
+//! # Ok::<(), turbo_picard_core::picard_args::PicardArgError>(())
+//! ```
+
 use std::collections::BTreeMap;
 use std::fmt;
+use std::ops::Deref;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PicardArgError {
@@ -22,20 +43,105 @@ impl fmt::Display for PicardArgError {
 
 impl std::error::Error for PicardArgError {}
 
-pub type PicardArgs = BTreeMap<String, Vec<String>>;
+pub type PicardArgMap = BTreeMap<String, Vec<String>>;
 
-pub fn normalize_picard_args(args: &[String]) -> Result<PicardArgs, PicardArgError> {
-    normalize_picard_args_with_aliases(args, canonical_key)
+/// Normalized Picard arguments with the command that produced them.
+///
+/// The command travels with the values so every extraction error can name the
+/// command it belongs to. Callers keep reading the map through [`Deref`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PicardArgs {
+    command: String,
+    values: PicardArgMap,
 }
 
+impl PicardArgs {
+    pub fn command(&self) -> &str {
+        &self.command
+    }
+
+    pub fn typed(&self) -> CommandArgs<'_> {
+        self.typed_for(&self.command)
+    }
+
+    /// Read these arguments as if they belonged to `command`.
+    ///
+    /// The override keeps explicit command names working for shared helpers
+    /// without giving up typed extraction.
+    pub fn typed_for<'b>(&'b self, command: &'b str) -> CommandArgs<'b> {
+        CommandArgs {
+            command,
+            args: self,
+        }
+    }
+
+    pub fn reject_unknown(&self, allowed: &[&str]) -> Result<(), CommandArgError> {
+        self.typed().reject_unknown(allowed)
+    }
+
+    pub fn into_values(self) -> PicardArgMap {
+        self.values
+    }
+}
+
+impl Deref for PicardArgs {
+    type Target = PicardArgMap;
+
+    fn deref(&self) -> &Self::Target {
+        &self.values
+    }
+}
+
+/// Normalise the generic Picard aliases into canonical argument names.
+///
+/// Repeated keys accumulate values in input order, and parsed keys are sorted
+/// because the result keeps a [`BTreeMap`]. Use
+/// [`normalize_picard_args_for_command`] when a short alias is ambiguous.
+///
+/// # Example
+///
+/// ```
+/// use turbo_picard_core::picard_args::normalize_picard_args;
+///
+/// let args = ["-I".to_string(), "in.bam".to_string(), "M=metrics.txt".to_string()];
+/// let parsed = normalize_picard_args(&args)?;
+///
+/// assert_eq!(parsed["INPUT"], vec!["in.bam".to_string()]);
+/// assert_eq!(parsed["METRICS_FILE"], vec!["metrics.txt".to_string()]);
+/// # Ok::<(), turbo_picard_core::picard_args::PicardArgError>(())
+/// ```
+pub fn normalize_picard_args(args: &[String]) -> Result<PicardArgs, PicardArgError> {
+    normalize_picard_args_with_aliases("Picard", args, canonical_key)
+}
+
+/// Normalise aliases using the option table for one Picard command.
+///
+/// The same short name can refer to different fields: `M` is `METRICS_FILE`
+/// for `MarkDuplicates` but `MINIMUM_PCT` for `CollectInsertSizeMetrics`.
+///
+/// # Example
+///
+/// ```
+/// use turbo_picard_core::picard_args::normalize_picard_args_for_command;
+///
+/// let args = ["M=0.05".to_string()];
+/// let parsed = normalize_picard_args_for_command("CollectInsertSizeMetrics", &args)?;
+/// assert_eq!(parsed["MINIMUM_PCT"], vec!["0.05".to_string()]);
+///
+/// let args = ["M=metrics.txt".to_string()];
+/// let parsed = normalize_picard_args_for_command("MarkDuplicates", &args)?;
+/// assert_eq!(parsed["METRICS_FILE"], vec!["metrics.txt".to_string()]);
+/// # Ok::<(), turbo_picard_core::picard_args::PicardArgError>(())
+/// ```
 pub fn normalize_picard_args_for_command(
     command: &str,
     args: &[String],
 ) -> Result<PicardArgs, PicardArgError> {
-    normalize_picard_args_with_aliases(args, |key| canonical_key_for_command(command, key))
+    normalize_picard_args_with_aliases(command, args, |key| canonical_key_for_command(command, key))
 }
 
 fn normalize_picard_args_with_aliases(
+    command: &str,
     args: &[String],
     canonicalize: impl Fn(&str) -> Result<String, PicardArgError>,
 ) -> Result<PicardArgs, PicardArgError> {
@@ -98,7 +204,10 @@ fn normalize_picard_args_with_aliases(
         return Err(PicardArgError::UnexpectedPositional(arg.clone()));
     }
 
-    Ok(normalized)
+    Ok(PicardArgs {
+        command: command.to_string(),
+        values: normalized,
+    })
 }
 
 fn looks_like_flag_value(value: &str) -> bool {
@@ -106,7 +215,7 @@ fn looks_like_flag_value(value: &str) -> bool {
 }
 
 fn push_arg_with_aliases(
-    args: &mut PicardArgs,
+    args: &mut PicardArgMap,
     key: &str,
     value: &str,
     canonicalize: &impl Fn(&str) -> Result<String, PicardArgError>,
@@ -255,4 +364,193 @@ fn canonical_key_for_command(command: &str, key: &str) -> Result<String, PicardA
     };
 
     Ok(canonical.to_string())
+}
+
+/// A typed reader over [`PicardArgs`] that keeps the command in every error.
+#[derive(Debug, Clone, Copy)]
+pub struct CommandArgs<'a> {
+    command: &'a str,
+    args: &'a PicardArgs,
+}
+
+impl<'a> CommandArgs<'a> {
+    pub fn command(self) -> &'a str {
+        self.command
+    }
+
+    pub fn required_string(self, key: &str) -> Result<String, CommandArgError> {
+        self.scalar(key).map(str::to_string)
+    }
+
+    /// Reject keys outside `allowed`, naming this reader's command.
+    pub fn reject_unknown(self, allowed: &[&str]) -> Result<(), CommandArgError> {
+        for key in self.args.values.keys() {
+            if !allowed.contains(&key.as_str()) {
+                return Err(CommandArgError::Unknown {
+                    command: self.command.to_string(),
+                    key: key.clone(),
+                });
+            }
+        }
+        Ok(())
+    }
+
+    pub fn required_values(self, key: &str) -> Result<Vec<String>, CommandArgError> {
+        self.args
+            .values
+            .get(key)
+            .filter(|values| !values.is_empty())
+            .cloned()
+            .ok_or_else(|| self.missing(key))
+    }
+
+    pub fn optional_string(self, key: &str) -> Result<Option<String>, CommandArgError> {
+        if !self.args.values.contains_key(key) {
+            return Ok(None);
+        }
+        self.scalar(key).map(|value| Some(value.to_string()))
+    }
+
+    pub fn optional_bool(self, key: &str) -> Result<Option<bool>, CommandArgError> {
+        let Some(value) = self.optional_string(key)? else {
+            return Ok(None);
+        };
+        match value.to_ascii_lowercase().as_str() {
+            "true" => Ok(Some(true)),
+            "false" => Ok(Some(false)),
+            _ => Err(CommandArgError::InvalidBoolean {
+                command: self.command.to_string(),
+                key: key.to_string(),
+                value,
+            }),
+        }
+    }
+
+    pub fn optional_u32(self, key: &str) -> Result<Option<u32>, CommandArgError> {
+        self.optional_parsed(key)
+    }
+
+    pub fn optional_i64(self, key: &str) -> Result<Option<i64>, CommandArgError> {
+        self.optional_parsed(key)
+    }
+
+    pub fn optional_f64(self, key: &str) -> Result<Option<f64>, CommandArgError> {
+        self.optional_parsed(key)
+    }
+
+    fn optional_parsed<T>(self, key: &str) -> Result<Option<T>, CommandArgError>
+    where
+        T: std::str::FromStr,
+    {
+        let Some(value) = self.optional_string(key)? else {
+            return Ok(None);
+        };
+        value
+            .parse::<T>()
+            .map(Some)
+            .map_err(|_| CommandArgError::InvalidValue {
+                command: self.command.to_string(),
+                key: key.to_string(),
+                value,
+            })
+    }
+
+    fn scalar(self, key: &str) -> Result<&'a str, CommandArgError> {
+        let values = self.args.values.get(key).ok_or_else(|| self.missing(key))?;
+        if values.len() != 1 {
+            return Err(CommandArgError::DuplicateScalar {
+                command: self.command.to_string(),
+                key: key.to_string(),
+            });
+        }
+        Ok(values[0].as_str())
+    }
+
+    fn missing(self, key: &str) -> CommandArgError {
+        CommandArgError::MissingRequired {
+            command: self.command.to_string(),
+            key: key.to_string(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CommandArgError {
+    MissingRequired {
+        command: String,
+        key: String,
+    },
+    DuplicateScalar {
+        command: String,
+        key: String,
+    },
+    Unknown {
+        command: String,
+        key: String,
+    },
+    InvalidBoolean {
+        command: String,
+        key: String,
+        value: String,
+    },
+    InvalidValue {
+        command: String,
+        key: String,
+        value: String,
+    },
+}
+
+impl fmt::Display for CommandArgError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::MissingRequired { command, key } => {
+                write!(f, "missing required {command} argument: {key}")
+            }
+            Self::DuplicateScalar { command, key } => {
+                write!(f, "duplicate scalar {command} argument: {key}")
+            }
+            Self::Unknown { command, key } => {
+                write!(f, "unsupported {command} argument: {key}")
+            }
+            Self::InvalidBoolean {
+                command,
+                key,
+                value,
+            } => write!(f, "invalid boolean for {command} argument {key}: {value}"),
+            Self::InvalidValue {
+                command,
+                key,
+                value,
+            } => write!(f, "unsupported {command} argument {key}={value}"),
+        }
+    }
+}
+
+impl std::error::Error for CommandArgError {}
+
+/// Picard's `SORT_ORDER` values, parsed once at the argument boundary.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SortOrder {
+    Coordinate,
+    QueryName,
+    Unsorted,
+}
+
+impl SortOrder {
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "coordinate" => Some(Self::Coordinate),
+            "queryname" => Some(Self::QueryName),
+            "unsorted" => Some(Self::Unsorted),
+            _ => None,
+        }
+    }
+
+    pub fn as_picard_str(self) -> &'static str {
+        match self {
+            Self::Coordinate => "coordinate",
+            Self::QueryName => "queryname",
+            Self::Unsorted => "unsorted",
+        }
+    }
 }
