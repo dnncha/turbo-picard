@@ -41,6 +41,8 @@ impl ExternalSortConfig {
     }
 }
 
+const SORT_IO_BUFFER_BYTES: usize = 1 << 18;
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct ExternalSortMetrics {
     pub spills: usize,
@@ -283,7 +285,10 @@ fn compare_items(left: &SortItem, right: &SortItem) -> Ordering {
 }
 
 fn write_run(path: &Path, items: &[SortItem]) -> Result<u64, String> {
-    let mut writer = BufWriter::new(File::create(path).map_err(|error| error.to_string())?);
+    let mut writer = BufWriter::with_capacity(
+        SORT_IO_BUFFER_BYTES,
+        File::create(path).map_err(|error| error.to_string())?,
+    );
     let mut bytes = 0_u64;
     for item in items {
         bytes += write_item(&mut writer, item).map_err(|error| error.to_string())?;
@@ -344,7 +349,10 @@ fn read_item(reader: &mut impl Read) -> Result<Option<SortItem>, String> {
 }
 
 fn merge_runs_to_file(runs: &[PathBuf], output: &Path) -> Result<u64, String> {
-    let mut writer = BufWriter::new(File::create(output).map_err(|error| error.to_string())?);
+    let mut writer = BufWriter::with_capacity(
+        SORT_IO_BUFFER_BYTES,
+        File::create(output).map_err(|error| error.to_string())?,
+    );
     let mut bytes = 0_u64;
     merge_runs(runs, |item| {
         bytes += write_item(&mut writer, &item).map_err(|error| error.to_string())?;
@@ -361,7 +369,10 @@ fn merge_runs(
     let mut readers = Vec::with_capacity(runs.len());
     let mut heads = Vec::with_capacity(runs.len());
     for path in runs {
-        let mut reader = BufReader::new(File::open(path).map_err(|error| error.to_string())?);
+        let mut reader = BufReader::with_capacity(
+            SORT_IO_BUFFER_BYTES,
+            File::open(path).map_err(|error| error.to_string())?,
+        );
         heads.push(read_item(&mut reader)?);
         readers.push(reader);
     }
