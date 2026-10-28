@@ -4290,6 +4290,93 @@ mod tests {
     }
 
     #[test]
+    fn randomized_plan_and_pair_payloads_round_trip() {
+        fn next(state: &mut u64) -> u64 {
+            *state = state.wrapping_mul(6364136223846793005).wrapping_add(1);
+            *state
+        }
+        fn bytes(state: &mut u64, len: usize) -> Vec<u8> {
+            (0..len).map(|_| (next(state) % 251) as u8).collect()
+        }
+        let mut state = 0x9e37_79b9_7f4a_7c15_u64;
+        for iteration in 0..400 {
+            let qname_len = 1 + (next(&mut state) % 12) as usize;
+            let qname = bytes(&mut state, qname_len);
+            let has_read_group = next(&mut state) % 2 == 0;
+            let read_group_len = 1 + (next(&mut state) % 6) as usize;
+            let read_group = has_read_group.then(|| bytes(&mut state, read_group_len));
+            let primary_len = (next(&mut state) % 5) as usize;
+            let has_primary = next(&mut state) % 2 == 0;
+            let primary = has_primary.then(|| bytes(&mut state, primary_len));
+            let read_one_len = (next(&mut state) % 5) as usize;
+            let has_read_one = next(&mut state) % 2 == 0;
+            let read_one = has_read_one.then(|| bytes(&mut state, read_one_len));
+            let read_two_len = (next(&mut state) % 5) as usize;
+            let has_read_two = next(&mut state) % 2 == 0;
+            let read_two = has_read_two.then(|| bytes(&mut state, read_two_len));
+            let barcode = ExternalBarcodeValues {
+                primary,
+                read_one,
+                read_two,
+            };
+            let template_key = bounded_plan::template_key(read_group.as_deref(), &qname);
+            let ordinal = next(&mut state) % 10_000;
+            let library_id = (next(&mut state) % 4) as LibraryId;
+            let reference_id = (next(&mut state) % 7) as i32;
+            let position = (next(&mut state) % 100_000) as i64;
+            let mate_reference_id = (next(&mut state) % 7) as i32;
+            let mate_position = (next(&mut state) % 100_000) as i64;
+            let template_length = (next(&mut state) % 2000) as i64 - 1000;
+            let unclipped_position = (next(&mut state) % 100_000) as i64;
+            let quality_score = next(&mut state) % 1000;
+            let first = ExternalPlanRecord {
+                ordinal,
+                library_id,
+                read_group: read_group.clone(),
+                template_key: template_key.clone(),
+                flags: 99,
+                reference_id,
+                position,
+                mate_reference_id,
+                mate_position,
+                template_length,
+                unclipped_position,
+                quality_score,
+                qname: qname.clone(),
+                barcode: barcode.clone(),
+            };
+            let second_quality = next(&mut state) % 1000;
+            let mut second = first.clone();
+            second.ordinal = first.ordinal + 1;
+            second.flags = 147;
+            second.quality_score = second_quality;
+
+            let payload = encode_external_plan_record(&first, true);
+            let decoded = decode_borrowed_external_plan_record(b"key", &payload, true).unwrap();
+            assert_eq!(decoded.ordinal, first.ordinal, "iteration {iteration}");
+            assert_eq!(decoded.qname, first.qname);
+            assert_eq!(decoded.read_group, first.read_group.as_deref());
+            assert_eq!(decoded.flags, first.flags);
+            assert_eq!(decoded.position, first.position);
+            assert_eq!(decoded.mate_position, first.mate_position);
+            assert_eq!(decoded.barcode[0], first.barcode.primary.as_deref());
+            assert_eq!(decoded.barcode[1], first.barcode.read_one.as_deref());
+            assert_eq!(decoded.barcode[2], first.barcode.read_two.as_deref());
+
+            let pair = encode_external_pair(&first, &second);
+            let [decoded_first, decoded_second] =
+                decode_borrowed_external_pair(&template_key, &pair).unwrap();
+            assert_eq!(decoded_first.ordinal, first.ordinal);
+            assert_eq!(decoded_second.ordinal, second.ordinal);
+            assert_eq!(decoded_first.qname, decoded_second.qname);
+            assert_eq!(decoded_first.read_group, decoded_second.read_group);
+            assert_eq!(decoded_second.flags, 147);
+            assert_eq!(decoded_second.quality_score, second.quality_score);
+            assert_eq!(decoded_second.barcode[0], second.barcode.primary.as_deref());
+        }
+    }
+
+    #[test]
     fn external_decision_payload_round_trips_duplicate_set_metadata() {
         let decision = ExternalDecision {
             flags: EXTERNAL_DECISION_DUPLICATE
