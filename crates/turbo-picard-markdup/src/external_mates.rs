@@ -323,6 +323,50 @@ mod tests {
     }
 
     #[test]
+    fn randomized_bounded_cache_matches_the_exact_join() {
+        fn next(state: &mut u64) -> u64 {
+            *state = state.wrapping_mul(6364136223846793005).wrapping_add(1);
+            *state
+        }
+        let mut state = 0x2545_f491_4f6c_dd1d_u64;
+        for iteration in 0..24 {
+            let template_count = 2 + (next(&mut state) % 6) as usize;
+            let record_count = 4 + (next(&mut state) % 40) as usize;
+            let mut records = Vec::with_capacity(record_count);
+            let mut occurrences = HashMap::<(Vec<u8>, Option<Vec<u8>>), usize>::default();
+            for ordinal in 0..record_count {
+                let name = format!("read-{}", next(&mut state) % template_count as u64).into_bytes();
+                let group = match next(&mut state) % 3 {
+                    0 => None,
+                    1 => Some(Vec::new()),
+                    _ => Some(b"rg1".to_vec()),
+                };
+                let count = occurrences
+                    .entry((name.clone(), group.clone()))
+                    .or_default();
+                let flags = if *count % 2 == 0 { 99 } else { 147 };
+                *count += 1;
+                records.push(plan(ordinal as u64, &name, group.as_deref(), flags));
+            }
+            let expected = join(&records, None, true, false).unwrap();
+            for max_pending in [1, 2, 3, 7] {
+                for max_bytes in [64, 512, 4096, MAX_PENDING_BUFFER_BYTES] {
+                    assert_eq!(
+                        join(&records, Some((max_pending, max_bytes)), true, false).unwrap(),
+                        expected,
+                        "iteration={iteration} count={max_pending} bytes={max_bytes}"
+                    );
+                }
+            }
+            assert_eq!(
+                join(&records, Some((2, 128)), true, true).unwrap(),
+                expected,
+                "iteration={iteration} saturated filter"
+            );
+        }
+    }
+
+    #[test]
     fn spill_filter_collision_flushes_an_already_cached_first_mate() {
         let tmp = tempdir().unwrap();
         let mut qnames = external_sorter(tmp.path(), "qname").unwrap();
