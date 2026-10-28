@@ -335,7 +335,8 @@ mod tests {
             let mut records = Vec::with_capacity(record_count);
             let mut occurrences = HashMap::<(Vec<u8>, Option<Vec<u8>>), usize>::default();
             for ordinal in 0..record_count {
-                let name = format!("read-{}", next(&mut state) % template_count as u64).into_bytes();
+                let name =
+                    format!("read-{}", next(&mut state) % template_count as u64).into_bytes();
                 let group = match next(&mut state) % 3 {
                     0 => None,
                     1 => Some(Vec::new()),
