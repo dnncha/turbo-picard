@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+## Agent integration
+
+- `doctor` prints `fallback_ready`, `fallback_status` and, when delegation is
+  unavailable, a `fallback_hint` install command. `explain` reports the same
+  state, and `explain --json` adds `fallback_ready`, `fallback_status` and
+  `fallback_install_hint`. Readiness requires a resolved fallback command whose
+  program is executable; `TURBO_PICARD_REQUIRE_NATIVE` reports
+  `disabled-by-require-native`.
+- Add the `turbo-picard-full` Bioconda metapackage recipe, which pins
+  `turbo-picard`, upstream `picard` 3.4.0 and `openjdk` so one environment
+  covers every Picard 3.4.0 command name. It is prepared in the repository and
+  not yet submitted to Bioconda.
+
 ## Engineering
 
 - Add a per-run collector plan to the single-pass metrics pipeline. The plan

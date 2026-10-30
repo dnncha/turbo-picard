@@ -25,6 +25,7 @@ RECIPES = [
         "is_shim": True,
     },
 ]
+FULL_METAPACKAGE = ROOT / "packaging" / "bioconda" / "turbo-picard-full"
 RELEASE_URL_TEMPLATE = (
     "https://github.com/dnncha/turbo-picard/archive/refs/tags/v{version}.tar.gz"
 )
@@ -645,6 +646,38 @@ def validate_release_evidence(root: pathlib.Path = ROOT) -> list[str]:
     return errors
 
 
+def picard_reference_version(matrix_text: str) -> str | None:
+    match = re.search(r'^picard_reference:\s*"?([^"\s]+)"?', matrix_text, re.MULTILINE)
+    return match.group(1) if match else None
+
+
+def validate_full_metapackage(meta_yaml: str, picard_reference: str | None) -> list[str]:
+    name = "turbo-picard-full"
+    errors: list[str] = []
+    if recipe_package_name(meta_yaml) != name:
+        errors.append(f"{name} meta.yaml must declare package name {name}")
+    if not re.search(r"^\s*noarch:\s*generic\s*$", meta_yaml, re.MULTILINE):
+        errors.append(f"{name} meta.yaml must be noarch: generic")
+    if re.search(r"^source:", meta_yaml, re.MULTILINE):
+        errors.append(f"{name} meta.yaml must not declare a source")
+    if not re.search(r"^\s*-\s*turbo-picard\s*==\{\{\s*version\s*\}\}\s*$", meta_yaml, re.MULTILINE):
+        errors.append(f"{name} meta.yaml must pin turbo-picard =={{{{ version }}}}")
+    reference = re.search(r'{%\s*set\s+picard_reference\s*=\s*"([^"]+)"\s*%}', meta_yaml)
+    if not re.search(r"^\s*-\s*picard\s*==\{\{\s*picard_reference\s*\}\}\s*$", meta_yaml, re.MULTILINE):
+        errors.append(f"{name} meta.yaml must pin picard =={{{{ picard_reference }}}}")
+    if reference is None or reference.group(1) != picard_reference:
+        errors.append(f"{name} picard_reference must match docs/command-matrix.yml ({picard_reference})")
+    if not re.search(r"^\s*-\s*openjdk\b", meta_yaml, re.MULTILINE):
+        errors.append(f"{name} meta.yaml must depend on openjdk")
+    if "turbo-picard-picard-shim" in meta_yaml.split("about:", 1)[0]:
+        errors.append(f"{name} must not depend on the picard shim")
+    if "fallback_ready=true" not in meta_yaml or '"fallback_ready": true' not in meta_yaml:
+        errors.append(f"{name} tests must assert fallback_ready in doctor and explain --json")
+    for phrase in replacement_overclaims(meta_yaml):
+        errors.append(f"{name} meta.yaml contains unsupported replacement overclaim: {phrase}")
+    return errors
+
+
 def main(argv: list[str] | None = None) -> int:
     argv = sys.argv[1:] if argv is None else argv
     allowed_args = {"--release-ready"}
@@ -702,6 +735,14 @@ def main(argv: list[str] | None = None) -> int:
                         expected_bin=str(recipe["expected_bin"]),
                     )
                 )
+    full_meta = FULL_METAPACKAGE / "meta.yaml"
+    if not full_meta.is_file():
+        errors.append("turbo-picard-full missing meta.yaml")
+    else:
+        full_yaml = full_meta.read_text(encoding="utf-8")
+        matrix_text = COMMAND_MATRIX.read_text(encoding="utf-8") if COMMAND_MATRIX.is_file() else ""
+        errors.extend(validate_full_metapackage(full_yaml, picard_reference_version(matrix_text)))
+        recipe_metadata.append(("turbo-picard-full", recipe_version(full_yaml)))
     errors.extend(validate_recipe_set_consistency(recipe_metadata))
     if errors:
         for error in errors:
