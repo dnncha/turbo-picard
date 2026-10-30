@@ -335,6 +335,25 @@ def validate_picard_reference_coverage(entries):
     return errors
 
 
+def set_enables_errexit(tokens):
+    for index, token in enumerate(tokens):
+        if token.startswith("#") or token in {";", "&&", "||"}:
+            return False
+        if token == "-o" and tokens[index + 1 : index + 2] == ["errexit"]:
+            return True
+        if re.fullmatch(r"-[A-Za-z]*e[A-Za-z]*", token):
+            return True
+    return False
+
+
+def enables_errexit(text):
+    for line in text.splitlines():
+        tokens = line.replace(";", " ; ").split()
+        if tokens[:1] == ["set"] and set_enables_errexit(tokens[1:]):
+            return True
+    return False
+
+
 def validate_parity_script_files(scripts, root=ROOT):
     errors = []
     missing_scripts = [script for script in scripts if not (root / script).is_file()]
@@ -347,7 +366,7 @@ def validate_parity_script_files(scripts, root=ROOT):
         text = (root / script).read_text(encoding="utf-8")
         if not text.startswith("#!"):
             errors.append(f"matrix parity script is not a shell program: {script}")
-        if "set -" not in text:
+        if not enables_errexit(text):
             errors.append(f"matrix parity script does not fail closed: {script}")
     return errors
 

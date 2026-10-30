@@ -296,6 +296,48 @@ class CommandMatrixTests(unittest.TestCase):
                 ],
             )
 
+    def test_parity_script_file_validation_requires_errexit(self) -> None:
+        import tempfile
+
+        accepted = [
+            "set -euo pipefail\n",
+            "set -e\n",
+            "  set -o errexit -o nounset\n",
+            "set -u -e; run\n",
+        ]
+        rejected = [
+            "set -u\n",
+            "set -x\n",
+            "set -o pipefail\n",
+            "# set -e\n",
+            "set +e\n",
+            "echo set -e\n",
+            "set -u # -e\n",
+            "",
+        ]
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            script = root / "tools" / "parity.sh"
+            script.parent.mkdir()
+            for body in accepted:
+                script.write_text("#!/usr/bin/env bash\n" + body, encoding="utf-8")
+                self.assertEqual(
+                    verify_command_matrix.validate_parity_script_files(
+                        ["tools/parity.sh"], root
+                    ),
+                    [],
+                    body,
+                )
+            for body in rejected:
+                script.write_text("#!/usr/bin/env bash\n" + body, encoding="utf-8")
+                self.assertEqual(
+                    verify_command_matrix.validate_parity_script_files(
+                        ["tools/parity.sh"], root
+                    ),
+                    ["matrix parity script does not fail closed: tools/parity.sh"],
+                    body,
+                )
+
     def test_parity_script_ci_validation_reports_missing_references(self) -> None:
         self.assertEqual(
             verify_command_matrix.validate_parity_script_ci_coverage(
