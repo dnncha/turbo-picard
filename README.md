@@ -6,7 +6,7 @@
 
 <a href="https://turbo-picard.readthedocs.io/en/latest/evidence/"><picture><source media="(max-width: 700px)" srcset="https://raw.githubusercontent.com/dnncha/turbo-picard/main/docs/site/assets/competitor-card-mobile.png"><img src="https://raw.githubusercontent.com/dnncha/turbo-picard/main/docs/site/assets/competitor-card.png" width="100%" alt="Turbo Picard MarkDuplicates timings and memory against Picard and other duplicate markers, from saved benchmark evidence."></picture></a>
 
-[Documentation](https://turbo-picard.readthedocs.io/en/latest/) · [Command coverage](docs/commands.rst) · [Evaluate on your data](docs/real-data-evaluation.rst) · [Research](https://cheerfulduck.com/research) · [Independent evaluations](https://turbo-picard.readthedocs.io/en/latest/independent-evaluation.html)
+[Documentation](https://turbo-picard.readthedocs.io/en/latest/) · [Command coverage](docs/commands.rst) · [Evaluate on your data](docs/real-data-evaluation.rst) · [MarkDuplicates slow or out of memory?](https://turbo-picard.readthedocs.io/en/latest/picard-markduplicates-slow-memory-alternatives.html) · [Research](https://cheerfulduck.com/research) · [Independent evaluations](https://turbo-picard.readthedocs.io/en/latest/independent-evaluation.html)
 
 ## Run your Picard task natively
 
