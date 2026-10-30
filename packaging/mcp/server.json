@@ -1,0 +1,30 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-09-29/server.schema.json",
+  "name": "io.github.dnncha/turbo-picard",
+  "title": "turbo-picard",
+  "description": "Explain and run Picard-compatible genomics commands natively; delegate the rest to upstream Picard.",
+  "websiteUrl": "https://turbo-picard.readthedocs.io/en/latest/agentic-coders.html",
+  "repository": {
+    "url": "https://github.com/dnncha/turbo-picard",
+    "source": "github"
+  },
+  "version": "0.1.18",
+  "packages": [
+    {
+      "registryType": "pypi",
+      "registryBaseUrl": "https://pypi.org",
+      "identifier": "turbo-picard",
+      "version": "0.1.18",
+      "runtimeHint": "uvx",
+      "transport": {
+        "type": "stdio"
+      },
+      "packageArguments": [
+        {
+          "type": "positional",
+          "value": "mcp"
+        }
+      ]
+    }
+  ]
+}

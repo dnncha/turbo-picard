@@ -14,6 +14,11 @@
   `turbo-picard`, upstream `picard` 3.4.0 and `openjdk` so one environment
   covers every Picard 3.4.0 command name. It is prepared in the repository and
   not yet submitted to Bioconda.
+- Add `turbo-picard mcp`, a Model Context Protocol server on stdio with
+  `capabilities`, `explain`, `trial`, `doctor` and `run` tools. The report
+  tools return the existing JSON contracts; `run` executes without a shell and
+  refuses outputs that name an input or an existing file unless `overwrite` is
+  set. `packaging/mcp/server.json` is the prepared MCP Registry listing.
 
 ## Engineering
 
