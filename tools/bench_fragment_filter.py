@@ -124,8 +124,24 @@ def parse_cpu_seconds(text: str) -> float | None:
     return (user or 0.0) + (system or 0.0)
 
 
+GNU_ELAPSED = re.compile(r"Elapsed \(wall clock\) time.*:\s+([\d:.]+)\s*$")
+
+
+def parse_gnu_elapsed(value: str) -> float:
+    seconds = 0.0
+    for field in value.split(":"):
+        seconds = seconds * 60 + float(field)
+    return seconds
+
+
 def parse_wall_seconds(text: str) -> float | None:
     for line in text.splitlines():
+        gnu = GNU_ELAPSED.search(line)
+        if gnu:
+            try:
+                return parse_gnu_elapsed(gnu.group(1))
+            except ValueError:
+                continue
         parts = line.split()
         if "real" in parts:
             index = parts.index("real")

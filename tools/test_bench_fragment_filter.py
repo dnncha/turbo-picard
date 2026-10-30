@@ -50,6 +50,16 @@ class FragmentFilterHarnessTests(unittest.TestCase):
         self.assertEqual(bench.parse_wall_seconds("  1.08 real  1.52 user  0.36 sys\n"), 1.08)
         self.assertIsNone(bench.parse_wall_seconds("no timing here\n"))
 
+    def test_parse_wall_seconds_reads_gnu_verbose_elapsed(self) -> None:
+        self.assertEqual(
+            bench.parse_wall_seconds("\tElapsed (wall clock) time (h:mm:ss or m:ss): 0:01.25\n"),
+            1.25,
+        )
+        self.assertEqual(
+            bench.parse_wall_seconds("\tElapsed (wall clock) time (h:mm:ss or m:ss): 1:02:03\n"),
+            3723.0,
+        )
+
     def test_summarize_reports_median_and_digest_sets(self) -> None:
         runs = [
             {"wall_seconds": 2.0, "cpu_seconds": 2.0, "peak_rss_bytes": 200, "bam_sha256": "a", "metrics_sha256": "m"},
