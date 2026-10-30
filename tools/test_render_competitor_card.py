@@ -8,6 +8,7 @@ import re
 import struct
 import sys
 import unittest
+from unittest.mock import patch
 import zlib
 from pathlib import Path
 
@@ -33,6 +34,23 @@ def tiny_png() -> bytes:
 
 
 class HeadlineTests(unittest.TestCase):
+    def test_comparison_tiles_follow_direction(self):
+        for metric, labels in [("memory", ["more memory than Picard", "same memory as Picard", "less memory than Picard"]), ("speed", ["slower than Picard", "same speed as Picard", "faster than Picard"])]:
+            for ratio, label in zip([0.5, 1, 2], labels):
+                value, actual, _, _ = card.comparison_tile(ratio, metric, "fixture")
+                self.assertEqual(actual, label)
+                self.assertEqual(value, "1x" if ratio == 1 else card.fmt_ratio(2))
+
+    def test_card_content_routes_all_comparison_tiles_through_direction(self):
+        for ratio, speed_label, memory_label in [(0.5, "slower than Picard", "more memory than Picard"), (1, "same speed as Picard", "same memory as Picard"), (2, "faster than Picard", "less memory than Picard")]:
+            results = {
+                card.TURBO: {**result(2, True), "median_peak_rss_bytes": 2},
+                card.REFERENCE: {**result(2 * ratio, True), "median_peak_rss_bytes": 2 * ratio},
+            }
+            with patch.object(card, "case_results", return_value=results), patch.object(card, "headline", return_value=("Fixture", "Fixture")):
+                tiles = card.card_content()["tiles"]
+            self.assertEqual([tile[1] for tile in tiles[:3]], [speed_label, memory_label, speed_label])
+
     def test_claims_overall_fastest_only_when_every_tool_is_slower(self) -> None:
         title, qualifier = card.headline({
             "candidate": result(1.0, True), "picard": result(5.0, True), "fastdup": result(1.2, False),

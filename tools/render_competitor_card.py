@@ -286,6 +286,16 @@ def install_pill(x: int, y: int, width: int) -> str:
     )
 
 
+def comparison_tile(ratio: float, metric: str, detail: str) -> tuple:
+    if ratio == 1:
+        return ("1x", f"same {metric} as Picard", detail, False)
+    if metric == "memory":
+        label = "less memory than Picard" if ratio > 1 else "more memory than Picard"
+    else:
+        label = "faster than Picard" if ratio > 1 else "slower than Picard"
+    return (fmt_ratio(ratio if ratio > 1 else 1 / ratio), label, detail, metric == "speed" and ratio > 1)
+
+
 def card_content() -> dict:
     """Every claim on the card, derived from evidence; layouts only place it."""
     landscape_path = latest_landscape()
@@ -304,8 +314,8 @@ def card_content() -> dict:
     memory = picard["median_peak_rss_bytes"] / turbo["median_peak_rss_bytes"]
 
     tiles = [
-        (fmt_ratio(speed), "faster than Picard", CASE_LABELS[case], True),
-        (fmt_ratio(memory), "less memory than Picard", CASE_LABELS[case], False),
+        comparison_tile(speed, "speed", CASE_LABELS[case]),
+        comparison_tile(memory, "memory", CASE_LABELS[case]),
     ]
     try:
         real = case_results(landscape, REAL_CASE)
@@ -313,7 +323,7 @@ def card_content() -> dict:
         real = {}
     if real.get(TURBO, {}).get("full_parity") and REFERENCE in real:
         real_speed = real[REFERENCE]["median_wall_seconds"] / real[TURBO]["median_wall_seconds"]
-        tiles.append((fmt_ratio(real_speed), "faster than Picard", f"{CASE_LABELS[REAL_CASE]}, identical", True))
+        tiles.append(comparison_tile(real_speed, "speed", f"{CASE_LABELS[REAL_CASE]}, identical"))
     summary = suite["summary"]
     tiles.append((
         f"{summary['parity_pass_count']}/{summary['command_count']}",

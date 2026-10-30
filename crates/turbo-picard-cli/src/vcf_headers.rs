@@ -57,7 +57,11 @@ fn key(line: &str) -> Result<(String, Option<String>), String> {
     } else {
         None
     };
-    Ok((kind.to_string(), id))
+    Ok(if kind == "fileformat" || id.is_some() {
+        (kind.to_string(), id)
+    } else {
+        (line.to_string(), None)
+    })
 }
 
 pub(super) fn merge(documents: &[VcfDocument]) -> Result<VcfDocument, String> {
@@ -144,6 +148,12 @@ pub(super) fn validate_gather(inputs: &[String], header: &VcfDocument) -> Result
             previous = Some(current);
             first = false;
             let fields: Vec<_> = record.line.split('\t').collect();
+            if fields.len() < 8 {
+                return Err(format!(
+                    "GatherVcfs requires at least 8 VCF columns in {input}, found {}",
+                    fields.len()
+                ));
+            }
             let mut required = Vec::new();
             for filter in fields[6]
                 .split(';')

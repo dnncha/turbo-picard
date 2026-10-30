@@ -1,5 +1,8 @@
 """Generate the Turbo the Pika kit SVGs from one geometry definition."""
 import sys
+import shutil
+import subprocess
+import struct
 from pathlib import Path
 from fontTools.ttLib import TTFont
 from fontTools.pens.svgPathPen import SVGPathPen
@@ -161,3 +164,55 @@ for variant, (text_c, dot_c) in {"color": (FOREST, "#216546"), "reversed": (PAPE
     wm, w_end, _ = wordmark(text_c, dot_c, x0=0, baseline=100, size=size)
     write(f"wordmark-{variant}.svg", svg(wm, "Turbo Picard", f"0 0 {round(w_end + 4)} 124"))
 print("ok", sorted(p.name for p in OUT.glob("*.svg")))
+
+if "--export" in sys.argv[3:]:
+    kit = Path(__file__).resolve().parents[1]
+    root = kit.parents[2]
+    export = kit / "export"
+    for directory in ("mascot", "icon", "lockups"):
+        (export / directory).mkdir(parents=True, exist_ok=True)
+    for source in OUT.glob("*.svg"):
+        if source.name.startswith(("lockup-", "wordmark-")):
+            shutil.copyfile(source, export / "lockups" / source.name)
+        elif not source.stem.endswith("mono"):
+            shutil.copyfile(source, export / "mascot" / source.name)
+    colors = {"black": "#000000", "white": "#ffffff", "mono-142b25": FOREST, "mono-d9ef9f": LIME}
+    for name, color in colors.items():
+        (export / "mascot" / f"turbo-pika-{name}.svg").write_text(svg(mascot_mono(color), TITLE))
+        if name != "mono-d9ef9f":
+            (export / "icon" / f"turbo-pika-icon-{name}.svg").write_text(svg(head_mono(color), "Turbo Picard"))
+    full = mascot_layers(FOREST, LIME, FOREST, PAPER, FOREST, LIME, FOREST)
+    (export / "mascot" / "turbo-pika-square.svg").write_text(svg(f'<g transform="translate(11.39 10.48) scale(0.911)">{full}</g>', TITLE))
+    head = head_layers(FOREST, LIME, FOREST)
+    (export / "icon" / "turbo-pika-icon-square.svg").write_text(svg(f'<g transform="translate(9.34 5.19) scale(0.927)">{head}</g>', "Turbo Picard"))
+    favicon = svg(f'<rect width="256" height="256" rx="56" fill="{FOREST}"/><g transform="translate(23.2 14.6) scale(0.82)">{head_layers(LIME, FOREST, LIME)}</g>', "Turbo Picard")
+    for name in ("favicon.svg", "turbo-pika-icon-favicon.svg"):
+        (export / "icon" / name).write_text(favicon)
+    app_icon = svg(f'<rect width="256" height="256" rx="57.6" fill="{FOREST}"/><g transform="translate(32 29.62) scale(0.75)" fill="{LIME}">{head_mono(LIME)}</g>', "Turbo Picard")
+    (export / "icon" / "turbo-pika-icon-app-icon.svg").write_text(app_icon)
+    def raster(source, target, size, dimension="--width"):
+        subprocess.run(["rsvg-convert", dimension, str(size), "--keep-aspect-ratio", "--output", str(target), str(source)], check=True)
+
+    for source in sorted(export.rglob("*.svg")):
+        if source.parent.name == "lockups":
+            raster(source, source.with_suffix('.png'), 512, "--height")
+            continue
+        if source.name == "favicon.svg":
+            continue
+        sizes = (64, 256, 512) if source.parent.name == "icon" else (512, 1024)
+        for size in sizes:
+            raster(source, source.with_name(f"{source.stem}-{size}.png"), size)
+    icon = export / "icon"
+    for name, size in [("apple-touch-icon.png", 180), ("icon-192.png", 192), ("icon-512.png", 512), ("maskable-512.png", 512), *[(f"favicon-{size}.png", size) for size in (16, 32, 48)]]:
+        raster(icon / "favicon.svg", icon / name, size)
+    images = [(size, (icon / f"favicon-{size}.png").read_bytes()) for size in (16, 32, 48)]
+    offset = 6 + 16 * len(images)
+    entries = []
+    for size, payload in images:
+        entries.append(struct.pack('<BBBBHHII', size, size, 0, 0, 1, 32, len(payload), offset))
+        offset += len(payload)
+    (icon / "favicon.ico").write_bytes(struct.pack('<HHH', 0, 1, len(images)) + b''.join(entries) + b''.join(payload for _, payload in images))
+    for destination in (root / "website/assets", root / "docs/site/assets"):
+        for name in ("favicon.svg", "pika-mark.svg"):
+            shutil.copyfile(export / "icon/favicon.svg", destination / name)
+        shutil.copyfile(export / "icon/apple-touch-icon.png", destination / "apple-touch-icon.png")

@@ -9182,3 +9182,60 @@ fn trial_exposes_argv_and_does_not_confuse_inputs_with_outputs() {
         .stdout(predicate::str::contains("\"turbo_argv\": [\"turbo-picard\", \"FastqToSam\", \"FASTQ=input one.fq\", \"F2=input two.fq\", \"-O\", \"output.bam\"]"))
         .stdout(predicate::str::contains("\"declared_outputs\": [\n    \"O=output.bam\"\n  ]"));
 }
+
+#[test]
+fn gathervcfs_rejects_short_records_without_panicking() {
+    let directory = tempfile::tempdir().unwrap();
+    for columns in 2..8 {
+        let input = directory.path().join(format!("short-{columns}.vcf"));
+        let output = directory.path().join(format!("out-{columns}.vcf"));
+        let row = ["chr1", "1", ".", "A", "C", ".", "PASS"][..columns].join("\t");
+        fs::write(&input, format!("##fileformat=VCFv4.2\n##contig=<ID=chr1,length=1000>\n#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\n{row}\n")).unwrap();
+        let result = Command::cargo_bin("picard")
+            .unwrap()
+            .args([
+                "GatherVcfs",
+                &format!("I={}", input.display()),
+                &format!("O={}", output.display()),
+            ])
+            .output()
+            .unwrap();
+        assert!(!result.status.success());
+        let stderr = String::from_utf8_lossy(&result.stderr);
+        assert!(stderr.contains("at least 8 VCF columns"), "{stderr}");
+        assert!(!stderr.contains("panicked"), "{stderr}");
+    }
+}
+
+#[test]
+fn mergevcfs_preserves_distinct_non_id_metadata() {
+    let directory = tempfile::tempdir().unwrap();
+    for count in 1..=2 {
+        let mut args = vec!["MergeVcfs".to_string()];
+        for index in 0..count {
+            let input = directory.path().join(format!("metadata-{index}.vcf"));
+            fs::write(&input, format!("##fileformat=VCFv4.2\n##contig=<ID=chr1,length=1000>\n##source=caller-a\n##source=caller-b\n##source=caller-a\n##PEDIGREE=<Name=one>\n##PEDIGREE=<Name=two>\n#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\nchr1\t{}\t.\tA\tC\t.\tPASS\t.\n", index + 1)).unwrap();
+            args.push(format!("I={}", input.display()));
+        }
+        let output = directory.path().join(format!("metadata-out-{count}.vcf"));
+        args.push(format!("O={}", output.display()));
+        Command::cargo_bin("picard")
+            .unwrap()
+            .args(args)
+            .assert()
+            .success();
+        let text = fs::read_to_string(output).unwrap();
+        for line in [
+            "##source=caller-a",
+            "##source=caller-b",
+            "##PEDIGREE=<Name=one>",
+            "##PEDIGREE=<Name=two>",
+        ] {
+            assert_eq!(
+                text.lines().filter(|value| *value == line).count(),
+                1,
+                "{text}"
+            );
+        }
+    }
+}
