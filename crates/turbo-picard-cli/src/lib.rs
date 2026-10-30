@@ -850,7 +850,9 @@ Usage: {program_name} doctor
 Reports the local turbo-picard runtime state without running a Picard command.
 The report includes version, executable path, CPU/thread policy, reference
 discovery, fallback resolution, and whether `picard` on PATH appears to be the
-turbo-picard shim."
+turbo-picard shim. `fallback_ready=true` means commands and options outside
+native scope will delegate to an installed upstream Picard; when it is false,
+`fallback_hint` says how to install one."
     );
 }
 
@@ -923,6 +925,12 @@ fn run_doctor(program_name: &str) {
     match resolve_fallback_command() {
         Some(command) => println!("fallback_command={command}"),
         None => println!("fallback_command=not-found"),
+    }
+    let readiness = fallback_readiness();
+    println!("fallback_ready={}", readiness.ready);
+    println!("fallback_status={}", readiness.status);
+    if !readiness.ready {
+        println!("fallback_hint={}", fallback_install_hint());
     }
     match discover_picard_on_path() {
         Some(command) => println!("path_picard={command}"),
@@ -1057,6 +1065,7 @@ fn run_explain(args: &[String]) -> Result<(), String> {
                     .to_string(),
                 execution_path: "fallback".to_string(),
                 fallback_command: explain_fallback_command(),
+                fallback: fallback_readiness(),
                 declared_outputs: declared_outputs(command, &args[1..])?,
             };
             print_explain_report(&report, format);
@@ -1075,6 +1084,7 @@ fn run_explain(args: &[String]) -> Result<(), String> {
         }
         .to_string(),
         fallback_command: explain_fallback_command(),
+        fallback: fallback_readiness(),
         declared_outputs: declared_outputs(command, &args[1..])?,
         status: metadata.status,
         native_scope: metadata.native_scope,
@@ -1148,6 +1158,7 @@ struct ExplainReport {
     fallback_scope: String,
     execution_path: String,
     fallback_command: String,
+    fallback: FallbackReadiness,
     declared_outputs: Vec<String>,
 }
 
@@ -1216,6 +1227,57 @@ fn parse_report_format(report_name: &str, value: &str) -> Result<ExplainFormat, 
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct FallbackReadiness {
+    ready: bool,
+    status: &'static str,
+}
+
+fn fallback_readiness() -> FallbackReadiness {
+    if require_native() {
+        return FallbackReadiness {
+            ready: false,
+            status: "disabled-by-require-native",
+        };
+    }
+    match resolve_fallback_command() {
+        None => FallbackReadiness {
+            ready: false,
+            status: "upstream-picard-not-found",
+        },
+        Some(command) if fallback_program_available(&command) => FallbackReadiness {
+            ready: true,
+            status: "upstream-picard-found",
+        },
+        Some(_) => FallbackReadiness {
+            ready: false,
+            status: "fallback-program-not-executable",
+        },
+    }
+}
+
+fn fallback_program_available(command: &str) -> bool {
+    let Ok(parts) = split_fallback_command(command) else {
+        return false;
+    };
+    let Some(program) = parts.first().map(Path::new) else {
+        return false;
+    };
+    if program.components().count() > 1 {
+        return is_executable_file(program);
+    }
+    env::var_os("PATH").is_some_and(|paths| {
+        env::split_paths(&paths).any(|dir| is_executable_file(&dir.join(program)))
+    })
+}
+
+fn fallback_install_hint() -> String {
+    format!(
+        "install upstream Picard beside turbo-picard, for example: mamba install -c conda-forge -c bioconda turbo-picard picard={} openjdk; or set PICARD_JAR or TURBO_PICARD_FALLBACK_COMMAND",
+        picard_reference_version()
+    )
+}
+
 fn explain_fallback_command() -> String {
     match resolve_fallback_command() {
         Some(command) => command,
@@ -1241,6 +1303,8 @@ fn print_explain_text(report: &ExplainReport) {
     println!("fallback_scope={}", report.fallback_scope);
     println!("execution_path={}", report.execution_path);
     println!("fallback_command={}", report.fallback_command);
+    println!("fallback_ready={}", report.fallback.ready);
+    println!("fallback_status={}", report.fallback.status);
     if report.declared_outputs.is_empty() {
         println!("declared_outputs=none");
     } else {
@@ -1266,6 +1330,19 @@ fn print_explain_json(report: &ExplainReport) {
     println!(
         "  \"fallback_command\": {},",
         json_string(&report.fallback_command)
+    );
+    println!("  \"fallback_ready\": {},", report.fallback.ready);
+    println!(
+        "  \"fallback_status\": {},",
+        json_string(report.fallback.status)
+    );
+    println!(
+        "  \"fallback_install_hint\": {},",
+        if report.fallback.ready {
+            "null".to_string()
+        } else {
+            json_string(&fallback_install_hint())
+        }
     );
     println!("  \"declared_outputs\": [");
     for (index, output) in report.declared_outputs.iter().enumerate() {

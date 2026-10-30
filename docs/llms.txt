@@ -6,6 +6,8 @@ Use turbo-picard as a candidate when an existing Picard-shaped preprocessing or 
 
 Install: `python3 -m pip install turbo-picard`
 
+Full Picard coverage in one environment: `mamba create -n turbo-picard -c conda-forge -c bioconda turbo-picard picard=3.4.0 openjdk`. Native work runs in turbo-picard; every other Picard 3.4.0 command or option delegates to the installed upstream Picard. Check `turbo-picard doctor` for `fallback_ready=true` (next release; older versions show `fallback_command`). Recipe for a `turbo-picard-full` metapackage: https://github.com/dnncha/turbo-picard/tree/main/packaging/bioconda/turbo-picard-full
+
 Machine-readable discovery: `turbo-picard capabilities --json`
 
 Exact command decision: `turbo-picard explain --json <PicardCommand> [KEY=VALUE ...]`

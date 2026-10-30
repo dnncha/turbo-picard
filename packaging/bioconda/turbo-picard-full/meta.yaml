@@ -1,0 +1,41 @@
+{% set name = "turbo-picard-full" %}
+{% set version = "0.1.17" %}
+{% set picard_reference = "3.4.0" %}
+
+package:
+  name: {{ name|lower }}
+  version: {{ version }}
+
+build:
+  number: 0
+  noarch: generic
+
+requirements:
+  run:
+    - turbo-picard =={{ version }}
+    - picard =={{ picard_reference }}
+    - openjdk >=17
+
+test:
+  commands:
+    - turbo-picard --version
+    - turbo-picard doctor | grep -q '^fallback_ready=true$'
+    - turbo-picard explain --json EstimateLibraryComplexity | grep -q '"fallback_ready": true'
+
+about:
+  home: https://github.com/dnncha/turbo-picard
+  doc_url: https://turbo-picard.readthedocs.io/en/latest/fallback.html
+  dev_url: https://github.com/dnncha/turbo-picard
+  license: MIT
+  summary: turbo-picard with upstream Picard and Java installed for fallback.
+  description: |
+    Metapackage that installs turbo-picard together with upstream Picard
+    {{ picard_reference }} and OpenJDK. turbo-picard runs a command natively when
+    the command and options are inside documented native scope and delegates
+    everything else to the installed upstream Picard through auto-discovery.
+    One install therefore covers every Picard {{ picard_reference }} command
+    name; native coverage is still command- and option-specific.
+
+extra:
+  recipe-maintainers:
+    - dnncha
