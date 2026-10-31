@@ -28,8 +28,7 @@ Client configuration:
 Claude Code: `claude mcp add turbo-picard -- turbo-picard mcp`.
 Codex: `codex mcp add turbo-picard -- turbo-picard mcp`.
 
-The server needs a build from the current source or the next release; it is not
-in 0.1.17.
+The server needs 0.1.18 or later.
 
 ## Registry listing
 

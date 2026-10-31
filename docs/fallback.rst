@@ -32,8 +32,7 @@ when delegation will work. When it is false, ``fallback_status`` names the
 reason (``upstream-picard-not-found``, ``fallback-program-not-executable`` or
 ``disabled-by-require-native``) and ``fallback_hint`` gives an install command.
 ``explain --json`` reports the same ``fallback_ready``, ``fallback_status`` and
-``fallback_install_hint`` fields. These fields require a build from the current
-source or the next release.
+``fallback_install_hint`` fields. These fields require 0.1.18 or later.
 
 Auto-discovery
 --------------

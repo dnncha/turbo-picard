@@ -38,8 +38,10 @@ as Python wheel scripts:
 
    python3 -m pip install turbo-picard
 
-Version ``0.1.17`` targets Linux x86_64 and ARM64 wheels, macOS Intel and
-Apple Silicon wheels, and a source distribution. Publishing workflows validate
+Version ``0.1.18`` on PyPI has Linux x86_64, macOS Intel and Apple Silicon
+wheels and a source distribution. Its Linux ARM64 wheel did not build because
+the manylinux2014 cross image's GCC 4.8 is too old for libdeflate; on Linux
+ARM64, build from the source distribution or use Bioconda. Publishing workflows validate
 artifacts and run installation smoke tests before uploading. Confirm publication
 on the versioned GitHub release and PyPI pages; source metadata alone is not a
 provider receipt. The release scope and evidence boundaries are summarized in

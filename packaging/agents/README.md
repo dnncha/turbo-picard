@@ -16,8 +16,8 @@ The skill and snippets need `turbo-picard` on `PATH`
 (`python3 -m pip install turbo-picard`). For every Picard command to work,
 install upstream Picard beside it, for example
 `mamba install -c conda-forge -c bioconda turbo-picard picard=3.4.0 openjdk`.
-The plugin's MCP server and the `fallback_ready` field need a build from the
-current source or the next release; with an older install the skill falls back
+The plugin's MCP server and the `fallback_ready` field need 0.1.18 or later;
+with an older install the skill falls back
 to reading `fallback_command`.
 
 Copy the skill straight from GitHub:

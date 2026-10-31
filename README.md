@@ -36,7 +36,7 @@ being considered. See the [agentic-coder guide](docs/agentic-coders.rst) for the
 selection rule and safe substitution pattern.
 
 Agents can also use the MCP server, which wraps the same reports plus a
-guarded `run` tool (current source; first release after 0.1.17):
+guarded `run` tool (0.1.18 or later):
 
 ```bash
 claude mcp add turbo-picard -- turbo-picard mcp
@@ -96,7 +96,7 @@ mamba activate turbo-picard
 turbo-picard doctor
 ```
 
-From the next release, `doctor` prints `fallback_ready=true` once upstream Picard
+From 0.1.18, `doctor` prints `fallback_ready=true` once upstream Picard
 is found, and `explain --json` reports `fallback_ready` for each call; older
 versions show the resolved `fallback_command` instead. With a pip install, point
 `PICARD_JAR` at an upstream `picard.jar` and keep Java on `PATH`. The
@@ -347,12 +347,13 @@ A command-level speedup is not a universal replacement claim. Keep upstream Pica
 
 ## Packaging Status
 
-The current source release is `0.1.18`. Release builds target Linux x86_64 and
-ARM64, macOS Intel and Apple Silicon, plus a source distribution. Publication
-is gated on artifact validation and installation smoke tests; the
+The current release is `0.1.18`. [PyPI](https://pypi.org/project/turbo-picard/0.1.18/)
+has wheels for Linux x86_64, macOS Intel and Apple Silicon, plus a source
+distribution. The Linux ARM64 wheel did not build for 0.1.18: the cross-build
+image's GCC 4.8 is too old for libdeflate. On Linux ARM64, install from the
+source distribution (needs a Rust toolchain) or Bioconda. The
 [release page](https://github.com/dnncha/turbo-picard/releases/tag/v0.1.18)
-and [PyPI](https://pypi.org/project/turbo-picard/0.1.18/) identify the published
-artifacts. The Linux ARM64 wheel is cross-built and artifact-validated.
+lists the release notes.
 
 Read the [release notes](CHANGELOG.md) for the release scope and evidence
 boundaries.
