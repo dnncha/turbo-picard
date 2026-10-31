@@ -49,7 +49,7 @@ def code(text: str, label: str = 'Shell') -> str:
 
 
 def command_catalogue(matrix: dict) -> str:
-    utility = {'AccelerationStatus', 'capabilities', 'doctor', 'explain', 'trial'}
+    utility = {'AccelerationStatus', 'capabilities', 'doctor', 'explain', 'mcp', 'trial'}
     cards = []
     for c in matrix['commands']:
         name, status = c['name'], c['status']

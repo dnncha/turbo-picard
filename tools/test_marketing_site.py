@@ -35,7 +35,7 @@ class MarketingSiteTests(unittest.TestCase):
         page=verify.Page((build.ROOT/'docs/site/commands/index.html').read_text())
         self.assertEqual(page.commands['CollectRnaSeqMetrics'],'fallback-only')
         self.assertEqual(page.commands['MarkDuplicates'],'partial-native')
-        self.assertEqual(len(page.commands),126)
+        self.assertEqual(len(page.commands),127)
     def test_home_is_not_a_large_ratio_advertisement(self):
         home=(build.ROOT/'docs/site/index.html').read_text()
         self.assertNotIn('272.12x',home)
