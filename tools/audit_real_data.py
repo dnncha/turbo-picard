@@ -1,9 +1,4 @@
 #!/usr/bin/env python3
-"""Production audit wrapper around tools/compare_real_data.py.
-
-Builds a side-by-side evidence bundle suitable for pipeline owners who want
-Picard-vs-turbo-picard proof before switching a command in production.
-"""
 
 from __future__ import annotations
 
@@ -11,7 +6,6 @@ import argparse
 import subprocess
 import sys
 from pathlib import Path
-
 
 ROOT = Path(__file__).resolve().parents[1]
 COMPARE = ROOT / "tools" / "compare_real_data.py"

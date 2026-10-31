@@ -44,3 +44,28 @@ manifest-path = "crates/turbo-picard-cli/Cargo.toml"
 bindings = "bin"
 strip = true
 include = [{ path = "LICENSE", format = "sdist" }]
+
+[dependency-groups]
+dev = ["pytest>=8", "PyYAML==6.0.3", "types-PyYAML"]
+
+[tool.mypy]
+python_version = "3.10"
+strict = true
+warn_unreachable = true
+explicit_package_bases = true
+files = ["tools", "benchmarks", "branding", "docs/conf.py"]
+
+[[tool.mypy.overrides]]
+module = ["fontTools", "fontTools.*", "playwright", "playwright.*", "pysam"]
+ignore_missing_imports = true
+
+[tool.ruff]
+target-version = "py39"
+line-length = 120
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "B", "UP", "ANN", "S", "RUF", "SIM", "I", "PL", "PT", "C4", "RET", "ARG"]
+ignore = ["S101", "S603", "S607", "PLR2004", "PLR0913", "PLR0912", "PLR0915", "PLR0911", "E501"]
+
+[tool.ruff.lint.per-file-ignores]
+"**/test_*.py" = ["S", "PLR", "ARG"]

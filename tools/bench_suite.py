@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+
+from __future__ import annotations
+
 import argparse
 import json
 import os
@@ -9,10 +12,12 @@ import statistics
 import subprocess
 import sys
 import time
+from collections.abc import Sequence
+from dataclasses import dataclass
 from pathlib import Path
+from typing import TypedDict
 
-from compare_real_data import native_evaluation_env
-
+from compare_real_data import native_evaluation_env  # type: ignore[import-not-found]
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -61,20 +66,48 @@ BENCHMARK_SPECS = [
 ]
 
 
-def run(command):
+class RunProfile(TypedDict):
+    command_line: list[str]
+    wall_seconds: float
+    cpu_user_seconds: float
+    cpu_system_seconds: float
+    max_rss_kb: int | None
+
+
+@dataclass
+class BenchmarkRow:
+    values: dict[str, str]
+    label: str
+    speedup: float
+    turbo_seconds: float
+    picard_seconds: float
+    profile: RunProfile
+
+
+class Summary(TypedDict):
+    command: str
+    reads: str
+    runs: int
+    median_turbo_seconds: float
+    median_picard_seconds: float
+    median_speedup: float
+    best_speedup: float
+    parity: str
+
+
+def run(command: list[str]) -> str:
     stdout, _ = run_profiled(command)
     return stdout
 
 
-def run_profiled(command):
+def run_profiled(command: list[str]) -> tuple[str, RunProfile]:
     usage_before = resource.getrusage(resource.RUSAGE_CHILDREN)
     start = time.perf_counter()
     timed_command = time_wrapper(command)
     completed = subprocess.run(
         timed_command,
         cwd=ROOT,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        capture_output=True,
         text=True,
         check=False,
         env=native_evaluation_env(),
@@ -85,7 +118,7 @@ def run_profiled(command):
         sys.stderr.write(completed.stdout)
         sys.stderr.write(completed.stderr)
         raise SystemExit(f"command failed with exit {completed.returncode}: {' '.join(command)}")
-    profile = {
+    profile: RunProfile = {
         "command_line": command,
         "wall_seconds": elapsed,
         "cpu_user_seconds": usage_after.ru_utime - usage_before.ru_utime,
@@ -95,7 +128,7 @@ def run_profiled(command):
     return completed.stdout, profile
 
 
-def time_wrapper(command):
+def time_wrapper(command: list[str]) -> list[str]:
     time_bin = shutil.which("time")
     if not time_bin:
         return command
@@ -104,7 +137,7 @@ def time_wrapper(command):
     return [time_bin, "-v", *command]
 
 
-def parse_time_max_rss_kb(stderr):
+def parse_time_max_rss_kb(stderr: str) -> int | None:
     for line in stderr.splitlines():
         if "Maximum resident set size" in line:
             value = line.split(":", 1)[1].strip().split()[0]
@@ -121,8 +154,8 @@ def parse_time_max_rss_kb(stderr):
     return None
 
 
-def parse_key_values(text):
-    values = {}
+def parse_key_values(text: str) -> dict[str, str]:
+    values: dict[str, str] = {}
     for line in text.splitlines():
         if "=" not in line:
             continue
@@ -131,8 +164,10 @@ def parse_key_values(text):
     return values
 
 
-def run_benchmark(label, script, reads, repeats, extra_args=()):
-    rows = []
+def run_benchmark(
+    label: str, script: str, reads: int, repeats: int, extra_args: Sequence[str] = ()
+) -> list[BenchmarkRow]:
+    rows: list[BenchmarkRow] = []
     for _ in range(repeats):
         command = [
             "python3",
@@ -143,25 +178,28 @@ def run_benchmark(label, script, reads, repeats, extra_args=()):
             *extra_args,
         ]
         output, profile = run_profiled(command)
-        row = parse_key_values(output)
-        row["label"] = label
-        row["speedup_float"] = float(row["speedup"].removesuffix("x"))
-        row["turbo_seconds_float"] = float(row["turbo_seconds"])
-        row["picard_seconds_float"] = float(row["picard_seconds"])
-        row["profile"] = profile
-        if row.get("parity") != "PASS":
+        values = parse_key_values(output)
+        row = BenchmarkRow(
+            values=values,
+            label=label,
+            speedup=float(values["speedup"].removesuffix("x")),
+            turbo_seconds=float(values["turbo_seconds"]),
+            picard_seconds=float(values["picard_seconds"]),
+            profile=profile,
+        )
+        if values.get("parity") != "PASS":
             raise SystemExit(f"{label} parity failed: {output}")
         rows.append(row)
     return rows
 
 
-def summarize(rows):
-    speedups = [row["speedup_float"] for row in rows]
-    turbo = [row["turbo_seconds_float"] for row in rows]
-    picard = [row["picard_seconds_float"] for row in rows]
+def summarize(rows: list[BenchmarkRow]) -> Summary:
+    speedups = [row.speedup for row in rows]
+    turbo = [row.turbo_seconds for row in rows]
+    picard = [row.picard_seconds for row in rows]
     return {
-        "command": rows[0]["command"],
-        "reads": rows[0]["reads"],
+        "command": rows[0].values["command"],
+        "reads": rows[0].values["reads"],
         "runs": len(rows),
         "median_turbo_seconds": statistics.median(turbo),
         "median_picard_seconds": statistics.median(picard),
@@ -171,41 +209,37 @@ def summarize(rows):
     }
 
 
-def benchmark_profile(rows):
+def benchmark_profile(rows: list[BenchmarkRow]) -> dict[str, object]:
     summary = summarize(rows)
-    profiles = [row["profile"] for row in rows]
-    cpu_seconds = [
-        profile["cpu_user_seconds"] + profile["cpu_system_seconds"] for profile in profiles
-    ]
+    profiles = [row.profile for row in rows]
+    cpu_seconds = [profile["cpu_user_seconds"] + profile["cpu_system_seconds"] for profile in profiles]
     wall_seconds = [profile["wall_seconds"] for profile in profiles]
-    max_rss_kb = [profile["max_rss_kb"] for profile in profiles if profile["max_rss_kb"]]
+    max_rss_kb = [rss for rss in (profile["max_rss_kb"] for profile in profiles) if rss]
     return {
         **summary,
-        "label": rows[0]["label"],
+        "label": rows[0].label,
         "median_wrapper_wall_seconds": statistics.median(wall_seconds),
         "median_wrapper_cpu_seconds": statistics.median(cpu_seconds),
         "max_observed_rss_kb": max(max_rss_kb) if max_rss_kb else None,
         "turbo_threads": os.environ.get("TURBO_PICARD_THREADS", "auto"),
         "turbo_reader_threads": os.environ.get("TURBO_PICARD_READER_THREADS", ""),
-        "turbo_pipeline_reader_threads": os.environ.get(
-            "TURBO_PICARD_PIPELINE_READER_THREADS", ""
-        ),
+        "turbo_pipeline_reader_threads": os.environ.get("TURBO_PICARD_PIPELINE_READER_THREADS", ""),
         "turbo_writer_threads": os.environ.get("TURBO_PICARD_WRITER_THREADS", ""),
         "turbo_index_threads": os.environ.get("TURBO_PICARD_INDEX_THREADS", ""),
         "turbo_cmm_threads": os.environ.get("TURBO_PICARD_CMM_THREADS", ""),
         "runs_detail": [
             {
-                "turbo_seconds": row["turbo_seconds_float"],
-                "picard_seconds": row["picard_seconds_float"],
-                "speedup": row["speedup_float"],
-                "profile": row["profile"],
+                "turbo_seconds": row.turbo_seconds,
+                "picard_seconds": row.picard_seconds,
+                "speedup": row.speedup,
+                "profile": row.profile,
             }
             for row in rows
         ],
     }
 
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser(description="Run parity-checked turbo-picard benchmark suite.")
     parser.add_argument("--repeats", type=int, default=5)
     parser.add_argument("--samtofastq-reads", type=int, default=50_000)
@@ -278,12 +312,7 @@ def main():
     if not args.skip_build:
         run(["cargo", "build", "--release", "-p", "turbo-picard-cli", "--bin", "picard"])
 
-    selected_labels = {
-        label.strip().lower()
-        for value in args.only
-        for label in value.split(",")
-        if label.strip()
-    }
+    selected_labels = {label.strip().lower() for value in args.only for label in value.split(",") if label.strip()}
     known_labels = {label for label, _script, _reads_attr in BENCHMARK_SPECS}
     unknown_labels = selected_labels - known_labels
     if unknown_labels:
@@ -294,7 +323,7 @@ def main():
             + ", ".join(sorted(known_labels))
         )
 
-    markduplicates_extra_args = (
+    markduplicates_extra_args: tuple[str, ...] = (
         "--duplicate-family-size",
         str(args.markduplicates_family_size),
     )
@@ -339,9 +368,7 @@ def main():
             "environment": {
                 "TURBO_PICARD_THREADS": os.environ.get("TURBO_PICARD_THREADS", ""),
                 "TURBO_PICARD_READER_THREADS": os.environ.get("TURBO_PICARD_READER_THREADS", ""),
-                "TURBO_PICARD_PIPELINE_READER_THREADS": os.environ.get(
-                    "TURBO_PICARD_PIPELINE_READER_THREADS", ""
-                ),
+                "TURBO_PICARD_PIPELINE_READER_THREADS": os.environ.get("TURBO_PICARD_PIPELINE_READER_THREADS", ""),
                 "TURBO_PICARD_WRITER_THREADS": os.environ.get("TURBO_PICARD_WRITER_THREADS", ""),
                 "TURBO_PICARD_INDEX_THREADS": os.environ.get("TURBO_PICARD_INDEX_THREADS", ""),
                 "TURBO_PICARD_CMM_THREADS": os.environ.get("TURBO_PICARD_CMM_THREADS", ""),

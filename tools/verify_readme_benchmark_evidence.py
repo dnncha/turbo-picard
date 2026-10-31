@@ -1,19 +1,18 @@
 #!/usr/bin/env python3
-"""Verify README benchmark claims against rendered benchmark-data.json."""
 
 from __future__ import annotations
 
 import json
 import sys
 from pathlib import Path
-
+from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
 TOOL_DIR = Path(__file__).resolve().parent
 if str(TOOL_DIR) not in sys.path:
     sys.path.insert(0, str(TOOL_DIR))
 
-from verify_benchmark_suite_coverage import BENCHMARK_EXEMPTIONS  # noqa: E402
+from verify_benchmark_suite_coverage import BENCHMARK_EXEMPTIONS  # type: ignore[import-not-found]  # noqa: E402
 
 README = ROOT / "README.md"
 BENCHMARKS_README = ROOT / "benchmarks" / "README.md"
@@ -24,7 +23,7 @@ def format_speedup(value: float) -> str:
     return f"{value:.2f}x"
 
 
-def validate_readme_benchmark_evidence(readme: str, data: dict) -> list[str]:
+def validate_readme_benchmark_evidence(readme: str, data: dict[str, Any]) -> list[str]:
     errors = []
     summary = data["summary"]
     parity_count = data["parity"].split()[0]
@@ -112,7 +111,7 @@ def validate_readme_benchmark_evidence(readme: str, data: dict) -> list[str]:
     return errors
 
 
-def validate_benchmarks_readme_evidence(benchmarks_readme: str, data: dict) -> list[str]:
+def validate_benchmarks_readme_evidence(benchmarks_readme: str, data: dict[str, Any]) -> list[str]:
     normalized = " ".join(benchmarks_readme.split())
     summary = data["summary"]
     claims = [

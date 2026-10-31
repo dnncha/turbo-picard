@@ -1,10 +1,4 @@
 #!/usr/bin/env python3
-"""Sync docs/command-matrix.yml with the Picard 3.4.0 command surface.
-
-Accelerated commands (native / partial-native) are preserved from the existing
-matrix. Every upstream Picard command missing from that set is recorded as
-fallback-only so turbo-picard can claim full Picard 3.4.0 CLI parity.
-"""
 
 from __future__ import annotations
 
@@ -13,7 +7,6 @@ import pathlib
 import re
 import subprocess
 import sys
-
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 MATRIX = ROOT / "docs" / "command-matrix.yml"
@@ -25,9 +18,7 @@ FALLBACK_NATIVE_SCOPE = (
     "accelerated implementation when one exists; otherwise it transparently "
     "forwards to upstream Picard when fallback is configured or auto-discovered."
 )
-FALLBACK_SCOPE = (
-    "Transparent upstream Picard 3.4.0 delegation. No native fast path yet."
-)
+FALLBACK_SCOPE = "Transparent upstream Picard 3.4.0 delegation. No native fast path yet."
 TURBO_ONLY_NATIVE_SCOPE = {
     "AccelerationStatus": (
         "turbo-picard utility command that reports the effective CPU accelerator "
@@ -36,9 +27,7 @@ TURBO_ONLY_NATIVE_SCOPE = {
     ),
 }
 TURBO_ONLY_FALLBACK_SCOPE = {
-    "AccelerationStatus": (
-        "This is not an upstream Picard command and does not delegate to fallback."
-    ),
+    "AccelerationStatus": ("This is not an upstream Picard command and does not delegate to fallback."),
 }
 
 
@@ -47,25 +36,16 @@ def load_picard_commands(picard_command: str | None) -> list[str]:
         completed = subprocess.run(
             [picard_command, "--list-commands"],
             check=False,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+            capture_output=True,
             text=True,
         )
         if completed.returncode != 0:
-            raise SystemExit(
-                f"failed to list commands from {picard_command}: {completed.stderr.strip()}"
-            )
+            raise SystemExit(f"failed to list commands from {picard_command}: {completed.stderr.strip()}")
         commands = [line.strip() for line in completed.stdout.splitlines() if line.strip()]
     elif COMMANDS_LIST.is_file():
-        commands = [
-            line.strip()
-            for line in COMMANDS_LIST.read_text(encoding="utf-8").splitlines()
-            if line.strip()
-        ]
+        commands = [line.strip() for line in COMMANDS_LIST.read_text(encoding="utf-8").splitlines() if line.strip()]
     else:
-        raise SystemExit(
-            "provide --picard-command or check in docs/picard-3.4.0-commands.txt"
-        )
+        raise SystemExit("provide --picard-command or check in docs/picard-3.4.0-commands.txt")
     if not commands:
         raise SystemExit("no Picard commands discovered")
     return sorted(set(commands))
@@ -110,11 +90,7 @@ def sync_matrix(picard_commands: list[str], dry_run: bool = False) -> int:
     existing = parse_matrix_entries(MATRIX.read_text(encoding="utf-8"))
     by_name = {entry["name"]: entry for entry in existing}
 
-    accelerated = {
-        name: entry
-        for name, entry in by_name.items()
-        if entry.get("status") in ACCELERATED_STATUSES
-    }
+    accelerated = {name: entry for name, entry in by_name.items() if entry.get("status") in ACCELERATED_STATUSES}
     turbo_only = {
         name: entry
         for name, entry in by_name.items()
@@ -123,9 +99,7 @@ def sync_matrix(picard_commands: list[str], dry_run: bool = False) -> int:
 
     missing_upstream = [name for name in picard_commands if name not in by_name]
     stale_accelerated = sorted(
-        name
-        for name, entry in accelerated.items()
-        if name in picard_commands and entry.get("status") == "scaffold"
+        name for name, entry in accelerated.items() if name in picard_commands and entry.get("status") == "scaffold"
     )
 
     if stale_accelerated:
@@ -183,8 +157,17 @@ def sync_matrix(picard_commands: list[str], dry_run: bool = False) -> int:
     return 0
 
 
+_DESCRIPTION = (
+    "Sync docs/command-matrix.yml with the Picard 3.4.0 command surface.\n"
+    "\n"
+    "Accelerated commands (native / partial-native) are preserved from the existing\n"
+    "matrix. Every upstream Picard command missing from that set is recorded as\n"
+    "fallback-only so turbo-picard can claim full Picard 3.4.0 CLI parity.\n"
+)
+
+
 def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(description=_DESCRIPTION)
     parser.add_argument(
         "--picard-command",
         help="Path to upstream picard executable for --list-commands",

@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+
+from __future__ import annotations
+
 import argparse
 import os
 import pathlib
@@ -8,18 +11,17 @@ import subprocess
 import sys
 import tempfile
 import time
-
+from collections.abc import Sequence
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 
 
-def run(command, *, cwd=ROOT):
+def run(command: Sequence[str], *, cwd: pathlib.Path = ROOT) -> float:
     start = time.perf_counter()
     completed = subprocess.run(
         command,
         cwd=cwd,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        capture_output=True,
         text=True,
         check=False,
     )
@@ -31,7 +33,7 @@ def run(command, *, cwd=ROOT):
     return elapsed
 
 
-def conda_runner():
+def conda_runner() -> str:
     for name in ("mamba", "micromamba"):
         path = shutil.which(name)
         if path:
@@ -39,14 +41,14 @@ def conda_runner():
     raise SystemExit("mamba or micromamba is required to benchmark against Picard")
 
 
-def write_dictionary(path):
+def write_dictionary(path: pathlib.Path) -> None:
     with open(path, "w", encoding="utf-8") as handle:
         handle.write("@HD\tVN:1.6\n")
         handle.write("@SQ\tSN:chr1\tLN:100000000\tM5:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\tAS:GRCh38\n")
         handle.write("@SQ\tSN:chr2\tLN:100000000\tUR:file:///ref.fa\n")
 
 
-def write_vcf(path, records):
+def write_vcf(path: pathlib.Path, records: int) -> None:
     with open(path, "w", encoding="utf-8") as handle:
         handle.write("##fileformat=VCFv4.2\n")
         handle.write("##contig=<ID=old,length=10>\n")
@@ -57,7 +59,7 @@ def write_vcf(path, records):
             handle.write(f"{chrom}\t{index + 1}\t.\tA\tC\t.\tPASS\t.\n")
 
 
-def stable_output(path):
+def stable_output(path: pathlib.Path) -> list[str]:
     lines = []
     with open(path, encoding="utf-8") as handle:
         for line in handle:
@@ -70,10 +72,8 @@ def stable_output(path):
     return lines
 
 
-def main():
-    parser = argparse.ArgumentParser(
-        description="Benchmark turbo-picard UpdateVcfSequenceDictionary against Picard."
-    )
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Benchmark turbo-picard UpdateVcfSequenceDictionary against Picard.")
     parser.add_argument("--reads", type=int, default=100_000, help="VCF records to synthesize")
     parser.add_argument(
         "--conda-prefix",

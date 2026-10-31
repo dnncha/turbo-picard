@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+from __future__ import annotations
+
 import argparse
 import os
 import pathlib
@@ -8,17 +10,15 @@ import sys
 import tempfile
 import time
 
-
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 
 
-def run(command, *, cwd=ROOT):
+def run(command: list[str], *, cwd: pathlib.Path = ROOT) -> float:
     start = time.perf_counter()
     completed = subprocess.run(
         command,
         cwd=cwd,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        capture_output=True,
         text=True,
         check=False,
     )
@@ -30,7 +30,7 @@ def run(command, *, cwd=ROOT):
     return elapsed
 
 
-def conda_runner():
+def conda_runner() -> str:
     for name in ("mamba", "micromamba"):
         path = shutil.which(name)
         if path:
@@ -38,26 +38,26 @@ def conda_runner():
     raise SystemExit("mamba or micromamba is required to benchmark against Picard")
 
 
-def write_reference(path, bases):
+def write_reference(path: pathlib.Path, bases: str) -> None:
     with open(path, "w", encoding="utf-8") as handle:
         handle.write(">chr1\n")
         for offset in range(0, len(bases), 80):
             handle.write(bases[offset : offset + 80] + "\n")
 
 
-def write_dictionary(path, length):
+def write_dictionary(path: pathlib.Path, length: int) -> None:
     with open(path, "w", encoding="utf-8") as handle:
         handle.write("@HD\tVN:1.6\n")
         handle.write(f"@SQ\tSN:chr1\tLN:{length}\n")
 
 
-def write_chain(path, length):
+def write_chain(path: pathlib.Path, length: int) -> None:
     with open(path, "w", encoding="utf-8") as handle:
         handle.write(f"chain 100 chr1 {length} + 0 {length} chr1 {length} + 0 {length} 1\n")
         handle.write(f"{length}\n")
 
 
-def write_vcf(path, records, reference_length):
+def write_vcf(path: pathlib.Path, records: int, reference_length: int) -> None:
     alleles = [("A", "C"), ("C", "G"), ("G", "T"), ("T", "A")]
     with open(path, "w", encoding="utf-8") as handle:
         handle.write("##fileformat=VCFv4.2\n")
@@ -70,17 +70,17 @@ def write_vcf(path, records, reference_length):
             handle.write(f"chr1\t{pos}\t.\t{ref}\t{alt}\t.\tPASS\t.\n")
 
 
-def stable_records(path):
+def stable_records(path: pathlib.Path) -> list[str]:
     with open(path, encoding="utf-8") as handle:
         return [line.rstrip("\n") for line in handle if not line.startswith("#")]
 
 
-def stable_reject_filters(path):
+def stable_reject_filters(path: pathlib.Path) -> list[str]:
     with open(path, encoding="utf-8") as handle:
         return [line.rstrip("\n") for line in handle if line.startswith("##FILTER=")]
 
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser(description="Benchmark turbo-picard LiftoverVcf against Picard.")
     parser.add_argument("--reads", type=int, default=100_000, help="VCF records to synthesize")
     parser.add_argument(

@@ -1,6 +1,4 @@
-//! Keep ownership separate from the active merge queue. Moving a queue into a
-//! fallible merge must not orphan its files, or the partially written output.
-
+use crate::sort_error::SortError;
 use std::collections::BTreeSet;
 use std::fs;
 use std::io;
@@ -12,22 +10,18 @@ pub(crate) struct OwnedRuns {
 }
 
 impl OwnedRuns {
-    /// Register immediately after exclusive creation, before any fallible I/O.
     pub(crate) fn register(&mut self, path: &Path) {
         self.paths.insert(path.to_path_buf());
     }
 
-    pub(crate) fn remove(&mut self, path: &Path) -> Result<(), String> {
+    pub(crate) fn remove(&mut self, path: &Path) -> Result<(), SortError> {
         if !self.paths.contains(path) {
-            return Err(format!(
-                "refusing to remove unowned sort run: {}",
-                path.display()
-            ));
+            return Err(SortError::UnownedRun(path.to_path_buf()));
         }
         match fs::remove_file(path) {
             Ok(()) => {}
             Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-            Err(error) => return Err(error.to_string()),
+            Err(error) => return Err(error.into()),
         }
         self.paths.remove(path);
         Ok(())
@@ -36,8 +30,6 @@ impl OwnedRuns {
 
 impl Drop for OwnedRuns {
     fn drop(&mut self) {
-        // Best effort on exceptional exits. Successful merges remove runs
-        // eagerly; failed removals remain registered for this final attempt.
         for path in &self.paths {
             let _ = fs::remove_file(path);
         }

@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+from __future__ import annotations
+
 import argparse
 import os
 import pathlib
@@ -8,18 +10,18 @@ import sys
 import tempfile
 import time
 
-
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 
 
-def run(command, *, cwd=ROOT, env=None):
+def run(
+    command: list[str], *, cwd: pathlib.Path = ROOT, env: dict[str, str] | None = None
+) -> tuple[float, subprocess.CompletedProcess[str]]:
     start = time.perf_counter()
     completed = subprocess.run(
         command,
         cwd=cwd,
         env=env,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        capture_output=True,
         text=True,
         check=False,
     )
@@ -31,7 +33,7 @@ def run(command, *, cwd=ROOT, env=None):
     return elapsed, completed
 
 
-def conda_runner():
+def conda_runner() -> str:
     for name in ("mamba", "micromamba"):
         path = shutil.which(name)
         if path:
@@ -39,7 +41,7 @@ def conda_runner():
     raise SystemExit("mamba or micromamba is required to benchmark against Picard")
 
 
-def write_fastq_pair(workdir, reads):
+def write_fastq_pair(workdir: pathlib.Path, reads: int) -> tuple[pathlib.Path, pathlib.Path]:
     r1 = workdir / "r1.fastq"
     r2 = workdir / "r2.fastq"
     bases = ("ACGT" * 38).encode()
@@ -53,17 +55,17 @@ def write_fastq_pair(workdir, reads):
     return r1, r2
 
 
-def stable_sam(path):
+def stable_sam(path: pathlib.Path) -> list[str]:
     rows = []
     with open(path, encoding="utf-8") as handle:
-        for line in handle:
-            line = line.rstrip("\n")
+        for raw in handle:
+            line = raw.rstrip("\n")
             if line.startswith("@HD") or line.startswith("@RG") or not line.startswith("@"):
                 rows.append(line)
     return rows
 
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser(description="Benchmark turbo-picard FastqToSam against Picard.")
     parser.add_argument("--reads", type=int, default=100_000, help="paired reads to synthesize")
     parser.add_argument(
@@ -107,7 +109,7 @@ def main():
 
         parity = stable_sam(turbo_out) == stable_sam(picard_out)
         speedup = picard_time / turbo_time if turbo_time > 0 else float("inf")
-        print(f"command=FastqToSam")
+        print("command=FastqToSam")
         print(f"reads={args.reads}")
         print(f"turbo_seconds={turbo_time:.6f}")
         print(f"picard_seconds={picard_time:.6f}")

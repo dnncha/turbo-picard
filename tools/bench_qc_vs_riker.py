@@ -1,15 +1,4 @@
 #!/usr/bin/env python3
-"""Three-way QC benchmark: Picard vs turbo-picard vs riker.
-
-Runs overlapping whole-genome and bundle QC profiles on the same BAM and
-writes a TSV plus a short Markdown summary. Riker is required for canonical
-three-way evidence; use --allow-missing-riker for Picard-vs-turbo smoke runs
-when riker is not installed.
-
-Smoke mode uses the pinned GATK NA12878 mitochondrial fixture in this repo.
-For WGS-scale comparisons, point --input-bam at a staged 1000 Genomes BAM and
-see benchmarks/riker-comparison/README.md.
-"""
 
 from __future__ import annotations
 
@@ -25,10 +14,10 @@ import tempfile
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable
-
+from typing import Callable, Union
 
 ROOT = Path(__file__).resolve().parents[1]
+Row = dict[str, Union[str, int]]
 
 
 @dataclass(frozen=True)
@@ -101,8 +90,7 @@ def run_timed(
             wrapped,
             cwd=cwd,
             env=env,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+            capture_output=True,
             text=True,
             check=False,
         )
@@ -111,9 +99,7 @@ def run_timed(
         if completed.returncode != 0:
             sys.stderr.write(completed.stdout)
             sys.stderr.write(completed.stderr)
-            raise SystemExit(
-                f"command failed with exit {completed.returncode}: {' '.join(command)}"
-            )
+            raise SystemExit(f"command failed with exit {completed.returncode}: {' '.join(command)}")
         return elapsed, completed.returncode, max_rss_kb
 
     start = time.perf_counter()
@@ -121,8 +107,7 @@ def run_timed(
         command,
         cwd=cwd,
         env=env,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        capture_output=True,
         text=True,
         check=False,
     )
@@ -130,9 +115,7 @@ def run_timed(
     if completed.returncode != 0:
         sys.stderr.write(completed.stdout)
         sys.stderr.write(completed.stderr)
-        raise SystemExit(
-            f"command failed with exit {completed.returncode}: {' '.join(command)}"
-        )
+        raise SystemExit(f"command failed with exit {completed.returncode}: {' '.join(command)}")
     return elapsed, completed.returncode, None
 
 
@@ -164,13 +147,13 @@ def silent_args() -> list[str]:
     return ["VALIDATION_STRINGENCY=SILENT", "QUIET=true"]
 
 
-def wgs_only_runs(workdir: Path, input_bam: Path, reference: Path, prefix: Path) -> list[ToolRun]:
+def wgs_only_runs(workdir: Path, input_bam: Path, reference: Path, _: Path) -> list[ToolRun]:
     return [
         ToolRun(
             family="picard",
             label="CollectWgsMetrics",
             command=[
-                *prefix_picard,
+                *PREFIXES.picard,
                 "CollectWgsMetrics",
                 f"I={input_bam}",
                 f"O={workdir / 'picard.wgs.txt'}",
@@ -183,15 +166,13 @@ def wgs_only_runs(workdir: Path, input_bam: Path, reference: Path, prefix: Path)
     ]
 
 
-def wgs_bundle_picard_runs(
-    workdir: Path, input_bam: Path, reference: Path, prefix: Path
-) -> list[ToolRun]:
+def wgs_bundle_picard_runs(workdir: Path, input_bam: Path, reference: Path, _: Path) -> list[ToolRun]:
     return [
         ToolRun(
             family="picard",
             label="CollectMultipleMetrics",
             command=[
-                *prefix_picard,
+                *PREFIXES.picard,
                 "CollectMultipleMetrics",
                 f"I={input_bam}",
                 f"O={workdir / 'picard.bundle'}",
@@ -208,7 +189,7 @@ def wgs_bundle_picard_runs(
             family="picard",
             label="CollectGcBiasMetrics",
             command=[
-                *prefix_picard,
+                *PREFIXES.picard,
                 "CollectGcBiasMetrics",
                 f"I={input_bam}",
                 f"O={workdir / 'picard.gc.detail.txt'}",
@@ -223,7 +204,7 @@ def wgs_bundle_picard_runs(
             family="picard",
             label="CollectWgsMetrics",
             command=[
-                *prefix_picard,
+                *PREFIXES.picard,
                 "CollectWgsMetrics",
                 f"I={input_bam}",
                 f"O={workdir / 'picard.wgs.txt'}",
@@ -236,10 +217,15 @@ def wgs_bundle_picard_runs(
     ]
 
 
-prefix_picard: list[str] = []
-prefix_turbo: list[str] = []
-prefix_riker: list[str] | None = None
-riker_threads: int = 1
+@dataclass
+class BoundPrefixes:
+    picard: list[str]
+    turbo: list[str]
+    riker: list[str] | None
+    riker_threads: int
+
+
+PREFIXES = BoundPrefixes(picard=[], turbo=[], riker=None, riker_threads=1)
 
 
 def bind_prefixes(
@@ -249,11 +235,10 @@ def bind_prefixes(
     *,
     threads: int = 1,
 ) -> None:
-    global prefix_picard, prefix_turbo, prefix_riker, riker_threads
-    prefix_picard = picard_command
-    prefix_turbo = turbo_command
-    prefix_riker = riker_command
-    riker_threads = max(1, threads)
+    PREFIXES.picard = picard_command
+    PREFIXES.turbo = turbo_command
+    PREFIXES.riker = riker_command
+    PREFIXES.riker_threads = max(1, threads)
 
 
 def wgs_only_turbo_runs(workdir: Path, input_bam: Path, reference: Path, _: Path) -> list[ToolRun]:
@@ -262,7 +247,7 @@ def wgs_only_turbo_runs(workdir: Path, input_bam: Path, reference: Path, _: Path
             family="turbo-picard",
             label="CollectWgsMetrics",
             command=[
-                *prefix_turbo,
+                *PREFIXES.turbo,
                 "CollectWgsMetrics",
                 f"I={input_bam}",
                 f"O={workdir / 'turbo.wgs.txt'}",
@@ -275,15 +260,13 @@ def wgs_only_turbo_runs(workdir: Path, input_bam: Path, reference: Path, _: Path
     ]
 
 
-def wgs_only_turbo_fast_runs(
-    workdir: Path, input_bam: Path, reference: Path, _: Path
-) -> list[ToolRun]:
+def wgs_only_turbo_fast_runs(workdir: Path, input_bam: Path, reference: Path, _: Path) -> list[ToolRun]:
     return [
         ToolRun(
             family="turbo-picard",
             label="CollectWgsMetrics(use_fast_algorithm)",
             command=[
-                *prefix_turbo,
+                *PREFIXES.turbo,
                 "CollectWgsMetrics",
                 f"I={input_bam}",
                 f"O={workdir / 'turbo.wgs.txt'}",
@@ -297,15 +280,13 @@ def wgs_only_turbo_fast_runs(
     ]
 
 
-def wgs_only_turbo_env_fast_runs(
-    workdir: Path, input_bam: Path, reference: Path, _: Path
-) -> list[ToolRun]:
+def wgs_only_turbo_env_fast_runs(workdir: Path, input_bam: Path, reference: Path, _: Path) -> list[ToolRun]:
     return [
         ToolRun(
             family="turbo-picard",
             label="CollectWgsMetrics(env_fast_default)",
             command=[
-                *prefix_turbo,
+                *PREFIXES.turbo,
                 "CollectWgsMetrics",
                 f"I={input_bam}",
                 f"O={workdir / 'turbo.wgs.txt'}",
@@ -325,7 +306,7 @@ def wgs_bundle_turbo_runs(workdir: Path, input_bam: Path, reference: Path, _: Pa
             family="turbo-picard",
             label="CollectMultipleMetrics",
             command=[
-                *prefix_turbo,
+                *PREFIXES.turbo,
                 "CollectMultipleMetrics",
                 f"I={input_bam}",
                 f"O={workdir / 'turbo.bundle'}",
@@ -344,15 +325,13 @@ def wgs_bundle_turbo_runs(workdir: Path, input_bam: Path, reference: Path, _: Pa
     ]
 
 
-def wgs_bundle_turbo_fast_runs(
-    workdir: Path, input_bam: Path, reference: Path, _: Path
-) -> list[ToolRun]:
+def wgs_bundle_turbo_fast_runs(workdir: Path, input_bam: Path, reference: Path, _: Path) -> list[ToolRun]:
     return [
         ToolRun(
             family="turbo-picard",
             label="CollectMultipleMetrics(wgs_fast)",
             command=[
-                *prefix_turbo,
+                *PREFIXES.turbo,
                 "CollectMultipleMetrics",
                 f"I={input_bam}",
                 f"O={workdir / 'turbo.bundle'}",
@@ -372,15 +351,13 @@ def wgs_bundle_turbo_fast_runs(
     ]
 
 
-def wgs_bundle_turbo_env_fast_runs(
-    workdir: Path, input_bam: Path, reference: Path, _: Path
-) -> list[ToolRun]:
+def wgs_bundle_turbo_env_fast_runs(workdir: Path, input_bam: Path, reference: Path, _: Path) -> list[ToolRun]:
     return [
         ToolRun(
             family="turbo-picard",
             label="CollectMultipleMetrics(env_wgs_fast_default)",
             command=[
-                *prefix_turbo,
+                *PREFIXES.turbo,
                 "CollectMultipleMetrics",
                 f"I={input_bam}",
                 f"O={workdir / 'turbo.bundle'}",
@@ -401,13 +378,13 @@ def wgs_bundle_turbo_env_fast_runs(
 
 
 def riker_wgs_only(workdir: Path, input_bam: Path, reference: Path, _: Path) -> ToolRun | None:
-    if prefix_riker is None:
+    if PREFIXES.riker is None:
         return None
     return ToolRun(
         family="riker",
         label="wgs",
         command=[
-            *prefix_riker,
+            *PREFIXES.riker,
             "wgs",
             "-i",
             str(input_bam),
@@ -421,13 +398,13 @@ def riker_wgs_only(workdir: Path, input_bam: Path, reference: Path, _: Path) -> 
 
 
 def riker_wgs_bundle(workdir: Path, input_bam: Path, reference: Path, _: Path) -> ToolRun | None:
-    if prefix_riker is None:
+    if PREFIXES.riker is None:
         return None
     return ToolRun(
         family="riker",
         label="multi",
         command=[
-            *prefix_riker,
+            *PREFIXES.riker,
             "multi",
             "-i",
             str(input_bam),
@@ -442,7 +419,7 @@ def riker_wgs_bundle(workdir: Path, input_bam: Path, reference: Path, _: Path) -
             "isize",
             "gcbias",
             "--threads",
-            str(riker_threads),
+            str(PREFIXES.riker_threads),
         ],
         workdir=workdir,
     )
@@ -509,7 +486,7 @@ def write_outputs(
     output_dir: Path,
     sample_id: str,
     input_bam: Path,
-    rows: list[dict[str, object]],
+    rows: list[Row],
     riker_thread_count: int | None = None,
 ) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -533,17 +510,13 @@ def write_outputs(
         for row in rows:
             handle.write("\t".join(str(row[key]) for key in headers) + "\n")
 
-    by_profile: dict[str, list[dict[str, object]]] = {}
+    by_profile: dict[str, list[Row]] = {}
     for row in rows:
         by_profile.setdefault(str(row["profile"]), []).append(row)
 
     has_riker = any(row["tool_family"] == "riker" for row in rows)
     profile_comparisons: dict[str, dict[str, object]] = {}
-    title = (
-        "# QC benchmark: Picard vs turbo-picard vs riker"
-        if has_riker
-        else "# QC benchmark: Picard vs turbo-picard"
-    )
+    title = "# QC benchmark: Picard vs turbo-picard vs riker" if has_riker else "# QC benchmark: Picard vs turbo-picard"
     lines = [
         title,
         "",
@@ -564,37 +537,18 @@ def write_outputs(
         lines.append("")
         lines.append("| tool | label | wall (s) | max RSS (GB) | vs Picard |")
         lines.append("| --- | --- | ---: | ---: | ---: |")
-        picard_total = sum(
-            float(row["wall_s"])
-            for row in profile_rows
-            if row["tool_family"] == "picard"
-        )
-        for row in sorted(profile_rows, key=lambda item: (item["tool_family"], item["tool_label"])):
+        picard_total = sum(float(row["wall_s"]) for row in profile_rows if row["tool_family"] == "picard")
+        for row in sorted(profile_rows, key=lambda item: (str(item["tool_family"]), str(item["tool_label"]))):
             wall = float(row["wall_s"])
-            if row["tool_family"] == "picard":
-                ratio = "1.00x"
-            else:
-                ratio = f"{picard_total / wall:.2f}x" if wall > 0 else "inf"
+            ratio = "1.00x" if row["tool_family"] == "picard" else f"{picard_total / wall:.2f}x" if wall > 0 else "inf"
             rss = row.get("max_rss_kb")
-            rss_gb = f"{int(rss) / (1024 * 1024):.2f}" if rss not in (None, "") else "n/a"
-            lines.append(
-                f"| {row['tool_family']} | {row['tool_label']} | {wall:.3f} | {rss_gb} | {ratio} |"
-            )
+            rss_gb = f"{int(rss) / (1024 * 1024):.2f}" if rss is not None and rss != "" else "n/a"
+            lines.append(f"| {row['tool_family']} | {row['tool_label']} | {wall:.3f} | {rss_gb} | {ratio} |")
         lines.append("")
-        turbo_total = sum(
-            float(row["wall_s"])
-            for row in profile_rows
-            if row["tool_family"] == "turbo-picard"
-        )
-        riker_total = sum(
-            float(row["wall_s"])
-            for row in profile_rows
-            if row["tool_family"] == "riker"
-        )
+        turbo_total = sum(float(row["wall_s"]) for row in profile_rows if row["tool_family"] == "turbo-picard")
+        riker_total = sum(float(row["wall_s"]) for row in profile_rows if row["tool_family"] == "riker")
         if picard_total > 0 and turbo_total > 0:
-            lines.append(
-                f"- turbo-picard profile speedup vs Picard: **{picard_total / turbo_total:.2f}x**"
-            )
+            lines.append(f"- turbo-picard profile speedup vs Picard: **{picard_total / turbo_total:.2f}x**")
         if picard_total > 0 and riker_total > 0:
             lines.append(f"- riker profile speedup vs Picard: **{picard_total / riker_total:.2f}x**")
         if turbo_total > 0 and riker_total > 0:
@@ -650,7 +604,7 @@ def write_outputs(
     )
 
 
-def ensure_riker_rows(rows: list[dict[str, object]]) -> None:
+def ensure_riker_rows(rows: list[Row]) -> None:
     if any(row["tool_family"] == "riker" for row in rows):
         return
     raise SystemExit(
@@ -658,8 +612,22 @@ def ensure_riker_rows(rows: list[dict[str, object]]) -> None:
     )
 
 
+_DESCRIPTION = (
+    "Three-way QC benchmark: Picard vs turbo-picard vs riker.\n"
+    "\n"
+    "Runs overlapping whole-genome and bundle QC profiles on the same BAM and\n"
+    "writes a TSV plus a short Markdown summary. Riker is required for canonical\n"
+    "three-way evidence; use --allow-missing-riker for Picard-vs-turbo smoke runs\n"
+    "when riker is not installed.\n"
+    "\n"
+    "Smoke mode uses the pinned GATK NA12878 mitochondrial fixture in this repo.\n"
+    "For WGS-scale comparisons, point --input-bam at a staged 1000 Genomes BAM and\n"
+    "see benchmarks/riker-comparison/README.md.\n"
+)
+
+
 def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(description=_DESCRIPTION)
     parser.add_argument("--input-bam", type=Path, help="Coordinate-sorted BAM or SAM input.")
     parser.add_argument("--reference-fasta", type=Path, help="Reference FASTA for WGS/GC metrics.")
     parser.add_argument("--sample-id", default="sample")
@@ -685,9 +653,7 @@ def main() -> int:
     )
     parser.add_argument(
         "--conda-prefix",
-        default=os.environ.get(
-            "TURBO_PICARD_CONDA_PREFIX", str(ROOT / ".conda-turbo-picard")
-        ),
+        default=os.environ.get("TURBO_PICARD_CONDA_PREFIX", str(ROOT / ".conda-turbo-picard")),
         help="Conda prefix used when --picard-command is not set.",
     )
     parser.add_argument(
@@ -743,20 +709,11 @@ def main() -> int:
             raise SystemExit(f"missing reference FASTA: {reference}")
 
     picard_command = (
-        parse_command(args.picard_command)
-        if args.picard_command
-        else default_picard_command(Path(args.conda_prefix))
+        parse_command(args.picard_command) if args.picard_command else default_picard_command(Path(args.conda_prefix))
     )
-    turbo_command = (
-        parse_command(args.turbo_picard_command)
-        if args.turbo_picard_command
-        else default_turbo_command()
-    )
+    turbo_command = parse_command(args.turbo_picard_command) if args.turbo_picard_command else default_turbo_command()
     riker_command = None
-    if args.riker_command:
-        riker_command = parse_command(args.riker_command)
-    else:
-        riker_command = default_riker_command()
+    riker_command = parse_command(args.riker_command) if args.riker_command else default_riker_command()
 
     riker_thread_count = args.riker_threads
     if riker_thread_count is None:
@@ -781,7 +738,7 @@ def main() -> int:
             threads=riker_thread_count,
         )
 
-    rows: list[dict[str, object]] = []
+    rows: list[Row] = []
     selected_profiles = [profile for profile in PROFILES if profile.name in args.profiles]
 
     with tempfile.TemporaryDirectory(prefix="turbo-picard-qc-bench.") as tmp:
@@ -813,30 +770,22 @@ def main() -> int:
                             "tool_label": run.label,
                             "wall_s": f"{wall:.6f}",
                             "max_rss_kb": "" if max_rss_kb is None else str(max_rss_kb),
-                            "threads": str(
-                                riker_thread_count
-                                if run.family == "riker" and run.label == "multi"
-                                else 1
-                            ),
-                            "picard_bundle_role": "main"
-                            if run.family == "picard"
-                            else "",
+                            "threads": str(riker_thread_count if run.family == "riker" and run.label == "multi" else 1),
+                            "picard_bundle_role": "main" if run.family == "picard" else "",
                             "input_bytes": input_bam.stat().st_size,
                         }
                     )
 
     if args.repeats > 1:
-        collapsed: list[dict[str, object]] = []
-        groups: dict[tuple[str, str, str], list[dict[str, object]]] = {}
+        collapsed: list[Row] = []
+        groups: dict[tuple[str, str, str], list[Row]] = {}
         for row in rows:
             key = (str(row["profile"]), str(row["tool_family"]), str(row["tool_label"]))
             groups.setdefault(key, []).append(row)
         for (profile_name, family, label), group_rows in sorted(groups.items()):
             walls = [float(row["wall_s"]) for row in group_rows]
             rss_values = [
-                int(row["max_rss_kb"])
-                for row in group_rows
-                if row.get("max_rss_kb") not in (None, "")
+                int(rss) for row in group_rows for rss in [row.get("max_rss_kb")] if rss is not None and rss != ""
             ]
             collapsed.append(
                 {
@@ -854,9 +803,7 @@ def main() -> int:
         rows = collapsed
 
     if riker_command is None and not args.allow_missing_riker:
-        raise SystemExit(
-            "riker not found on PATH; install riker or rerun with --allow-missing-riker"
-        )
+        raise SystemExit("riker not found on PATH; install riker or rerun with --allow-missing-riker")
     if not args.allow_missing_riker:
         ensure_riker_rows(rows)
 

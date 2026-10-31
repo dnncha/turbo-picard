@@ -1,11 +1,9 @@
 #!/usr/bin/env python3
-"""Verify the production-evidence workflow fails closed before expensive work."""
 
 from __future__ import annotations
 
-from pathlib import Path
 import sys
-
+from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = ROOT / ".github" / "workflows" / "production-evidence.yml"
@@ -70,12 +68,14 @@ def validate_production_evidence_workflow(root: Path = ROOT) -> list[str]:
     validation_marker = "Validate dispatch inputs"
     download_marker = "Download and hash input"
     build_marker = "Build Turbo-Picard"
-    if validation_marker in text and download_marker in text:
-        if text.index(validation_marker) > text.index(download_marker):
-            errors.append("Dispatch validation must run before input download")
-    if validation_marker in text and build_marker in text:
-        if text.index(validation_marker) > text.index(build_marker):
-            errors.append("Dispatch validation must run before Turbo-Picard build")
+    if (
+        validation_marker in text
+        and download_marker in text
+        and text.index(validation_marker) > text.index(download_marker)
+    ):
+        errors.append("Dispatch validation must run before input download")
+    if validation_marker in text and build_marker in text and text.index(validation_marker) > text.index(build_marker):
+        errors.append("Dispatch validation must run before Turbo-Picard build")
 
     for path_trigger in (
         "tools/verify_production_evidence_workflow.py",

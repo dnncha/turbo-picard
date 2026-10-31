@@ -1,20 +1,9 @@
 #!/usr/bin/env python3
-"""A/B the MarkDuplicates fragment-stage filter on a synthetic mix.
-
-The mix has many pair-only loci and a small number of loci where an unpaired
-candidate taints the fragment key. Without the filter every pair read end is
-spilled into the fragment sorter; with it, only pairs whose key was tainted are.
-
-This is a native-path measurement on synthetic input. It is not a Picard
-comparison, not a whole-genome guarantee, and not evidence for a different
-input distribution. The tool refuses to report timings unless both binaries
-produce byte-identical BAM output and metrics, so a faster run that changes the
-decision cannot be presented as a win.
-"""
 
 from __future__ import annotations
 
 import argparse
+import contextlib
 import hashlib
 import json
 import platform
@@ -24,6 +13,21 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
+from typing import Literal, TypedDict
+
+MODULE_DESCRIPTION = (
+    "A/B the MarkDuplicates fragment-stage filter on a synthetic mix.\n"
+    "\n"
+    "The mix has many pair-only loci and a small number of loci where an unpaired\n"
+    "candidate taints the fragment key. Without the filter every pair read end is\n"
+    "spilled into the fragment sorter; with it, only pairs whose key was tainted are.\n"
+    "\n"
+    "This is a native-path measurement on synthetic input. It is not a Picard\n"
+    "comparison, not a whole-genome guarantee, and not evidence for a different\n"
+    "input distribution. The tool refuses to report timings unless both binaries\n"
+    "produce byte-identical BAM output and metrics, so a faster run that changes the\n"
+    "decision cannot be presented as a win.\n"
+)
 
 READ_LEN = 100
 PAIRS_PER_TAINTED = 3
@@ -31,8 +35,31 @@ SEQ = "A" * READ_LEN
 QUAL = "I" * READ_LEN
 
 
+class RunResult(TypedDict):
+    wall_seconds: float | None
+    cpu_seconds: float | None
+    peak_rss_bytes: int | None
+    bam_sha256: str
+    metrics_sha256: str
+
+
+class InputFacts(TypedDict):
+    sam_sha256: str
+    bam_sha256: str
+    records: None
+
+
+class Summary(TypedDict):
+    label: str
+    repeats: int
+    median_wall_seconds: float | None
+    median_cpu_seconds: float | None
+    median_peak_rss_bytes: int | None
+    bam_sha256: list[str]
+    metrics_sha256: list[str]
+
+
 def sam_lines(pairs: int, unpaired_loci: int) -> list[str]:
-    """Return coordinate-sorted SAM lines for the synthetic mix."""
     if pairs < 1 or unpaired_loci < 1:
         raise ValueError("pairs and unpaired_loci must be positive")
     records: list[tuple[int, str]] = []
@@ -51,9 +78,7 @@ def sam_lines(pairs: int, unpaired_loci: int) -> list[str]:
     base = 4 * pairs + 1000
     for index in range(unpaired_loci):
         pos = base + 8 * index
-        records.append(
-            (pos, f"unpaired{index}\t9\tchr1\t{pos}\t60\t{READ_LEN}M\t*\t0\t0\t{SEQ}\t{QUAL}\tRG:Z:rg1\n")
-        )
+        records.append((pos, f"unpaired{index}\t9\tchr1\t{pos}\t60\t{READ_LEN}M\t*\t0\t0\t{SEQ}\t{QUAL}\tRG:Z:rg1\n"))
         for member in range(PAIRS_PER_TAINTED):
             qname = f"coll{index}_{member}"
             records.append(
@@ -87,19 +112,16 @@ def time_flags() -> list[str]:
 
 
 def parse_peak_rss(text: str) -> int | None:
-    """Parse peak RSS in bytes from macOS (`-l`) or Linux (`-v`) output."""
     for line in text.splitlines():
         if "maximum resident set size" in line.lower():
             values = re.findall(r"\d+", line)
             if values:
-                # Linux reports KiB, macOS reports bytes.
                 value = int(values[-1])
                 return value if platform.system() == "Darwin" else value * 1024
     return None
 
 
 def parse_cpu_seconds(text: str) -> float | None:
-    """CPU seconds from macOS (`-l`) or Linux (`-v`) output."""
     user = system = None
     for line in text.splitlines():
         stripped = line.strip()
@@ -110,15 +132,11 @@ def parse_cpu_seconds(text: str) -> float | None:
         else:
             parts = stripped.split()
             if "user" in parts:
-                try:
+                with contextlib.suppress(ValueError):
                     user = float(parts[parts.index("user") - 1])
-                except ValueError:
-                    pass
             if "sys" in parts:
-                try:
+                with contextlib.suppress(ValueError):
                     system = float(parts[parts.index("sys") - 1])
-                except ValueError:
-                    pass
     if user is None and system is None:
         return None
     return (user or 0.0) + (system or 0.0)
@@ -158,7 +176,7 @@ def run_once(
     bam: Path,
     workdir: Path,
     timeout_s: int,
-) -> dict:
+) -> RunResult:
     workdir.mkdir(parents=True, exist_ok=True)
     out_bam = workdir / "out.bam"
     metrics = workdir / "metrics.txt"
@@ -182,11 +200,10 @@ def run_once(
         text=True,
         timeout=timeout_s,
         env={"TMPDIR": str(workdir), "PATH": "/usr/bin:/bin"},
+        check=False,
     )
     if completed.returncode != 0:
-        raise RuntimeError(
-            f"{binary} failed with {completed.returncode}: {completed.stderr[-400:]}"
-        )
+        raise RuntimeError(f"{binary} failed with {completed.returncode}: {completed.stderr[-400:]}")
     return {
         "wall_seconds": parse_wall_seconds(completed.stderr),
         "cpu_seconds": parse_cpu_seconds(completed.stderr),
@@ -196,7 +213,7 @@ def run_once(
     }
 
 
-def build_input(candidate: Path, workdir: Path, pairs: int, unpaired_loci: int) -> tuple[Path, dict]:
+def build_input(candidate: Path, workdir: Path, pairs: int, unpaired_loci: int) -> tuple[Path, InputFacts]:
     sam = workdir / "input.sam"
     sam.write_text("".join(sam_lines(pairs, unpaired_loci)), encoding="utf-8")
     bam = workdir / "input.bam"
@@ -219,7 +236,7 @@ def build_input(candidate: Path, workdir: Path, pairs: int, unpaired_loci: int) 
     return bam, {"sam_sha256": digest(sam), "bam_sha256": digest(bam), "records": None}
 
 
-def summarize(label: str, runs: list[dict]) -> dict:
+def summarize(label: str, runs: list[RunResult]) -> Summary:
     walls = [run["wall_seconds"] for run in runs if run["wall_seconds"] is not None]
     cpus = [run["cpu_seconds"] for run in runs if run["cpu_seconds"] is not None]
     rss = [run["peak_rss_bytes"] for run in runs if run["peak_rss_bytes"] is not None]
@@ -234,22 +251,20 @@ def summarize(label: str, runs: list[dict]) -> dict:
     }
 
 
-def paired_ratio(base_runs: list[dict], candidate_runs: list[dict], key: str) -> float | None:
-    """Median of per-repetition base/candidate ratios.
-
-    Base and candidate run next to each other, so a slow thermal or cache
-    drift cancels instead of biasing one median against the other.
-    """
-    ratios = [
-        base[key] / candidate[key]
-        for base, candidate in zip(base_runs, candidate_runs)
-        if base.get(key) and candidate.get(key)
-    ]
+def paired_ratio(
+    base_runs: list[RunResult], candidate_runs: list[RunResult], key: Literal["cpu_seconds", "wall_seconds"]
+) -> float | None:
+    ratios = []
+    for base, candidate in zip(base_runs, candidate_runs):
+        base_value = base[key]
+        candidate_value = candidate[key]
+        if base_value and candidate_value:
+            ratios.append(base_value / candidate_value)
     return statistics.median(ratios) if ratios else None
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(description=MODULE_DESCRIPTION)
     parser.add_argument("--base-binary", required=True, type=Path)
     parser.add_argument("--candidate-binary", required=True, type=Path)
     parser.add_argument("--pairs", type=int, default=400_000)
@@ -278,23 +293,17 @@ def main(argv: list[str] | None = None) -> int:
             parser.error(f"--keep directory must be empty: {workdir}")
         workdir.mkdir(parents=True, exist_ok=True)
 
-    bam, input_facts = build_input(
-        args.candidate_binary, workdir, args.pairs, args.unpaired_loci
-    )
+    bam, input_facts = build_input(args.candidate_binary, workdir, args.pairs, args.unpaired_loci)
 
-    runs = {"base": [], "candidate": []}
+    runs: dict[str, list[RunResult]] = {"base": [], "candidate": []}
     order = [("candidate", args.candidate_binary), ("base", args.base_binary)]
     for label, binary in order:
         for index in range(args.warmups):
             run_once(binary, bam, workdir / f"{label}-warmup-{index}", args.timeout_seconds)
     for index in range(args.repeats):
-        # Alternate which binary runs first: a fixed order lets a slow drift in
-        # CPU frequency or cache state bias every pair the same way.
         ordered = order if index % 2 == 0 else list(reversed(order))
         for label, binary in ordered:
-            runs[label].append(
-                run_once(binary, bam, workdir / f"{label}-{index}", args.timeout_seconds)
-            )
+            runs[label].append(run_once(binary, bam, workdir / f"{label}-{index}", args.timeout_seconds))
 
     base = summarize("base", runs["base"])
     candidate = summarize("candidate", runs["candidate"])

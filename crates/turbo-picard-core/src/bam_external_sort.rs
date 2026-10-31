@@ -1,10 +1,6 @@
-//! Bounded-memory external sorting for alignment records.
-//!
-//! Runs are ordinary BAM files. That avoids lossy record serialisation and
-//! permits the final k-way merge to write records directly to the destination.
-
 use crate::external_sort::reserve_run_slot;
 use crate::merge_tree::MergeTree;
+use crate::sort_error::SortError;
 use crate::temp_runs::OwnedRuns;
 use rust_htslib::bam::{self, Read};
 use std::cmp::Ordering;
@@ -27,7 +23,6 @@ pub type RecordCompare = fn(&bam::Record, &bam::Record) -> Ordering;
 pub struct BamExternalSortConfig {
     pub tmp_dir: PathBuf,
     pub max_records_in_ram: usize,
-    /// Approximate run budget for record buffers and the vector allocation.
     pub max_bytes_in_ram: usize,
     pub merge_fan_in: usize,
     pub prefix: String,
@@ -53,8 +48,6 @@ pub struct BamExternalSortMetrics {
     pub run_count: usize,
 }
 
-/// Alignment sorter which only holds the current run and one record per open
-/// run in memory. It owns its temporary files until completion.
 pub struct BamExternalSorter {
     config: BamExternalSortConfig,
     header: bam::Header,
@@ -68,8 +61,8 @@ pub struct BamExternalSorter {
 }
 
 impl BamExternalSorter {
-    pub fn new(header: bam::Header, config: BamExternalSortConfig) -> Result<Self, String> {
-        fs::create_dir_all(&config.tmp_dir).map_err(|error| error.to_string())?;
+    pub fn new(header: bam::Header, config: BamExternalSortConfig) -> Result<Self, SortError> {
+        fs::create_dir_all(&config.tmp_dir)?;
         Ok(Self {
             config,
             header,
@@ -83,11 +76,8 @@ impl BamExternalSorter {
         })
     }
 
-    pub fn push(&mut self, record: bam::Record, compare: RecordCompare) -> Result<(), String> {
+    pub fn push(&mut self, record: bam::Record, compare: RecordCompare) -> Result<(), SortError> {
         let record_bytes = record.inner().m_data as usize;
-        // Spill before admitting a record that would exceed the run budget.
-        // A single oversized record still has to be held briefly, but it must
-        // not share a run with the records already resident in memory.
         let incoming_bytes = self
             .resident_record_bytes
             .saturating_add(record_bytes)
@@ -95,7 +85,7 @@ impl BamExternalSorter {
                 self.records
                     .capacity()
                     .max(self.records.len().saturating_add(1))
-                    .saturating_mul(std::mem::size_of::<bam::Record>()),
+                    .saturating_mul(size_of::<bam::Record>()),
             );
         if !self.records.is_empty() && incoming_bytes > self.config.max_bytes_in_ram.max(1) {
             self.spill_current_run(compare)?;
@@ -111,7 +101,7 @@ impl BamExternalSorter {
         let estimated_bytes = self.resident_record_bytes.saturating_add(
             self.records
                 .capacity()
-                .saturating_mul(std::mem::size_of::<bam::Record>()),
+                .saturating_mul(size_of::<bam::Record>()),
         );
         self.metrics.max_resident_records =
             self.metrics.max_resident_records.max(self.records.len());
@@ -127,8 +117,8 @@ impl BamExternalSorter {
     pub fn finish_into(
         mut self,
         compare: RecordCompare,
-        mut emit: impl FnMut(bam::Record) -> Result<(), String>,
-    ) -> Result<BamExternalSortMetrics, String> {
+        mut emit: impl FnMut(bam::Record) -> Result<(), SortError>,
+    ) -> Result<BamExternalSortMetrics, SortError> {
         if self.runs.is_empty() {
             self.records.sort_unstable_by(compare);
             self.metrics.run_count = usize::from(!self.records.is_empty());
@@ -139,11 +129,10 @@ impl BamExternalSorter {
         }
 
         self.spill_current_run(compare)?;
-        // Release the empty run buffer before allocating the merge readers.
         self.records = Vec::new();
         let mut runs = std::mem::take(&mut self.runs);
         while runs.len() > self.config.merge_fan_in.max(2) {
-            runs = self.merge_pass(runs, compare)?;
+            runs = self.merge_pass(&runs, compare)?;
         }
         let result = merge_runs(&runs, compare, emit);
         for run in runs {
@@ -153,7 +142,7 @@ impl BamExternalSorter {
         Ok(self.metrics)
     }
 
-    fn spill_current_run(&mut self, compare: RecordCompare) -> Result<(), String> {
+    fn spill_current_run(&mut self, compare: RecordCompare) -> Result<(), SortError> {
         if self.records.is_empty() {
             return Ok(());
         }
@@ -170,13 +159,12 @@ impl BamExternalSorter {
 
     fn merge_pass(
         &mut self,
-        runs: Vec<PathBuf>,
+        runs: &[PathBuf],
         compare: RecordCompare,
-    ) -> Result<Vec<PathBuf>, String> {
+    ) -> Result<Vec<PathBuf>, SortError> {
         let fan_in = self.config.merge_fan_in.max(2);
         let mut merged = Vec::new();
         for chunk in runs.chunks(fan_in) {
-            // Keep singleton BAMs owned, but avoid a decode/encode round trip.
             if chunk.len() == 1 {
                 merged.push(chunk[0].clone());
                 continue;
@@ -192,7 +180,7 @@ impl BamExternalSorter {
         Ok(merged)
     }
 
-    fn create_run_path(&mut self) -> Result<PathBuf, String> {
+    fn create_run_path(&mut self) -> Result<PathBuf, SortError> {
         loop {
             let path = self.config.tmp_dir.join(format!(
                 "{}-{}-{}-{}.bam",
@@ -207,18 +195,17 @@ impl BamExternalSorter {
                     self.owned_runs.register(&path);
                     return Ok(path);
                 }
-                Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
-                Err(error) => return Err(error.to_string()),
+                Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
+                Err(error) => return Err(error.into()),
             }
         }
     }
 }
 
-fn write_run(path: &Path, header: &bam::Header, records: &[bam::Record]) -> Result<(), String> {
-    let mut writer = bam::Writer::from_path(path, header, bam::Format::Bam)
-        .map_err(|error| error.to_string())?;
+fn write_run(path: &Path, header: &bam::Header, records: &[bam::Record]) -> Result<(), SortError> {
+    let mut writer = bam::Writer::from_path(path, header, bam::Format::Bam)?;
     for record in records {
-        writer.write(record).map_err(|error| error.to_string())?;
+        writer.write(record)?;
     }
     Ok(())
 }
@@ -228,39 +215,34 @@ fn merge_runs_to_file(
     output: &Path,
     header: &bam::Header,
     compare: RecordCompare,
-) -> Result<(), String> {
-    let mut writer = bam::Writer::from_path(output, header, bam::Format::Bam)
-        .map_err(|error| error.to_string())?;
-    merge_runs(runs, compare, |record| {
-        writer.write(&record).map_err(|error| error.to_string())
-    })
+) -> Result<(), SortError> {
+    let mut writer = bam::Writer::from_path(output, header, bam::Format::Bam)?;
+    merge_runs(runs, compare, |record| Ok(writer.write(&record)?))
 }
 
 fn merge_runs(
     runs: &[PathBuf],
     compare: RecordCompare,
-    mut emit: impl FnMut(bam::Record) -> Result<(), String>,
-) -> Result<(), String> {
+    mut emit: impl FnMut(bam::Record) -> Result<(), SortError>,
+) -> Result<(), SortError> {
     let mut readers = Vec::with_capacity(runs.len());
     let mut heads = Vec::with_capacity(runs.len());
     for path in runs {
-        let mut reader = bam::Reader::from_path(path).map_err(|error| error.to_string())?;
+        let mut reader = bam::Reader::from_path(path)?;
         heads.push(next_record(&mut reader)?);
         readers.push(reader);
     }
-    // One record per input stays in a fixed slot. Only indices move through
-    // the tournament; equal keys continue to prefer the earlier input run.
     let mut tree = MergeTree::new(&heads, compare);
     while let Some(reader_index) = tree.winner() {
-        let record = heads[reader_index].take().expect("winning BAM merge head");
-        emit(record)?;
+        if let Some(record) = heads[reader_index].take() {
+            emit(record)?;
+        }
         heads[reader_index] = next_record(&mut readers[reader_index])?;
         tree.update(reader_index, &heads, compare);
     }
     Ok(())
 }
 
-// Retained only as the historical heap reference for the comparison test.
 #[cfg(test)]
 struct HeapRecord {
     record: bam::Record,
@@ -293,11 +275,11 @@ impl PartialEq for HeapRecord {
 #[cfg(test)]
 impl Eq for HeapRecord {}
 
-fn next_record(reader: &mut bam::Reader) -> Result<Option<bam::Record>, String> {
+fn next_record(reader: &mut bam::Reader) -> Result<Option<bam::Record>, SortError> {
     let mut record = bam::Record::new();
     match reader.read(&mut record) {
         Some(Ok(())) => Ok(Some(record)),
-        Some(Err(error)) => Err(error.to_string()),
+        Some(Err(error)) => Err(error.into()),
         None => Ok(None),
     }
 }
@@ -319,7 +301,7 @@ mod tests {
         ));
         let mut record = bam::Record::new();
         record.set(b"same", None, b"A", &[30]);
-        let budget = 5 * (record.inner().m_data as usize + std::mem::size_of::<bam::Record>());
+        let budget = 5 * (record.inner().m_data as usize + size_of::<bam::Record>());
         let mut config = BamExternalSortConfig::new(&dir);
         config.max_bytes_in_ram = budget;
         let mut sorter = BamExternalSorter::new(bam::Header::new(), config).unwrap();
@@ -332,7 +314,7 @@ mod tests {
                 .iter()
                 .map(|record| record.inner().m_data as usize)
                 .sum::<usize>()
-                + sorter.records.capacity() * std::mem::size_of::<bam::Record>();
+                + sorter.records.capacity() * size_of::<bam::Record>();
             assert!(
                 allocated <= budget,
                 "allocated {allocated} with budget {budget}"
@@ -377,8 +359,6 @@ mod tests {
             .unwrap();
         assert_eq!(names, [b"a".to_vec(), b"b".to_vec(), b"c".to_vec()]);
         assert!(metrics.spills >= 2);
-        // An individual oversized record can exceed the budget once; it is
-        // spilled immediately and cannot accumulate with later records.
         assert!(metrics.max_estimated_bytes >= 4096);
         assert!(fs::read_dir(&dir).unwrap().next().is_none());
         fs::remove_dir(&dir).unwrap();
@@ -586,10 +566,12 @@ mod tests {
             record.set(format!("r{index}").as_bytes(), None, b"A", &[30]);
             sorter.push(record, qname_compare).unwrap();
         }
-        assert_eq!(
-            sorter.finish_into(qname_compare, |_| Err("sink failed".to_string())),
-            Err("sink failed".to_string())
-        );
+        let error = sorter
+            .finish_into(qname_compare, |_| {
+                Err(SortError::Sink("sink failed".to_string()))
+            })
+            .unwrap_err();
+        assert_eq!(error.to_string(), "sink failed");
         assert!(fs::read_dir(&dir).unwrap().next().is_none());
         fs::remove_dir(&dir).unwrap();
     }

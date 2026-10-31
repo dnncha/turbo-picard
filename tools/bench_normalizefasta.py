@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+
+from __future__ import annotations
+
 import argparse
 import os
 import pathlib
@@ -7,18 +10,17 @@ import subprocess
 import sys
 import tempfile
 import time
-
+from collections.abc import Sequence
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 
 
-def run(command, *, cwd=ROOT):
+def run(command: Sequence[str], *, cwd: pathlib.Path = ROOT) -> float:
     start = time.perf_counter()
     completed = subprocess.run(
         command,
         cwd=cwd,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        capture_output=True,
         text=True,
         check=False,
     )
@@ -30,7 +32,7 @@ def run(command, *, cwd=ROOT):
     return elapsed
 
 
-def conda_runner():
+def conda_runner() -> str:
     for name in ("mamba", "micromamba"):
         path = shutil.which(name)
         if path:
@@ -38,7 +40,7 @@ def conda_runner():
     raise SystemExit("mamba or micromamba is required to benchmark against Picard")
 
 
-def write_wrapped_reference(path, sequences):
+def write_wrapped_reference(path: pathlib.Path, sequences: int) -> None:
     bases = "ACGTN" * 40
     with open(path, "w", encoding="utf-8") as handle:
         for index in range(sequences):
@@ -48,7 +50,7 @@ def write_wrapped_reference(path, sequences):
             handle.write(f"{bases[113:]}\n")
 
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser(description="Benchmark turbo-picard NormalizeFasta against Picard.")
     parser.add_argument("--reads", type=int, default=10_000, help="FASTA records to synthesize")
     parser.add_argument(

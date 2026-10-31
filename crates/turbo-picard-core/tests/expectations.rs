@@ -1,10 +1,3 @@
-//! Jane Street-style expect tests for the shared argument and I/O boundary.
-//!
-//! Each assertion shows the whole observed value instead of a hand-picked
-//! field, so a changed default, ordering rule, or error message is visible in
-//! the diff. Run `UPDATE_EXPECT=1 cargo test -p turbo-picard-core --test
-//! expectations` to accept an intentional change.
-
 use expect_test::expect;
 use turbo_picard_core::external_sort::{ExternalSortConfig, ExternalSorter};
 use turbo_picard_core::hts_io::{
@@ -133,7 +126,7 @@ fn command_specific_alias_table_is_visible() {
         .collect::<Vec<_>>()
         .join("\n");
 
-    expect![[r#"
+    expect![[r"
         MarkDuplicates M=value -> METRICS_FILE
         MergeSamFiles AS=true -> ASSUME_SORTED
         CollectInsertSizeMetrics M=0.05 -> MINIMUM_PCT
@@ -146,7 +139,7 @@ fn command_specific_alias_table_is_visible() {
         CreateSequenceDictionary AS=GRCh38 -> GENOME_ASSEMBLY
         IntervalListTools SI=other.interval_list -> SECOND_INPUT
         SortVcf SD=ref.dict -> SEQUENCE_DICTIONARY
-        CollectHsMetrics BAIT=baits.interval_list -> BAIT_INTERVALS"#]]
+        CollectHsMetrics BAIT=baits.interval_list -> BAIT_INTERVALS"]]
     .assert_eq(&rendered);
 }
 
@@ -371,7 +364,7 @@ fn markduplicates_config_errors_are_visible() {
         .collect::<Vec<_>>()
         .join("\n");
 
-    expect![[r#"
+    expect![[r"
         missing input: error missing required MarkDuplicates argument: INPUT
         missing output: error missing required MarkDuplicates argument: OUTPUT
         missing metrics: error missing required MarkDuplicates argument: METRICS_FILE
@@ -384,7 +377,7 @@ fn markduplicates_config_errors_are_visible() {
         invalid tagging policy: error unsupported MarkDuplicates argument: TAGGING_POLICY=Some
         invalid tag name: error unsupported MarkDuplicates argument: BARCODE_TAG=TOO_LONG
         compression level above 9: error unsupported MarkDuplicates argument: COMPRESSION_LEVEL=10
-        negative pixel distance: error unsupported MarkDuplicates argument: OPTICAL_DUPLICATE_PIXEL_DISTANCE=-1"#]].assert_eq(&rendered);
+        negative pixel distance: error unsupported MarkDuplicates argument: OPTICAL_DUPLICATE_PIXEL_DISTANCE=-1"]].assert_eq(&rendered);
 }
 
 #[test]
@@ -447,13 +440,13 @@ fn output_format_errors_are_visible() {
         .collect::<Vec<_>>()
         .join("\n");
 
-    expect![[r#"
+    expect![[r"
         out.bam: ok Bam
         out.BAM: ok Bam
         out.sam: ok Sam
         out.cram: ok Cram
         out.vcf: error unsupported MarkDuplicates output format for out.vcf; expected .sam, .bam, or .cram
-        out: error unsupported MarkDuplicates output format for out; expected .sam, .bam, or .cram"#]].assert_eq(&rendered);
+        out: error unsupported MarkDuplicates output format for out; expected .sam, .bam, or .cram"]].assert_eq(&rendered);
 }
 
 #[test]

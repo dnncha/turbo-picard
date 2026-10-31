@@ -1,15 +1,15 @@
 from __future__ import annotations
 
 import importlib.util
-from pathlib import Path
 import sys
 import tempfile
 import unittest
-
+from pathlib import Path
 
 MODULE_PATH = Path(__file__).with_name("verify_publish_workflows.py")
 SPEC = importlib.util.spec_from_file_location("verify_publish_workflows", MODULE_PATH)
-assert SPEC is not None and SPEC.loader is not None
+assert SPEC is not None
+assert SPEC.loader is not None
 verify_publish_workflows = importlib.util.module_from_spec(SPEC)
 sys.modules["verify_publish_workflows"] = verify_publish_workflows
 SPEC.loader.exec_module(verify_publish_workflows)
@@ -110,14 +110,12 @@ class VerifyPublishWorkflowsTests(unittest.TestCase):
 
     def test_accepts_exact_tag_guard_before_login(self) -> None:
         root = self.write_workflow(VALID_WORKFLOW)
-        self.assertEqual([], verify_publish_workflows.validate_docker_publish_workflow(root))
+        assert verify_publish_workflows.validate_docker_publish_workflow(root) == []
 
     def test_rejects_missing_ref_type_guard(self) -> None:
-        root = self.write_workflow(
-            VALID_WORKFLOW.replace('test "${GITHUB_REF_TYPE}" = "tag"\n', "")
-        )
+        root = self.write_workflow(VALID_WORKFLOW.replace('test "${GITHUB_REF_TYPE}" = "tag"\n', ""))
         errors = verify_publish_workflows.validate_docker_publish_workflow(root)
-        self.assertIn("Docker publishing must require a tag ref", errors)
+        assert "Docker publishing must require a tag ref" in errors
 
     def test_rejects_conditional_tag_guard(self) -> None:
         root = self.write_workflow(
@@ -127,38 +125,27 @@ class VerifyPublishWorkflowsTests(unittest.TestCase):
             )
         )
         errors = verify_publish_workflows.validate_docker_publish_workflow(root)
-        self.assertIn(
-            "Docker tag validation must not be conditional on an already-tagged ref",
-            errors,
-        )
+        assert "Docker tag validation must not be conditional on an already-tagged ref" in errors
 
     def test_accepts_explicit_pypi_distribution_artifacts(self) -> None:
         root = self.write_pypi_workflow(VALID_PYPI_WORKFLOW)
-        self.assertEqual([], verify_publish_workflows.validate_pypi_publish_workflow(root))
+        assert verify_publish_workflows.validate_pypi_publish_workflow(root) == []
 
     def test_rejects_unrestricted_pypi_artifact_download(self) -> None:
-        root = self.write_pypi_workflow(
-            VALID_PYPI_WORKFLOW.replace("          pattern: wheels-*\n", "")
-        )
+        root = self.write_pypi_workflow(VALID_PYPI_WORKFLOW.replace("          pattern: wheels-*\n", ""))
         errors = verify_publish_workflows.validate_pypi_publish_workflow(root)
-        self.assertIn(
-            "PyPI publish job must restrict wheel downloads to wheels-* artifacts",
-            errors,
-        )
+        assert "PyPI publish job must restrict wheel downloads to wheels-* artifacts" in errors
 
     def test_rejects_release_manifest_in_pypi_dist(self) -> None:
         root = self.write_pypi_workflow(
             VALID_PYPI_WORKFLOW.replace("          name: sdist\n", "          name: turbo-picard-release-manifest\n")
         )
         errors = verify_publish_workflows.validate_pypi_publish_workflow(root)
-        self.assertIn(
-            "PyPI publish job must not download the release manifest into dist",
-            errors,
-        )
+        assert "PyPI publish job must not download the release manifest into dist" in errors
 
     def test_accepts_least_privilege_release_asset_job(self) -> None:
         root = self.write_pypi_workflow(VALID_GITHUB_RELEASE_ASSETS_JOB)
-        self.assertEqual([], verify_publish_workflows.validate_github_release_assets_job(root))
+        assert verify_publish_workflows.validate_github_release_assets_job(root) == []
 
     def test_rejects_release_asset_job_with_oidc_permission(self) -> None:
         root = self.write_pypi_workflow(
@@ -167,22 +154,22 @@ class VerifyPublishWorkflowsTests(unittest.TestCase):
             )
         )
         errors = verify_publish_workflows.validate_github_release_assets_job(root)
-        self.assertIn(
-            "GitHub release asset job must not receive PyPI OIDC publishing permission",
-            errors,
-        )
+        assert "GitHub release asset job must not receive PyPI OIDC publishing permission" in errors
 
     def test_accepts_explicit_publishing_dispatch_on_tag(self) -> None:
         guard = "if: (github.event_name == 'release' || (github.event_name == 'workflow_dispatch' && inputs.publish == 'true')) && github.ref_type == 'tag'"
         text = VALID_GITHUB_RELEASE_ASSETS_JOB.replace(
-            "if: github.event_name == 'release' && github.ref_type == 'tag'", guard)
+            "if: github.event_name == 'release' && github.ref_type == 'tag'", guard
+        )
         root = self.write_pypi_workflow(text)
-        self.assertEqual([], verify_publish_workflows.validate_github_release_assets_job(root))
-        for unsafe in (guard.replace(" && github.ref_type == 'tag'", ""),
-                       guard.replace(" && inputs.publish == 'true'", "")):
+        assert verify_publish_workflows.validate_github_release_assets_job(root) == []
+        for unsafe in (
+            guard.replace(" && github.ref_type == 'tag'", ""),
+            guard.replace(" && inputs.publish == 'true'", ""),
+        ):
             with self.subTest(guard=unsafe):
                 root = self.write_pypi_workflow(text.replace(guard, unsafe))
-                self.assertTrue(verify_publish_workflows.validate_github_release_assets_job(root))
+                assert verify_publish_workflows.validate_github_release_assets_job(root)
 
     def test_ci_release_requires_every_trust_boundary(self) -> None:
         source = verify_publish_workflows.ROOT / ".github/workflows/release-v0.1.17.yml"
@@ -193,14 +180,16 @@ class VerifyPublishWorkflowsTests(unittest.TestCase):
         path = root / ".github/workflows/release-v0.1.17.yml"
         path.parent.mkdir(parents=True)
         path.write_text(text)
-        self.assertEqual([], verify_publish_workflows.validate_ci_release_workflow(root))
-        for guard in ("github.event.workflow_run.event == 'push'",
-                      "github.event.workflow_run.head_branch == 'main'",
-                      "github.event.workflow_run.head_repository.full_name == github.repository",
-                      "ref: ${{ github.event.workflow_run.head_sha }}"):
+        assert verify_publish_workflows.validate_ci_release_workflow(root) == []
+        for guard in (
+            "github.event.workflow_run.event == 'push'",
+            "github.event.workflow_run.head_branch == 'main'",
+            "github.event.workflow_run.head_repository.full_name == github.repository",
+            "ref: ${{ github.event.workflow_run.head_sha }}",
+        ):
             with self.subTest(guard=guard):
                 path.write_text(text.replace(guard, ""))
-                self.assertTrue(verify_publish_workflows.validate_ci_release_workflow(root))
+                assert verify_publish_workflows.validate_ci_release_workflow(root)
 
 
 if __name__ == "__main__":

@@ -1,5 +1,4 @@
-//! One Picard ordering contract for decoded BAM/CRAM and SAM spill keys.
-use super::*;
+use super::{SortOrder, aux_i32, bam};
 
 pub(super) struct Fields<'a> {
     pub name: &'a [u8],
@@ -33,7 +32,6 @@ impl<'a> Fields<'a> {
     }
 
     pub fn coordinate(&self) -> (i32, i64, bool, &[u8], u16, u8, i32, i64, i64) {
-        // HTSJDK ignores alignment start for an unplaced reference.
         let (tid, position) = if self.tid < 0 {
             (i32::MAX, 0)
         } else {
@@ -71,16 +69,16 @@ impl<'a> Fields<'a> {
             SortOrder::Coordinate => {
                 let (tid, position, reverse, name, flags, mapq, mate_tid, mate_position, length) =
                     self.coordinate();
-                bytes.extend((tid as u32 ^ (1 << 31)).to_be_bytes());
-                bytes.extend((position as u64 ^ (1 << 63)).to_be_bytes());
+                bytes.extend((tid.cast_unsigned() ^ (1 << 31)).to_be_bytes());
+                bytes.extend((position.cast_unsigned() ^ (1 << 63)).to_be_bytes());
                 bytes.push(u8::from(reverse));
                 bytes.extend(name);
                 bytes.push(0);
                 bytes.extend(flags.to_be_bytes());
                 bytes.push(mapq);
-                bytes.extend((mate_tid as u32 ^ (1 << 31)).to_be_bytes());
-                bytes.extend((mate_position as u64 ^ (1 << 63)).to_be_bytes());
-                bytes.extend((length as u64 ^ (1 << 63)).to_be_bytes());
+                bytes.extend((mate_tid.cast_unsigned() ^ (1 << 31)).to_be_bytes());
+                bytes.extend((mate_position.cast_unsigned() ^ (1 << 63)).to_be_bytes());
+                bytes.extend((length.cast_unsigned() ^ (1 << 63)).to_be_bytes());
             }
             SortOrder::QueryName => {
                 let (name, unpaired, second, reverse, secondary, supplementary, hit) =
@@ -90,7 +88,7 @@ impl<'a> Fields<'a> {
                 bytes.extend([unpaired, second, reverse, secondary, supplementary].map(u8::from));
                 bytes.push(u8::from(hit.is_some()));
                 if let Some(hit) = hit {
-                    bytes.extend((hit as u32 ^ (1 << 31)).to_be_bytes());
+                    bytes.extend((hit.cast_unsigned() ^ (1 << 31)).to_be_bytes());
                 }
             }
             SortOrder::Unsorted => {}
@@ -102,20 +100,21 @@ impl<'a> Fields<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::Aux;
     #[test]
     fn spill_keys_and_decoded_comparison_share_order_including_ties() {
         let mut records = Vec::new();
-        for (index, flags) in [0, 16, 99, 147, 355, 2147, 2209].into_iter().enumerate() {
+        for (index, flags) in (0_i32..).zip([0, 16, 99, 147, 355, 2147, 2209]) {
             let mut record = bam::Record::new();
             record.set(if index % 2 == 0 { b"a" } else { b"b" }, None, &[], &[]);
             record.set_flags(flags);
             record.set_tid(if index % 3 == 0 { -1 } else { 0 });
-            record.set_pos(index as i64 - 3);
+            record.set_pos(i64::from(index) - 3);
             record.set_mtid(-1);
             record.set_mpos(-1);
-            record.set_insert_size(index as i64 - 4);
+            record.set_insert_size(i64::from(index) - 4);
             if index % 2 == 0 {
-                record.push_aux(b"HI", Aux::I32(index as i32 - 3)).unwrap();
+                record.push_aux(b"HI", Aux::I32(index - 3)).unwrap();
             }
             records.push(record);
         }

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""Verify CI covers release-critical helper scripts."""
 from __future__ import annotations
+
 import pathlib
 import re
 import sys
@@ -111,8 +111,6 @@ def validate_ci_coverage(ci_text: str) -> list[str]:
     for snippet in REQUIRED_SNIPPETS:
         if snippet in ci_text:
             continue
-        # Bulk commands do not substitute for parity scripts, release checks,
-        # installation smoke tests, or assertions about their exit status.
         if discovery and snippet.startswith("python3 -m unittest tools/test_"):
             continue
         compile_path = snippet.removesuffix(" " + chr(92))
@@ -171,8 +169,9 @@ def main() -> int:
     ci_text = CI.read_text(encoding="utf-8")
     errors = validate_ci_coverage(ci_text)
     errors.extend(validate_python_tool_compile_coverage(ci_text))
-    errors.extend(validate_parity_script_ci_coverage(
-        ci_text, (ROOT / "docs" / "command-matrix.yml").read_text(encoding="utf-8")))
+    errors.extend(
+        validate_parity_script_ci_coverage(ci_text, (ROOT / "docs" / "command-matrix.yml").read_text(encoding="utf-8"))
+    )
     errors.extend(validate_package_install_coverage(PACKAGE_INSTALL.read_text(encoding="utf-8")))
     if errors:
         for error in errors:

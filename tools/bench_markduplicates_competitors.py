@@ -1,33 +1,36 @@
 #!/usr/bin/env python3
-"""Run auditable MarkDuplicates benchmarks against installed competitors.
-
-The runner deliberately separates measurement from publication.  It writes raw
-logs and a machine-readable report, including failed and unavailable tools, but
-never turns a timing into a performance claim.
-"""
 
 from __future__ import annotations
 
 import argparse
 import hashlib
+import importlib
 import json
 import os
 import platform
 import re
-import signal
 import shlex
 import shutil
+import signal
 import statistics
 import subprocess
 import sys
-import threading
 import tempfile
-from contextlib import closing
+import threading
 import time
+from collections.abc import Generator, Mapping, Sequence
+from contextlib import closing
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Iterator
+from typing import IO, Any
 
+MODULE_DESCRIPTION = (
+    "Run auditable MarkDuplicates benchmarks against installed competitors.\n"
+    "\n"
+    "The runner deliberately separates measurement from publication.  It writes raw\n"
+    "logs and a machine-readable report, including failed and unavailable tools, but\n"
+    "never turns a timing into a performance claim.\n"
+)
 
 ROOT = Path(__file__).resolve().parents[1]
 GNU_TIME = Path("/usr/bin/time")
@@ -114,7 +117,7 @@ class DiskPeakMonitor:
             self._stop.wait(self.interval_seconds)
         self.peak = max(self.peak, directory_size(self.path))
 
-    def __enter__(self) -> "DiskPeakMonitor":
+    def __enter__(self) -> DiskPeakMonitor:
         self._thread.start()
         return self
 
@@ -133,6 +136,7 @@ def executable_path(name: str, local_candidates: tuple[Path, ...] = ()) -> str |
 def preset_tools(
     read_name_regex: str | None = "null",
     reference_fasta: Path | None = None,
+    *,
     tag_duplicate_set_members: bool = False,
     barcode_tag: str | None = None,
     read_one_barcode_tag: str | None = None,
@@ -146,7 +150,7 @@ def preset_tools(
     samtools = executable_path("samtools")
     sambamba = executable_path("sambamba")
     fastdup = executable_path("fastdup")
-    common = (
+    common: tuple[str, ...] = (
         "ASSUME_SORTED=true",
         "VALIDATION_STRINGENCY=SILENT",
         "QUIET=true",
@@ -175,31 +179,64 @@ def preset_tools(
             (turbo, "--version"),
             "picard",
             (("TURBO_PICARD_THREADS", "{threads}"), ("TURBO_PICARD_REQUIRE_NATIVE", "1")),
-        ) if turbo else None,
+        )
+        if turbo
+        else None,
         "picard": ToolSpec(
             "picard",
             (picard, "MarkDuplicates", "I={input}", "O={output}", "M={metrics}", "TMP_DIR={tmp}", *reference, *common),
             (picard, "MarkDuplicates", "--version"),
             "picard",
-        ) if picard else None,
+        )
+        if picard
+        else None,
         "samtools": ToolSpec(
             "samtools",
-            (samtools, "markdup", "-@", "{threads}", "--no-PG", "-T", "{tmp}/samtools", *samtools_reference, "-f", "{metrics}", "{input}", "{output}"),
+            (
+                samtools,
+                "markdup",
+                "-@",
+                "{threads}",
+                "--no-PG",
+                "-T",
+                "{tmp}/samtools",
+                *samtools_reference,
+                "-f",
+                "{metrics}",
+                "{input}",
+                "{output}",
+            ),
             (samtools, "--version"),
             "samtools",
-        ) if samtools else None,
+        )
+        if samtools
+        else None,
         "sambamba": ToolSpec(
             "sambamba",
             (sambamba, "markdup", "-t", "{threads}", "--tmpdir={tmp}", "{input}", "{output}"),
             (sambamba, "--version"),
             "picard",
-        ) if sambamba else None,
+        )
+        if sambamba
+        else None,
         "fastdup": ToolSpec(
             "fastdup",
-            (fastdup, "--input", "{input}", "--output", "{output}", "--metrics", "{metrics}", "--num-threads", "{threads}"),
+            (
+                fastdup,
+                "--input",
+                "{input}",
+                "--output",
+                "{output}",
+                "--metrics",
+                "{metrics}",
+                "--num-threads",
+                "{threads}",
+            ),
             (fastdup, "--version"),
             "picard",
-        ) if fastdup else None,
+        )
+        if fastdup
+        else None,
     }
 
 
@@ -231,9 +268,7 @@ def parse_custom_tool(value: str) -> ToolSpec:
 
 def sam_tag_argument(value: str) -> str:
     if not SAM_TAG_PATTERN.fullmatch(value):
-        raise argparse.ArgumentTypeError(
-            "SAM tags must be exactly two ASCII letters or digits"
-        )
+        raise argparse.ArgumentTypeError("SAM tags must be exactly two ASCII letters or digits")
     return value
 
 
@@ -246,9 +281,7 @@ def validate_profile(
     if profile == "cram_reference" and input_format != "CRAM":
         raise SystemExit("--profile cram_reference requires a .cram input")
     if profile == "umi_panel" and not any(barcode_tags):
-        raise SystemExit(
-            "--profile umi_panel requires --barcode-tag or a mate-specific barcode tag"
-        )
+        raise SystemExit("--profile umi_panel requires --barcode-tag or a mate-specific barcode tag")
     if input_format == "CRAM" and reference_fasta is None:
         raise SystemExit("CRAM input requires --reference-fasta")
 
@@ -271,9 +304,6 @@ def expand_command(
         "threads": str(threads),
         "reference": str(reference_fasta.resolve()) if reference_fasta is not None else "",
     }
-    # Replace only supported placeholders. Picard optical-name regexes often
-    # contain quantifier braces such as ``\\d{4}``, which ``str.format`` would
-    # incorrectly interpret as template syntax.
     return [
         token.replace("{input}", values["input"])
         .replace("{output}", values["output"])
@@ -311,7 +341,14 @@ def capture_version(spec: ToolSpec) -> dict[str, object]:
 def parse_time_file(path: Path) -> dict[str, float | int]:
     if not path.exists():
         raise ValueError("GNU time did not produce a resource record")
-    line = next((line for line in reversed(path.read_text(encoding="utf-8").splitlines()) if line.startswith(TIME_PREFIX + "\t")), None)
+    line = next(
+        (
+            line
+            for line in reversed(path.read_text(encoding="utf-8").splitlines())
+            if line.startswith(TIME_PREFIX + "\t")
+        ),
+        None,
+    )
     if line is None:
         raise ValueError("GNU time resource record is malformed")
     fields = line.split("\t")
@@ -327,13 +364,6 @@ def parse_time_file(path: Path) -> dict[str, float | int]:
 
 
 def gnu_time_available() -> bool:
-    """Return whether the configured ``time`` executable is GNU time.
-
-    macOS ships a BSD ``/usr/bin/time`` that accepts neither GNU's ``-f``
-    format nor ``-o`` output options. Treating that executable as GNU time
-    makes every measured run look failed before the fallback resource meter
-    can be used.
-    """
     if not GNU_TIME.is_file():
         return False
     try:
@@ -349,8 +379,15 @@ def gnu_time_available() -> bool:
     return result.returncode == 0 and "gnu time" in result.stdout.lower()
 
 
-def run_metered(command, stdout_handle, stderr_handle, resource_log, timeout, environment):
-    """Run without a shell, preferring GNU time and disclosing a wait4 fallback."""
+def run_metered(
+    command: Sequence[str],
+    stdout_handle: IO[bytes],
+    stderr_handle: IO[bytes],
+    resource_log: Path,
+    *,
+    timeout: float | None,
+    environment: Mapping[str, str],
+) -> tuple[int | None, dict[str, float | int], str | None, str]:
     if gnu_time_available():
         time_format = f"{TIME_PREFIX}\t%e\t%U\t%S\t%M\t%x"
         try:
@@ -413,6 +450,7 @@ def run_once(
     spec: ToolSpec,
     input_path: Path,
     root: Path,
+    *,
     repeat: int,
     warmup: bool,
     threads: int,
@@ -437,12 +475,9 @@ def run_once(
         threads=threads,
         reference_fasta=reference_fasta,
     )
-    run_environment = {
-        key: value.format(threads=threads)
-        for key, value in spec.environment
-    }
+    run_environment = {key: value.format(threads=threads) for key, value in spec.environment}
     environment = os.environ.copy()
-    removed_environment = ()
+    removed_environment: tuple[str, ...] = ()
     if spec.name == "turbo-picard":
         removed_environment = tuple(sorted(key for key in environment if key.startswith("TURBO_PICARD_")))
         for key in removed_environment:
@@ -457,10 +492,15 @@ def run_once(
     error: str | None = None
     resources: dict[str, float | int] = {}
     resource_backend = "unknown"
-    with stdout.open("wb") as stdout_handle, stderr.open("wb") as stderr_handle, DiskPeakMonitor(tmp, sample_seconds) as monitor:
+    with (
+        stdout.open("wb") as stdout_handle,
+        stderr.open("wb") as stderr_handle,
+        DiskPeakMonitor(tmp, sample_seconds) as monitor,
+    ):
         exit_code, resources, error, resource_backend = run_metered(
-            command, stdout_handle, stderr_handle, resource_log, timeout, environment
+            command, stdout_handle, stderr_handle, resource_log, timeout=timeout, environment=environment
         )
+    peak_rss = resources.get("peak_rss_bytes")
     status = "success" if exit_code == 0 and output.is_file() else "failed"
     if exit_code == 0 and not output.is_file():
         error = "command returned zero but did not create {output}"
@@ -472,7 +512,7 @@ def run_once(
         wall_seconds=resources.get("wall_seconds"),
         user_cpu_seconds=resources.get("user_cpu_seconds"),
         system_cpu_seconds=resources.get("system_cpu_seconds"),
-        peak_rss_bytes=resources.get("peak_rss_bytes"),
+        peak_rss_bytes=int(peak_rss) if peak_rss is not None else None,
         temporary_disk_peak_bytes=monitor.peak,
         output_bytes=output.stat().st_size if output.is_file() else 0,
         command=command,
@@ -504,7 +544,13 @@ def summarize_runs(runs: list[RunResult]) -> dict[str, object]:
         "successful_repeats": len(measured),
         "failed_repeats": sum(not run.warmup and run.status != "success" for run in runs),
     }
-    for attribute in ("wall_seconds", "user_cpu_seconds", "system_cpu_seconds", "peak_rss_bytes", "temporary_disk_peak_bytes"):
+    for attribute in (
+        "wall_seconds",
+        "user_cpu_seconds",
+        "system_cpu_seconds",
+        "peak_rss_bytes",
+        "temporary_disk_peak_bytes",
+    ):
         values = [float(getattr(run, attribute)) for run in measured if getattr(run, attribute) is not None]
         if values:
             summary[attribute] = {
@@ -546,7 +592,7 @@ def parse_sam_fields(line: str) -> tuple[object, ...] | None:
 def sam_fields(
     path: Path,
     reference_fasta: Path | None = None,
-) -> Iterator[tuple[object, ...]]:
+) -> Generator[tuple[object, ...], None, None]:
     if path.suffix.lower() == ".sam":
         with path.open(encoding="utf-8") as handle:
             for line in handle:
@@ -555,16 +601,12 @@ def sam_fields(
                     yield parsed
         return
     try:
-        import pysam  # type: ignore[import-not-found]
-    except ImportError:
+        pysam = importlib.import_module("pysam")
+    except ImportError as import_error:
         samtools = shutil.which("samtools")
         if not samtools:
-            raise RuntimeError("alignment parity comparison requires pysam or samtools")
-        reference_args = (
-            ["--reference", str(reference_fasta.resolve())]
-            if reference_fasta is not None
-            else []
-        )
+            raise RuntimeError("alignment parity comparison requires pysam or samtools") from import_error
+        reference_args = ["--reference", str(reference_fasta.resolve())] if reference_fasta is not None else []
         with tempfile.TemporaryFile(mode="w+t") as errors:
             process = subprocess.Popen(
                 [samtools, "view", "-h", *reference_args, str(path)],
@@ -593,14 +635,12 @@ def sam_fields(
                         process.kill()
                         process.wait()
         return
-    pysam_kwargs = (
-        {"reference_filename": str(reference_fasta.resolve())}
-        if reference_fasta is not None
-        else {}
-    )
+    pysam_kwargs = {"reference_filename": str(reference_fasta.resolve())} if reference_fasta is not None else {}
     with pysam.AlignmentFile(str(path), "rb", **pysam_kwargs) as handle:
         for record in handle.fetch(until_eof=True):
-            yield parse_sam_fields(record.to_string())
+            parsed = parse_sam_fields(record.to_string())
+            if parsed is not None:
+                yield parsed
 
 
 def has_picard_metrics(path: Path) -> bool:
@@ -634,7 +674,10 @@ def compare_outputs(
     compared = 0
     mismatch: dict[str, object] | None = None
     try:
-        with closing(sam_fields(reference_output, reference_fasta)) as left, closing(sam_fields(candidate_output, reference_fasta)) as right:
+        with (
+            closing(sam_fields(reference_output, reference_fasta)) as left,
+            closing(sam_fields(candidate_output, reference_fasta)) as right,
+        ):
             while True:
                 a = next(left, None)
                 b = next(right, None)
@@ -643,11 +686,21 @@ def compare_outputs(
                         mismatch = {"record_index": compared, "reason": "record counts differ"}
                     break
                 if a != b:
-                    mismatch = {"record_index": compared, "reason": "alignment fields or duplicate-marking semantics differ", "reference": list(a), "candidate": list(b)}
+                    mismatch = {
+                        "record_index": compared,
+                        "reason": "alignment fields or duplicate-marking semantics differ",
+                        "reference": list(a),
+                        "candidate": list(b),
+                    }
                     break
                 compared += 1
     except (OSError, ValueError, RuntimeError) as exc:
-        return {"status": "ERROR", "comparator": "v2: ordered full SAM fields and typed tags excluding PG", "records_compared": compared, "error": str(exc)}
+        return {
+            "status": "ERROR",
+            "comparator": "v2: ordered full SAM fields and typed tags excluding PG",
+            "records_compared": compared,
+            "error": str(exc),
+        }
     metrics_compared = has_picard_metrics(reference_metrics) and has_picard_metrics(candidate_metrics)
     metrics_match = None
     if metrics_compared:
@@ -655,7 +708,8 @@ def compare_outputs(
     status = "PASS" if mismatch is None and metrics_match is not False else "FAIL"
     return {
         "status": status,
-        "comparator": "v2: ordered full SAM fields and typed tags excluding PG" + (" plus normalized Picard DuplicationMetrics" if metrics_compared else " (metrics not comparable)"),
+        "comparator": "v2: ordered full SAM fields and typed tags excluding PG"
+        + (" plus normalized Picard DuplicationMetrics" if metrics_compared else " (metrics not comparable)"),
         "records_compared": compared,
         "alignment_mismatch": mismatch,
         "metrics_compared": metrics_compared,
@@ -664,15 +718,16 @@ def compare_outputs(
 
 
 def check_measured_parity(
-    tool: dict[str, object],
-    reference_run: dict[str, object],
+    tool: dict[str, Any],
+    reference_run: dict[str, Any],
     output_dir: Path,
     reference_fasta: Path | None = None,
-) -> dict[str, object]:
-    comparisons = []
+) -> dict[str, Any]:
+    comparisons: list[dict[str, Any]] = []
     for run in tool["runs"]:
         if run["warmup"] or run["status"] != "success":
             continue
+        comparison: dict[str, Any]
         if run is reference_run:
             comparison = {"status": "REFERENCE", "comparator": "self"}
         else:
@@ -734,29 +789,45 @@ def host_metadata() -> dict[str, object]:
     }
 
 
-def markdown(report: dict[str, object]) -> str:
-    lines = ["# MarkDuplicates competitor benchmark", "", "> Results apply only to the recorded input, programs, options, and host.", "", f"Input SHA-256: `{report['input']['sha256']}`", "", "| Tool | Status | Median wall | Median CPU | Peak RSS | Peak temp | Parity |", "|---|---|---:|---:|---:|---:|---|"]
+def median_cell(summary: dict[str, Any], key: str, suffix: str = "") -> str:
+    value = summary.get(key, {}).get("median")
+    return f"{value:.3f}{suffix}" if value is not None else "—"
+
+
+def markdown(report: dict[str, Any]) -> str:
+    lines = [
+        "# MarkDuplicates competitor benchmark",
+        "",
+        "> Results apply only to the recorded input, programs, options, and host.",
+        "",
+        f"Input SHA-256: `{report['input']['sha256']}`",
+        "",
+        "| Tool | Status | Median wall | Median CPU | Peak RSS | Peak temp | Parity |",
+        "|---|---|---:|---:|---:|---:|---|",
+    ]
     for name, tool in report["tools"].items():
         if tool["status"] == "unavailable":
             lines.append(f"| {name} | unavailable | — | — | — | — | NOT RUN |")
             continue
         summary = tool.get("summary", {})
-        def median(key: str, suffix: str = "") -> str:
-            value = summary.get(key, {}).get("median")
-            return f"{value:.3f}{suffix}" if value is not None else "—"
+
         cpu = "—"
         if summary.get("user_cpu_seconds") and summary.get("system_cpu_seconds"):
             cpu = f"{summary['user_cpu_seconds']['median'] + summary['system_cpu_seconds']['median']:.3f}s"
         rss = summary.get("peak_rss_bytes", {}).get("max")
         temp = summary.get("temporary_disk_peak_bytes", {}).get("max")
         parity = tool.get("parity", {}).get("status", "NOT RUN")
-        lines.append(f"| {name} | {tool['status']} | {median('wall_seconds', 's')} | {cpu} | {int(rss) if rss is not None else '—'} | {int(temp) if temp is not None else '—'} | {parity} |")
-    lines.extend(["", "See `report.json` and per-run raw logs for commands, versions, failures and resource records.", ""])
+        lines.append(
+            f"| {name} | {tool['status']} | {median_cell(summary, 'wall_seconds', 's')} | {cpu} | {int(rss) if rss is not None else '—'} | {int(temp) if temp is not None else '—'} | {parity} |"
+        )
+    lines.extend(
+        ["", "See `report.json` and per-run raw logs for commands, versions, failures and resource records.", ""]
+    )
     return "\n".join(lines)
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(description=MODULE_DESCRIPTION)
     parser.add_argument(
         "--input",
         required=True,
@@ -769,10 +840,21 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="reference FASTA required for CRAM input and recorded in evidence",
     )
     parser.add_argument("--output-dir", required=True, type=Path)
-    parser.add_argument("--tools", default="turbo-picard,picard,samtools,fastdup", help="comma-separated installed presets to attempt")
-    parser.add_argument("--tool", action="append", default=[], type=parse_custom_tool, metavar="NAME=COMMAND", help="add/override a command template using {input}, {output}, {metrics}, {tmp}, {threads}, {reference}")
+    parser.add_argument(
+        "--tools", default="turbo-picard,picard,samtools,fastdup", help="comma-separated installed presets to attempt"
+    )
+    parser.add_argument(
+        "--tool",
+        action="append",
+        default=[],
+        type=parse_custom_tool,
+        metavar="NAME=COMMAND",
+        help="add/override a command template using {input}, {output}, {metrics}, {tmp}, {threads}, {reference}",
+    )
     parser.add_argument("--reference-tool", default="picard")
-    parser.add_argument("--require-tools", default="", help="comma-separated tools which must complete and pass/reference parity")
+    parser.add_argument(
+        "--require-tools", default="", help="comma-separated tools which must complete and pass/reference parity"
+    )
     parser.add_argument("--threads", type=int, default=min(8, os.cpu_count() or 1))
     parser.add_argument("--repeats", type=int, default=5)
     parser.add_argument("--warmups", type=int, default=1)
@@ -847,10 +929,10 @@ def main(argv: list[str] | None = None) -> int:
     presets = preset_tools(
         read_name_regex,
         args.reference_fasta,
-        args.tag_duplicate_set_members,
-        args.barcode_tag,
-        args.read_one_barcode_tag,
-        args.read_two_barcode_tag,
+        tag_duplicate_set_members=args.tag_duplicate_set_members,
+        barcode_tag=args.barcode_tag,
+        read_one_barcode_tag=args.read_one_barcode_tag,
+        read_two_barcode_tag=args.read_two_barcode_tag,
     )
     names = [name.strip() for name in args.tools.split(",") if name.strip()]
     unknown = sorted(set(names) - set(presets))
@@ -860,7 +942,7 @@ def main(argv: list[str] | None = None) -> int:
     for custom in args.tool:
         specs[custom.name] = custom
 
-    report: dict[str, object] = {
+    report: dict[str, Any] = {
         "schema_version": 1,
         "created_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "claim_status": "evidence_only",
@@ -900,21 +982,17 @@ def main(argv: list[str] | None = None) -> int:
             "barcode_tag": args.barcode_tag,
             "read_one_barcode_tag": args.read_one_barcode_tag,
             "read_two_barcode_tag": args.read_two_barcode_tag,
-            "reference_fasta_sha256": (
-                sha256_file(args.reference_fasta)
-                if args.reference_fasta is not None
-                else None
-            ),
+            "reference_fasta_sha256": (sha256_file(args.reference_fasta) if args.reference_fasta is not None else None),
         },
         "host": host_metadata(),
         "tools": {},
     }
-    tools_report: dict[str, dict[str, object]] = report["tools"]
+    tools_report: dict[str, dict[str, Any]] = report["tools"]
     for name, spec in specs.items():
         if spec is None or not Path(spec.command[0]).is_file():
             tools_report[name] = {"status": "unavailable", "reason": "executable not found", "runs": []}
             continue
-        tool: dict[str, object] = {
+        tool: dict[str, Any] = {
             "status": "running",
             "metrics_kind": spec.metrics_kind,
             "version": capture_version(spec),
@@ -932,12 +1010,12 @@ def main(argv: list[str] | None = None) -> int:
                 spec,
                 args.input,
                 output_dir / "runs" / name / label,
-                repeat,
-                warmup,
-                args.threads,
-                args.disk_sample_ms / 1000,
-                args.timeout_seconds,
-                args.reference_fasta,
+                repeat=repeat,
+                warmup=warmup,
+                threads=args.threads,
+                sample_seconds=args.disk_sample_ms / 1000,
+                timeout=args.timeout_seconds,
+                reference_fasta=args.reference_fasta,
             )
             runs.append(result)
         tool["runs"] = [asdict(run) for run in runs]
@@ -945,27 +1023,32 @@ def main(argv: list[str] | None = None) -> int:
         tool["status"] = "complete" if tool["summary"]["successful_repeats"] == args.repeats else "incomplete"
 
     reference = tools_report.get(args.reference_tool)
-    reference_run = None
+    reference_run: dict[str, Any] | None = None
     if reference and reference.get("status") in {"complete", "incomplete"}:
-        reference_run = next((run for run in reference["runs"] if not run["warmup"] and run["status"] == "success"), None)
-    for name, tool in tools_report.items():
+        reference_run = next(
+            (run for run in reference["runs"] if not run["warmup"] and run["status"] == "success"), None
+        )
+    for tool in tools_report.values():
         if tool.get("status") == "unavailable":
             continue
         if not reference_run:
-            tool["parity"] = {"status": "NOT_RUN", "reason": f"reference tool {args.reference_tool!r} has no successful measured output"}
+            tool["parity"] = {
+                "status": "NOT_RUN",
+                "reason": f"reference tool {args.reference_tool!r} has no successful measured output",
+            }
         else:
             tool["parity"] = check_measured_parity(tool, reference_run, output_dir, args.reference_fasta)
 
     required_names = [name.strip() for name in args.require_tools.split(",") if name.strip()]
-    required_failures = []
+    required_failures: list[str] = []
     for name in required_names:
-        tool = tools_report.get(name)
-        if tool is None:
+        required_tool = tools_report.get(name)
+        if required_tool is None:
             required_failures.append(f"{name}: not selected")
-        elif tool.get("status") != "complete":
-            required_failures.append(f"{name}: status={tool.get('status')}")
-        elif tool.get("parity", {}).get("status") not in {"PASS", "REFERENCE"}:
-            required_failures.append(f"{name}: parity={tool.get('parity', {}).get('status', 'NOT_RUN')}")
+        elif required_tool.get("status") != "complete":
+            required_failures.append(f"{name}: status={required_tool.get('status')}")
+        elif required_tool.get("parity", {}).get("status") not in {"PASS", "REFERENCE"}:
+            required_failures.append(f"{name}: parity={required_tool.get('parity', {}).get('status', 'NOT_RUN')}")
     report["required_tool_gate"] = {
         "required": required_names,
         "status": "PASS" if not required_failures else "FAIL",

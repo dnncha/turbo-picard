@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+
+from __future__ import annotations
+
 import argparse
 import os
 import pathlib
@@ -7,18 +10,17 @@ import subprocess
 import sys
 import tempfile
 import time
-
+from collections.abc import Sequence
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 
 
-def run(command, *, cwd=ROOT):
+def run(command: Sequence[str], *, cwd: pathlib.Path = ROOT) -> float:
     start = time.perf_counter()
     completed = subprocess.run(
         command,
         cwd=cwd,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        capture_output=True,
         text=True,
         check=False,
     )
@@ -30,7 +32,7 @@ def run(command, *, cwd=ROOT):
     return elapsed
 
 
-def conda_runner():
+def conda_runner() -> str:
     for name in ("mamba", "micromamba"):
         path = shutil.which(name)
         if path:
@@ -38,13 +40,13 @@ def conda_runner():
     raise SystemExit("mamba or micromamba is required to benchmark against Picard")
 
 
-def write_dictionary(path):
+def write_dictionary(path: pathlib.Path) -> None:
     with open(path, "w", encoding="utf-8") as handle:
         handle.write("@HD\tVN:1.6\tSO:unsorted\n")
         handle.write("@SQ\tSN:chr1\tLN:100000000\n")
 
 
-def write_bed(path, intervals):
+def write_bed(path: pathlib.Path, intervals: int) -> None:
     with open(path, "w", encoding="utf-8") as handle:
         for index in range(intervals):
             start = index * 10
@@ -52,7 +54,7 @@ def write_bed(path, intervals):
             handle.write(f"chr1\t{start}\t{end}\tinterval_{index:09d}\n")
 
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser(description="Benchmark turbo-picard BedToIntervalList against Picard.")
     parser.add_argument("--reads", type=int, default=100_000, help="BED intervals to synthesize")
     parser.add_argument(

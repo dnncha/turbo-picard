@@ -1,7 +1,5 @@
-//! Small, independently tested contracts used by the external duplicate plan.
+use crate::ExternalPlanError;
 
-/// Coordinate sorting does not impose a read-name or flag order at equal
-/// positions. Unplaced records (RNAME=*) belong after every placed record.
 pub(super) fn coordinate_key(tid: i32, position: i64) -> (i32, i64) {
     if tid < 0 {
         (i32::MAX, i64::MAX)
@@ -10,10 +8,6 @@ pub(super) fn coordinate_key(tid: i32, position: i64) -> (i32, i64) {
     }
 }
 
-/// A template belongs to a read group as well as a read name. Length framing
-/// prevents ambiguities such as ("a", "bc") versus ("ab", "c"), and keeps an
-/// absent read group distinct from an empty value. The suffix remains the
-/// original QNAME, so no duplicate copy is needed in the QNAME-sort payload.
 pub(super) fn template_key(read_group: Option<&[u8]>, qname: &[u8]) -> Vec<u8> {
     let group = read_group.unwrap_or_default();
     let mut key = Vec::with_capacity(9 + group.len() + qname.len());
@@ -24,25 +18,25 @@ pub(super) fn template_key(read_group: Option<&[u8]>, qname: &[u8]) -> Vec<u8> {
     key
 }
 
-pub(super) fn template_qname(key: &[u8]) -> Result<&[u8], String> {
+pub(super) fn template_qname(key: &[u8]) -> Result<&[u8], ExternalPlanError> {
     let prefix = key
         .get(..9)
-        .ok_or_else(|| "external MarkDuplicates template key is truncated".to_string())?;
+        .ok_or(ExternalPlanError::TruncatedTemplateKey)?;
     if prefix[0] > 1 {
-        return Err("external MarkDuplicates template marker is invalid".to_string());
+        return Err(ExternalPlanError::InvalidTemplateMarker);
     }
     let mut length = [0_u8; 8];
     length.copy_from_slice(&prefix[1..]);
     let length = usize::try_from(u64::from_le_bytes(length))
-        .map_err(|_| "external MarkDuplicates read-group key is too large".to_string())?;
+        .map_err(|_| ExternalPlanError::ReadGroupKeyTooLarge)?;
     if prefix[0] == 0 && length != 0 {
-        return Err("absent read group has a nonempty template key".to_string());
+        return Err(ExternalPlanError::AbsentReadGroupWithKey);
     }
     let end = 9_usize
         .checked_add(length)
-        .ok_or_else(|| "external MarkDuplicates template length overflow".to_string())?;
+        .ok_or(ExternalPlanError::TemplateLengthOverflow)?;
     key.get(end..)
-        .ok_or_else(|| "external MarkDuplicates read-group key is truncated".to_string())
+        .ok_or(ExternalPlanError::TruncatedReadGroupKey)
 }
 
 #[cfg(test)]

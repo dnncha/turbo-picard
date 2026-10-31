@@ -1,12 +1,10 @@
 #!/usr/bin/env python3
-"""Check the local JOSS paper draft for basic submission hygiene."""
 
 from __future__ import annotations
 
 import re
 import sys
 from pathlib import Path
-
 
 ROOT = Path(__file__).resolve().parents[1]
 PAPER = ROOT / "paper" / "paper.md"
@@ -98,13 +96,9 @@ def validate() -> list[str]:
     if "No external funding" not in paper:
         errors.append("paper must include funding acknowledgement")
     if f"Zenodo archive for version {ZENODO_RELEASE_VERSION.removeprefix('v')}" not in paper:
-        errors.append(
-            f"paper must cite the current Zenodo archive version {ZENODO_RELEASE_VERSION}"
-        )
+        errors.append(f"paper must cite the current Zenodo archive version {ZENODO_RELEASE_VERSION}")
     if f"version = {{{ZENODO_RELEASE_VERSION}}}" not in bib:
-        errors.append(
-            f"paper.bib must cite the current Zenodo archive version {ZENODO_RELEASE_VERSION}"
-        )
+        errors.append(f"paper.bib must cite the current Zenodo archive version {ZENODO_RELEASE_VERSION}")
     if f"doi = {{{ZENODO_RELEASE_DOI}}}" not in bib:
         errors.append(f"paper.bib must cite the current Zenodo DOI {ZENODO_RELEASE_DOI}")
     if "docs/joss-submission.rst" not in readme:

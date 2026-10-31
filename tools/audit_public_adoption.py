@@ -1,56 +1,34 @@
 #!/usr/bin/env python3
-"""Collect read-only, source-backed public adoption signals.
-
-This audit measures distribution and public-interest signals for Turbo Picard.
-It deliberately does not infer active users, customer demand, or production
-readiness from download counts or repository metadata.
-"""
 
 from __future__ import annotations
 
 import argparse
-from datetime import date, datetime, timedelta, timezone
 import hashlib
 import json
-from pathlib import Path
 import re
-import sys
 import subprocess
+import sys
 import time
+import urllib.request
+from datetime import date, datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any, Callable
 from urllib.error import HTTPError
-import urllib.request
-
+from urllib.parse import urlparse
 
 ROOT = Path(__file__).resolve().parents[1]
 PACKAGE_NAME = "turbo-picard"
 PYPI_JSON_URL = "https://pypi.org/pypi/turbo-picard/json"
-PYPISTATS_OVERALL_URL = (
-    "https://pypistats.org/api/packages/turbo-picard/overall?mirrors=false"
-)
+PYPISTATS_OVERALL_URL = "https://pypistats.org/api/packages/turbo-picard/overall?mirrors=false"
 GITHUB_REPOSITORY_URL = "https://api.github.com/repos/dnncha/turbo-picard"
-GITHUB_RELEASES_URL = (
-    "https://api.github.com/repos/dnncha/turbo-picard/releases"
-    "?per_page=100"
-)
-GITHUB_ISSUES_URL = (
-    "https://api.github.com/repos/dnncha/turbo-picard/issues"
-    "?state=open&per_page=100"
-)
-GITHUB_TRIAL_COMMENTS_URL = (
-    "https://api.github.com/repos/dnncha/turbo-picard/issues/4/comments"
-    "?per_page=100"
-)
+GITHUB_RELEASES_URL = "https://api.github.com/repos/dnncha/turbo-picard/releases?per_page=100"
+GITHUB_ISSUES_URL = "https://api.github.com/repos/dnncha/turbo-picard/issues?state=open&per_page=100"
+GITHUB_TRIAL_COMMENTS_URL = "https://api.github.com/repos/dnncha/turbo-picard/issues/4/comments?per_page=100"
 GITHUB_OWNER_LOGIN = "dnncha"
-GHCR_TOKEN_URL = (
-    "https://ghcr.io/token?service=ghcr.io"
-    "&scope=repository%3Adnncha%2Fturbo-picard%3Apull"
-)
+GHCR_PULL_AUTH_URL = "https://ghcr.io/token?service=ghcr.io&scope=repository%3Adnncha%2Fturbo-picard%3Apull"
 GHCR_TAGS_URL = "https://ghcr.io/v2/dnncha/turbo-picard/tags/list"
 ANACONDA_TURBO_PICARD_URL = "https://api.anaconda.org/package/bioconda/turbo-picard"
-ANACONDA_SHIM_URL = (
-    "https://api.anaconda.org/package/bioconda/turbo-picard-picard-shim"
-)
+ANACONDA_SHIM_URL = "https://api.anaconda.org/package/bioconda/turbo-picard-picard-shim"
 BIOCONDA_PR_URL = "https://api.github.com/repos/bioconda/bioconda-recipes/pulls/65922"
 BIOCONDA_PR_NUMBER = 65922
 TRIAL_REPORT_ISSUE_NUMBER = 4
@@ -78,21 +56,16 @@ GitRunner = Callable[[list[str], Path], tuple[int, list[str]]]
 
 
 def run_git(args: list[str], root: Path = ROOT) -> tuple[int, list[str]]:
-    """Run a read-only git query and return its status plus non-empty lines."""
 
     completed = subprocess.run(
         ["git", *args],
         cwd=root,
         text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        capture_output=True,
         check=False,
     )
     lines = [
-        line.strip()
-        for stream in (completed.stdout, completed.stderr)
-        for line in stream.splitlines()
-        if line.strip()
+        line.strip() for stream in (completed.stdout, completed.stderr) for line in stream.splitlines() if line.strip()
     ]
     return completed.returncode, lines
 
@@ -102,7 +75,6 @@ def _first_line(status: int, lines: list[str]) -> str | None:
 
 
 def _remote_tag_commit(lines: list[str], tag: str) -> str | None:
-    """Resolve an annotated or lightweight remote tag without exposing URLs."""
 
     for line in lines:
         parts = line.split()
@@ -120,31 +92,22 @@ def collect_release_state(
     *,
     git_runner: GitRunner = run_git,
 ) -> dict[str, Any]:
-    """Capture local source/tag state without recording filesystem paths."""
 
     version = workspace_version(root)
     tag = f"v{version}"
     status, status_lines = git_runner(["status", "--porcelain"], root)
     head_status, head_lines = git_runner(["rev-parse", "HEAD"], root)
-    branch_status, branch_lines = git_runner(
-        ["rev-parse", "--abbrev-ref", "HEAD"], root
-    )
+    branch_status, branch_lines = git_runner(["rev-parse", "--abbrev-ref", "HEAD"], root)
     local_tag_status, local_tag_lines = git_runner(["rev-list", "-n", "1", tag], root)
-    remote_tag_status, remote_tag_lines = git_runner(
-        ["ls-remote", "--tags", "origin", f"{tag}*"], root
-    )
+    remote_tag_status, remote_tag_lines = git_runner(["ls-remote", "--tags", "origin", f"{tag}*"], root)
 
     head = _first_line(head_status, head_lines)
     local_tag_commit = _first_line(local_tag_status, local_tag_lines)
-    origin_tag_commit = (
-        _remote_tag_commit(remote_tag_lines, tag) if remote_tag_status == 0 else None
-    )
+    origin_tag_commit = _remote_tag_commit(remote_tag_lines, tag) if remote_tag_status == 0 else None
     worktree_clean = status == 0 and not status_lines
     tag_matches_head = head is not None and local_tag_commit == head
     origin_tag_matches_local = (
-        local_tag_commit is not None
-        and origin_tag_commit is not None
-        and origin_tag_commit == local_tag_commit
+        local_tag_commit is not None and origin_tag_commit is not None and origin_tag_commit == local_tag_commit
     )
     git_queries_succeeded = all(
         query_status == 0
@@ -200,7 +163,6 @@ def fetch_json(
     headers: dict[str, str] | None = None,
     allow_not_found: bool = False,
 ) -> object:
-    """Fetch a public JSON endpoint with bounded retries."""
 
     if retries < 1:
         raise ValueError("retries must be at least 1")
@@ -208,6 +170,9 @@ def fetch_json(
         raise ValueError("timeout must be greater than 0")
     if retry_delay < 0:
         raise ValueError("retry_delay must not be negative")
+
+    if urlparse(url).scheme != "https":
+        raise ValueError("url must use https")
 
     last_error: Exception | None = None
     for attempt in range(retries):
@@ -217,12 +182,12 @@ def fetch_json(
         }
         if headers:
             request_headers.update(headers)
-        request = urllib.request.Request(
+        request = urllib.request.Request(  # noqa: S310
             url,
             headers=request_headers,
         )
         try:
-            with urllib.request.urlopen(request, timeout=timeout) as response:
+            with urllib.request.urlopen(request, timeout=timeout) as response:  # noqa: S310
                 return json.load(response)
         except HTTPError as error:
             if allow_not_found and error.code == 404:
@@ -267,9 +232,11 @@ def parse_pypi_metadata(
     if not isinstance(files, list):
         raise ValueError("PyPI urls must be a list")
     upload_times = [
-        item.get("upload_time_iso_8601")
+        stamp
         for item in files
-        if isinstance(item, dict) and isinstance(item.get("upload_time_iso_8601"), str)
+        if isinstance(item, dict)
+        for stamp in [item.get("upload_time_iso_8601")]
+        if isinstance(stamp, str)
     ]
 
     result: dict[str, Any] = {
@@ -384,9 +351,7 @@ def parse_github_releases(payload: object, *, expected_version: str) -> dict[str
     latest_tag = latest.get("tag_name") if latest else None
     latest_version = _semver_from_tag(latest_tag)
     workspace_url = workspace_release.get("html_url") if workspace_release else None
-    if workspace_url is not None and (
-        not isinstance(workspace_url, str) or not workspace_url.strip()
-    ):
+    if workspace_url is not None and (not isinstance(workspace_url, str) or not workspace_url.strip()):
         workspace_url = None
     return {
         "status": "available",
@@ -561,7 +526,7 @@ def collect_distribution_state(
     try:
         token = parse_ghcr_token(
             fetcher(
-                GHCR_TOKEN_URL,
+                GHCR_PULL_AUTH_URL,
                 timeout=timeout,
                 retries=retries,
                 retry_delay=retry_delay,
@@ -600,11 +565,7 @@ def parse_open_issues(
         for item in issues
         if isinstance(item.get("number"), int) and not isinstance(item.get("number"), bool)
     )
-    urls = sorted(
-        item["html_url"]
-        for item in issues
-        if isinstance(item.get("html_url"), str) and item["html_url"]
-    )
+    urls = sorted(item["html_url"] for item in issues if isinstance(item.get("html_url"), str) and item["html_url"])
     maintainer_issue_numbers: list[int] = []
     external_issue_numbers: list[int] = []
     unknown_issue_author_numbers: list[int] = []
@@ -621,11 +582,7 @@ def parse_open_issues(
         else:
             unknown_issue_author_numbers.append(number)
     trial_issue = next(
-        (
-            item
-            for item in issues
-            if item.get("number") == TRIAL_REPORT_ISSUE_NUMBER
-        ),
+        (item for item in issues if item.get("number") == TRIAL_REPORT_ISSUE_NUMBER),
         None,
     )
     if trial_issue is None:
@@ -639,11 +596,7 @@ def parse_open_issues(
         }
     else:
         comments = trial_issue.get("comments")
-        if comments is not None and (
-            not isinstance(comments, int)
-            or isinstance(comments, bool)
-            or comments < 0
-        ):
+        if comments is not None and (not isinstance(comments, int) or isinstance(comments, bool) or comments < 0):
             raise ValueError("trial report issue comments must be a non-negative integer")
         issue_url = trial_issue.get("html_url")
         if not isinstance(issue_url, str) or not issue_url.strip():
@@ -686,7 +639,6 @@ def parse_trial_comments(
     *,
     maintainer_login: str = GITHUB_OWNER_LOGIN,
 ) -> dict[str, Any]:
-    """Count comment-author provenance without retaining public usernames."""
 
     if not isinstance(payload, list):
         raise ValueError("GitHub trial comments response must be a list")
@@ -742,7 +694,7 @@ def build_report(
             "github_releases": GITHUB_RELEASES_URL,
             "github_open_issues": GITHUB_ISSUES_URL,
             "github_trial_report_comments": GITHUB_TRIAL_COMMENTS_URL,
-            "ghcr_token": GHCR_TOKEN_URL,
+            "ghcr_token": GHCR_PULL_AUTH_URL,
             "ghcr_tags": GHCR_TAGS_URL,
             "anaconda_turbo_picard": ANACONDA_TURBO_PICARD_URL,
             "anaconda_picard_shim": ANACONDA_SHIM_URL,
@@ -760,20 +712,15 @@ def build_report(
             "community_provenance_is_recorded": True,
             "release_source_ready_verified": release_state["release_source_ready"],
             "public_package_matches_source_verified": bool(
-                pypi.get("version_matches_workspace")
-                and pypi.get("long_description_matches_workspace")
+                pypi.get("version_matches_workspace") and pypi.get("long_description_matches_workspace")
             ),
             "distribution_channels_match_workspace_verified": bool(
                 pypi.get("version_matches_workspace")
                 and pypi.get("long_description_matches_workspace")
                 and distribution["github_release"].get("workspace_release_published")
                 and distribution["container"].get("workspace_version_tag_present")
-                and distribution["bioconda"]["main_package"].get(
-                    "workspace_version_available"
-                )
-                and distribution["bioconda"]["shim_package"].get(
-                    "workspace_version_available"
-                )
+                and distribution["bioconda"]["main_package"].get("workspace_version_available")
+                and distribution["bioconda"]["shim_package"].get("workspace_version_available")
             ),
         },
     }
@@ -854,8 +801,17 @@ def collect_report(
     )
 
 
+_DESCRIPTION = (
+    "Collect read-only, source-backed public adoption signals.\n"
+    "\n"
+    "This audit measures distribution and public-interest signals for Turbo Picard.\n"
+    "It deliberately does not infer active users, customer demand, or production\n"
+    "readiness from download counts or repository metadata.\n"
+)
+
+
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(description=_DESCRIPTION)
     parser.add_argument("--output", type=Path, help="write JSON to this path instead of stdout")
     parser.add_argument("--pretty", action="store_true", help="indent JSON output")
     parser.add_argument("--timeout", type=float, default=15.0)

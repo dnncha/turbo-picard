@@ -4,17 +4,17 @@ from __future__ import annotations
 
 import importlib.util
 import io
-from pathlib import Path
 import sys
 import tarfile
 import tempfile
 import unittest
 import zipfile
-
+from pathlib import Path
 
 MODULE_PATH = Path(__file__).with_name("verify_release_artifacts.py")
 SPEC = importlib.util.spec_from_file_location("verify_release_artifacts", MODULE_PATH)
-assert SPEC and SPEC.loader
+assert SPEC
+assert SPEC.loader
 verify_release_artifacts = importlib.util.module_from_spec(SPEC)
 sys.modules["verify_release_artifacts"] = verify_release_artifacts
 SPEC.loader.exec_module(verify_release_artifacts)
@@ -32,9 +32,7 @@ docker run --rm ghcr.io/dnncha/turbo-picard:0.1.11 --version
 """
 
     def make_root(self, root: Path) -> None:
-        (root / "Cargo.toml").write_text(
-            '[workspace.package]\nversion = "0.1.11"\n', encoding="utf-8"
-        )
+        (root / "Cargo.toml").write_text('[workspace.package]\nversion = "0.1.11"\n', encoding="utf-8")
         (root / "README.md").write_text(self.readme, encoding="utf-8")
 
     def metadata(self) -> bytes:
@@ -43,8 +41,7 @@ docker run --rm ghcr.io/dnncha/turbo-picard:0.1.11 --version
             "Name: turbo-picard\n"
             "Version: 0.1.11\n"
             "Description-Content-Type: text/markdown; charset=UTF-8\n"
-            "\n"
-            + self.readme
+            "\n" + self.readme
         ).encode()
 
     def write_wheel(
@@ -53,8 +50,10 @@ docker run --rm ghcr.io/dnncha/turbo-picard:0.1.11 --version
         description: str | None = None,
         binary_architecture: str = "x86_64",
     ) -> None:
-        metadata = self.metadata() if description is None else self.metadata().replace(
-            self.readme.encode(), description.encode()
+        metadata = (
+            self.metadata()
+            if description is None
+            else self.metadata().replace(self.readme.encode(), description.encode())
         )
         binary = bytearray(64)
         if binary_architecture == "x86_64":
@@ -92,12 +91,9 @@ docker run --rm ghcr.io/dnncha/turbo-picard:0.1.11 --version
             dist = root / "dist"
             dist.mkdir(parents=True)
             self.make_root(root)
-            self.write_wheel(
-                dist
-                / "turbo_picard-0.1.11-py3-none-manylinux_2_17_x86_64.manylinux2014_x86_64.whl"
-            )
+            self.write_wheel(dist / "turbo_picard-0.1.11-py3-none-manylinux_2_17_x86_64.manylinux2014_x86_64.whl")
             self.write_sdist(dist / "turbo_picard-0.1.11.tar.gz")
-            self.assertEqual([], verify_release_artifacts.collect_errors(dist, root))
+            assert verify_release_artifacts.collect_errors(dist, root) == []
 
     def test_rejects_stale_container_marker(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -105,19 +101,11 @@ docker run --rm ghcr.io/dnncha/turbo-picard:0.1.11 --version
             dist = root / "dist"
             dist.mkdir(parents=True)
             self.make_root(root)
-            (root / "README.md").write_text(
-                self.readme.replace("0.1.11", "0.1.10"), encoding="utf-8"
-            )
-            wheel = (
-                dist
-                / "turbo_picard-0.1.11-py3-none-manylinux_2_17_x86_64.manylinux2014_x86_64.whl"
-            )
+            (root / "README.md").write_text(self.readme.replace("0.1.11", "0.1.10"), encoding="utf-8")
+            wheel = dist / "turbo_picard-0.1.11-py3-none-manylinux_2_17_x86_64.manylinux2014_x86_64.whl"
             self.write_wheel(wheel)
             errors = verify_release_artifacts.collect_errors(dist, root)
-            self.assertIn(
-                "README.md must contain current release marker: The current source release is `0.1.11`",
-                errors,
-            )
+            assert "README.md must contain current release marker: The current source release is `0.1.11`" in errors
 
     def test_rejects_long_description_drift(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -126,16 +114,14 @@ docker run --rm ghcr.io/dnncha/turbo-picard:0.1.11 --version
             dist.mkdir(parents=True)
             self.make_root(root)
             self.write_wheel(
-                dist
-                / "turbo_picard-0.1.11-py3-none-manylinux_2_17_x86_64.manylinux2014_x86_64.whl",
+                dist / "turbo_picard-0.1.11-py3-none-manylinux_2_17_x86_64.manylinux2014_x86_64.whl",
                 description=self.readme + "\nUnexpected drift.\n",
             )
             errors = verify_release_artifacts.collect_errors(dist, root)
-            self.assertIn(
+            assert (
                 "turbo_picard-0.1.11-py3-none-manylinux_2_17_x86_64.manylinux2014_x86_64.whl "
                 "long description must match "
-                "the checked-out README.md",
-                errors,
+                "the checked-out README.md" in errors
             )
 
     def test_rejects_binary_platform_mismatch(self) -> None:
@@ -144,16 +130,12 @@ docker run --rm ghcr.io/dnncha/turbo-picard:0.1.11 --version
             dist = root / "dist"
             dist.mkdir(parents=True)
             self.make_root(root)
-            wheel = (
-                dist
-                / "turbo_picard-0.1.11-py3-none-manylinux_2_17_aarch64.manylinux2014_aarch64.whl"
-            )
+            wheel = dist / "turbo_picard-0.1.11-py3-none-manylinux_2_17_aarch64.manylinux2014_aarch64.whl"
             self.write_wheel(wheel)
             errors = verify_release_artifacts.collect_errors(dist, root)
-            self.assertIn(
+            assert (
                 "turbo_picard-0.1.11-py3-none-manylinux_2_17_aarch64.manylinux2014_aarch64.whl "
-                "entrypoint architecture x86_64 must match wheel platform aarch64",
-                errors,
+                "entrypoint architecture x86_64 must match wheel platform aarch64" in errors
             )
 
     def test_accepts_macos_arm64_binary(self) -> None:
@@ -164,7 +146,7 @@ docker run --rm ghcr.io/dnncha/turbo-picard:0.1.11 --version
             self.make_root(root)
             wheel = dist / "turbo_picard-0.1.11-py3-none-macosx_11_0_arm64.whl"
             self.write_wheel(wheel, binary_architecture="arm64")
-            self.assertEqual([], verify_release_artifacts.collect_errors(dist, root))
+            assert verify_release_artifacts.collect_errors(dist, root) == []
 
 
 if __name__ == "__main__":

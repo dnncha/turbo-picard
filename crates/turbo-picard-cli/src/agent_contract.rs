@@ -1,10 +1,6 @@
-//! Read-only command inspection. Output roles are command-specific: for example,
-//! F2 is an input to FastqToSam but an output of SamToFastq, and M is not always
-//! a metrics filename. Reuse the execution parser rather than inventing syntax.
 use turbo_picard_core::picard_args::normalize_picard_args_for_command;
 
 pub(crate) fn declared_outputs(command: &str, args: &[String]) -> Result<Vec<String>, String> {
-    // This checks argument syntax only, not option support or input contents.
     normalize_picard_args_for_command(command, args).map_err(|error| error.to_string())?;
     let mut outputs = Vec::new();
     let mut index = 0;
@@ -19,14 +15,18 @@ pub(crate) fn declared_outputs(command: &str, args: &[String]) -> Result<Vec<Str
         } else if let Some(short) = arg.strip_prefix('-') {
             (short, args[index + 1].as_str(), 2)
         } else {
-            let (key, value) = arg.split_once('=').expect("syntax checked above");
+            let (key, value) = arg
+                .split_once('=')
+                .ok_or_else(|| format!("malformed argument {arg}"))?;
             (key, value, 1)
         };
         let normalized = normalize_picard_args_for_command(command, &args[index..index + width])
             .map_err(|error| error.to_string())?;
-        let canonical = normalized.keys().next().expect("one checked argument");
+        let canonical = normalized
+            .keys()
+            .next()
+            .ok_or_else(|| format!("malformed argument {arg}"))?;
         if !value.is_empty() && is_output_argument(command, canonical) {
-            // Preserve spelling and order in the existing schema-v1 field.
             outputs.push(format!("{key}={value}"));
         }
         index += width;
@@ -67,7 +67,7 @@ mod tests {
     fn inspect(command: &str, args: &[&str]) -> Vec<String> {
         declared_outputs(
             command,
-            &args.iter().map(|arg| arg.to_string()).collect::<Vec<_>>(),
+            &args.iter().map(ToString::to_string).collect::<Vec<_>>(),
         )
         .unwrap()
     }
@@ -149,7 +149,7 @@ mod tests {
             vec!["--OUTPUT", "--INPUT"],
             vec!["=file"],
         ] {
-            let args = args.iter().map(|arg| arg.to_string()).collect::<Vec<_>>();
+            let args = args.iter().map(ToString::to_string).collect::<Vec<_>>();
             assert!(declared_outputs("MarkDuplicates", &args).is_err());
         }
         assert_eq!(

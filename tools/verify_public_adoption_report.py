@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
-"""Validate the shape and safety boundaries of a public adoption report."""
 
 from __future__ import annotations
 
 import argparse
 import json
-from pathlib import Path
 import re
 import sys
+from pathlib import Path
 from typing import Any
 
+MODULE_DESCRIPTION = "Validate the shape and safety boundaries of a public adoption report."
 
 SCHEMA_VERSION = 4
 HEX40 = re.compile(r"^[0-9a-f]{40}$")
@@ -92,9 +92,7 @@ def collect_errors(payload: object) -> list[str]:
         ):
             errors.append("distribution container version_tags must be a list of semantic versions")
         latest_version = container.get("latest_version")
-        if latest_version is not None and (
-            not isinstance(latest_version, str) or not SEMVER.fullmatch(latest_version)
-        ):
+        if latest_version is not None and (not isinstance(latest_version, str) or not SEMVER.fullmatch(latest_version)):
             errors.append("distribution container latest_version must be semantic version text or null")
         if not isinstance(container.get("workspace_version_tag_present"), bool):
             errors.append("distribution container workspace_version_tag_present must be boolean")
@@ -115,9 +113,7 @@ def collect_errors(payload: object) -> list[str]:
         if not isinstance(package_state.get("package_url"), str) or not package_state["package_url"].strip():
             errors.append(f"distribution bioconda {key} package_url must be non-empty text")
         latest_version = package_state.get("latest_version")
-        if latest_version is not None and (
-            not isinstance(latest_version, str) or not SEMVER.fullmatch(latest_version)
-        ):
+        if latest_version is not None and (not isinstance(latest_version, str) or not SEMVER.fullmatch(latest_version)):
             errors.append(f"distribution bioconda {key} latest_version must be semantic version text or null")
         if not isinstance(package_state.get("workspace_version_available"), bool):
             errors.append(f"distribution bioconda {key} workspace_version_available must be boolean")
@@ -164,9 +160,7 @@ def collect_errors(payload: object) -> list[str]:
     if not isinstance(community.get("possibly_truncated"), bool):
         errors.append("community possibly_truncated must be boolean")
     trial_thread = _mapping(community.get("trial_report_thread"), "community trial_report_thread", errors)
-    if not isinstance(trial_thread.get("issue_number"), int) or isinstance(
-        trial_thread.get("issue_number"), bool
-    ):
+    if not isinstance(trial_thread.get("issue_number"), int) or isinstance(trial_thread.get("issue_number"), bool):
         errors.append("community trial_report_thread issue_number must be an integer")
     if not isinstance(trial_thread.get("state"), str) or not trial_thread["state"].strip():
         errors.append("community trial_report_thread state must be non-empty text")
@@ -238,7 +232,7 @@ def load_report(path: Path) -> object:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(description=MODULE_DESCRIPTION)
     parser.add_argument("report", type=Path)
     args = parser.parse_args(argv)
     try:
@@ -247,8 +241,8 @@ def main(argv: list[str] | None = None) -> int:
         print(f"public adoption report could not be read: {error}", file=sys.stderr)
         return 1
     if errors:
-        for error in errors:
-            print(error, file=sys.stderr)
+        for message in errors:
+            print(message, file=sys.stderr)
         return 1
     print("public adoption report shape and safety boundaries are valid")
     return 0

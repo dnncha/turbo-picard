@@ -1,22 +1,4 @@
 #!/usr/bin/env python3
-"""Render the MarkDuplicates competitor card from checked-in evidence.
-
-The card is the first graphic a visitor sees (README, PyPI, site home, link
-previews). Every number on it comes from three files:
-
-- the newest ``benchmarks/markduplicates-competitors/landscape-*.json``
-- ``docs/site/assets/benchmark-data.json`` (the parity-checked command suite)
-- ``benchmarks/progress.json`` (accepted hill-climb results on main)
-
-The headline is derived, not written: it only says "fastest" for the set of
-tools the evidence shows Turbo Picard beating, and only among tools whose
-output passed the full Picard comparison.
-
-    python3 tools/render_competitor_card.py            # re-render SVG + PNG
-    python3 tools/render_competitor_card.py --check    # fail if stale
-    python3 tools/render_competitor_card.py record --series ID --version V \\
-        --before S --after S --evidence URL            # add a same-run step
-"""
 
 from __future__ import annotations
 
@@ -34,7 +16,7 @@ import struct
 import subprocess
 import sys
 import zlib
-
+from typing import Any
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 ASSET_DIR = ROOT / "docs" / "site" / "assets"
@@ -83,12 +65,13 @@ def latest_landscape() -> pathlib.Path:
     return paths[-1]
 
 
-def load_landscape(path: pathlib.Path) -> dict:
+def load_landscape(path: pathlib.Path) -> dict[str, Any]:
     raw = path.read_bytes()
-    return json.loads(gzip.decompress(raw) if path.suffix == ".gz" else raw)
+    landscape: dict[str, Any] = json.loads(gzip.decompress(raw) if path.suffix == ".gz" else raw)
+    return landscape
 
 
-def primary_case(landscape: dict) -> str:
+def primary_case(landscape: dict[str, Any]) -> str:
     cases = {summary["case"] for summary in landscape["summaries"]}
     for case in PRIMARY_CASES:
         if case in cases:
@@ -96,8 +79,7 @@ def primary_case(landscape: dict) -> str:
     raise ValueError(f"landscape has none of the primary cases {PRIMARY_CASES}")
 
 
-def tool_names(landscape: dict) -> dict[str, str]:
-    """Display names, with the measured Picard version taken from the evidence."""
+def tool_names(landscape: dict[str, Any]) -> dict[str, str]:
     names = dict(TOOL_NAMES)
     picard = landscape["executables"].get(REFERENCE, {}).get("version", "")
     match = re.search(r"\d+(\.\d+)+", picard)
@@ -105,20 +87,18 @@ def tool_names(landscape: dict) -> dict[str, str]:
     return names
 
 
-def case_results(landscape: dict, case: str) -> dict[str, dict]:
+def case_results(landscape: dict[str, Any], case: str) -> dict[str, dict[str, Any]]:
     for summary in landscape["summaries"]:
         if summary["case"] == case:
             return {
                 tool: result
                 for tool, result in summary.items()
-                if isinstance(result, dict) and result.get("successful_runs")
-                and result.get("median_wall_seconds")
+                if isinstance(result, dict) and result.get("successful_runs") and result.get("median_wall_seconds")
             }
     raise ValueError(f"landscape has no case {case!r}")
 
 
-def headline(results: dict[str, dict]) -> tuple[str, str]:
-    """Return (headline, qualifier) supported by this case's evidence."""
+def headline(results: dict[str, dict[str, Any]]) -> tuple[str, str]:
     if TURBO not in results or REFERENCE not in results:
         raise ValueError("card needs successful Turbo Picard and Picard runs")
     if not results[TURBO].get("full_parity"):
@@ -137,8 +117,7 @@ def headline(results: dict[str, dict]) -> tuple[str, str]:
     return "Picard-identical MarkDuplicates, natively.", "Measured against every tool we could run."
 
 
-def series_change(series: dict) -> tuple[list[float], float] | None:
-    """Cumulative wall-time ratio after each step, and the total % reduction."""
+def series_change(series: dict[str, Any]) -> tuple[list[float], float] | None:
     steps = series["steps"]
     if not steps:
         return None
@@ -149,7 +128,6 @@ def series_change(series: dict) -> tuple[list[float], float] | None:
 
 
 def source_label(source: str) -> str:
-    """Short commit, marking a measured patch on top of it."""
     commit, _, patch = source.partition("+")
     return commit[:7] + ("+patch" if patch else "")
 
@@ -170,14 +148,20 @@ def wrap(text: str, max_chars: int) -> list[str]:
 
 def text_lines(lines: list[str], x: int, y: int, leading: int, cls: str) -> str:
     return "".join(
-        f'<text x="{x}" y="{y + i * leading}" class="{cls}">{html.escape(line)}</text>'
-        for i, line in enumerate(lines)
+        f'<text x="{x}" y="{y + i * leading}" class="{cls}">{html.escape(line)}</text>' for i, line in enumerate(lines)
     )
 
 
-def render_bars(results: dict[str, dict], names: dict[str, str], x: int, y: int, *, label_w: int,
-                plot_w: int, stacked: bool = False) -> tuple[str, int]:
-    """Bars grouped by Picard parity; returns (svg, y below the last group)."""
+def render_bars(
+    results: dict[str, dict[str, Any]],
+    names: dict[str, str],
+    x: int,
+    y: int,
+    *,
+    label_w: int,
+    plot_w: int,
+    stacked: bool = False,
+) -> tuple[str, int]:
     exact = sorted(
         (t for t, r in results.items() if r.get("full_parity")),
         key=lambda t: results[t]["median_wall_seconds"],
@@ -216,7 +200,8 @@ def render_bars(results: dict[str, dict], names: dict[str, str], x: int, y: int,
                 f'<text x="{x}" y="{label_y}" class="{label_cls}">{html.escape(name)}</text>'
                 f'<rect x="{bar_x}" y="{bar_y}" width="{plot_w}" height="{22 if stacked else 28}" rx="7" class="track"/>'
                 f'<rect x="{bar_x}" y="{bar_y}" width="{width:.1f}" height="{22 if stacked else 28}" rx="7" fill="{fill}"'
-                + (' filter="url(#glow)"' if tool == TURBO else "") + "/>"
+                + (' filter="url(#glow)"' if tool == TURBO else "")
+                + "/>"
                 f'<text x="{bar_x + width + 10:.1f}" y="{bar_y + (16 if stacked else 20)}" class="{value_cls}">{seconds:.2f} s</text>'
             )
             cursor += row_h
@@ -245,7 +230,7 @@ def render_tile(x: int, y: int, tile: tuple[str, str, str, bool], *, width: int,
     )
 
 
-def render_progress(progress: dict, x: int, y: int, *, width: int, spark_w: int) -> tuple[str, int]:
+def render_progress(progress: dict[str, Any], x: int, y: int, *, width: int, spark_w: int) -> tuple[str, int]:
     rows = [(s, c) for s in progress["series"] if (c := series_change(s))]
     if not rows:
         return "", y
@@ -261,11 +246,10 @@ def render_progress(progress: dict, x: int, y: int, *, width: int, spark_w: int)
         span = hi - lo or 1.0
         step = spark_w / (len(values) - 1)
         points = " ".join(
-            f"{x + 18 + i * step:.1f},{row_y - 2 - (hi - v) / span * 18:.1f}"
-            for i, v in enumerate(values)
+            f"{x + 18 + i * step:.1f},{row_y - 2 - (hi - v) / span * 18:.1f}" for i, v in enumerate(values)
         )
         label = series.get("short_label", series["label"])
-        span_text = f'{series["baseline"]} \u2192 {series["steps"][-1]["version"]}'
+        span_text = f"{series['baseline']} \u2192 {series['steps'][-1]['version']}"
         end_x, end_y = points.split()[-1].split(",")
         parts.append(
             f'<polyline points="{points}" fill="none" stroke="#36d7c9" stroke-width="2.5" '
@@ -286,7 +270,7 @@ def install_pill(x: int, y: int, width: int) -> str:
     )
 
 
-def comparison_tile(ratio: float, metric: str, detail: str) -> tuple:
+def comparison_tile(ratio: float, metric: str, detail: str) -> tuple[str, str, str, bool]:
     if ratio == 1:
         return ("1x", f"same {metric} as Picard", detail, False)
     if metric == "memory":
@@ -296,8 +280,7 @@ def comparison_tile(ratio: float, metric: str, detail: str) -> tuple:
     return (fmt_ratio(ratio if ratio > 1 else 1 / ratio), label, detail, metric == "speed" and ratio > 1)
 
 
-def card_content() -> dict:
-    """Every claim on the card, derived from evidence; layouts only place it."""
+def card_content() -> dict[str, Any]:
     landscape_path = latest_landscape()
     landscape = load_landscape(landscape_path)
     suite = json.loads(SUITE_DATA.read_text(encoding="utf-8"))
@@ -325,12 +308,14 @@ def card_content() -> dict:
         real_speed = real[REFERENCE]["median_wall_seconds"] / real[TURBO]["median_wall_seconds"]
         tiles.append(comparison_tile(real_speed, "speed", f"{CASE_LABELS[REAL_CASE]}, identical"))
     summary = suite["summary"]
-    tiles.append((
-        f"{summary['parity_pass_count']}/{summary['command_count']}",
-        "commands match Picard",
-        f"{summary['geometric_mean_speedup']:.0f}x geo-mean speedup",
-        False,
-    ))
+    tiles.append(
+        (
+            f"{summary['parity_pass_count']}/{summary['command_count']}",
+            "commands match Picard",
+            f"{summary['geometric_mean_speedup']:.0f}x geo-mean speedup",
+            False,
+        )
+    )
 
     version = landscape["executables"][TURBO]["version"].strip().removeprefix("turbo-picard ")
     footer = (
@@ -350,12 +335,19 @@ def card_content() -> dict:
         + "."
     )
     return {
-        "title": title, "qualifier": qualifier, "subtitle": f"{qualifier} Same commands, same arguments, no JVM.",
-        "desc": desc, "primary": primary, "names": names, "tiles": tiles, "progress": progress, "footer": footer,
+        "title": title,
+        "qualifier": qualifier,
+        "subtitle": f"{qualifier} Same commands, same arguments, no JVM.",
+        "desc": desc,
+        "primary": primary,
+        "names": names,
+        "tiles": tiles,
+        "progress": progress,
+        "footer": footer,
     }
 
 
-def svg_document(content: dict, width: int, height: int, body: str, sizes: dict[str, float]) -> str:
+def svg_document(content: dict[str, Any], width: int, height: int, body: str, sizes: dict[str, float]) -> str:
     s = sizes
     return f"""<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" viewBox="0 0 {width} {height}" role="img" aria-labelledby="title desc">
   <title id="title">{html.escape(content["title"])} {html.escape(content["qualifier"])}</title>
@@ -404,13 +396,11 @@ def svg_document(content: dict, width: int, height: int, body: str, sizes: dict[
 """
 
 
-def build_card(content: dict | None = None) -> str:
-    """Landscape 1280x640: README, site home, link previews."""
+def build_card(content: dict[str, Any] | None = None) -> str:
     c = content or card_content()
     bars, _ = render_bars(c["primary"], c["names"], 56, 182, label_w=168, plot_w=404)
     tiles = "".join(
-        render_tile(800 + (i % 2) * 220, 140 + (i // 2) * 128, tile, width=204)
-        for i, tile in enumerate(c["tiles"])
+        render_tile(800 + (i % 2) * 220, 140 + (i // 2) * 128, tile, width=204) for i, tile in enumerate(c["tiles"])
     )
     progress, _ = render_progress(c["progress"], 800, 400, width=424, spark_w=88)
     body = (
@@ -420,12 +410,12 @@ def build_card(content: dict | None = None) -> str:
         f"  {bars}\n  {tiles}\n  {progress}\n  {install_pill(56, 490, 372)}\n"
         f'  <text x="56" y="{HEIGHT - 26}" class="foot">{html.escape(c["footer"])}</text>'
     )
-    return svg_document(c, WIDTH, HEIGHT, body,
-                        {"brand": 16, "title": 40, "sub": 19, "big": 38, "foot": 12.5, "cmd": 19})
+    return svg_document(
+        c, WIDTH, HEIGHT, body, {"brand": 16, "title": 40, "sub": 19, "big": 38, "foot": 12.5, "cmd": 19}
+    )
 
 
-def build_mobile_card(content: dict | None = None) -> str:
-    """Portrait, narrow viewBox so text stays legible at phone width."""
+def build_mobile_card(content: dict[str, Any] | None = None) -> str:
     c = content or card_content()
     x, inner = 24, MOBILE_WIDTH - 48
     parts = ['<text x="24" y="44" class="brand">TURBO PICARD</text>']
@@ -450,8 +440,9 @@ def build_mobile_card(content: dict | None = None) -> str:
     parts.append(text_lines(foot, x, cursor, 16, "foot"))
     height = cursor + 16 * (len(foot) - 1) + 28
     body = "  " + "\n  ".join(parts)
-    return svg_document(c, MOBILE_WIDTH, height, body,
-                        {"brand": 13, "title": 31, "sub": 15.5, "big": 30, "foot": 10.5, "cmd": 17})
+    return svg_document(
+        c, MOBILE_WIDTH, height, body, {"brand": 13, "title": 31, "sub": 15.5, "big": 30, "foot": 10.5, "cmd": 17}
+    )
 
 
 def svg_digest(svg: str) -> str:
@@ -459,7 +450,6 @@ def svg_digest(svg: str) -> str:
 
 
 def png_with_text(png: bytes, key: bytes, value: str) -> bytes:
-    """Insert a tEXt chunk after IHDR so --check can tie the PNG to its SVG."""
     signature, rest = png[:8], png[8:]
     ihdr_len = struct.unpack(">I", rest[:4])[0]
     ihdr_end = 12 + ihdr_len
@@ -472,17 +462,16 @@ def png_with_text(png: bytes, key: bytes, value: str) -> bytes:
 def png_text(png: bytes, key: bytes) -> str | None:
     offset = 8
     while offset + 8 <= len(png):
-        length = struct.unpack(">I", png[offset:offset + 4])[0]
-        kind = png[offset + 4:offset + 8]
-        body = png[offset + 8:offset + 8 + length]
+        length = struct.unpack(">I", png[offset : offset + 4])[0]
+        kind = png[offset + 4 : offset + 8]
+        body = png[offset + 8 : offset + 8 + length]
         if kind == b"tEXt" and body.startswith(key + b"\x00"):
-            return body[len(key) + 1:].decode("ascii")
+            return body[len(key) + 1 :].decode("ascii")
         offset += 12 + length
     return None
 
 
 def rendered_cards() -> list[tuple[str, pathlib.Path, pathlib.Path, int]]:
-    """(svg, svg path, png path, png scale) for every card variant."""
     content = card_content()
     return [
         (build_card(content), SVG_PATH, PNG_PATH, 1),
@@ -497,7 +486,9 @@ def write_card() -> None:
     for svg, svg_path, png_path, scale in rendered_cards():
         png = subprocess.run(
             [converter, "--zoom", str(scale), "--format", "png"],
-            input=svg.encode("utf-8"), capture_output=True, check=True,
+            input=svg.encode("utf-8"),
+            capture_output=True,
+            check=True,
         ).stdout
         svg_path.write_text(svg, encoding="utf-8")
         png_path.write_bytes(png_with_text(png, PNG_HASH_KEY, svg_digest(svg)))
@@ -525,23 +516,50 @@ def record_point(args: argparse.Namespace) -> None:
         if not (args.label and args.protocol and args.baseline):
             raise SystemExit(f"new series {args.series!r} needs --label, --protocol and --baseline")
         series = {
-            "id": args.series, "label": args.label, "short_label": args.label,
-            "baseline": args.baseline, "protocol": args.protocol, "steps": [],
+            "id": args.series,
+            "label": args.label,
+            "short_label": args.label,
+            "baseline": args.baseline,
+            "protocol": args.protocol,
+            "steps": [],
         }
         progress["series"].append(series)
-    series["steps"].append({
-        "date": args.date or datetime.date.today().isoformat(),
-        "version": args.version,
-        "before": args.before,
-        "after": args.after,
-        "evidence": args.evidence,
-    })
+    series["steps"].append(
+        {
+            "date": args.date or datetime.date.today().isoformat(),
+            "version": args.version,
+            "before": args.before,
+            "after": args.after,
+            "evidence": args.evidence,
+        }
+    )
     PROGRESS.write_text(json.dumps(progress, indent=2) + "\n", encoding="utf-8")
     print(f"recorded {args.series} {args.version}: {args.before} -> {args.after}")
 
 
+_DESCRIPTION = (
+    "Render the MarkDuplicates competitor card from checked-in evidence.\n"
+    "\n"
+    "The card is the first graphic a visitor sees (README, PyPI, site home, link\n"
+    "previews). Every number on it comes from three files:\n"
+    "\n"
+    "- the newest ``benchmarks/markduplicates-competitors/landscape-*.json``\n"
+    "- ``docs/site/assets/benchmark-data.json`` (the parity-checked command suite)\n"
+    "- ``benchmarks/progress.json`` (accepted hill-climb results on main)\n"
+    "\n"
+    'The headline is derived, not written: it only says "fastest" for the set of\n'
+    "tools the evidence shows Turbo Picard beating, and only among tools whose\n"
+    "output passed the full Picard comparison.\n"
+    "\n"
+    "    python3 tools/render_competitor_card.py            # re-render SVG + PNG\n"
+    "    python3 tools/render_competitor_card.py --check    # fail if stale\n"
+    "    python3 tools/render_competitor_card.py record --series ID --version V \\\n"
+    "        --before S --after S --evidence URL            # add a same-run step\n"
+)
+
+
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser = argparse.ArgumentParser(description=_DESCRIPTION, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--check", action="store_true", help="fail if the committed card is stale")
     sub = parser.add_subparsers(dest="command")
     record = sub.add_parser("record", help="append an accepted measurement to benchmarks/progress.json")

@@ -1,10 +1,3 @@
-//! Tournament selection for a fixed set of sorted streams.
-//!
-//! Only run indices move through the tree; potentially large record wrappers
-//! stay in their input slots. Replacing the winning head requires at most one
-//! record comparison per level. Equal keys prefer the earlier input run, as
-//! the previous heap-based merges did.
-
 use std::cmp::Ordering;
 
 const EMPTY: usize = usize::MAX;
@@ -36,10 +29,6 @@ impl MergeTree {
         (self.winners[1] != EMPTY).then_some(self.winners[1])
     }
 
-    /// Call after replacing or exhausting one head. All other heads must stay
-    /// unchanged until their own update; their cached tournament results are
-    /// still valid. The caller must not ask for a winner between taking a head
-    /// and updating its slot.
     pub(crate) fn update<T>(
         &mut self,
         index: usize,
@@ -63,22 +52,24 @@ impl MergeTree {
     ) {
         let left = self.winners[2 * node];
         let right = self.winners[2 * node + 1];
-        self.winners[node] = if left == EMPTY {
-            right
-        } else if right == EMPTY {
-            left
-        } else if compare(
-            heads[left].as_ref().expect("active left merge head"),
-            heads[right].as_ref().expect("active right merge head"),
-        )
-        .then_with(|| left.cmp(&right))
-            != Ordering::Greater
-        {
-            left
-        } else {
-            right
+        self.winners[node] = match (active_head(heads, left), active_head(heads, right)) {
+            (None, _) => right,
+            (_, None) => left,
+            (Some(left_head), Some(right_head)) => {
+                if compare(left_head, right_head).then_with(|| left.cmp(&right))
+                    == Ordering::Greater
+                {
+                    right
+                } else {
+                    left
+                }
+            }
         };
     }
+}
+
+fn active_head<T>(heads: &[Option<T>], index: usize) -> Option<&T> {
+    heads.get(index).and_then(Option::as_ref)
 }
 
 #[cfg(test)]
@@ -104,7 +95,6 @@ mod tests {
         let mut tree = MergeTree::new(&heads, u64::cmp);
         for index in 0..heads.len() {
             assert_eq!(tree.winner(), Some(index));
-            // A replacement with an equal key must still beat later runs.
             tree.update(index, &heads, u64::cmp);
             assert_eq!(tree.winner(), Some(index));
             heads[index] = None;
@@ -130,11 +120,15 @@ mod tests {
                 let mut runs = Vec::new();
                 let mut expected = Vec::new();
                 for run in 0..run_count {
-                    state = state.wrapping_mul(6364136223846793005).wrapping_add(1);
+                    state = state
+                        .wrapping_mul(6_364_136_223_846_793_005)
+                        .wrapping_add(1);
                     let len = (state % 23) as usize;
                     let mut values = Vec::new();
                     for _ in 0..len {
-                        state = state.wrapping_mul(6364136223846793005).wrapping_add(1);
+                        state = state
+                            .wrapping_mul(6_364_136_223_846_793_005)
+                            .wrapping_add(1);
                         values.push(state % 11);
                     }
                     values.sort_unstable();

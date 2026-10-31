@@ -1,3 +1,5 @@
+use std::num::NonZero;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HtsThreadRole {
     Reader,
@@ -6,20 +8,23 @@ pub enum HtsThreadRole {
     PipelineReader,
 }
 
-/// BGZF decode/encode thread count for htslib readers and writers.
 pub fn bgzf_threads() -> Option<usize> {
     bgzf_threads_for(HtsThreadRole::Reader)
 }
 
 pub fn bgzf_threads_for(role: HtsThreadRole) -> Option<usize> {
-    if let Some(threads) = explicit_threads(role) {
-        return threads;
+    match explicit_threads(role) {
+        ExplicitThreads::Unset => Some(default_threads(role)),
+        ExplicitThreads::Resolved(threads) => threads,
     }
-
-    default_threads(role)
 }
 
-fn explicit_threads(role: HtsThreadRole) -> Option<Option<usize>> {
+enum ExplicitThreads {
+    Unset,
+    Resolved(Option<usize>),
+}
+
+fn explicit_threads(role: HtsThreadRole) -> ExplicitThreads {
     let role_var = match role {
         HtsThreadRole::Reader => "TURBO_PICARD_READER_THREADS",
         HtsThreadRole::Writer => "TURBO_PICARD_WRITER_THREADS",
@@ -28,26 +33,22 @@ fn explicit_threads(role: HtsThreadRole) -> Option<Option<usize>> {
     };
     std::env::var(role_var)
         .ok()
-        .map(|value| parse_thread_override(role, &value))
         .or_else(|| {
             if role == HtsThreadRole::PipelineReader {
-                return std::env::var("TURBO_PICARD_READER_THREADS")
-                    .ok()
-                    .map(|value| parse_thread_override(role, &value));
+                return std::env::var("TURBO_PICARD_READER_THREADS").ok();
             }
             None
         })
-        .or_else(|| {
-            std::env::var("TURBO_PICARD_THREADS")
-                .ok()
-                .map(|value| parse_thread_override(role, &value))
+        .or_else(|| std::env::var("TURBO_PICARD_THREADS").ok())
+        .map_or(ExplicitThreads::Unset, |value| {
+            ExplicitThreads::Resolved(parse_thread_override(role, &value))
         })
 }
 
 fn parse_thread_override(role: HtsThreadRole, value: &str) -> Option<usize> {
     let value = value.trim();
     if value.eq_ignore_ascii_case("auto") || value.is_empty() {
-        return default_threads(role);
+        return Some(default_threads(role));
     }
     value
         .parse::<usize>()
@@ -55,11 +56,8 @@ fn parse_thread_override(role: HtsThreadRole, value: &str) -> Option<usize> {
         .and_then(|threads| (threads > 0).then_some(threads))
 }
 
-fn default_threads(role: HtsThreadRole) -> Option<usize> {
-    let available = std::thread::available_parallelism()
-        .ok()
-        .map(|parallelism| parallelism.get())
-        .unwrap_or(1);
+fn default_threads(role: HtsThreadRole) -> usize {
+    let available = std::thread::available_parallelism().map_or(1, NonZero::get);
     let max_threads = std::env::var("TURBO_PICARD_MAX_THREADS")
         .ok()
         .and_then(|value| value.parse::<usize>().ok())
@@ -71,21 +69,19 @@ fn default_threads(role: HtsThreadRole) -> Option<usize> {
     };
     let role_cap = match role {
         HtsThreadRole::Reader => 8,
-        HtsThreadRole::Writer => 12,
-        HtsThreadRole::Index => 12,
+        HtsThreadRole::Writer | HtsThreadRole::Index => 12,
         HtsThreadRole::PipelineReader => 2,
     };
-    let threads = available
+    available
         .saturating_sub(reserved)
         .min(role_cap)
         .min(max_threads)
-        .max(1);
-    Some(threads)
+        .max(1)
 }
 
-/// Thread count for HTSlib index construction and other multi-threaded HTSlib work.
 pub fn htslib_worker_threads() -> u32 {
-    bgzf_threads_for(HtsThreadRole::Index).unwrap_or(1) as u32
+    let threads = bgzf_threads_for(HtsThreadRole::Index).unwrap_or(1);
+    u32::try_from(threads).unwrap_or(u32::MAX)
 }
 
 #[cfg(test)]

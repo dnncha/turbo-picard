@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-"""Print a concise Bioconda release preflight report."""
 
 from __future__ import annotations
 
@@ -7,7 +6,6 @@ import re
 import subprocess
 import sys
 from pathlib import Path
-
 
 ROOT = Path(__file__).resolve().parents[1]
 EXPECTED_ARCHIVE_ERRORS = {
@@ -57,9 +55,7 @@ def git_tag_status(root: Path = ROOT) -> tuple[str, list[str]]:
     if local_status != 0:
         return "WAIT", [f"local tag {tag} does not exist yet"]
 
-    local_commit_status, local_commit_lines = run_check(
-        ["git", "rev-list", "-n", "1", tag], root
-    )
+    local_commit_status, local_commit_lines = run_check(["git", "rev-list", "-n", "1", tag], root)
     if local_commit_status != 0 or not local_commit_lines:
         return "FAIL", [f"could not resolve local tag {tag} commit"]
     local_commit = local_commit_lines[0].split()[0]
@@ -74,11 +70,9 @@ def git_tag_status(root: Path = ROOT) -> tuple[str, list[str]]:
             f"bump the workspace version for a new release or check out {tag} before packaging",
         ]
 
-    remote_status, remote_lines = run_check(
-        ["git", "ls-remote", "--tags", "origin", f"{tag}*"], root
-    )
+    remote_status, remote_lines = run_check(["git", "ls-remote", "--tags", "origin", f"{tag}*"], root)
     if remote_status != 0:
-        return "WAIT", [f"could not confirm origin tag {tag}"] + remote_lines
+        return "WAIT", [f"could not confirm origin tag {tag}", *remote_lines]
     if not remote_lines:
         return "WAIT", [f"origin tag {tag} does not exist yet"]
 
@@ -102,15 +96,11 @@ def run_check(command: list[str], root: Path = ROOT) -> tuple[int, list[str]]:
         command,
         cwd=root,
         text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        capture_output=True,
         check=False,
     )
     lines = [
-        line.strip()
-        for stream in (completed.stdout, completed.stderr)
-        for line in stream.splitlines()
-        if line.strip()
+        line.strip() for stream in (completed.stdout, completed.stderr) for line in stream.splitlines() if line.strip()
     ]
     return completed.returncode, lines
 
@@ -173,8 +163,7 @@ def preflight_report(root: Path = ROOT) -> tuple[int, str]:
         output.append("  The recipes still need immutable release archive metadata.")
         output.append("  After tagging the exact release commit, download the GitHub archive and run:")
         output.append(
-            "  python3 tools/prepare_bioconda_release.py "
-            f"--archive ~/Downloads/turbo-picard-{version}.tar.gz"
+            f"  python3 tools/prepare_bioconda_release.py --archive ~/Downloads/turbo-picard-{version}.tar.gz"
         )
         output.append("  python3 tools/verify_bioconda_recipes.py --release-ready")
         output.append("  Then copy both recipes into bioconda-recipes and run lint plus Docker/mulled builds.")

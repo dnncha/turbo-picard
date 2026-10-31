@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-"""Tests for raw benchmark log to rendered manifest consistency checks."""
 
 from __future__ import annotations
 
@@ -8,7 +7,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
-
+from unittest import mock
 
 MODULE_PATH = Path(__file__).with_name("verify_benchmark_log_evidence.py")
 SPEC = importlib.util.spec_from_file_location("verify_benchmark_log_evidence", MODULE_PATH)
@@ -59,17 +58,21 @@ class BenchmarkLogEvidenceTests(unittest.TestCase):
             source_artifact="docs/site/assets/bench-suite-output.txt",
         )
 
-        self.assertEqual(errors, [])
+        assert errors == []
 
     def test_published_absolute_timings_cannot_drift_from_log(self) -> None:
-        raw = ("benchmark_date=2026-09-05 source=python3 tools/bench_suite.py --repeats 1 --skip-build\n"
-               "command=SortSam reads=100 runs=1 median_turbo_seconds=1 median_picard_seconds=2 median_speedup=2x parity=PASS")
+        raw = (
+            "benchmark_date=2026-09-05 source=python3 tools/bench_suite.py --repeats 1 --skip-build\n"
+            "command=SortSam reads=100 runs=1 median_turbo_seconds=1 median_picard_seconds=2 median_speedup=2x parity=PASS"
+        )
         manifest = verify_benchmark_log_evidence.build_benchmark_data_from_suite_output(
-            raw, source_artifact="docs/site/assets/bench-suite-output.txt")
+            raw, source_artifact="docs/site/assets/bench-suite-output.txt"
+        )
         manifest["benchmarks"][0]["median_turbo_seconds"] = 0.01
         errors = verify_benchmark_log_evidence.validate_benchmark_log_evidence(
-            raw, manifest, source_artifact="docs/site/assets/bench-suite-output.txt")
-        self.assertTrue(any("median_turbo_seconds" in error for error in errors))
+            raw, manifest, source_artifact="docs/site/assets/bench-suite-output.txt"
+        )
+        assert any("median_turbo_seconds" in error for error in errors)
 
     def test_missing_metadata_is_reported(self) -> None:
         suite_output = (
@@ -103,8 +106,8 @@ class BenchmarkLogEvidenceTests(unittest.TestCase):
             source_artifact="docs/site/assets/bench-suite-output.txt",
         )
 
-        self.assertIn("raw benchmark log is missing benchmark_date metadata", errors)
-        self.assertIn("raw benchmark log is missing source metadata", errors)
+        assert "raw benchmark log is missing benchmark_date metadata" in errors
+        assert "raw benchmark log is missing source metadata" in errors
 
     def test_metadata_and_source_artifact_must_be_release_evidence_shaped(self) -> None:
         suite_output = "\n".join(
@@ -141,18 +144,9 @@ class BenchmarkLogEvidenceTests(unittest.TestCase):
             source_artifact="../bench-suite-output.txt",
         )
 
-        self.assertIn(
-            "raw benchmark log has non-ISO benchmark_date: 2026/05/30",
-            errors,
-        )
-        self.assertIn(
-            "raw benchmark log source must start with python3 tools/bench_suite.py: bash run-something.sh",
-            errors,
-        )
-        self.assertIn(
-            "benchmark source_artifact must be repository-relative: ../bench-suite-output.txt",
-            errors,
-        )
+        assert "raw benchmark log has non-ISO benchmark_date: 2026/05/30" in errors
+        assert "raw benchmark log source must start with python3 tools/bench_suite.py: bash run-something.sh" in errors
+        assert "benchmark source_artifact must be repository-relative: ../bench-suite-output.txt" in errors
 
     def test_source_artifact_must_exist_under_site_assets(self) -> None:
         suite_output = "\n".join(
@@ -186,9 +180,7 @@ class BenchmarkLogEvidenceTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             (root / "docs" / "site" / "assets").mkdir(parents=True)
-            old_root = verify_benchmark_log_evidence.ROOT
-            try:
-                verify_benchmark_log_evidence.ROOT = root
+            with mock.patch.object(verify_benchmark_log_evidence, "ROOT", root):
                 outside_errors = verify_benchmark_log_evidence.validate_benchmark_log_evidence(
                     suite_output,
                     manifest,
@@ -208,18 +200,12 @@ class BenchmarkLogEvidenceTests(unittest.TestCase):
                     {**manifest, "source_artifact": "docs/site/assets/bench-suite-output.txt"},
                     source_artifact="docs/site/assets/bench-suite-output.txt",
                 )
-            finally:
-                verify_benchmark_log_evidence.ROOT = old_root
 
-        self.assertIn(
-            "benchmark source_artifact must stay under docs/site/assets: docs/bench-suite-output.txt",
-            outside_errors,
+        assert (
+            "benchmark source_artifact must stay under docs/site/assets: docs/bench-suite-output.txt" in outside_errors
         )
-        self.assertIn(
-            "benchmark source_artifact is missing: docs/site/assets/missing.txt",
-            missing_errors,
-        )
-        self.assertEqual(ok_errors, [])
+        assert "benchmark source_artifact is missing: docs/site/assets/missing.txt" in missing_errors
+        assert ok_errors == []
 
     def test_manifest_drift_is_reported(self) -> None:
         suite_output = "\n".join(
@@ -256,10 +242,13 @@ class BenchmarkLogEvidenceTests(unittest.TestCase):
             source_artifact="docs/site/assets/bench-suite-output.txt",
         )
 
-        self.assertIn("manifest field date is '2026-05-29', expected '2026-05-30'", errors)
-        self.assertIn("manifest field source is 'old command', expected 'python3 tools/bench_suite.py --repeats 1 --skip-build'", errors)
-        self.assertIn("manifest summary top_speedup is 19.0, expected 20.0", errors)
-        self.assertIn("manifest benchmark SortSam speedup is 19.0, expected 20.0", errors)
+        assert "manifest field date is '2026-05-29', expected '2026-05-30'" in errors
+        assert (
+            "manifest field source is 'old command', expected 'python3 tools/bench_suite.py --repeats 1 --skip-build'"
+            in errors
+        )
+        assert "manifest summary top_speedup is 19.0, expected 20.0" in errors
+        assert "manifest benchmark SortSam speedup is 19.0, expected 20.0" in errors
 
     def test_malformed_manifest_benchmark_rows_are_reported(self) -> None:
         suite_output = "\n".join(
@@ -299,9 +288,9 @@ class BenchmarkLogEvidenceTests(unittest.TestCase):
             source_artifact="docs/site/assets/bench-suite-output.txt",
         )
 
-        self.assertIn("manifest benchmark row 0 must be an object", errors)
-        self.assertIn("manifest benchmark row 1 missing command", errors)
-        self.assertIn("manifest has duplicate benchmark command: SortSam", errors)
+        assert "manifest benchmark row 0 must be an object" in errors
+        assert "manifest benchmark row 1 missing command" in errors
+        assert "manifest has duplicate benchmark command: SortSam" in errors
 
 
 if __name__ == "__main__":

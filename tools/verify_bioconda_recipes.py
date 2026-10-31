@@ -1,17 +1,26 @@
 #!/usr/bin/env python3
-"""Validate Bioconda-oriented recipe readiness for turbo-picard."""
 
 from __future__ import annotations
 
+import contextlib
+import json
 import pathlib
 import re
 import sys
-import json
-
+from typing import Any, TypedDict
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 COMMAND_MATRIX = ROOT / "docs" / "command-matrix.yml"
-RECIPES = [
+
+
+class Recipe(TypedDict):
+    name: str
+    path: pathlib.Path
+    expected_bin: str
+    is_shim: bool
+
+
+RECIPES: list[Recipe] = [
     {
         "name": "turbo-picard",
         "path": ROOT / "packaging" / "bioconda" / "turbo-picard",
@@ -26,9 +35,7 @@ RECIPES = [
     },
 ]
 FULL_METAPACKAGE = ROOT / "packaging" / "bioconda" / "turbo-picard-full"
-RELEASE_URL_TEMPLATE = (
-    "https://github.com/dnncha/turbo-picard/archive/refs/tags/v{version}.tar.gz"
-)
+RELEASE_URL_TEMPLATE = "https://github.com/dnncha/turbo-picard/archive/refs/tags/v{version}.tar.gz"
 RELEASE_CANDIDATE_PORTFOLIO_COMMAND_TEXT = (
     "AddOrReplaceReadGroups, BuildBamIndex, CleanSam, "
     "CollectAlignmentSummaryMetrics, CollectInsertSizeMetrics, "
@@ -62,11 +69,7 @@ def bioconda_pr_overclaims(text: str) -> list[str]:
             if index == -1:
                 break
             context = normalized[max(0, index - 80) : index]
-            if not (
-                "do not describe" in context
-                or "do not claim" in context
-                or "not " in context[-16:]
-            ):
+            if not ("do not describe" in context or "do not claim" in context or "not " in context[-16:]):
                 overclaims.append(phrase)
                 break
             start = index + len(phrase)
@@ -144,17 +147,13 @@ def pr_source_sha256(text: str) -> str | None:
 
 
 def has_meta_test_command(meta_yaml: str, command: str) -> bool:
-    return bool(
-        re.search(rf"(?m)^\s*-\s+{re.escape(command)}\s*$", meta_yaml)
-    )
+    return bool(re.search(rf"(?m)^\s*-\s+{re.escape(command)}\s*$", meta_yaml))
 
 
 def benchmark_pr_text_requirements(root: pathlib.Path = ROOT) -> tuple[list[str], list[str]]:
     benchmark_data_path = root / "docs" / "site" / "assets" / "benchmark-data.json"
     if not benchmark_data_path.is_file():
-        return ["docs/site/assets/benchmark-data.json"], [
-            "docs/site/assets/benchmark-data.json is missing"
-        ]
+        return ["docs/site/assets/benchmark-data.json"], ["docs/site/assets/benchmark-data.json is missing"]
     try:
         data = json.loads(benchmark_data_path.read_text(encoding="utf-8"))
     except ValueError as error:
@@ -163,9 +162,7 @@ def benchmark_pr_text_requirements(root: pathlib.Path = ROOT) -> tuple[list[str]
         ]
     errors: list[str] = []
     if not isinstance(data, dict):
-        return ["docs/site/assets/benchmark-data.json"], [
-            "docs/site/assets/benchmark-data.json must be a JSON object"
-        ]
+        return ["docs/site/assets/benchmark-data.json"], ["docs/site/assets/benchmark-data.json must be a JSON object"]
     summary = data.get("summary", {})
     if not isinstance(summary, dict):
         errors.append("docs/site/assets/benchmark-data.json missing summary object")
@@ -196,9 +193,7 @@ def benchmark_pr_text_requirements(root: pathlib.Path = ROOT) -> tuple[list[str]
         elif value is not None:
             required.append(str(value))
     benchmark_commands = {
-        row.get("command")
-        for row in benchmarks
-        if isinstance(row, dict) and isinstance(row.get("command"), str)
+        row.get("command") for row in benchmarks if isinstance(row, dict) and isinstance(row.get("command"), str)
     }
     for promoted_command in (
         "IntervalListTools",
@@ -284,13 +279,9 @@ def validate_recipe(
         summary_lower = summary.lower()
         if is_shim:
             if "shim" not in summary_lower or "picard" not in summary_lower:
-                errors.append(
-                    f"{name} meta.yaml summary must describe the opt-in picard shim"
-                )
+                errors.append(f"{name} meta.yaml summary must describe the opt-in picard shim")
         elif "picard-compatible" not in summary_lower:
-            errors.append(
-                f"{name} meta.yaml summary must describe the Picard-compatible toolkit"
-            )
+            errors.append(f"{name} meta.yaml summary must describe the Picard-compatible toolkit")
     if release_ready:
         version = recipe_version(meta_yaml)
         expected_url = RELEASE_URL_TEMPLATE.format(version=version) if version else None
@@ -300,9 +291,7 @@ def validate_recipe(
         if not source_url:
             errors.append(f"{name} meta.yaml missing release source url")
         elif expected_url and source_url != expected_url:
-            errors.append(
-                f"{name} meta.yaml release source url must be {expected_url}"
-            )
+            errors.append(f"{name} meta.yaml release source url must be {expected_url}")
         if not re.search(r"(?m)^\s+sha256:\s+[0-9a-f]{64}\s*$", meta_yaml):
             errors.append(f"{name} meta.yaml missing release source sha256")
     if "number: 0" not in meta_yaml:
@@ -340,12 +329,8 @@ def validate_recipe(
         errors.append(f"{name} meta.yaml contains unsupported replacement overclaim: {phrase}")
     if "cargo-bundle-licenses" not in build_sh:
         errors.append(f"{name} build.sh missing cargo-bundle-licenses invocation")
-    if "cargo-bundle-licenses --format yaml --output THIRDPARTY.yml" not in re.sub(
-        r"\s+", " ", build_sh
-    ):
-        errors.append(
-            f"{name} build.sh must write bundled Rust dependency licenses to THIRDPARTY.yml"
-        )
+    if "cargo-bundle-licenses --format yaml --output THIRDPARTY.yml" not in re.sub(r"\s+", " ", build_sh):
+        errors.append(f"{name} build.sh must write bundled Rust dependency licenses to THIRDPARTY.yml")
     if "OPENSSL_NO_VENDOR=1" not in build_sh:
         errors.append(f"{name} build.sh missing OPENSSL_NO_VENDOR=1")
     if "CARGO_NET_GIT_FETCH_WITH_CLI=true" not in build_sh:
@@ -364,25 +349,17 @@ def validate_recipe(
         if not has_meta_test_command(meta_yaml, "picard --version"):
             errors.append(f"{name} meta.yaml test commands missing picard --version")
         if not has_meta_test_command(meta_yaml, "picard MarkDuplicates --help"):
-            errors.append(
-                f"{name} meta.yaml test commands missing picard MarkDuplicates --help"
-            )
+            errors.append(f"{name} meta.yaml test commands missing picard MarkDuplicates --help")
         if has_meta_test_command(meta_yaml, "turbo-picard --version"):
             errors.append(f"{name} meta.yaml shim tests must not use turbo-picard")
         if has_cargo_install_flag(build_sh, r"--bin\s+turbo-picard\b"):
             errors.append(f"{name} build.sh must not install turbo-picard")
         if "intentionally conflicts with upstream picard" not in meta_yaml:
-            errors.append(
-                f"{name} meta.yaml description must disclose upstream picard conflict"
-            )
+            errors.append(f"{name} meta.yaml description must disclose upstream picard conflict")
         if "shadows the" not in meta_yaml or "same command name" not in meta_yaml:
-            errors.append(
-                f"{name} meta.yaml description must disclose picard command shadowing"
-            )
+            errors.append(f"{name} meta.yaml description must disclose picard command shadowing")
         if "turbo-picard =={{ version }}" not in meta_yaml:
-            errors.append(
-                f"{name} meta.yaml missing exact turbo-picard version run dependency"
-            )
+            errors.append(f"{name} meta.yaml missing exact turbo-picard version run dependency")
         if "picard ==0" not in meta_yaml:
             errors.append(f"{name} meta.yaml missing picard ==0 run_constrained conflict")
         if "picard MarkDuplicates --help" not in run_test_sh:
@@ -402,9 +379,7 @@ def validate_recipe(
         if "picard ==0" in meta_yaml:
             errors.append(f"{name} meta.yaml must not declare shim-only picard conflict")
         if "non-shadowing turbo-picard" not in normalized_meta:
-            errors.append(
-                f"{name} meta.yaml description must disclose non-shadowing entrypoint"
-            )
+            errors.append(f"{name} meta.yaml description must disclose non-shadowing entrypoint")
         for command in ("MarkDuplicates", "SortSam", "CleanSam", "ViewSam"):
             smoke = f"{expected_bin} {command} --help"
             if smoke not in run_test_sh:
@@ -413,40 +388,28 @@ def validate_recipe(
 
 
 def validate_recipe_set_consistency(recipe_metadata: list[tuple[str, str | None]]) -> list[str]:
-    versions = {
-        name: version
-        for name, version in recipe_metadata
-        if version is not None
-    }
+    versions = {name: version for name, version in recipe_metadata if version is not None}
     if len(versions) < len(recipe_metadata):
-        missing = [
-            name
-            for name, version in recipe_metadata
-            if version is None
-        ]
+        missing = [name for name, version in recipe_metadata if version is None]
         return [f"{name} meta.yaml missing version" for name in missing]
     unique_versions = sorted(set(versions.values()))
     if len(unique_versions) > 1:
-        details = ", ".join(
-            f"{name}={version}" for name, version in sorted(versions.items())
-        )
+        details = ", ".join(f"{name}={version}" for name, version in sorted(versions.items()))
         return [f"Bioconda recipe versions differ: {details}"]
     return []
 
 
 def validate_release_evidence(root: pathlib.Path = ROOT) -> list[str]:
     errors: list[str] = []
-    release_candidates: list[dict] = []
+    release_candidates: list[dict[str, Any]] = []
     recipe_sources: list[tuple[str, str | None, str | None]] = []
     for recipe in RECIPES:
         meta_yaml_path = pathlib.Path(recipe["path"])
         if not meta_yaml_path.is_absolute():
             meta_yaml_path = root / meta_yaml_path
         else:
-            try:
+            with contextlib.suppress(ValueError):
                 meta_yaml_path = root / meta_yaml_path.relative_to(ROOT)
-            except ValueError:
-                pass
         meta_yaml_path = meta_yaml_path / "meta.yaml"
         if not meta_yaml_path.is_file():
             continue
@@ -467,9 +430,7 @@ def validate_release_evidence(root: pathlib.Path = ROOT) -> list[str]:
         site_path = site_evidence_path
     docs_packaging_path = root / "docs" / "packaging.rst"
     packaging_readme_path = root / "packaging" / "bioconda" / "turbo-picard" / "README.md"
-    packaging_shim_readme_path = (
-        root / "packaging" / "bioconda" / "turbo-picard-picard-shim" / "README.md"
-    )
+    packaging_shim_readme_path = root / "packaging" / "bioconda" / "turbo-picard-picard-shim" / "README.md"
     packaging_pr_path = root / "packaging" / "bioconda" / "BIOCONDA_PR.md"
     if not manifest_path.is_file():
         errors.append("release evidence manifest missing benchmarks/real-data/manifest.json")
@@ -492,13 +453,10 @@ def validate_release_evidence(root: pathlib.Path = ROOT) -> list[str]:
             release_candidates = [
                 dataset
                 for dataset in datasets
-                if isinstance(dataset, dict)
-                and dataset.get("release_tier") == "release_candidate"
+                if isinstance(dataset, dict) and dataset.get("release_tier") == "release_candidate"
             ]
             if not release_candidates:
-                errors.append(
-                    "release evidence manifest has no release_candidate dataset"
-                )
+                errors.append("release evidence manifest has no release_candidate dataset")
     if not verifier_path.is_file():
         errors.append("release evidence verifier missing tools/verify_real_data_evidence.py")
     for path in (
@@ -515,17 +473,11 @@ def validate_release_evidence(root: pathlib.Path = ROOT) -> list[str]:
         text = path.read_text(encoding="utf-8")
         is_shim_readme = path == packaging_shim_readme_path
         if not is_shim_readme and "python3 tools/verify_real_data_evidence.py" not in text:
-            errors.append(
-                f"{path.relative_to(root)} missing real-data evidence verifier command"
-            )
+            errors.append(f"{path.relative_to(root)} missing real-data evidence verifier command")
         if not is_shim_readme and "python3 tools/verify_real_data_evidence.py --release-ready" not in text:
-            errors.append(
-                f"{path.relative_to(root)} missing release-ready real-data verifier command"
-            )
+            errors.append(f"{path.relative_to(root)} missing release-ready real-data verifier command")
         if not is_shim_readme and "python3 tools/update_real_data_manifest.py" not in text:
-            errors.append(
-                f"{path.relative_to(root)} missing real-data manifest update command"
-            )
+            errors.append(f"{path.relative_to(root)} missing real-data manifest update command")
         if path in {
             docs_packaging_path,
             packaging_readme_path,
@@ -534,22 +486,16 @@ def validate_release_evidence(root: pathlib.Path = ROOT) -> list[str]:
             normalized = re.sub(r"\s+", " ", text)
             normalized_lower = normalized.lower()
             for phrase in replacement_overclaims(text):
-                errors.append(
-                    f"{path.relative_to(root)} contains unsupported replacement overclaim: {phrase}"
-                )
+                errors.append(f"{path.relative_to(root)} contains unsupported replacement overclaim: {phrase}")
             for needle in (
                 "CITATION.cff",
                 "archived turbo-picard release",
                 "SHA-256",
             ):
                 if needle not in text:
-                    errors.append(
-                        f"{path.relative_to(root)} missing citation boundary text: {needle}"
-                    )
+                    errors.append(f"{path.relative_to(root)} missing citation boundary text: {needle}")
             if "benchmark" not in normalized or "input" not in normalized or "separate" not in normalized:
-                errors.append(
-                    f"{path.relative_to(root)} missing software-vs-input citation boundary"
-                )
+                errors.append(f"{path.relative_to(root)} missing software-vs-input citation boundary")
             for needle in (
                 "cp -R packaging/bioconda/turbo-picard recipes/turbo-picard",
                 "cp -R packaging/bioconda/turbo-picard-picard-shim recipes/turbo-picard-picard-shim",
@@ -558,9 +504,7 @@ def validate_release_evidence(root: pathlib.Path = ROOT) -> list[str]:
                 "bioconda-utils build --docker --mulled-test turbo-picard-picard-shim",
             ):
                 if needle not in text:
-                    errors.append(
-                        f"{path.relative_to(root)} missing Bioconda submission command: {needle}"
-                    )
+                    errors.append(f"{path.relative_to(root)} missing Bioconda submission command: {needle}")
             for needle in (
                 "python3 tools/verify_benchmark_thresholds.py",
                 "5.00x",
@@ -568,42 +512,27 @@ def validate_release_evidence(root: pathlib.Path = ROOT) -> list[str]:
                 "50.00x",
             ):
                 if needle not in text:
-                    errors.append(
-                        f"{path.relative_to(root)} missing benchmark threshold release gate: {needle}"
-                    )
+                    errors.append(f"{path.relative_to(root)} missing benchmark threshold release gate: {needle}")
             if RELEASE_CANDIDATE_PORTFOLIO_COMMAND_TEXT not in normalized:
-                errors.append(
-                    f"{path.relative_to(root)} missing release-candidate command portfolio"
-                )
-            if path in {docs_packaging_path, packaging_readme_path}:
-                if (
-                    "do not open a bioconda pr" not in normalized_lower
-                    or "source.path" not in normalized_lower
-                    or "release-ready verifier" not in normalized_lower
-                ):
-                    errors.append(
-                        f"{path.relative_to(root)} missing source.path Bioconda PR stop sign"
-                    )
+                errors.append(f"{path.relative_to(root)} missing release-candidate command portfolio")
+            if path in {docs_packaging_path, packaging_readme_path} and (
+                "do not open a bioconda pr" not in normalized_lower
+                or "source.path" not in normalized_lower
+                or "release-ready verifier" not in normalized_lower
+            ):
+                errors.append(f"{path.relative_to(root)} missing source.path Bioconda PR stop sign")
         if path == packaging_pr_path:
             if re.search(r"<github-v\d+\.\d+\.\d+-source-archive-sha256>", text):
-                errors.append(
-                    "packaging/bioconda/BIOCONDA_PR.md still contains source archive SHA placeholder"
-                )
+                errors.append("packaging/bioconda/BIOCONDA_PR.md still contains source archive SHA placeholder")
             pr_url = pr_source_url(text)
             pr_sha256 = pr_source_sha256(text)
             if not pr_url:
-                errors.append(
-                    "packaging/bioconda/BIOCONDA_PR.md missing tagged source archive URL"
-                )
+                errors.append("packaging/bioconda/BIOCONDA_PR.md missing tagged source archive URL")
             if not pr_sha256:
-                errors.append(
-                    "packaging/bioconda/BIOCONDA_PR.md missing concrete source archive SHA-256"
-                )
+                errors.append("packaging/bioconda/BIOCONDA_PR.md missing concrete source archive SHA-256")
             for recipe_name, recipe_url, recipe_sha256 in recipe_sources:
                 if recipe_url and pr_url and recipe_url != pr_url:
-                    errors.append(
-                        f"packaging/bioconda/BIOCONDA_PR.md source URL does not match {recipe_name} recipe"
-                    )
+                    errors.append(f"packaging/bioconda/BIOCONDA_PR.md source URL does not match {recipe_name} recipe")
                 if recipe_sha256 and pr_sha256 and recipe_sha256 != pr_sha256:
                     errors.append(
                         f"packaging/bioconda/BIOCONDA_PR.md source SHA-256 does not match {recipe_name} recipe"
@@ -633,16 +562,12 @@ def validate_release_evidence(root: pathlib.Path = ROOT) -> list[str]:
                 for key in ("evidence_markdown",):
                     value = dataset.get(key)
                     if not value:
-                        errors.append(
-                            f"release_candidate {dataset_id} missing manifest key for Bioconda PR: {key}"
-                        )
+                        errors.append(f"release_candidate {dataset_id} missing manifest key for Bioconda PR: {key}")
                     else:
                         required_pr_text.append(str(value))
             for needle in required_pr_text:
                 if needle not in text:
-                    errors.append(
-                        f"{path.relative_to(root)} missing Bioconda PR evidence text: {needle}"
-                    )
+                    errors.append(f"{path.relative_to(root)} missing Bioconda PR evidence text: {needle}")
     return errors
 
 
@@ -721,9 +646,7 @@ def main(argv: list[str] | None = None) -> int:
             else:
                 errors.extend(
                     validate_main_run_test_command_surface(
-                        run_test_sh=(recipe_dir / "run_test.sh").read_text(
-                            encoding="utf-8"
-                        ),
+                        run_test_sh=(recipe_dir / "run_test.sh").read_text(encoding="utf-8"),
                         matrix_text=COMMAND_MATRIX.read_text(encoding="utf-8"),
                         expected_bin=str(recipe["expected_bin"]),
                     )

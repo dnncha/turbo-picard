@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+from __future__ import annotations
+
 import argparse
 import os
 import pathlib
@@ -8,17 +10,15 @@ import sys
 import tempfile
 import time
 
-
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 
 
-def run(command, *, cwd=ROOT):
+def run(command: list[str], *, cwd: pathlib.Path = ROOT) -> float:
     start = time.perf_counter()
     completed = subprocess.run(
         command,
         cwd=cwd,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        capture_output=True,
         text=True,
         check=False,
     )
@@ -30,7 +30,7 @@ def run(command, *, cwd=ROOT):
     return elapsed
 
 
-def conda_runner():
+def conda_runner() -> str:
     for name in ("mamba", "micromamba"):
         path = shutil.which(name)
         if path:
@@ -38,7 +38,7 @@ def conda_runner():
     raise SystemExit("mamba or micromamba is required to benchmark against Picard")
 
 
-def write_sam(path, reads):
+def write_sam(path: pathlib.Path, reads: int) -> None:
     sequence = "ACGT" * 25
     qualities = "F" * len(sequence)
     with open(path, "w", encoding="utf-8") as handle:
@@ -46,17 +46,13 @@ def write_sam(path, reads):
         handle.write(f"@SQ\tSN:chr1\tLN:{reads + len(sequence) + 100}\n")
         for index in range(1, reads + 1):
             if index % 20 == 0:
-                handle.write(
-                    f"unmapped{index:09d}\t4\t*\t0\t0\t*\t*\t0\t0\t{sequence}\t{qualities}\n"
-                )
+                handle.write(f"unmapped{index:09d}\t4\t*\t0\t0\t*\t*\t0\t0\t{sequence}\t{qualities}\n")
             else:
                 flag = 16 if index % 2 == 0 else 0
-                handle.write(
-                    f"read{index:09d}\t{flag}\tchr1\t{index}\t60\t100M\t*\t0\t0\t{sequence}\t{qualities}\n"
-                )
+                handle.write(f"read{index:09d}\t{flag}\tchr1\t{index}\t60\t100M\t*\t0\t0\t{sequence}\t{qualities}\n")
 
 
-def stable_metrics(path):
+def stable_metrics(path: pathlib.Path) -> list[str]:
     lines = []
     with open(path, encoding="utf-8") as handle:
         keep = False
@@ -69,7 +65,7 @@ def stable_metrics(path):
     return lines
 
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser(
         description="Benchmark turbo-picard CollectAlignmentSummaryMetrics against Picard."
     )
@@ -104,9 +100,7 @@ def main():
             "QUIET=true",
         ]
         turbo_time = run([str(turbo), *common, f"O={turbo_out}"])
-        picard_time = run(
-            [runner, "run", "-p", args.conda_prefix, "picard", *common, f"O={picard_out}"]
-        )
+        picard_time = run([runner, "run", "-p", args.conda_prefix, "picard", *common, f"O={picard_out}"])
 
         parity = stable_metrics(turbo_out) == stable_metrics(picard_out)
         speedup = picard_time / turbo_time if turbo_time > 0 else float("inf")

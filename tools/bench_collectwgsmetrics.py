@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+
+from __future__ import annotations
+
 import argparse
 import os
 import pathlib
@@ -7,18 +10,17 @@ import subprocess
 import sys
 import tempfile
 import time
-
+from collections.abc import Sequence
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 
 
-def run(command, *, cwd=ROOT):
+def run(command: Sequence[str], *, cwd: pathlib.Path = ROOT) -> float:
     start = time.perf_counter()
     completed = subprocess.run(
         command,
         cwd=cwd,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        capture_output=True,
         text=True,
         check=False,
     )
@@ -30,7 +32,7 @@ def run(command, *, cwd=ROOT):
     return elapsed
 
 
-def conda_runner():
+def conda_runner() -> str:
     for name in ("mamba", "micromamba"):
         path = shutil.which(name)
         if path:
@@ -38,7 +40,7 @@ def conda_runner():
     raise SystemExit("mamba or micromamba is required to benchmark against Picard")
 
 
-def write_reference(path, length):
+def write_reference(path: pathlib.Path, length: int) -> None:
     with open(path, "w", encoding="utf-8") as handle:
         handle.write(">chr1\n")
         sequence = "A" * length
@@ -46,21 +48,19 @@ def write_reference(path, length):
             handle.write(sequence[offset : offset + 80] + "\n")
 
 
-def write_sam(path, reads, reference_length):
+def write_sam(path: pathlib.Path, reads: int, reference_length: int) -> None:
     sequence = "A" * 100
     qualities = "F" * len(sequence)
     with open(path, "w", encoding="utf-8") as handle:
         handle.write("@HD\tVN:1.6\tSO:coordinate\n")
         handle.write(f"@SQ\tSN:chr1\tLN:{reference_length}\n")
         for index in range(1, reads + 1):
-            handle.write(
-                f"read{index:09d}\t0\tchr1\t{index}\t60\t100M\t*\t0\t0\t"
-                f"{sequence}\t{qualities}\n"
-            )
+            handle.write(f"read{index:09d}\t0\tchr1\t{index}\t60\t100M\t*\t0\t0\t{sequence}\t{qualities}\n")
 
 
-def stable_wgs_metrics(path):
-    lines = [line.rstrip("\n") for line in open(path, encoding="utf-8")]
+def stable_wgs_metrics(path: pathlib.Path) -> tuple[dict[str, str], list[str]]:
+    with open(path, encoding="utf-8") as handle:
+        lines = [line.rstrip("\n") for line in handle]
     metrics = None
     histogram = []
     for index, line in enumerate(lines):
@@ -75,17 +75,13 @@ def stable_wgs_metrics(path):
             break
     if metrics is None:
         raise SystemExit(f"no WgsMetrics table in {path}")
-    # Picard's theoretical sensitivity is sampled and can differ by a few
-    # last-place digits across otherwise identical benchmark runs.
     metrics.pop("HET_SNP_SENSITIVITY", None)
     metrics.pop("HET_SNP_Q", None)
     return metrics, histogram
 
 
-def main():
-    parser = argparse.ArgumentParser(
-        description="Benchmark turbo-picard CollectWgsMetrics against Picard."
-    )
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Benchmark turbo-picard CollectWgsMetrics against Picard.")
     parser.add_argument("--reads", type=int, default=100_000, help="reads to synthesize")
     parser.add_argument(
         "--conda-prefix",
@@ -123,9 +119,7 @@ def main():
             "QUIET=true",
         ]
         turbo_time = run([str(turbo), *common, f"O={turbo_out}"])
-        picard_time = run(
-            [runner, "run", "-p", args.conda_prefix, "picard", *common, f"O={picard_out}"]
-        )
+        picard_time = run([runner, "run", "-p", args.conda_prefix, "picard", *common, f"O={picard_out}"])
 
         parity = stable_wgs_metrics(turbo_out) == stable_wgs_metrics(picard_out)
         speedup = picard_time / turbo_time if turbo_time > 0 else float("inf")

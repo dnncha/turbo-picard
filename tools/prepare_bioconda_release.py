@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Switch local Bioconda recipes to a tagged release source."""
 
 from __future__ import annotations
 
 import argparse
 import hashlib
+import importlib
 import json
 import math
 import pathlib
@@ -14,10 +14,9 @@ import tarfile
 
 import yaml
 
-if __package__:
-    from .sam_contract import COMPARISON as MARKDUP_V2_COMPARISON
-else:
-    from sam_contract import COMPARISON as MARKDUP_V2_COMPARISON
+MARKDUP_V2_COMPARISON = importlib.import_module(
+    ".sam_contract" if __package__ else "sam_contract", __package__ or None
+).COMPARISON
 
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -26,9 +25,7 @@ RECIPE_DIRS = [
     ROOT / "packaging" / "bioconda" / "turbo-picard-picard-shim",
 ]
 BIOCONDA_PR = ROOT / "packaging" / "bioconda" / "BIOCONDA_PR.md"
-RELEASE_URL_TEMPLATE = (
-    "https://github.com/dnncha/turbo-picard/archive/refs/tags/v{version}.tar.gz"
-)
+RELEASE_URL_TEMPLATE = "https://github.com/dnncha/turbo-picard/archive/refs/tags/v{version}.tar.gz"
 RELEASE_CANDIDATE_PORTFOLIO_REQUIRED_COMMANDS = {
     "AddOrReplaceReadGroups",
     "BuildBamIndex",
@@ -70,11 +67,7 @@ def recipe_version(meta_yaml: str) -> str:
 
 
 def release_source_block(version: str, sha256: str) -> str:
-    return (
-        "source:\n"
-        f"  url: {RELEASE_URL_TEMPLATE.format(version=version)}\n"
-        f"  sha256: {sha256}\n"
-    )
+    return f"source:\n  url: {RELEASE_URL_TEMPLATE.format(version=version)}\n  sha256: {sha256}\n"
 
 
 def update_meta_yaml(meta_yaml: str, sha256: str) -> str:
@@ -87,19 +80,14 @@ def update_meta_yaml(meta_yaml: str, sha256: str) -> str:
 
 def update_bioconda_pr(text: str, version: str, sha256: str) -> str:
     url = RELEASE_URL_TEMPLATE.format(version=version)
-    url_pattern = re.compile(
-        r"https://github\.com/dnncha/turbo-picard/archive/refs/tags/v\d+\.\d+\.\d+\.tar\.gz"
-    )
-    sha_pattern = re.compile(
-        r"(?m)^(\s*)`(?:<github-v\d+\.\d+\.\d+-source-archive-sha256>|[0-9a-f]{64})`"
-    )
+    url_pattern = re.compile(r"https://github\.com/dnncha/turbo-picard/archive/refs/tags/v\d+\.\d+\.\d+\.tar\.gz")
+    sha_pattern = re.compile(r"(?m)^(\s*)`(?:<github-v\d+\.\d+\.\d+-source-archive-sha256>|[0-9a-f]{64})`")
     if not url_pattern.search(text):
         raise ValueError("BIOCONDA_PR.md is missing the tagged archive URL")
     if not sha_pattern.search(text):
         raise ValueError("BIOCONDA_PR.md is missing the archive SHA-256 field")
     text = url_pattern.sub(url, text, count=1)
-    text = sha_pattern.sub(lambda match: f"{match.group(1)}`{sha256}`", text, count=1)
-    return text
+    return sha_pattern.sub(lambda match: f"{match.group(1)}`{sha256}`", text, count=1)
 
 
 def sha256_file(path: pathlib.Path) -> str:
@@ -124,11 +112,15 @@ def validate_archive_name(path: pathlib.Path, versions: set[str]) -> str | None:
     version = next(iter(versions))
     allowed = {f"v{version}.tar.gz", f"turbo-picard-{version}.tar.gz"}
     if path.name not in allowed:
-        return (
-            "--archive filename must match the recipe version: "
-            + " or ".join(sorted(allowed))
-        )
+        return "--archive filename must match the recipe version: " + " or ".join(sorted(allowed))
     return None
+
+
+def read_archive_member(archive: tarfile.TarFile, name: str) -> bytes:
+    handle = archive.extractfile(name)
+    if handle is None:
+        raise KeyError(name)
+    return handle.read()
 
 
 def validate_archive_contents(path: pathlib.Path, version: str) -> str | None:
@@ -180,10 +172,8 @@ def validate_archive_contents(path: pathlib.Path, version: str) -> str | None:
         }
     )
     if unexpected_prefixes:
-        return (
-            "--archive contains unexpected top-level entries outside "
-            f"{expected_prefix}: "
-            + ", ".join(unexpected_prefixes)
+        return f"--archive contains unexpected top-level entries outside {expected_prefix}: " + ", ".join(
+            unexpected_prefixes
         )
     missing = sorted(required_paths - name_set)
     if missing:
@@ -198,10 +188,10 @@ def validate_archive_contents(path: pathlib.Path, version: str) -> str | None:
     try:
         with tarfile.open(path, "r:gz") as archive:
             contents = {
-                required_path: archive.extractfile(required_path).read().decode("utf-8")
+                required_path: read_archive_member(archive, required_path).decode("utf-8")
                 for required_path in required_paths
             }
-    except (AttributeError, KeyError, UnicodeDecodeError) as error:
+    except (KeyError, UnicodeDecodeError) as error:
         return f"--archive could not read expected release source file text: {error}"
     content_error = validate_archive_release_metadata(
         contents,
@@ -326,31 +316,17 @@ def validate_archive_release_metadata(
         expected_commands = dataset.get("expected_commands", {})
         if isinstance(expected_commands, dict):
             unknown_comparisons = sorted(
-                {
-                    comparison
-                    for comparison in expected_commands.values()
-                    if comparison not in KNOWN_COMPARISONS
-                }
+                {comparison for comparison in expected_commands.values() if comparison not in KNOWN_COMPARISONS}
             )
             if unknown_comparisons:
-                return (
-                    "--archive real-data manifest has unknown comparison labels: "
-                    + ", ".join(unknown_comparisons)
-                )
-            release_candidate_commands.update(
-                command
-                for command in expected_commands
-                if isinstance(command, str)
-            )
+                return "--archive real-data manifest has unknown comparison labels: " + ", ".join(unknown_comparisons)
+            release_candidate_commands.update(command for command in expected_commands if isinstance(command, str))
     if not release_candidate_commands:
         return "--archive real-data manifest must contain release_candidate command evidence"
-    missing_commands = sorted(
-        RELEASE_CANDIDATE_PORTFOLIO_REQUIRED_COMMANDS - release_candidate_commands
-    )
+    missing_commands = sorted(RELEASE_CANDIDATE_PORTFOLIO_REQUIRED_COMMANDS - release_candidate_commands)
     if missing_commands:
-        return (
-            "--archive real-data manifest release_candidate portfolio missing commands: "
-            + ", ".join(missing_commands)
+        return "--archive real-data manifest release_candidate portfolio missing commands: " + ", ".join(
+            missing_commands
         )
 
     benchmark_data = contents[f"{prefix}docs/site/assets/benchmark-data.json"]
@@ -374,11 +350,7 @@ def validate_archive_release_metadata(
     parity_pass_count = summary.get("parity_pass_count")
     if command_count != len(benchmark_rows):
         return "--archive benchmark-data.json summary command_count does not match benchmark rows"
-    row_pass_count = sum(
-        1
-        for row in benchmark_rows
-        if isinstance(row, dict) and row.get("parity") == "PASS"
-    )
+    row_pass_count = sum(1 for row in benchmark_rows if isinstance(row, dict) and row.get("parity") == "PASS")
     if parity_pass_count != row_pass_count:
         return "--archive benchmark-data.json summary parity_pass_count does not match benchmark rows"
     seen_benchmark_commands: set[str] = set()

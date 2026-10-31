@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-"""Tests for benchmark performance threshold verification."""
 
 from __future__ import annotations
 
@@ -7,7 +6,6 @@ import importlib.util
 import sys
 import unittest
 from pathlib import Path
-
 
 MODULE_PATH = Path(__file__).with_name("verify_benchmark_thresholds.py")
 SPEC = importlib.util.spec_from_file_location("verify_benchmark_thresholds", MODULE_PATH)
@@ -37,7 +35,7 @@ class BenchmarkThresholdTests(unittest.TestCase):
 
         errors = verify_benchmark_thresholds.validate_benchmark_thresholds(data)
 
-        self.assertEqual(errors, [])
+        assert errors == []
 
     def test_threshold_failures_are_reported(self) -> None:
         data = {
@@ -57,21 +55,19 @@ class BenchmarkThresholdTests(unittest.TestCase):
 
         errors = verify_benchmark_thresholds.validate_benchmark_thresholds(data)
 
-        self.assertIn("parity pass count 1 does not match command count 2", errors)
-        self.assertIn("floor speedup 4.90x is below required 5.00x", errors)
-        self.assertIn("geometric mean speedup 19.00x is below required 20.00x", errors)
-        self.assertIn("top speedup 40.00x is below required 50.00x", errors)
-        self.assertIn("benchmark B parity is FAIL", errors)
+        assert "parity pass count 1 does not match command count 2" in errors
+        assert "floor speedup 4.90x is below required 5.00x" in errors
+        assert "geometric mean speedup 19.00x is below required 20.00x" in errors
+        assert "top speedup 40.00x is below required 50.00x" in errors
+        assert "benchmark B parity is FAIL" in errors
 
     def test_malformed_benchmark_data_reports_errors_instead_of_crashing(self) -> None:
-        self.assertEqual(
-            verify_benchmark_thresholds.validate_benchmark_thresholds({}),
-            ["benchmark-data.json missing summary object"],
-        )
-        self.assertEqual(
-            verify_benchmark_thresholds.validate_benchmark_thresholds({"summary": {}}),
-            ["benchmark-data.json missing benchmarks list"],
-        )
+        assert verify_benchmark_thresholds.validate_benchmark_thresholds({}) == [
+            "benchmark-data.json missing summary object"
+        ]
+        assert verify_benchmark_thresholds.validate_benchmark_thresholds({"summary": {}}) == [
+            "benchmark-data.json missing benchmarks list"
+        ]
 
         errors = verify_benchmark_thresholds.validate_benchmark_thresholds(
             {
@@ -86,7 +82,7 @@ class BenchmarkThresholdTests(unittest.TestCase):
                 "benchmarks": [],
             }
         )
-        self.assertEqual(errors, ["benchmark summary missing numeric command_count"])
+        assert errors == ["benchmark summary missing numeric command_count"]
 
         errors = verify_benchmark_thresholds.validate_benchmark_thresholds(
             {
@@ -104,8 +100,8 @@ class BenchmarkThresholdTests(unittest.TestCase):
                 ],
             }
         )
-        self.assertIn("benchmark row 0 must be an object", errors)
-        self.assertIn("benchmark B missing numeric speedup", errors)
+        assert "benchmark row 0 must be an object" in errors
+        assert "benchmark B missing numeric speedup" in errors
 
     def test_summary_must_match_benchmark_rows(self) -> None:
         data = {
@@ -125,30 +121,12 @@ class BenchmarkThresholdTests(unittest.TestCase):
 
         errors = verify_benchmark_thresholds.validate_benchmark_thresholds(data)
 
-        self.assertIn(
-            "summary command_count 3 does not match benchmark row count 2",
-            errors,
-        )
-        self.assertIn(
-            "summary parity_pass_count 3 does not match PASS rows 2",
-            errors,
-        )
-        self.assertIn(
-            "top-level parity '3/3 PASS' does not match benchmark rows '2/2 PASS'",
-            errors,
-        )
-        self.assertIn(
-            "summary floor_speedup 7.50x does not match benchmark rows 8.00x",
-            errors,
-        )
-        self.assertIn(
-            "summary top_speedup 60.00x does not match benchmark rows 55.00x",
-            errors,
-        )
-        self.assertIn(
-            "summary geometric_mean_speedup 30.00x does not match benchmark rows 20.98x",
-            errors,
-        )
+        assert "summary command_count 3 does not match benchmark row count 2" in errors
+        assert "summary parity_pass_count 3 does not match PASS rows 2" in errors
+        assert "top-level parity '3/3 PASS' does not match benchmark rows '2/2 PASS'" in errors
+        assert "summary floor_speedup 7.50x does not match benchmark rows 8.00x" in errors
+        assert "summary top_speedup 60.00x does not match benchmark rows 55.00x" in errors
+        assert "summary geometric_mean_speedup 30.00x does not match benchmark rows 20.98x" in errors
 
     def test_duplicate_benchmark_rows_are_reported(self) -> None:
         data = {
@@ -168,7 +146,7 @@ class BenchmarkThresholdTests(unittest.TestCase):
 
         errors = verify_benchmark_thresholds.validate_benchmark_thresholds(data)
 
-        self.assertIn("benchmark-data has duplicate command row: A", errors)
+        assert "benchmark-data has duplicate command row: A" in errors
 
 
 if __name__ == "__main__":

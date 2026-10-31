@@ -1,13 +1,9 @@
-//! Bounded early mate joining for the external duplicate plan.
-//!
-//! Complete pairs use the same key and original ordinals as the QNAME sort.
-//! Evicted identities must never re-enter the cache: doing so could pair the
-//! second and third occurrences of a reused QNAME instead of the first and
-//! second. The spill filter has false positives only; these send additional
-//! records through the exact external join and never affect duplicate decisions.
-
-use super::*;
-use std::hash::Hasher;
+use crate::fragment_taint::bloom_positions;
+use crate::{
+    ExternalPlanError, ExternalPlanRecord, ExternalSorter, FragmentStage, HashMap,
+    decode_external_plan_record, duplicate_candidate_is_pair, encode_external_pair,
+    encode_external_plan_record, external_pair_key,
+};
 
 const MAX_PENDING_MATES: usize = 4096;
 const MAX_PENDING_BUFFER_BYTES: usize = 4 * 1024 * 1024;
@@ -33,17 +29,7 @@ impl ExternalMateCache {
     }
 
     fn filter_bits(&self, key: &[u8]) -> [usize; 3] {
-        let mut hasher = rustc_hash::FxHasher::default();
-        hasher.write(key);
-        let hash = hasher.finish();
-        let step = (hash.rotate_left(32) | 1) as usize;
-        let mask = self.spilled.len() * 64 - 1;
-        let first = hash as usize;
-        [
-            first & mask,
-            first.wrapping_add(step) & mask,
-            first.wrapping_add(step.wrapping_mul(2)) & mask,
-        ]
+        bloom_positions(key, self.spilled.len() * 64 - 1)
     }
 
     fn was_spilled(&self, key: &[u8]) -> bool {
@@ -69,10 +55,8 @@ impl ExternalMateCache {
         record: ExternalPlanRecord,
         qnames: &mut ExternalSorter,
         pairs: &mut ExternalSorter,
-    ) -> Result<(), String> {
+    ) -> Result<(), ExternalPlanError> {
         if self.was_spilled(&record.template_key) {
-            // A filter collision can affect an identity already resident in
-            // the cache. Spill its earlier occurrence before the incoming one.
             if let Some(first) = self.pending.remove(record.template_key.as_slice()) {
                 self.buffer_bytes -= record_buffer_bytes(&first);
                 spill_record(first, qnames)?;
@@ -101,8 +85,7 @@ impl ExternalMateCache {
         Ok(())
     }
 
-    pub(super) fn flush(&mut self, qnames: &mut ExternalSorter) -> Result<(), String> {
-        // Drop the map's reserved capacity as well as the records on eviction.
+    pub(super) fn flush(&mut self, qnames: &mut ExternalSorter) -> Result<(), ExternalPlanError> {
         for (key, record) in std::mem::take(&mut self.pending) {
             self.mark_spilled(&key);
             qnames.push(key, encode_external_plan_record(&record, false))?;
@@ -113,8 +96,6 @@ impl ExternalMateCache {
 }
 
 fn record_buffer_bytes(record: &ExternalPlanRecord) -> usize {
-    // Metadata is bounded separately by MAX_PENDING_MATES. Count the extra
-    // map key and every owned record buffer, including reserved capacity.
     [
         record.template_key.len(),
         record.template_key.capacity(),
@@ -128,45 +109,45 @@ fn record_buffer_bytes(record: &ExternalPlanRecord) -> usize {
     .fold(0, usize::saturating_add)
 }
 
-fn spill_record(record: ExternalPlanRecord, qnames: &mut ExternalSorter) -> Result<(), String> {
+fn spill_record(
+    record: ExternalPlanRecord,
+    qnames: &mut ExternalSorter,
+) -> Result<(), ExternalPlanError> {
     let payload = encode_external_plan_record(&record, false);
-    qnames.push(record.template_key, payload)
+    qnames
+        .push(record.template_key, payload)
+        .map_err(ExternalPlanError::Sort)
 }
 
 pub(super) fn push_pair(
     first: &ExternalPlanRecord,
     second: &ExternalPlanRecord,
     pairs: &mut ExternalSorter,
-) -> Result<(), String> {
+) -> Result<(), ExternalPlanError> {
     if !matches!(
         (first.flags & 0xc0, second.flags & 0xc0),
         (0x40, 0x80) | (0x80, 0x40)
     ) {
-        return Err(
-            "external MarkDuplicates mates must have complementary first/second flags".to_string(),
-        );
+        return Err(ExternalPlanError::MatesNotComplementary);
     }
     let key = external_pair_key(first, second);
-    pairs.push(key, encode_external_pair(first, second))
+    pairs
+        .push(key, encode_external_pair(first, second))
+        .map_err(ExternalPlanError::Sort)
 }
 
-// This is the original stable QNAME join, shared by the fallback and the
-// differential oracle in tests.
 pub(super) fn finish_spilled(
     qnames: ExternalSorter,
     pairs: &mut ExternalSorter,
     mut fragments: Option<&mut FragmentStage>,
-) -> Result<(), String> {
+) -> Result<(), ExternalPlanError> {
     let mut pending_pair = None::<ExternalPlanRecord>;
     qnames.finish_into(|item| {
-        if pending_pair
-            .as_ref()
-            .is_some_and(|pending| pending.template_key.as_slice() != item.key.as_slice())
+        if let Some(pending) =
+            pending_pair.take_if(|pending| pending.template_key.as_slice() != item.key.as_slice())
+            && let Some(stage) = fragments.as_deref_mut()
         {
-            if let Some(stage) = fragments.as_deref_mut() {
-                stage.push_required(pending_pair.as_ref().unwrap())?;
-            }
-            pending_pair = None;
+            stage.push_required(&pending)?;
         }
         let plan = decode_external_plan_record(&item.key, &item.payload, false)?;
         if !duplicate_candidate_is_pair(plan.flags) {
@@ -192,6 +173,14 @@ pub(super) fn finish_spilled(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{
+        ExternalBarcodeValues, bounded_plan, decode_borrowed_external_pair, external_fragment_key,
+        external_sorter, push_external_pair_fragments,
+    };
+    use tempfile::tempdir;
+    use turbo_picard_core::external_sort::ExternalSortConfig;
+
+    type JoinedPair = (Vec<u8>, u64, Vec<u8>);
 
     fn plan(ordinal: u64, name: &[u8], group: Option<&[u8]>, flags: u16) -> ExternalPlanRecord {
         ExternalPlanRecord {
@@ -201,15 +190,15 @@ mod tests {
             template_key: bounded_plan::template_key(group, name),
             flags,
             reference_id: 0,
-            position: ordinal as i64 * 17,
+            position: ordinal.cast_signed() * 17,
             mate_reference_id: 0,
-            mate_position: ordinal as i64 * 17 + 31,
+            mate_position: ordinal.cast_signed() * 17 + 31,
             template_length: 350,
-            unclipped_position: ordinal as i64 * 17 - 3,
+            unclipped_position: ordinal.cast_signed() * 17 - 3,
             quality_score: ordinal % 41,
             qname: name.to_vec(),
             barcode: ExternalBarcodeValues {
-                primary: Some(vec![ordinal as u8; 4]),
+                primary: Some(vec![u8::try_from(ordinal % 256).unwrap(); 4]),
                 read_one: None,
                 read_two: Some(Vec::new()),
             },
@@ -221,7 +210,7 @@ mod tests {
         cache: Option<(usize, usize)>,
         spill: bool,
         saturate: bool,
-    ) -> Result<Vec<(Vec<u8>, u64, Vec<u8>)>, String> {
+    ) -> Result<Vec<JoinedPair>, ExternalPlanError> {
         let tmp = tempdir().unwrap();
         let mut config = ExternalSortConfig::new(tmp.path());
         config.max_records_in_ram = if spill { 1 } else { 10_000 };
@@ -264,8 +253,6 @@ mod tests {
             }
             Ok(())
         })?;
-        // Completion order can differ; original input ordinals remain the
-        // selection/tie-break contract used by duplicate-group processing.
         result.sort();
         Ok(result)
     }
@@ -274,8 +261,6 @@ mod tests {
     fn bounded_cache_matches_stable_qname_join_after_eviction_and_reused_names() {
         let mut records = Vec::new();
         let mut occurrences = HashMap::<(Vec<u8>, Option<Vec<u8>>), usize>::default();
-        // Interleave templates, reuse names, and leave orphan primary mates.
-        // Missing/empty RG, long identity keys and mate barcodes are retained.
         for ordinal in 0..257 {
             let identity = (ordinal * 13 + ordinal / 7) % 19;
             let name = if identity == 18 {
@@ -295,7 +280,6 @@ mod tests {
             *count += 1;
             records.push(plan(ordinal, &name, group.as_deref(), flags));
         }
-        // Same QNAME with distinct read groups is a distinct identity.
         for (ordinal, group, flag) in [
             (257, None, 99),
             (258, Some(b"".as_slice()), 99),
@@ -325,7 +309,9 @@ mod tests {
     #[test]
     fn randomized_bounded_cache_matches_the_exact_join() {
         fn next(state: &mut u64) -> u64 {
-            *state = state.wrapping_mul(6364136223846793005).wrapping_add(1);
+            *state = state
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1);
             *state
         }
         let mut state = 0x2545_f491_4f6c_dd1d_u64;
@@ -376,8 +362,6 @@ mod tests {
         cache
             .push(plan(0, b"shared", None, 99), &mut qnames, &mut pairs)
             .unwrap();
-        // Simulate unrelated spills setting every filter bit for this resident
-        // identity. This must defer both mates rather than lose the first.
         cache.spilled = vec![u64::MAX; SPILL_FILTER_WORDS];
         cache
             .push(plan(1, b"shared", None, 147), &mut qnames, &mut pairs)
@@ -412,10 +396,12 @@ mod tests {
     #[test]
     fn cache_and_spill_join_reject_noncomplementary_primary_mates() {
         let records = [plan(0, b"invalid", None, 99), plan(1, b"invalid", None, 99)];
-        let expected = join(&records, None, false, false).unwrap_err();
+        let expected = join(&records, None, false, false).unwrap_err().to_string();
         for saturate in [false, true] {
             assert_eq!(
-                join(&records, Some((1, 4096)), true, saturate).unwrap_err(),
+                join(&records, Some((1, 4096)), true, saturate)
+                    .unwrap_err()
+                    .to_string(),
                 expected
             );
         }

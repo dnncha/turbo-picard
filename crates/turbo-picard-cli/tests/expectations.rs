@@ -1,10 +1,3 @@
-//! Expect tests for the command-line contract.
-//!
-//! The whole `trial` report is asserted so a changed default, reason, output
-//! declaration, or ordering shows up in the diff. Run `UPDATE_EXPECT=1 cargo
-//! test -p turbo-picard-cli --test expectations` to accept an intentional
-//! change.
-
 use assert_cmd::Command;
 use expect_test::expect;
 
@@ -35,7 +28,7 @@ fn trial_text_contract_is_visible() {
         String::from_utf8_lossy(&output.stderr)
     );
 
-    expect![[r#"
+    expect![[r"
         inspection_only=true option_support=not-checked output_manifest=declared-arguments-only require_native=true
         command=MarkDuplicates
         status=partial-native
@@ -47,7 +40,7 @@ fn trial_text_contract_is_visible() {
         evidence=run both commands on the same representative input; keep input SHA-256, command versions, trial command lines, and output comparison notes
         fallback_command=not-found
         declared_outputs=O=marked.bam,M=metrics.txt
-    "#]].assert_eq(&String::from_utf8_lossy(&output.stdout));
+    "]].assert_eq(&String::from_utf8_lossy(&output.stdout));
 }
 
 #[test]
@@ -62,7 +55,7 @@ fn explain_text_contract_is_visible() {
     assert!(output.status.success());
     assert!(output.stderr.is_empty());
 
-    expect![[r#"
+    expect![[r"
         inspection_only=true option_support=not-checked output_manifest=declared-arguments-only require_native=true
         command=CollectHsMetrics
         status=partial-native
@@ -73,7 +66,7 @@ fn explain_text_contract_is_visible() {
         fallback_ready=false
         fallback_status=disabled-by-require-native
         declared_outputs=none
-    "#]].assert_eq(&String::from_utf8_lossy(&output.stdout));
+    "]].assert_eq(&String::from_utf8_lossy(&output.stdout));
 }
 
 #[test]

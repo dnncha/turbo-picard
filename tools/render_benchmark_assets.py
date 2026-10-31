@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-"""Render static benchmark assets for the README and marketing site."""
 
 from __future__ import annotations
 
@@ -9,7 +8,7 @@ import json
 import math
 import pathlib
 import statistics
-
+from typing import Any
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 ASSET_DIR = ROOT / "docs" / "site" / "assets"
@@ -17,7 +16,7 @@ DEFAULT_SUITE_OUTPUT = ASSET_DIR / "bench-suite-output.txt"
 
 
 def parse_key_values(line: str) -> dict[str, str]:
-    values = {}
+    values: dict[str, str] = {}
     for chunk in line.split():
         if "=" not in chunk:
             continue
@@ -27,12 +26,12 @@ def parse_key_values(line: str) -> dict[str, str]:
 
 
 def build_benchmark_data_from_rows(
-    rows: list[dict[str, object]],
+    rows: list[dict[str, Any]],
     *,
     source: str,
     date: str,
     source_artifact: str | None = None,
-) -> dict:
+) -> dict[str, Any]:
     if not rows:
         raise ValueError("benchmark data requires at least one row")
     seen_commands: set[str] = set()
@@ -61,8 +60,12 @@ def build_benchmark_data_from_rows(
             raise ValueError(f"benchmark row {command} runs must be a positive integer")
         if "workload_parameter" in row:
             workload = row["workload_parameter"]
-            if (not isinstance(workload, dict) or workload.get("name") != "reads"
-                    or type(workload.get("value")) is not int or workload["value"] <= 0):
+            if (
+                not isinstance(workload, dict)
+                or workload.get("name") != "reads"
+                or type(workload.get("value")) is not int
+                or workload["value"] <= 0
+            ):
                 raise ValueError(f"benchmark row {command} has invalid workload parameter")
 
     speedups = [float(row["speedup"]) for row in rows]
@@ -71,7 +74,7 @@ def build_benchmark_data_from_rows(
     geometric_mean = math.exp(math.fsum(math.log(speedup) for speedup in speedups) / len(speedups))
     ordered = sorted(rows, key=lambda row: float(row["speedup"]), reverse=True)
     pass_count = sum(1 for row in rows if row["parity"] == "PASS")
-    data = {
+    data: dict[str, Any] = {
         "source": source,
         "date": date,
         "parity": f"{pass_count}/{len(rows)} PASS",
@@ -91,9 +94,11 @@ def build_benchmark_data_from_rows(
                 "command": row["command"],
                 "speedup": float(row["speedup"]),
                 "parity": row["parity"],
-                **{key: row[key] for key in (
-                    "median_turbo_seconds", "median_picard_seconds", "runs", "workload_parameter"
-                ) if key in row},
+                **{
+                    key: row[key]
+                    for key in ("median_turbo_seconds", "median_picard_seconds", "runs", "workload_parameter")
+                    if key in row
+                },
             }
             for rank, row in enumerate(ordered, start=1)
         ],
@@ -103,7 +108,7 @@ def build_benchmark_data_from_rows(
     return data
 
 
-def build_benchmark_data() -> dict:
+def build_benchmark_data() -> dict[str, Any]:
     text = DEFAULT_SUITE_OUTPUT.read_text(encoding="utf-8")
     return build_benchmark_data_from_suite_output(
         text,
@@ -128,23 +133,19 @@ def build_benchmark_data_from_suite_output(
     source: str | None = None,
     date: str | None = None,
     source_artifact: str | None = None,
-) -> dict:
+) -> dict[str, Any]:
     metadata = parse_suite_metadata(text)
-    resolved_source = source or metadata.get(
-        "source", "python3 tools/bench_suite.py --repeats 1 --skip-build"
-    )
+    resolved_source = source or metadata.get("source", "python3 tools/bench_suite.py --repeats 1 --skip-build")
     resolved_date = date or metadata.get("benchmark_date", "2026-05-29")
-    rows = []
+    rows: list[dict[str, Any]] = []
     for line in text.splitlines():
         values = parse_key_values(line)
         if not values:
             continue
         if {"command", "median_speedup", "parity"} - values.keys():
             continue
-        row = {
+        row: dict[str, Any] = {
             "command": values["command"],
-            # Preserve the median of paired run ratios from bench_suite.py.
-            # A ratio of independent medians is not the same statistic.
             "speedup": float(values["median_speedup"].removesuffix("x")),
             "parity": values["parity"],
         }
@@ -154,8 +155,6 @@ def build_benchmark_data_from_suite_output(
         if "runs" in values:
             row["runs"] = int(values["runs"])
         if "reads" in values:
-            # This is a generator argument, not a verified read count; some
-            # commands operate on FASTA/VCF rather than alignment reads.
             row["workload_parameter"] = {"name": "reads", "value": int(values["reads"])}
         rows.append(row)
     return build_benchmark_data_from_rows(
@@ -163,14 +162,12 @@ def build_benchmark_data_from_suite_output(
     )
 
 
-def write_json(data: dict) -> None:
+def write_json(data: dict[str, Any]) -> None:
     ASSET_DIR.mkdir(parents=True, exist_ok=True)
-    (ASSET_DIR / "benchmark-data.json").write_text(
-        json.dumps(data, indent=2, allow_nan=False) + "\n", encoding="utf-8"
-    )
+    (ASSET_DIR / "benchmark-data.json").write_text(json.dumps(data, indent=2, allow_nan=False) + "\n", encoding="utf-8")
 
 
-def render_speedup_chart(data: dict) -> str:
+def render_speedup_chart(data: dict[str, Any]) -> str:
     benchmarks = data["benchmarks"]
     summary = data["summary"]
     width = 1280
@@ -208,8 +205,8 @@ def render_speedup_chart(data: dict) -> str:
     pass_count = summary["parity_pass_count"]
     floor_speedup = summary["floor_speedup"]
     top_speedup = summary["top_speedup"]
-    source = data["source"]
-    date = data["date"]
+    data["source"]
+    data["date"]
     return f"""<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" viewBox="0 0 {width} {height}" role="img" aria-labelledby="title desc">
   <title id="title">Same Picard checks. Less waiting.</title>
   <desc id="desc">Bar chart showing {command_count} Picard-compatible commands with parity passing and speedups from {floor_speedup:.2f}x to {top_speedup:.2f}x.</desc>
@@ -298,8 +295,11 @@ def render_hero() -> str:
 """
 
 
+_DESCRIPTION = "Render static benchmark assets for the README and marketing site."
+
+
 def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(description=_DESCRIPTION)
     parser.add_argument(
         "--suite-output",
         type=pathlib.Path,
@@ -318,9 +318,7 @@ def main() -> None:
     else:
         data = build_benchmark_data()
     write_json(data)
-    (ASSET_DIR / "benchmark-speedups.svg").write_text(
-        render_speedup_chart(data), encoding="utf-8"
-    )
+    (ASSET_DIR / "benchmark-speedups.svg").write_text(render_speedup_chart(data), encoding="utf-8")
     (ASSET_DIR / "hero-pipeline.svg").write_text(render_hero(), encoding="utf-8")
 
 

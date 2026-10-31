@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+from __future__ import annotations
+
 import argparse
 import os
 import pathlib
@@ -8,17 +10,15 @@ import sys
 import tempfile
 import time
 
-
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 
 
-def run(command, *, cwd=ROOT):
+def run(command: list[str], *, cwd: pathlib.Path = ROOT) -> float:
     start = time.perf_counter()
     completed = subprocess.run(
         command,
         cwd=cwd,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        capture_output=True,
         text=True,
         check=False,
     )
@@ -30,7 +30,7 @@ def run(command, *, cwd=ROOT):
     return elapsed
 
 
-def conda_runner():
+def conda_runner() -> str:
     for name in ("mamba", "micromamba"):
         path = shutil.which(name)
         if path:
@@ -38,7 +38,7 @@ def conda_runner():
     raise SystemExit("mamba or micromamba is required to benchmark against Picard")
 
 
-def write_sam(path, reads):
+def write_sam(path: pathlib.Path, reads: int) -> None:
     sequence = "ACGT" * 25
     qualities = "F" * len(sequence)
     with open(path, "w", encoding="utf-8") as handle:
@@ -51,20 +51,18 @@ def write_sam(path, reads):
             )
 
 
-def stable_rows(path):
+def stable_rows(path: pathlib.Path) -> list[str]:
     rows = []
     with open(path, encoding="utf-8") as handle:
-        for line in handle:
-            line = line.rstrip("\n")
+        for raw in handle:
+            line = raw.rstrip("\n")
             if line.startswith("@HD") or line.startswith("@RG") or not line.startswith("@"):
                 rows.append(line)
     return rows
 
 
-def main():
-    parser = argparse.ArgumentParser(
-        description="Benchmark turbo-picard AddOrReplaceReadGroups against Picard."
-    )
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Benchmark turbo-picard AddOrReplaceReadGroups against Picard.")
     parser.add_argument("--reads", type=int, default=200_000, help="reads to synthesize")
     parser.add_argument(
         "--conda-prefix",

@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+from __future__ import annotations
+
 import argparse
 import os
 import pathlib
@@ -8,17 +10,15 @@ import sys
 import tempfile
 import time
 
-
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 
 
-def run(command, *, cwd=ROOT):
+def run(command: list[str], *, cwd: pathlib.Path = ROOT) -> float:
     start = time.perf_counter()
     completed = subprocess.run(
         command,
         cwd=cwd,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        capture_output=True,
         text=True,
         check=False,
     )
@@ -30,7 +30,7 @@ def run(command, *, cwd=ROOT):
     return elapsed
 
 
-def conda_runner():
+def conda_runner() -> str:
     for name in ("mamba", "micromamba"):
         path = shutil.which(name)
         if path:
@@ -38,7 +38,7 @@ def conda_runner():
     raise SystemExit("mamba or micromamba is required to benchmark against Picard")
 
 
-def write_sam(path, pairs):
+def write_sam(path: pathlib.Path, pairs: int) -> None:
     sequence = "ACGT" * 25
     qualities = "F" * len(sequence)
     ref_len = pairs * 2 + len(sequence) + 100
@@ -58,13 +58,14 @@ def write_sam(path, pairs):
             )
 
 
-def write_fake_rscript(path):
+def write_fake_rscript(path: pathlib.Path) -> None:
     path.write_text("#!/usr/bin/env sh\nexit 0\n", encoding="utf-8")
     path.chmod(0o755)
 
 
-def stable_sections(path):
-    lines = [line.rstrip("\n") for line in open(path, encoding="utf-8")]
+def stable_sections(path: pathlib.Path) -> tuple[tuple[str, str], list[str]]:
+    with open(path, encoding="utf-8") as handle:
+        lines = [line.rstrip("\n") for line in handle]
     metrics = None
     histogram = []
     for index, line in enumerate(lines):
@@ -80,10 +81,8 @@ def stable_sections(path):
     return metrics, histogram
 
 
-def main():
-    parser = argparse.ArgumentParser(
-        description="Benchmark turbo-picard CollectInsertSizeMetrics against Picard."
-    )
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Benchmark turbo-picard CollectInsertSizeMetrics against Picard.")
     parser.add_argument("--reads", type=int, default=100_000, help="reads to synthesize")
     parser.add_argument(
         "--conda-prefix",

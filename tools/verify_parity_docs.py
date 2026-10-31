@@ -1,12 +1,10 @@
 #!/usr/bin/env python3
-"""Verify parity documentation stays explicit and linked."""
 
 from __future__ import annotations
 
 import re
 import sys
 from pathlib import Path
-
 
 ROOT = Path(__file__).resolve().parents[1]
 PARITY_DOCS = ROOT / "docs" / "parity.rst"
@@ -32,7 +30,7 @@ def normalize(text: str) -> str:
     return re.sub(r"\s+", " ", text).strip().lower()
 
 
-def validate_parity_docs(
+def validate_parity_docs(  # noqa: PLR0917
     parity_docs: str,
     docs_index: str,
     readme: str,

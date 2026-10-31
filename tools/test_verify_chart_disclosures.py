@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-"""Tests for chart boundary disclosure checks."""
 
 from __future__ import annotations
 
@@ -7,7 +6,6 @@ import importlib.util
 import sys
 import unittest
 from pathlib import Path
-
 
 MODULE_PATH = Path(__file__).with_name("verify_chart_disclosures.py")
 SPEC = importlib.util.spec_from_file_location("verify_chart_disclosures", MODULE_PATH)
@@ -38,7 +36,7 @@ The CHART_OUTPUT / CHART files are lightweight PDF artifacts, not Picard-equival
             matrix_text=matrix,
         )
 
-        self.assertEqual(errors, [])
+        assert errors == []
 
     def test_disclosures_report_missing_readme_and_matrix_mentions(self) -> None:
         errors = verify_chart_disclosures.validate_chart_disclosures(
@@ -47,14 +45,8 @@ The CHART_OUTPUT / CHART files are lightweight PDF artifacts, not Picard-equival
             matrix_text='- name: CollectInsertSizeMetrics\n  native_scope: "Insert-size metrics and chart artifact."',
         )
 
-        self.assertIn(
-            "README chart disclosure missing lightweight PDF wording for CollectInsertSizeMetrics",
-            errors,
-        )
-        self.assertIn(
-            "command matrix native_scope missing lightweight PDF wording for CollectInsertSizeMetrics",
-            errors,
-        )
+        assert "README chart disclosure missing lightweight PDF wording for CollectInsertSizeMetrics" in errors
+        assert "command matrix native_scope missing lightweight PDF wording for CollectInsertSizeMetrics" in errors
 
 
 if __name__ == "__main__":

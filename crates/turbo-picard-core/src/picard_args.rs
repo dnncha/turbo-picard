@@ -1,23 +1,3 @@
-//! Picard-style `KEY=VALUE` argument normalisation.
-//!
-//! Picard accepts short aliases (`-I`), long options (`--INPUT`), and bare
-//! key/value pairs (`INPUT=in.bam`). Some short names mean different fields in
-//! different commands, so command-aware normalisation exists alongside the
-//! generic form.
-//!
-//! # Example
-//!
-//! ```
-//! use turbo_picard_core::picard_args::normalize_picard_args;
-//!
-//! let args = ["I=in.bam".to_string(), "O=out.bam".to_string()];
-//! let parsed = normalize_picard_args(&args)?;
-//!
-//! assert_eq!(parsed["INPUT"], vec!["in.bam".to_string()]);
-//! assert_eq!(parsed["OUTPUT"], vec!["out.bam".to_string()]);
-//! # Ok::<(), turbo_picard_core::picard_args::PicardArgError>(())
-//! ```
-
 use std::collections::BTreeMap;
 use std::fmt;
 use std::ops::Deref;
@@ -45,10 +25,6 @@ impl std::error::Error for PicardArgError {}
 
 pub type PicardArgMap = BTreeMap<String, Vec<String>>;
 
-/// Normalized Picard arguments with the command that produced them.
-///
-/// The command travels with the values so every extraction error can name the
-/// command it belongs to. Callers keep reading the map through [`Deref`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PicardArgs {
     command: String,
@@ -64,10 +40,6 @@ impl PicardArgs {
         self.typed_for(&self.command)
     }
 
-    /// Read these arguments as if they belonged to `command`.
-    ///
-    /// The override keeps explicit command names working for shared helpers
-    /// without giving up typed extraction.
     pub fn typed_for<'b>(&'b self, command: &'b str) -> CommandArgs<'b> {
         CommandArgs {
             command,
@@ -92,47 +64,10 @@ impl Deref for PicardArgs {
     }
 }
 
-/// Normalise the generic Picard aliases into canonical argument names.
-///
-/// Repeated keys accumulate values in input order, and parsed keys are sorted
-/// because the result keeps a [`BTreeMap`]. Use
-/// [`normalize_picard_args_for_command`] when a short alias is ambiguous.
-///
-/// # Example
-///
-/// ```
-/// use turbo_picard_core::picard_args::normalize_picard_args;
-///
-/// let args = ["-I".to_string(), "in.bam".to_string(), "M=metrics.txt".to_string()];
-/// let parsed = normalize_picard_args(&args)?;
-///
-/// assert_eq!(parsed["INPUT"], vec!["in.bam".to_string()]);
-/// assert_eq!(parsed["METRICS_FILE"], vec!["metrics.txt".to_string()]);
-/// # Ok::<(), turbo_picard_core::picard_args::PicardArgError>(())
-/// ```
 pub fn normalize_picard_args(args: &[String]) -> Result<PicardArgs, PicardArgError> {
     normalize_picard_args_with_aliases("Picard", args, canonical_key)
 }
 
-/// Normalise aliases using the option table for one Picard command.
-///
-/// The same short name can refer to different fields: `M` is `METRICS_FILE`
-/// for `MarkDuplicates` but `MINIMUM_PCT` for `CollectInsertSizeMetrics`.
-///
-/// # Example
-///
-/// ```
-/// use turbo_picard_core::picard_args::normalize_picard_args_for_command;
-///
-/// let args = ["M=0.05".to_string()];
-/// let parsed = normalize_picard_args_for_command("CollectInsertSizeMetrics", &args)?;
-/// assert_eq!(parsed["MINIMUM_PCT"], vec!["0.05".to_string()]);
-///
-/// let args = ["M=metrics.txt".to_string()];
-/// let parsed = normalize_picard_args_for_command("MarkDuplicates", &args)?;
-/// assert_eq!(parsed["METRICS_FILE"], vec!["metrics.txt".to_string()]);
-/// # Ok::<(), turbo_picard_core::picard_args::PicardArgError>(())
-/// ```
 pub fn normalize_picard_args_for_command(
     command: &str,
     args: &[String],
@@ -262,11 +197,25 @@ fn canonical_key_for_command(command: &str, key: &str) -> Result<String, PicardA
     let canonical = match (command, upper.as_str()) {
         (_, "I") => "INPUT",
         (_, "O") => "OUTPUT",
-        (_, "R") => "REFERENCE_SEQUENCE",
+        (_, "R") | ("CreateSequenceDictionary", "REFERENCE") => "REFERENCE_SEQUENCE",
         (_, "SO") => "SORT_ORDER",
         (_, "CO") => "COMMENT",
         ("MarkDuplicates", "M") => "METRICS_FILE",
-        ("MarkDuplicates", "AS") => "ASSUME_SORTED",
+        (
+            "MarkDuplicates"
+            | "SortSam"
+            | "MergeSamFiles"
+            | "CollectAlignmentSummaryMetrics"
+            | "CollectBaseDistributionByCycle"
+            | "CollectGcBiasMetrics"
+            | "CollectHsMetrics"
+            | "QualityScoreDistribution"
+            | "MeanQualityByCycle"
+            | "CollectInsertSizeMetrics"
+            | "CollectMultipleMetrics"
+            | "FixMateInformation",
+            "AS",
+        ) => "ASSUME_SORTED",
         ("MarkDuplicates", "ASO") => "ASSUME_SORT_ORDER",
         ("MarkDuplicates", "DS") => "DUPLICATE_SCORING_STRATEGY",
         ("MarkDuplicates", "MAX_FILE_HANDLES") => "MAX_FILE_HANDLES_FOR_READ_ENDS_MAP",
@@ -275,13 +224,19 @@ fn canonical_key_for_command(command: &str, key: &str) -> Result<String, PicardA
         ("MarkDuplicates", "PG_COMMAND") => "PROGRAM_GROUP_COMMAND_LINE",
         ("MarkDuplicates", "PG_NAME") => "PROGRAM_GROUP_NAME",
         ("MarkDuplicates", "PG_VERSION") => "PROGRAM_GROUP_VERSION",
-        ("SortSam" | "MergeSamFiles", "AS") => "ASSUME_SORTED",
-        ("CollectAlignmentSummaryMetrics", "AS") => "ASSUME_SORTED",
-        ("CollectAlignmentSummaryMetrics", "LEVEL") => "METRIC_ACCUMULATION_LEVEL",
-        ("CollectBaseDistributionByCycle", "AS") => "ASSUME_SORTED",
-        ("CollectBaseDistributionByCycle", "CHART") => "CHART_OUTPUT",
-        ("CollectGcBiasMetrics", "AS") => "ASSUME_SORTED",
-        ("CollectGcBiasMetrics", "CHART") => "CHART_OUTPUT",
+        (
+            "CollectAlignmentSummaryMetrics"
+            | "CollectInsertSizeMetrics"
+            | "CollectMultipleMetrics",
+            "LEVEL",
+        ) => "METRIC_ACCUMULATION_LEVEL",
+        (
+            "CollectBaseDistributionByCycle"
+            | "CollectGcBiasMetrics"
+            | "QualityScoreDistribution"
+            | "MeanQualityByCycle",
+            "CHART",
+        ) => "CHART_OUTPUT",
         ("CollectGcBiasMetrics", "S") => "SUMMARY_OUTPUT",
         ("CollectGcBiasMetrics", "WINDOW_SIZE") => "SCAN_WINDOW_SIZE",
         ("CollectGcBiasMetrics", "MGF") => "MINIMUM_GENOME_FRACTION",
@@ -289,22 +244,20 @@ fn canonical_key_for_command(command: &str, key: &str) -> Result<String, PicardA
         ("CollectHsMetrics", "BAIT" | "BI") => "BAIT_INTERVALS",
         ("CollectHsMetrics", "TARGET") => "TARGET_INTERVALS",
         ("CollectHsMetrics", "N") => "BAIT_SET_NAME",
-        ("CollectHsMetrics", "MQ") => "MINIMUM_MAPPING_QUALITY",
-        ("CollectHsMetrics", "Q") => "MINIMUM_BASE_QUALITY",
-        ("CollectHsMetrics", "CAP") => "COVERAGE_CAP",
-        ("CollectHsMetrics", "AS") => "ASSUME_SORTED",
-        ("FastqToSam", "F1") => "FASTQ",
+        ("CollectHsMetrics" | "CollectWgsMetrics", "MQ") => "MINIMUM_MAPPING_QUALITY",
+        ("CollectHsMetrics" | "CollectWgsMetrics", "Q") => "MINIMUM_BASE_QUALITY",
+        ("CollectHsMetrics" | "CollectWgsMetrics", "CAP") => "COVERAGE_CAP",
+        ("FastqToSam", "F1") | ("SamToFastq", "F") => "FASTQ",
         ("FastqToSam", "F2") => "FASTQ2",
         ("FastqToSam", "RG") => "READ_GROUP_NAME",
         ("FastqToSam", "SM") => "SAMPLE_NAME",
-        ("FastqToSam", "LB") => "LIBRARY_NAME",
+        ("FastqToSam", "LB") | ("RevertSam", "LIB") => "LIBRARY_NAME",
         ("FastqToSam", "PL") => "PLATFORM",
         ("FastqToSam", "PU") => "PLATFORM_UNIT",
         ("FastqToSam", "CN") => "SEQUENCING_CENTER",
         ("FastqToSam", "DS") => "DESCRIPTION",
         ("FastqToSam", "DT") => "RUN_DATE",
         ("FastqToSam", "PI") => "PREDICTED_INSERT_SIZE",
-        ("SamToFastq", "F") => "FASTQ",
         ("SamToFastq", "F2") => "SECOND_END_FASTQ",
         ("SamToFastq", "FU") => "UNPAIRED_FASTQ",
         ("SamToFastq", "Q") => "QUALITY",
@@ -317,29 +270,19 @@ fn canonical_key_for_command(command: &str, key: &str) -> Result<String, PicardA
         ("SamToFastq", "ODIR") => "OUTPUT_DIR",
         ("SamToFastq", "R1_MAX_BASES") => "READ1_MAX_BASES_TO_WRITE",
         ("SamToFastq", "R2_MAX_BASES") => "READ2_MAX_BASES_TO_WRITE",
-        ("QualityScoreDistribution" | "MeanQualityByCycle", "AS") => "ASSUME_SORTED",
-        ("QualityScoreDistribution" | "MeanQualityByCycle", "CHART") => "CHART_OUTPUT",
         ("QualityScoreDistribution", "PF") => "PF_READS_ONLY",
-        ("CollectInsertSizeMetrics", "AS") => "ASSUME_SORTED",
         ("CollectInsertSizeMetrics", "H" | "HISTOGRAM") => "HISTOGRAM_FILE",
         ("CollectInsertSizeMetrics", "M") => "MINIMUM_PCT",
-        ("CollectInsertSizeMetrics", "LEVEL") => "METRIC_ACCUMULATION_LEVEL",
-        ("CollectMultipleMetrics", "AS") => "ASSUME_SORTED",
         ("CollectMultipleMetrics", "EXT") => "FILE_EXTENSION",
-        ("CollectMultipleMetrics", "LEVEL") => "METRIC_ACCUMULATION_LEVEL",
-        ("CreateSequenceDictionary", "REFERENCE") => "REFERENCE_SEQUENCE",
         ("CreateSequenceDictionary", "AS") => "GENOME_ASSEMBLY",
         ("CreateSequenceDictionary", "UR") => "URI",
         ("CreateSequenceDictionary", "SP") => "SPECIES",
         ("CreateSequenceDictionary", "AN") => "ALT_NAMES",
-        ("CollectWgsMetrics", "MQ") => "MINIMUM_MAPPING_QUALITY",
-        ("CollectWgsMetrics", "Q") => "MINIMUM_BASE_QUALITY",
-        ("CollectWgsMetrics", "CAP") => "COVERAGE_CAP",
-        ("BedToIntervalList", "SD") => "SEQUENCE_DICTIONARY",
+        ("BedToIntervalList", "SD")
+        | ("UpdateVcfSequenceDictionary" | "SortVcf" | "MergeVcfs", "D" | "SD") => {
+            "SEQUENCE_DICTIONARY"
+        }
         ("ReplaceSamHeader", "H") => "HEADER",
-        ("UpdateVcfSequenceDictionary", "D" | "SD") => "SEQUENCE_DICTIONARY",
-        ("SortVcf", "D" | "SD") => "SEQUENCE_DICTIONARY",
-        ("MergeVcfs", "D" | "SD") => "SEQUENCE_DICTIONARY",
         ("IntervalListTools", "M") => "SUBDIVISION_MODE",
         ("IntervalListTools", "SI") => "SECOND_INPUT",
         ("IntervalListTools", "BRK") => "BREAK_BANDS_AT_MULTIPLES_OF",
@@ -350,7 +293,6 @@ fn canonical_key_for_command(command: &str, key: &str) -> Result<String, PicardA
         ("ValidateSamFile", "M") => "MODE",
         ("ValidateSamFile", "MO") => "MAX_OUTPUT",
         ("ValidateSamFile", "SMV") => "SKIP_MATE_VALIDATION",
-        ("FixMateInformation", "AS") => "ASSUME_SORTED",
         ("FixMateInformation", "MC") => "ADD_MATE_CIGAR",
         ("RevertSam", "OQ") => "RESTORE_ORIGINAL_QUALITIES",
         ("RevertSam", "OM") => "OUTPUT_MAP",
@@ -359,14 +301,12 @@ fn canonical_key_for_command(command: &str, key: &str) -> Result<String, PicardA
         ("RevertSam", "RV") => "ATTRIBUTE_TO_REVERSE",
         ("RevertSam", "RC") => "ATTRIBUTE_TO_REVERSE_COMPLEMENT",
         ("RevertSam", "ALIAS") => "SAMPLE_ALIAS",
-        ("RevertSam", "LIB") => "LIBRARY_NAME",
         _ => upper.as_str(),
     };
 
     Ok(canonical.to_string())
 }
 
-/// A typed reader over [`PicardArgs`] that keeps the command in every error.
 #[derive(Debug, Clone, Copy)]
 pub struct CommandArgs<'a> {
     command: &'a str,
@@ -382,7 +322,6 @@ impl<'a> CommandArgs<'a> {
         self.scalar(key).map(str::to_string)
     }
 
-    /// Reject keys outside `allowed`, naming this reader's command.
     pub fn reject_unknown(self, allowed: &[&str]) -> Result<(), CommandArgError> {
         for key in self.args.values.keys() {
             if !allowed.contains(&key.as_str()) {
@@ -528,7 +467,6 @@ impl fmt::Display for CommandArgError {
 
 impl std::error::Error for CommandArgError {}
 
-/// Picard's `SORT_ORDER` values, parsed once at the argument boundary.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SortOrder {
     Coordinate,

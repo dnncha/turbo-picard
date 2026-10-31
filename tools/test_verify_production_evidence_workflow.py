@@ -1,17 +1,15 @@
 from __future__ import annotations
 
 import importlib.util
-from pathlib import Path
 import sys
 import tempfile
 import unittest
-
+from pathlib import Path
 
 MODULE_PATH = Path(__file__).with_name("verify_production_evidence_workflow.py")
-SPEC = importlib.util.spec_from_file_location(
-    "verify_production_evidence_workflow", MODULE_PATH
-)
-assert SPEC is not None and SPEC.loader is not None
+SPEC = importlib.util.spec_from_file_location("verify_production_evidence_workflow", MODULE_PATH)
+assert SPEC is not None
+assert SPEC.loader is not None
 verify_production_evidence_workflow = importlib.util.module_from_spec(SPEC)
 sys.modules[SPEC.name] = verify_production_evidence_workflow
 SPEC.loader.exec_module(verify_production_evidence_workflow)
@@ -71,37 +69,25 @@ class ProductionEvidenceWorkflowTests(unittest.TestCase):
 
     def test_accepts_guarded_workflow(self) -> None:
         root = self.write_workflow(VALID_WORKFLOW)
-        self.assertEqual(
-            [],
-            verify_production_evidence_workflow.validate_production_evidence_workflow(
-                root
-            ),
-        )
+        assert verify_production_evidence_workflow.validate_production_evidence_workflow(root) == []
 
     def test_accepts_current_workflow(self) -> None:
-        self.assertEqual(
-            [], verify_production_evidence_workflow.validate_production_evidence_workflow()
-        )
+        assert verify_production_evidence_workflow.validate_production_evidence_workflow() == []
 
     def test_rejects_validator_after_download(self) -> None:
         root = self.write_workflow(
             VALID_WORKFLOW.replace(
                 "      - name: Validate dispatch inputs\n",
-                "      - name: Download and hash input\n"
-                "      - name: Validate dispatch inputs\n",
+                "      - name: Download and hash input\n      - name: Validate dispatch inputs\n",
             )
         )
-        errors = verify_production_evidence_workflow.validate_production_evidence_workflow(
-            root
-        )
-        self.assertIn("Dispatch validation must run before input download", errors)
+        errors = verify_production_evidence_workflow.validate_production_evidence_workflow(root)
+        assert "Dispatch validation must run before input download" in errors
 
     def test_rejects_missing_measurement_dependency(self) -> None:
         root = self.write_workflow(VALID_WORKFLOW.replace("    needs: validate\n", ""))
-        errors = verify_production_evidence_workflow.validate_production_evidence_workflow(
-            root
-        )
-        self.assertIn("Production evidence measurement must depend on validation", errors)
+        errors = verify_production_evidence_workflow.validate_production_evidence_workflow(root)
+        assert "Production evidence measurement must depend on validation" in errors
 
     def test_rejects_missing_path_trigger(self) -> None:
         root = self.write_workflow(
@@ -110,15 +96,9 @@ class ProductionEvidenceWorkflowTests(unittest.TestCase):
                 "",
             )
         )
-        errors = verify_production_evidence_workflow.validate_production_evidence_workflow(
-            root
-        )
-        self.assertTrue(
-            any(
-                "path triggers must include tools/test_verify_production_evidence_workflow.py"
-                in error
-                for error in errors
-            )
+        errors = verify_production_evidence_workflow.validate_production_evidence_workflow(root)
+        assert any(
+            "path triggers must include tools/test_verify_production_evidence_workflow.py" in error for error in errors
         )
 
 
