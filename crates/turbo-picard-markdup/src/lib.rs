@@ -1412,7 +1412,10 @@ fn representative_external_name<'a>(
         .map(|(name, _)| *name)
 }
 
-fn read_location_tie_break(read_name_parser: &ReadNameLocationParser, name: &[u8]) -> (i64, i64, i64) {
+fn read_location_tie_break(
+    read_name_parser: &ReadNameLocationParser,
+    name: &[u8],
+) -> (i64, i64, i64) {
     read_name_parser
         .coordinates(name)
         .unwrap_or(UNPARSED_READ_LOCATION)
@@ -3888,8 +3891,12 @@ mod tests {
         ];
 
         let mut read_ends = read_ends_for_records(&records);
-        let representative_index =
-            best_duplicate_representative_index(&[0, 1, 2, 3], &records, &mut read_ends, &ReadNameLocationParser::Default);
+        let representative_index = best_duplicate_representative_index(
+            &[0, 1, 2, 3],
+            &records,
+            &mut read_ends,
+            &ReadNameLocationParser::Default,
+        );
         assert_eq!(representative_index, Some(0));
     }
 
@@ -3902,8 +3909,12 @@ mod tests {
         ];
 
         let mut read_ends = read_ends_for_records(&records);
-        let representative_index =
-            best_duplicate_representative_index(&[0, 1, 2], &records, &mut read_ends, &ReadNameLocationParser::Default);
+        let representative_index = best_duplicate_representative_index(
+            &[0, 1, 2],
+            &records,
+            &mut read_ends,
+            &ReadNameLocationParser::Default,
+        );
         assert_eq!(representative_index, Some(0));
     }
 
@@ -4445,7 +4456,12 @@ mod tests {
         read_ends[1].quality_score = 100;
 
         assert_eq!(
-            best_duplicate_representative_index(&[0, 1], &records, &mut read_ends, &ReadNameLocationParser::Default),
+            best_duplicate_representative_index(
+                &[0, 1],
+                &records,
+                &mut read_ends,
+                &ReadNameLocationParser::Default
+            ),
             Some(1)
         );
     }
