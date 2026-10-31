@@ -53,7 +53,7 @@ fn explain_text_contract_is_visible() {
 
     let output = command.output().expect("explain runs");
     assert!(output.status.success());
-    assert!(output.stderr.is_empty());
+    assert_eq!(output.stderr, [] as [u8; 0]);
 
     expect![[r"
         inspection_only=true option_support=not-checked output_manifest=declared-arguments-only require_native=true

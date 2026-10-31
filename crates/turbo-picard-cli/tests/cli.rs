@@ -8134,7 +8134,7 @@ fn viewsam_header_only_omits_sam_records() {
 
     let output = fs::read_to_string(output_sam).expect("ViewSam header-only output exists");
     assert!(output.contains("@SQ\tSN:chr1\tLN:1000"));
-    assert!(record_names(&output).is_empty());
+    assert_eq!(record_names(&output), [] as [&str; 0]);
 }
 
 #[test]

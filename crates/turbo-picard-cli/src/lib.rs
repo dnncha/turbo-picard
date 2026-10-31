@@ -21464,7 +21464,7 @@ mod tests {
     fn wgs_depth_window_is_bounded_by_live_alignments_not_contig_length() {
         let reference_contigs = vec![("chr1".to_string(), 250_000_000usize)];
         let mut summary = WgsMetricsSummary::new(&reference_contigs, None, 250);
-        assert!(summary.active_depths.is_empty());
+        assert_eq!(summary.active_depths, [] as [u16; 0]);
 
         let qualities = vec![30_u8; 150];
         summary
