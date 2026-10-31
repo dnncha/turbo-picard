@@ -1,23 +1,9 @@
-//! Synthetic external-sort-core benchmark, not a genomics command benchmark.
-//!
-//! Build the same harness against both source revisions with:
-//! rustc --edition=2024 -C opt-level=3 -A dead_code tools/bench_external_sort.rs
-//! rustc --edition=2024 --test -A dead_code tools/bench_external_sort.rs
-//! Arguments: NEW_OUTPUT_DIR SHAPE RECORDS RUN_RECORD_LIMIT FAN_IN.
-//! SHAPE is random, ordered, reversed, or equal. Outputs are never overwritten.
-
-#[path = "../crates/turbo-picard-core/src/external_sort.rs"]
-mod external_sort;
-#[path = "../crates/turbo-picard-core/src/merge_tree.rs"]
-mod merge_tree;
-#[path = "../crates/turbo-picard-core/src/temp_runs.rs"]
-mod temp_runs;
-
-use external_sort::{ExternalSortConfig, ExternalSorter};
 use std::fs::{self, OpenOptions};
 use std::io::{BufWriter, Write};
 use std::path::PathBuf;
 use std::time::Instant;
+use turbo_picard_core::external_sort::{ExternalSortConfig, ExternalSorter};
+use turbo_picard_core::sort_error::SortError;
 
 fn run() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<_> = std::env::args().skip(1).collect();
@@ -53,7 +39,9 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let mut state = 1_u64;
     let start = Instant::now();
     for ordinal in 0..records {
-        state = state.wrapping_mul(6364136223846793005).wrapping_add(1);
+        state = state
+            .wrapping_mul(6_364_136_223_846_793_005)
+            .wrapping_add(1);
         let value = match shape {
             "ordered" => ordinal as u64,
             "reversed" => (records - ordinal) as u64,
@@ -74,22 +62,18 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             .key
             .as_slice()
             .try_into()
-            .map_err(|_| "invalid key size")?;
-        if let Some((old_key, old_ordinal)) = previous {
-            if (old_key, old_ordinal) >= (key, item.ordinal) {
-                return Err("output is not in strict key/ordinal order".to_string());
-            }
+            .map_err(|_| SortError::from("invalid key size".to_string()))?;
+        if let Some((old_key, old_ordinal)) = previous
+            && (old_key, old_ordinal) >= (key, item.ordinal)
+        {
+            return Err(SortError::from(
+                "output is not in strict key/ordinal order".to_string(),
+            ));
         }
         previous = Some((key, item.ordinal));
-        output
-            .write_all(&item.key)
-            .map_err(|error| error.to_string())?;
-        output
-            .write_all(&item.ordinal.to_le_bytes())
-            .map_err(|error| error.to_string())?;
-        output
-            .write_all(&item.payload)
-            .map_err(|error| error.to_string())?;
+        output.write_all(&item.key)?;
+        output.write_all(&item.ordinal.to_le_bytes())?;
+        output.write_all(&item.payload)?;
         emitted += 1;
         Ok(())
     })?;

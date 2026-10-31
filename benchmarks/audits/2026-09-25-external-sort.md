@@ -28,7 +28,7 @@ This is a **synthetic external-sort-core experiment**, not a whole-MarkDuplicate
 
 Ordered input is effectively unchanged; do not promote noise into a win. The equal-key candidate had a 0.160019-second outlier, although its median improved. The raw bundle retains every repetition. The multi-pass case wrote 40,140,800 scratch bytes instead of 41,779,200, creating 22 runs instead of 24. This exact write reduction is independent of timer noise.
 
-Most cases contain 262,144 records with 16-byte keys and 64-byte payloads. The multi-pass case contains 139,264 records. Spill cases use 8,192-record runs; the multi-pass fan-in is four and the other merge fan-in is 32. Full reproduction lives in `tools/bench_external_sort.rs` and `.github/workflows/external-sort-performance.yml`.
+Most cases contain 262,144 records with 16-byte keys and 64-byte payloads. The multi-pass case contains 139,264 records. Spill cases use 8,192-record runs; the multi-pass fan-in is four and the other merge fan-in is 32. Reproduce with `cargo run --release -p turbo-picard-core --example bench_external_sort -- NEW_OUTPUT_DIR SHAPE RECORDS RUN_RECORD_LIMIT FAN_IN`, where SHAPE is random, ordered, reversed or equal.
 
 ## Higher-priority remaining findings
 
