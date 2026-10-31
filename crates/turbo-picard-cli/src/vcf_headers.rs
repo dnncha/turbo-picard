@@ -1,4 +1,5 @@
 use super::{VcfDocument, VcfRecord, stream_vcf_records};
+use crate::command_error::{CommandError, unsupported};
 use std::collections::{BTreeMap, BTreeSet};
 use thiserror::Error;
 
@@ -16,8 +17,6 @@ pub(super) enum VcfHeadersError {
     MissingInputs,
     #[error("incompatible VCF header versions")]
     IncompatibleVersions,
-    #[error("unsupported VCF header Type conflict for {kind} {id}")]
-    TypeConflict { kind: String, id: String },
     #[error("GatherVcfs contig {contig} is missing from sequence dictionary")]
     ContigMissing { contig: String },
     #[error("GatherVcfs inputs are out of order or overlap at {contig}:{position} in {input}")]
@@ -31,13 +30,7 @@ pub(super) enum VcfHeadersError {
     #[error("GatherVcfs {kind} {id} is not defined in the output header")]
     UndefinedHeader { kind: &'static str, id: String },
     #[error("{0}")]
-    Stream(String),
-}
-
-impl From<VcfHeadersError> for String {
-    fn from(error: VcfHeadersError) -> Self {
-        error.to_string()
-    }
+    Command(CommandError),
 }
 
 fn attributes(value: &str) -> Result<Vec<(&str, &str)>, VcfHeadersError> {
@@ -140,10 +133,11 @@ pub(super) fn merge(documents: &[VcfDocument]) -> Result<VcfDocument, VcfHeaders
                             .map(|(_, value)| (*value).to_string())
                     };
                     if get(&old, "Type") != get(&new, "Type") {
-                        return Err(VcfHeadersError::TypeConflict {
-                            kind: identity.0,
-                            id: identity.1.unwrap_or_default(),
-                        });
+                        return Err(VcfHeadersError::Command(unsupported(format!(
+                            "unsupported VCF header Type conflict for {} {}",
+                            identity.0,
+                            identity.1.unwrap_or_default()
+                        ))));
                     }
                     if get(&old, "Number") != get(&new, "Number") {
                         let promoted = old
@@ -180,11 +174,11 @@ pub(super) fn validate_gather(
         let mut first = true;
         stream_vcf_records(input, |record| {
             validate_gather_record(&order, &definitions, input, &mut previous, first, &record)
-                .map_err(String::from)?;
+                .map_err(CommandError::from)?;
             first = false;
             Ok(())
         })
-        .map_err(VcfHeadersError::Stream)?;
+        .map_err(VcfHeadersError::Command)?;
     }
     Ok(())
 }

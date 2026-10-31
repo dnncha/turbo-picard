@@ -16,12 +16,6 @@ pub enum HtsIoError {
     Htslib(#[from] rust_htslib::errors::Error),
 }
 
-impl From<HtsIoError> for String {
-    fn from(error: HtsIoError) -> Self {
-        error.to_string()
-    }
-}
-
 pub fn base_qualities(record: &bam::Record) -> &[u8] {
     let qualities = record.qual();
     if qualities.first() == Some(&255) {

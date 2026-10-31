@@ -31,12 +31,6 @@ pub enum CmmPipelineError {
     BamReaderPanicked,
 }
 
-impl From<CmmPipelineError> for String {
-    fn from(error: CmmPipelineError) -> Self {
-        error.to_string()
-    }
-}
-
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[expect(
     clippy::struct_excessive_bools,

@@ -2,9 +2,11 @@
 
 mod agent_contract;
 mod cmm_pipeline;
+mod command_error;
 mod mcp;
 
 use agent_contract::declared_outputs;
+use command_error::{CommandError, unsupported};
 mod hs_metrics;
 mod sam_sort;
 mod sam_structure;
@@ -821,7 +823,7 @@ pub fn run_cli(program_name: &str, raw_args: impl IntoIterator<Item = String>) -
                     "Picard command {command} requires upstream Picard; set TURBO_PICARD_FALLBACK_COMMAND or install Picard 3.4.0"
                 );
             } else {
-                eprintln!("unsupported Picard command: {command}");
+                eprintln!("{}", CommandError::unsupported_command(command));
             }
             2
         }
@@ -1015,7 +1017,7 @@ fn run_doctor(program_name: &str) {
     );
 }
 
-fn run_capabilities(args: &[String]) -> Result<(), String> {
+fn run_capabilities(args: &[String]) -> Result<(), CommandError> {
     let (format, remaining) = parse_report_args("capabilities", args)?;
     let mut entries = command_matrix_entries();
     let filtered = match remaining.as_slice() {
@@ -1023,15 +1025,14 @@ fn run_capabilities(args: &[String]) -> Result<(), String> {
         [flag, command] if flag == "--command" => {
             entries.retain(|entry| entry.name == *command);
             if entries.is_empty() {
-                return Err(format!("unsupported Picard command: {command}"));
+                return Err(CommandError::unsupported_command(command));
             }
             true
         }
         _ => {
-            return Err(format!(
-                "unexpected capabilities argument: {}",
-                remaining.join(" ")
-            ));
+            return Err(
+                format!("unexpected capabilities argument: {}", remaining.join(" ")).into(),
+            );
         }
     };
     match format {
@@ -1118,7 +1119,7 @@ fn print_capabilities_json(entries: &[CommandMatrixEntry], include_benchmarks: b
     println!("}}");
 }
 
-fn run_explain(args: &[String]) -> Result<(), String> {
+fn run_explain(args: &[String]) -> Result<(), CommandError> {
     let (format, args) = parse_explain_args(args)?;
     let command = args
         .first()
@@ -1140,7 +1141,7 @@ fn run_explain(args: &[String]) -> Result<(), String> {
             print_explain_report(&report, format);
             return Ok(());
         }
-        return Err(format!("unsupported Picard command: {command}"));
+        return Err(CommandError::unsupported_command(command));
     };
 
     let report = ExplainReport {
@@ -1163,7 +1164,7 @@ fn run_explain(args: &[String]) -> Result<(), String> {
     Ok(())
 }
 
-fn run_trial(program_name: &str, args: &[String]) -> Result<(), String> {
+fn run_trial(program_name: &str, args: &[String]) -> Result<(), CommandError> {
     let (format, args) = parse_trial_args(args)?;
     let command = args
         .first()
@@ -1188,7 +1189,7 @@ fn run_trial(program_name: &str, args: &[String]) -> Result<(), String> {
             print_trial_report(&report, format);
             return Ok(());
         }
-        return Err(format!("unsupported Picard command: {command}"));
+        return Err(CommandError::unsupported_command(command));
     };
 
     let declared_outputs = declared_outputs(command, &args[1..])?;
@@ -1247,18 +1248,18 @@ struct TrialReport {
     declared_outputs: Vec<String>,
 }
 
-fn parse_explain_args(args: &[String]) -> Result<(ExplainFormat, Vec<String>), String> {
+fn parse_explain_args(args: &[String]) -> Result<(ExplainFormat, Vec<String>), CommandError> {
     parse_report_args("explain", args)
 }
 
-fn parse_trial_args(args: &[String]) -> Result<(ExplainFormat, Vec<String>), String> {
+fn parse_trial_args(args: &[String]) -> Result<(ExplainFormat, Vec<String>), CommandError> {
     parse_report_args("trial", args)
 }
 
 fn parse_report_args(
     report_name: &str,
     args: &[String],
-) -> Result<(ExplainFormat, Vec<String>), String> {
+) -> Result<(ExplainFormat, Vec<String>), CommandError> {
     let mut format = ExplainFormat::Text;
     let mut command_args = Vec::new();
     let mut index = 0usize;
@@ -1270,14 +1271,16 @@ fn parse_report_args(
             }
             "--format" => {
                 let Some(value) = args.get(index + 1) else {
-                    return Err(format!("missing {report_name} format after --format"));
+                    return Err(format!("missing {report_name} format after --format").into());
                 };
                 format = parse_report_format(report_name, value)?;
                 index += 1;
             }
             "--format=text" | "FORMAT=text" | "FORMAT=TEXT" => format = ExplainFormat::Text,
             value if value.starts_with("--format=") => {
-                return Err(format!("unsupported {report_name} format option: {value}"));
+                return Err(unsupported(format!(
+                    "unsupported {report_name} format option: {value}"
+                )));
             }
             _ => command_args.push(arg.clone()),
         }
@@ -1287,13 +1290,13 @@ fn parse_report_args(
     Ok((format, command_args))
 }
 
-fn parse_report_format(report_name: &str, value: &str) -> Result<ExplainFormat, String> {
+fn parse_report_format(report_name: &str, value: &str) -> Result<ExplainFormat, CommandError> {
     match value {
         "json" | "JSON" => Ok(ExplainFormat::Json),
         "text" | "TEXT" => Ok(ExplainFormat::Text),
-        _ => Err(format!(
+        _ => Err(unsupported(format!(
             "unsupported {report_name} format option: --format {value}"
-        )),
+        ))),
     }
 }
 
@@ -1721,14 +1724,13 @@ Output fields:
     );
 }
 
-fn run_acceleration_status() -> Result<(), String> {
+fn run_acceleration_status() -> Result<(), CommandError> {
     let policy = accelerator_policy()?;
     print_acceleration_status_lines_for_policy(&policy);
 
     if policy == "gpu-required" {
         return Err(
-            "TURBO_PICARD_ACCELERATOR=gpu-required was set, but this build has no production GPU backend"
-                .to_string(),
+            "TURBO_PICARD_ACCELERATOR=gpu-required was set, but this build has no production GPU backend".into(),
         );
     }
 
@@ -1766,26 +1768,26 @@ fn print_acceleration_status_lines_for_policy(policy: &str) {
     println!("gpu_acceleration=not-enabled");
 }
 
-fn accelerator_policy() -> Result<String, String> {
+fn accelerator_policy() -> Result<String, CommandError> {
     match env::var("TURBO_PICARD_ACCELERATOR") {
         Ok(value) => {
             let normalized = value.trim().to_ascii_lowercase();
             match normalized.as_str() {
                 "" => Ok("auto".to_string()),
                 "auto" | "cpu" | "off" | "gpu-required" => Ok(normalized),
-                _ => Err(format!(
+                _ => Err(unsupported(format!(
                     "unsupported TURBO_PICARD_ACCELERATOR={value}; use auto, cpu, off, or gpu-required"
-                )),
+                ))),
             }
         }
         Err(env::VarError::NotPresent) => Ok("auto".to_string()),
         Err(env::VarError::NotUnicode(_)) => {
-            Err("TURBO_PICARD_ACCELERATOR must be valid UTF-8".to_string())
+            Err("TURBO_PICARD_ACCELERATOR must be valid UTF-8".into())
         }
     }
 }
 
-fn env_bool(name: &str) -> Result<Option<bool>, String> {
+fn env_bool(name: &str) -> Result<Option<bool>, CommandError> {
     match env::var(name) {
         Ok(value) => {
             let normalized = value.trim().to_ascii_lowercase();
@@ -1793,13 +1795,13 @@ fn env_bool(name: &str) -> Result<Option<bool>, String> {
                 "" => Ok(None),
                 "1" | "true" | "yes" | "on" => Ok(Some(true)),
                 "0" | "false" | "no" | "off" => Ok(Some(false)),
-                _ => Err(format!(
+                _ => Err(unsupported(format!(
                     "unsupported {name}={value}; use true/false, 1/0, yes/no, or on/off"
-                )),
+                ))),
             }
         }
         Err(env::VarError::NotPresent) => Ok(None),
-        Err(env::VarError::NotUnicode(_)) => Err(format!("{name} must be valid UTF-8")),
+        Err(env::VarError::NotUnicode(_)) => Err(format!("{name} must be valid UTF-8").into()),
     }
 }
 
@@ -2463,13 +2465,12 @@ Supported options:
     );
 }
 
-fn run_markduplicates(args: &[String]) -> Result<(), String> {
+fn run_markduplicates(args: &[String]) -> Result<(), CommandError> {
     let picard_args = normalize_picard_args_for_command("MarkDuplicates", args)
         .map_err(|error| error.to_string())?;
-    let config =
-        MarkDuplicatesConfig::try_from_args(&picard_args).map_err(|error| error.to_string())?;
+    let config = MarkDuplicatesConfig::try_from_args(&picard_args)?;
 
-    turbo_picard_markdup::run(&config).map_err(|error| error.to_string())?;
+    turbo_picard_markdup::run(&config)?;
     Ok(())
 }
 
@@ -2486,44 +2487,28 @@ struct SortSamConfig {
 }
 
 impl SortSamConfig {
-    fn try_from_args(args: &PicardArgs) -> Result<Self, String> {
+    fn try_from_args(args: &PicardArgs) -> Result<Self, CommandError> {
         let typed = args.typed();
-        let input = typed
-            .required_string("INPUT")
-            .map_err(|error| error.to_string())?;
-        let output = typed
-            .required_string("OUTPUT")
-            .map_err(|error| error.to_string())?;
-        let compression_level = typed
-            .optional_u32("COMPRESSION_LEVEL")
-            .map_err(|error| error.to_string())?;
+        let input = typed.required_string("INPUT")?;
+        let output = typed.required_string("OUTPUT")?;
+        let compression_level = typed.optional_u32("COMPRESSION_LEVEL")?;
         let max_records_in_ram = typed
-            .optional_u32("MAX_RECORDS_IN_RAM")
-            .map_err(|error| error.to_string())?
+            .optional_u32("MAX_RECORDS_IN_RAM")?
             .map_or(500_000, |value| value as usize);
         let tmp_dir = typed
-            .optional_string("TMP_DIR")
-            .map_err(|error| error.to_string())?
+            .optional_string("TMP_DIR")?
             .filter(|value| !value.trim().is_empty())
             .map(std::path::PathBuf::from);
-        let create_index = typed
-            .optional_bool("CREATE_INDEX")
-            .map_err(|error| error.to_string())?
-            .unwrap_or(false);
-        let create_md5_file = typed
-            .optional_bool("CREATE_MD5_FILE")
-            .map_err(|error| error.to_string())?
-            .unwrap_or(false);
-        let sort_order_value = typed
-            .required_string("SORT_ORDER")
-            .map_err(|error| error.to_string())?;
+        let create_index = typed.optional_bool("CREATE_INDEX")?.unwrap_or(false);
+        let create_md5_file = typed.optional_bool("CREATE_MD5_FILE")?.unwrap_or(false);
+        let sort_order_value = typed.required_string("SORT_ORDER")?;
         let sort_order = match SortOrder::parse(&sort_order_value) {
             Some(SortOrder::Coordinate) => SortOrder::Coordinate,
             Some(SortOrder::QueryName) => SortOrder::QueryName,
             _ => {
-                return Err(format!(
+                return Err(unsupported(format!(
                     "unsupported SortSam SORT_ORDER: {sort_order_value}"
-                ));
+                )));
             }
         };
 
@@ -2540,13 +2525,13 @@ impl SortSamConfig {
     }
 }
 
-fn run_sortsam(args: &[String]) -> Result<(), String> {
+fn run_sortsam(args: &[String]) -> Result<(), CommandError> {
     let args =
         normalize_picard_args_for_command("SortSam", args).map_err(|error| error.to_string())?;
     reject_unsupported_sortsam_args(&args)?;
     let config = SortSamConfig::try_from_args(&args)?;
     if config.create_index && config.sort_order != SortOrder::Coordinate {
-        return Err("SortSam CREATE_INDEX=true requires SORT_ORDER=coordinate".to_string());
+        return Err("SortSam CREATE_INDEX=true requires SORT_ORDER=coordinate".into());
     }
     let input = config.input;
     let output = config.output;
@@ -2583,7 +2568,7 @@ fn run_sortsam(args: &[String]) -> Result<(), String> {
     let header = sorted_header(reader.header(), sort_order);
     let format = output_format(&output)?;
     if create_index && format != bam::Format::Bam {
-        return Err("SortSam CREATE_INDEX=true requires BAM output".to_string());
+        return Err("SortSam CREATE_INDEX=true requires BAM output".into());
     }
 
     if input_is_sorted(&input, sort_order, reference.as_deref())? {
@@ -2630,7 +2615,11 @@ fn run_sortsam(args: &[String]) -> Result<(), String> {
     })?;
     drop(writer);
 
-    write_requested_sidecars(&output, create_md5_file, create_index)
+    Ok(write_requested_sidecars(
+        &output,
+        create_md5_file,
+        create_index,
+    )?)
 }
 
 fn try_raw_copy_sortsam(
@@ -2639,7 +2628,7 @@ fn try_raw_copy_sortsam(
     sort_order: SortOrder,
     compression_level: Option<u32>,
     reference: Option<&str>,
-) -> Result<bool, String> {
+) -> Result<bool, CommandError> {
     if compression_level.is_some()
         || hts_io::path_format(input) != hts_io::path_format(output)
         || !hts_io::is_hts_container_input(input)
@@ -2667,7 +2656,7 @@ fn try_raw_copy_sortsam(
     Ok(true)
 }
 
-fn run_cleansam(args: &[String]) -> Result<(), String> {
+fn run_cleansam(args: &[String]) -> Result<(), CommandError> {
     let args =
         normalize_picard_args_for_command("CleanSam", args).map_err(|error| error.to_string())?;
     reject_unsupported_cleansam_args(&args)?;
@@ -2694,7 +2683,7 @@ fn run_cleansam(args: &[String]) -> Result<(), String> {
         .collect::<Vec<_>>();
     let format = output_format_for(&output, "CleanSam")?;
     if create_index && format != bam::Format::Bam {
-        return Err("CleanSam CREATE_INDEX=true requires BAM output".to_string());
+        return Err("CleanSam CREATE_INDEX=true requires BAM output".into());
     }
     let mut writer = bam_writer_for_path_with_reference(
         &output,
@@ -2710,10 +2699,14 @@ fn run_cleansam(args: &[String]) -> Result<(), String> {
     }
     drop(writer);
 
-    write_requested_sidecars(&output, create_md5_file, create_index)
+    Ok(write_requested_sidecars(
+        &output,
+        create_md5_file,
+        create_index,
+    )?)
 }
 
-fn run_cleansam_sam_text(input: &str, output: &str) -> Result<(), String> {
+fn run_cleansam_sam_text(input: &str, output: &str) -> Result<(), CommandError> {
     let file = fs::File::open(input).map_err(|error| error.to_string())?;
     let mut reader = BufReader::with_capacity(1024 * 1024, file);
     let mut writer = BufWriter::with_capacity(
@@ -2773,21 +2766,21 @@ fn run_cleansam_sam_text(input: &str, output: &str) -> Result<(), String> {
             .write_all(&output_buffer)
             .map_err(|error| error.to_string())?;
     }
-    writer.flush().map_err(|error| error.to_string())
+    Ok(writer.flush().map_err(|error| error.to_string())?)
 }
 
 fn append_cleaned_sam_text_record(
     output: &mut Vec<u8>,
     line: &str,
     target_lengths: &BTreeMap<String, u64>,
-) -> Result<(), String> {
+) -> Result<(), CommandError> {
     let line = line.trim_end_matches(['\r', '\n']);
     if append_cleaned_simple_sam_text_record(output, line, target_lengths)? {
         return Ok(());
     }
     let fields = line.split('\t').collect::<Vec<_>>();
     if fields.len() < 11 {
-        return Err("malformed CleanSam SAM record".to_string());
+        return Err("malformed CleanSam SAM record".into());
     }
     let flags = fields[1]
         .parse::<u16>()
@@ -2804,7 +2797,9 @@ fn append_cleaned_sam_text_record(
             .map_err(|_| "malformed CleanSam SAM position".to_string())?;
         let start = pos.saturating_sub(1);
         if start >= target_len {
-            return Err("unsupported CleanSam alignment starting beyond reference end".to_string());
+            return Err(unsupported(
+                "unsupported CleanSam alignment starting beyond reference end",
+            ));
         }
         if let Some(cleaned) = clean_cigar_text(fields[5], start, target_len)? {
             new_cigar = Some(cleaned);
@@ -2829,7 +2824,7 @@ fn append_cleaned_simple_sam_text_record(
     output: &mut Vec<u8>,
     line: &str,
     target_lengths: &BTreeMap<String, u64>,
-) -> Result<bool, String> {
+) -> Result<bool, CommandError> {
     let Some(fields) = split_exact_11_tab_fields(line) else {
         return Ok(false);
     };
@@ -2863,7 +2858,9 @@ fn append_cleaned_simple_sam_text_record(
         .map_err(|_| "malformed CleanSam SAM position".to_string())?;
     let start = pos.saturating_sub(1);
     if start >= target_len {
-        return Err("unsupported CleanSam alignment starting beyond reference end".to_string());
+        return Err(unsupported(
+            "unsupported CleanSam alignment starting beyond reference end",
+        ));
     }
     let reference_end = start.saturating_add(cigar_len);
     if reference_end <= target_len {
@@ -3062,7 +3059,7 @@ fn run_sortsam_sam_text(
     sort_order: SortOrder,
     tmp_dir: &Path,
     max_records_in_ram: usize,
-) -> Result<(), String> {
+) -> Result<(), CommandError> {
     let file = fs::File::open(input).map_err(|error| error.to_string())?;
     let mut reader = BufReader::with_capacity(1024 * 1024, file);
     let mut header_lines = Vec::<String>::new();
@@ -3107,7 +3104,7 @@ fn run_sortsam_sam_text(
     );
     write_sorted_sam_text_header(&mut writer, &header_lines, sort_order)?;
     sorter.finish_into(|record| writer.write_all(&record.payload).map_err(Into::into))?;
-    writer.flush().map_err(|error| error.to_string())
+    Ok(writer.flush().map_err(|error| error.to_string())?)
 }
 
 struct SamTextSortRecord {
@@ -3243,7 +3240,7 @@ fn write_sorted_sam_text_header(
     Ok(())
 }
 
-fn run_mergesamfiles(args: &[String]) -> Result<(), String> {
+fn run_mergesamfiles(args: &[String]) -> Result<(), CommandError> {
     let args = normalize_picard_args_for_command("MergeSamFiles", args)
         .map_err(|error| error.to_string())?;
     reject_unsupported_mergesamfiles_args(&args)?;
@@ -3265,15 +3262,19 @@ fn run_mergesamfiles(args: &[String]) -> Result<(), String> {
         "coordinate" => SortOrder::Coordinate,
         "queryname" => SortOrder::QueryName,
         "unsorted" => SortOrder::Unsorted,
-        value => return Err(format!("unsupported MergeSamFiles SORT_ORDER: {value}")),
+        value => {
+            return Err(unsupported(format!(
+                "unsupported MergeSamFiles SORT_ORDER: {value}"
+            )));
+        }
     };
     if create_index && sort_order != SortOrder::Coordinate {
-        return Err("MergeSamFiles CREATE_INDEX=true requires SORT_ORDER=coordinate".to_string());
+        return Err("MergeSamFiles CREATE_INDEX=true requires SORT_ORDER=coordinate".into());
     }
 
     let format = output_format_for(&output, "MergeSamFiles")?;
     if create_index && format != bam::Format::Bam {
-        return Err("MergeSamFiles CREATE_INDEX=true requires BAM output".to_string());
+        return Err("MergeSamFiles CREATE_INDEX=true requires BAM output".into());
     }
 
     let reference = picard_reference(&args)?;
@@ -3306,7 +3307,7 @@ fn run_mergesamfiles(args: &[String]) -> Result<(), String> {
             &merge_plan.inputs,
             reference.as_deref(),
             interval_filter.as_ref(),
-            |record| writer.write(&record).map_err(|error| error.to_string()),
+            |record| Ok(writer.write(&record).map_err(|error| error.to_string())?),
         )?;
     } else {
         let run_reader =
@@ -3334,37 +3335,41 @@ fn run_mergesamfiles(args: &[String]) -> Result<(), String> {
     }
     drop(writer);
 
-    write_requested_sidecars(&output, create_md5_file, create_index)
+    Ok(write_requested_sidecars(
+        &output,
+        create_md5_file,
+        create_index,
+    )?)
 }
 
-fn run_buildbamindex(args: &[String]) -> Result<(), String> {
+fn run_buildbamindex(args: &[String]) -> Result<(), CommandError> {
     let args = normalize_picard_args_for_command("BuildBamIndex", args)
         .map_err(|error| error.to_string())?;
     reject_unsupported_buildbamindex_args(&args)?;
     let input = required_scalar_for(&args, "INPUT", "BuildBamIndex")?;
     let output = optional_scalar(&args, "OUTPUT")?.unwrap_or_else(|| picard_bai_path(&input));
     if !has_extension(&input, "bam") {
-        return Err(format!(
+        return Err(unsupported(format!(
             "unsupported BuildBamIndex input format for {input}; expected .bam"
-        ));
+        )));
     }
 
     let reader = open_bam_reader(&input).map_err(|error| error.clone())?;
     if header_sort_order(reader.header()).as_deref() != Some("coordinate") {
-        return Err("BuildBamIndex requires coordinate-sorted BAM input".to_string());
+        return Err("BuildBamIndex requires coordinate-sorted BAM input".into());
     }
     drop(reader);
 
-    index::build(
+    Ok(index::build(
         &input,
         Some(&output),
         index::Type::Bai,
         turbo_picard_core::bgzf_threads::htslib_worker_threads(),
     )
-    .map_err(|error| error.to_string())
+    .map_err(|error| error.to_string())?)
 }
 
-fn run_samtofastq(args: &[String]) -> Result<(), String> {
+fn run_samtofastq(args: &[String]) -> Result<(), CommandError> {
     let args =
         normalize_picard_args_for_command("SamToFastq", args).map_err(|error| error.to_string())?;
     reject_unsupported_samtofastq_args(&args)?;
@@ -3415,7 +3420,7 @@ fn run_samtofastq(args: &[String]) -> Result<(), String> {
     };
 
     if interleave && second_end_fastq.is_some() {
-        return Err("SamToFastq INTERLEAVE=true cannot be used with SECOND_END_FASTQ".to_string());
+        return Err("SamToFastq INTERLEAVE=true cannot be used with SECOND_END_FASTQ".into());
     }
 
     let per_rg = if output_per_rg || compress_outputs_per_rg {
@@ -3430,7 +3435,7 @@ fn run_samtofastq(args: &[String]) -> Result<(), String> {
     };
 
     if has_sam_extension(&input) {
-        return run_samtofastq_from_sam_text(
+        return Ok(run_samtofastq_from_sam_text(
             &input,
             fastq.as_deref(),
             second_end_fastq.as_deref(),
@@ -3443,7 +3448,7 @@ fn run_samtofastq(args: &[String]) -> Result<(), String> {
             create_md5_file,
             transform,
             per_rg,
-        );
+        )?);
     }
 
     let reference = picard_reference(&args)?;
@@ -3504,7 +3509,7 @@ fn run_samtofastq(args: &[String]) -> Result<(), String> {
         {
             return Err(
                 "SamToFastq input contains paired reads but no SECOND_END_FASTQ was specified"
-                    .to_string(),
+                    .into(),
             );
         }
         if record.is_paired() {
@@ -3609,16 +3614,16 @@ fn run_samtofastq(args: &[String]) -> Result<(), String> {
     drop(unpaired_writer);
     drop(reader);
     if let Some(outputs) = per_rg_outputs {
-        outputs.write_md5_sidecars(create_md5_file)
+        Ok(outputs.write_md5_sidecars(create_md5_file)?)
     } else {
-        write_samtofastq_sidecars(
+        Ok(write_samtofastq_sidecars(
             fastq
                 .as_deref()
                 .ok_or_else(|| "fastq path exists".to_string())?,
             second_end_fastq.as_deref(),
             unpaired_fastq.as_deref(),
             create_md5_file,
-        )
+        )?)
     }
 }
 
@@ -3637,7 +3642,7 @@ fn stage_samtofastq_queryname_input(
     tmp_dir: &Path,
     max_records_in_ram: usize,
     reference: Option<&str>,
-) -> Result<ScopedTemporaryPath, String> {
+) -> Result<ScopedTemporaryPath, CommandError> {
     fs::create_dir_all(tmp_dir).map_err(|error| error.to_string())?;
     let staged = ScopedTemporaryPath {
         path: tempfile::Builder::new()
@@ -3668,7 +3673,7 @@ fn stage_samtofastq_queryname_input(
     Ok(staged)
 }
 
-fn run_fastqtosam(args: &[String]) -> Result<(), String> {
+fn run_fastqtosam(args: &[String]) -> Result<(), CommandError> {
     let args =
         normalize_picard_args_for_command("FastqToSam", args).map_err(|error| error.to_string())?;
     reject_unsupported_fastqtosam_args(&args)?;
@@ -3688,7 +3693,8 @@ fn run_fastqtosam(args: &[String]) -> Result<(), String> {
                     "Found {} files for FASTQ and {} files for FASTQ2.",
                     fastq_paths.len(),
                     paths.len()
-                ));
+                )
+                .into());
             }
             Some(paths)
         }
@@ -3726,18 +3732,22 @@ fn run_fastqtosam(args: &[String]) -> Result<(), String> {
             allow_and_ignore_empty_lines,
         )?,
         Some(quality_format) => {
-            return Err(format!(
+            return Err(unsupported(format!(
                 "unsupported FastqToSam QUALITY_FORMAT={quality_format}"
-            ));
+            )));
         }
     };
     let min_q = optional_u32(&args, "MIN_Q")?.unwrap_or(0);
     let max_q = optional_u32(&args, "MAX_Q")?.unwrap_or(93);
     if min_q > u32::from(u8::MAX) {
-        return Err(format!("unsupported FastqToSam MIN_Q: {min_q}"));
+        return Err(unsupported(format!(
+            "unsupported FastqToSam MIN_Q: {min_q}"
+        )));
     }
     if max_q > u32::from(u8::MAX) {
-        return Err(format!("unsupported FastqToSam MAX_Q: {max_q}"));
+        return Err(unsupported(format!(
+            "unsupported FastqToSam MAX_Q: {max_q}"
+        )));
     }
     let options = FastqToSamOptions {
         quality_format,
@@ -3747,7 +3757,7 @@ fn run_fastqtosam(args: &[String]) -> Result<(), String> {
         allow_empty_fastq,
     };
     if options.min_q > options.max_q {
-        return Err("FastqToSam MIN_Q must be less than or equal to MAX_Q".to_string());
+        return Err("FastqToSam MIN_Q must be less than or equal to MAX_Q".into());
     }
     let compression_level = optional_u32(&args, "COMPRESSION_LEVEL")?.unwrap_or(5);
     let create_md5_file = optional_bool(&args, "CREATE_MD5_FILE")?.unwrap_or(false);
@@ -3760,7 +3770,7 @@ fn run_fastqtosam(args: &[String]) -> Result<(), String> {
             &read_group,
             options,
         )?;
-        return write_requested_sidecars(&output, create_md5_file, false);
+        return Ok(write_requested_sidecars(&output, create_md5_file, false)?);
     }
     let mut writer = if matches!(output_format, bam::Format::Sam) {
         FastqToSamWriter::Sam(BufWriter::with_capacity(
@@ -3811,7 +3821,7 @@ fn run_fastqtosam(args: &[String]) -> Result<(), String> {
                     &mut second_record,
                 )?
             {
-                return Err("malformed FastqToSam FASTQ2 has more records than FASTQ".to_string());
+                return Err("malformed FastqToSam FASTQ2 has more records than FASTQ".into());
             }
             break;
         }
@@ -3821,13 +3831,14 @@ fn run_fastqtosam(args: &[String]) -> Result<(), String> {
                 &mut second_reader_index,
                 &mut second_record,
             )? {
-                return Err("malformed FastqToSam FASTQ has more records than FASTQ2".to_string());
+                return Err("malformed FastqToSam FASTQ has more records than FASTQ2".into());
             }
             if first_record.name != second_record.name {
                 return Err(format!(
                     "malformed FastqToSam paired read names differ: {} vs {}",
                     first_record.name, second_record.name
-                ));
+                )
+                .into());
             }
             writer.write_record(&first_record, 77, &read_group.id, quality_format)?;
             writer.write_record(&second_record, 141, &read_group.id, quality_format)?;
@@ -3838,14 +3849,14 @@ fn run_fastqtosam(args: &[String]) -> Result<(), String> {
         }
     }
     if records_written == 0 && !options.allow_empty_fastq {
-        return Err("malformed FastqToSam empty FASTQ input".to_string());
+        return Err("malformed FastqToSam empty FASTQ input".into());
     }
 
     drop(writer);
-    write_requested_sidecars(&output, create_md5_file, false)
+    Ok(write_requested_sidecars(&output, create_md5_file, false)?)
 }
 
-fn run_addorreplacereadgroups(args: &[String]) -> Result<(), String> {
+fn run_addorreplacereadgroups(args: &[String]) -> Result<(), CommandError> {
     let args = normalize_picard_args_for_command("AddOrReplaceReadGroups", args)
         .map_err(|error| error.to_string())?;
     reject_unsupported_addorreplacereadgroups_args(&args)?;
@@ -3874,7 +3885,7 @@ fn run_addorreplacereadgroups(args: &[String]) -> Result<(), String> {
         && optional_u32(&args, "COMPRESSION_LEVEL")?.is_none()
     {
         run_addorreplacereadgroups_sam_text(&input, &output, &read_group)?;
-        return write_requested_sidecars(&output, create_md5_file, false);
+        return Ok(write_requested_sidecars(&output, create_md5_file, false)?);
     }
 
     let reference = picard_reference(&args)?;
@@ -3898,11 +3909,11 @@ fn run_addorreplacereadgroups(args: &[String]) -> Result<(), String> {
     }
     drop(writer);
 
-    write_requested_sidecars(
+    Ok(write_requested_sidecars(
         &output,
         create_md5_file,
         create_index && has_extension(&output, "bam"),
-    )
+    )?)
 }
 
 fn run_addorreplacereadgroups_sam_text(
@@ -4026,7 +4037,7 @@ fn append_read_group_replaced_sam_line(output: &mut Vec<u8>, line: &[u8], read_g
     output.extend_from_slice(b"\n");
 }
 
-fn run_collectalignmentsummarymetrics(args: &[String]) -> Result<(), String> {
+fn run_collectalignmentsummarymetrics(args: &[String]) -> Result<(), CommandError> {
     let args = normalize_picard_args_for_command("CollectAlignmentSummaryMetrics", args)
         .map_err(|error| error.to_string())?;
     reject_unsupported_collectalignment_args(&args)?;
@@ -4038,7 +4049,7 @@ fn run_collectalignmentsummarymetrics(args: &[String]) -> Result<(), String> {
 
     if has_sam_extension(&input) {
         let metrics = collect_alignment_sam_text(&input, stop_after, accumulation)?;
-        return fs::write(output, metrics.to_picard_text()).map_err(|error| error.to_string());
+        return Ok(fs::write(output, metrics.to_picard_text()).map_err(|error| error.to_string())?);
     }
 
     let mut reader = open_bam_reader_for_args(&input, &args).map_err(|error| error.clone())?;
@@ -4060,10 +4071,10 @@ fn run_collectalignmentsummarymetrics(args: &[String]) -> Result<(), String> {
         metrics.observe(&record, read_group.as_ref(), mismatch_bases);
     }
 
-    fs::write(output, metrics.to_picard_text()).map_err(|error| error.to_string())
+    Ok(fs::write(output, metrics.to_picard_text()).map_err(|error| error.to_string())?)
 }
 
-fn run_collectqualityyieldmetrics(args: &[String]) -> Result<(), String> {
+fn run_collectqualityyieldmetrics(args: &[String]) -> Result<(), CommandError> {
     let args = normalize_picard_args_for_command("CollectQualityYieldMetrics", args)
         .map_err(|error| error.to_string())?;
     reject_unsupported_collectqualityyield_args(&args)?;
@@ -4083,7 +4094,7 @@ fn run_collectqualityyieldmetrics(args: &[String]) -> Result<(), String> {
             include_supplemental,
             stop_after,
         )?;
-        return fs::write(output, metrics.to_picard_text()).map_err(|error| error.to_string());
+        return Ok(fs::write(output, metrics.to_picard_text()).map_err(|error| error.to_string())?);
     }
 
     let mut reader = open_bam_reader_for_args(&input, &args).map_err(|error| error.clone())?;
@@ -4098,10 +4109,10 @@ fn run_collectqualityyieldmetrics(args: &[String]) -> Result<(), String> {
         );
     }
 
-    fs::write(output, metrics.to_picard_text()).map_err(|error| error.to_string())
+    Ok(fs::write(output, metrics.to_picard_text()).map_err(|error| error.to_string())?)
 }
 
-fn run_collectinsertsizemetrics(args: &[String]) -> Result<(), String> {
+fn run_collectinsertsizemetrics(args: &[String]) -> Result<(), CommandError> {
     let args = normalize_picard_args_for_command("CollectInsertSizeMetrics", args)
         .map_err(|error| error.to_string())?;
     reject_unsupported_collectinsertsize_args(&args)?;
@@ -4119,7 +4130,10 @@ fn run_collectinsertsizemetrics(args: &[String]) -> Result<(), String> {
             collect_insert_size_sam_text(&input, include_duplicates, stop_after, accumulation)?;
         fs::write(output, metrics.to_picard_text(minimum_pct, deviations))
             .map_err(|error| error.to_string())?;
-        return write_summary_chart_pdf(&histogram, "CollectInsertSizeMetrics");
+        return Ok(write_summary_chart_pdf(
+            &histogram,
+            "CollectInsertSizeMetrics",
+        )?);
     }
 
     let mut reader = open_bam_reader_for_args(&input, &args).map_err(|error| error.clone())?;
@@ -4134,10 +4148,13 @@ fn run_collectinsertsizemetrics(args: &[String]) -> Result<(), String> {
 
     fs::write(output, metrics.to_picard_text(minimum_pct, deviations))
         .map_err(|error| error.to_string())?;
-    write_summary_chart_pdf(&histogram, "CollectInsertSizeMetrics")
+    Ok(write_summary_chart_pdf(
+        &histogram,
+        "CollectInsertSizeMetrics",
+    )?)
 }
 
-fn run_collectbasedistributionbycycle(args: &[String]) -> Result<(), String> {
+fn run_collectbasedistributionbycycle(args: &[String]) -> Result<(), CommandError> {
     let args = normalize_picard_args_for_command("CollectBaseDistributionByCycle", args)
         .map_err(|error| error.to_string())?;
     reject_unsupported_collectbasedistributionbycycle_args(&args)?;
@@ -4166,10 +4183,13 @@ fn run_collectbasedistributionbycycle(args: &[String]) -> Result<(), String> {
     };
 
     fs::write(output, metrics.to_picard_text()).map_err(|error| error.to_string())?;
-    write_summary_chart_pdf(&chart, "CollectBaseDistributionByCycle")
+    Ok(write_summary_chart_pdf(
+        &chart,
+        "CollectBaseDistributionByCycle",
+    )?)
 }
 
-fn run_collectgcbiasmetrics(args: &[String]) -> Result<(), String> {
+fn run_collectgcbiasmetrics(args: &[String]) -> Result<(), CommandError> {
     let args = normalize_picard_args_for_command("CollectGcBiasMetrics", args)
         .map_err(|error| error.to_string())?;
     reject_unsupported_collectgcbiasmetrics_args(&args)?;
@@ -4198,7 +4218,7 @@ fn run_collectgcbiasmetrics(args: &[String]) -> Result<(), String> {
             metrics.summary_text(window_size, minimum_genome_fraction),
         )
         .map_err(|error| error.to_string())?;
-        return write_summary_chart_pdf(&chart, "CollectGcBiasMetrics");
+        return Ok(write_summary_chart_pdf(&chart, "CollectGcBiasMetrics")?);
     }
 
     let mut reader = open_bam_reader_for_args(&input, &args).map_err(|error| error.clone())?;
@@ -4224,10 +4244,10 @@ fn run_collectgcbiasmetrics(args: &[String]) -> Result<(), String> {
         metrics.summary_text(window_size, minimum_genome_fraction),
     )
     .map_err(|error| error.to_string())?;
-    write_summary_chart_pdf(&chart, "CollectGcBiasMetrics")
+    Ok(write_summary_chart_pdf(&chart, "CollectGcBiasMetrics")?)
 }
 
-fn run_collecthsmetrics(args: &[String]) -> Result<(), String> {
+fn run_collecthsmetrics(args: &[String]) -> Result<(), CommandError> {
     let args = normalize_picard_args_for_command("CollectHsMetrics", args)
         .map_err(|error| error.to_string())?;
     reject_unsupported_collecthsmetrics_args(&args)?;
@@ -4248,16 +4268,16 @@ fn run_collecthsmetrics(args: &[String]) -> Result<(), String> {
     let per_base_coverage = optional_scalar(&args, "PER_BASE_COVERAGE")?;
     if per_base_report.is_some() && per_base_coverage.is_some() {
         return Err(
-            "CollectHsMetrics accepts only one of PER_BASE_REPORT or PER_BASE_COVERAGE".to_string(),
+            "CollectHsMetrics accepts only one of PER_BASE_REPORT or PER_BASE_COVERAGE".into(),
         );
     }
     let bait_set_name = optional_scalar(&args, "BAIT_SET_NAME")?
         .unwrap_or_else(|| hs_metrics_bait_set_name(&bait_intervals_path));
     let minimum_mapping_quality = u8::try_from(minimum_mapping_quality).map_err(|_| {
-        "unsupported CollectHsMetrics MINIMUM_MAPPING_QUALITY above 255".to_string()
+        unsupported("unsupported CollectHsMetrics MINIMUM_MAPPING_QUALITY above 255")
     })?;
     let minimum_base_quality = u8::try_from(minimum_base_quality)
-        .map_err(|_| "unsupported CollectHsMetrics MINIMUM_BASE_QUALITY above 255".to_string())?;
+        .map_err(|_| unsupported("unsupported CollectHsMetrics MINIMUM_BASE_QUALITY above 255"))?;
 
     let reference_contigs = read_reference_contigs_for_wgs(&reference)?;
     let contig_order = reference_contigs
@@ -4317,7 +4337,7 @@ fn run_collecthsmetrics(args: &[String]) -> Result<(), String> {
 
     let mut reader = open_bam_reader_for_args(&input, &args).map_err(|error| error.clone())?;
     let metrics_text = hs_metrics::collect_hs_metrics(&mut reader, &config)?;
-    fs::write(output, metrics_text).map_err(|error| error.to_string())
+    Ok(fs::write(output, metrics_text).map_err(|error| error.to_string())?)
 }
 
 fn hs_metrics_interval_from_bed(interval: BedInterval) -> hs_metrics::GenomicInterval {
@@ -4391,7 +4411,7 @@ fn run_collectmultiplemetrics_single_pass(
     output: &str,
     file_extension: &str,
     programs: &[String],
-) -> Result<(), String> {
+) -> Result<(), CommandError> {
     let stop_after = optional_u32(args, "STOP_AFTER")?.unwrap_or(0);
     let reference = optional_scalar(args, "REFERENCE_SEQUENCE")?;
     if programs.iter().any(|program| {
@@ -4401,9 +4421,7 @@ fn run_collectmultiplemetrics_single_pass(
         )
     }) && reference.is_none()
     {
-        return Err(
-            "missing required CollectMultipleMetrics argument: REFERENCE_SEQUENCE".to_string(),
-        );
+        return Err("missing required CollectMultipleMetrics argument: REFERENCE_SEQUENCE".into());
     }
 
     let mut alignment = None;
@@ -5378,7 +5396,7 @@ fn run_collectmultiplemetrics_single_pass(
     Ok(())
 }
 
-fn run_collectmultiplemetrics(args: &[String]) -> Result<(), String> {
+fn run_collectmultiplemetrics(args: &[String]) -> Result<(), CommandError> {
     let args = normalize_picard_args_for_command("CollectMultipleMetrics", args)
         .map_err(|error| error.to_string())?;
     reject_unsupported_collectmultiplemetrics_args(&args)?;
@@ -5643,9 +5661,9 @@ fn run_collectmultiplemetrics(args: &[String]) -> Result<(), String> {
                 run_collectwgsmetrics(&child_args)?;
             }
             _ => {
-                return Err(format!(
+                return Err(unsupported(format!(
                     "unsupported CollectMultipleMetrics PROGRAM={program}"
-                ));
+                )));
             }
         }
     }
@@ -5657,7 +5675,7 @@ fn collectmultiplemetrics_metric_path(prefix: &str, suffix: &str, file_extension
     format!("{prefix}{suffix}{file_extension}")
 }
 
-fn run_collectwgsmetrics(args: &[String]) -> Result<(), String> {
+fn run_collectwgsmetrics(args: &[String]) -> Result<(), CommandError> {
     let args = normalize_picard_args_for_command("CollectWgsMetrics", args)
         .map_err(|error| error.to_string())?;
     reject_unsupported_collectwgsmetrics_args(&args)?;
@@ -5706,10 +5724,10 @@ fn run_collectwgsmetrics(args: &[String]) -> Result<(), String> {
             stop_after_u32,
         )?;
         summary.finish();
-        return write_text_or_gzip(
+        return Ok(write_text_or_gzip(
             &output,
             &summary.to_picard_text(sample_size, include_bq_histogram),
-        );
+        )?);
     }
 
     let mut reader = open_bam_reader_for_args(&input, &args).map_err(|error| error.clone())?;
@@ -5747,19 +5765,19 @@ fn run_collectwgsmetrics(args: &[String]) -> Result<(), String> {
     }
     summary.finish();
 
-    write_text_or_gzip(
+    Ok(write_text_or_gzip(
         &output,
         &summary.to_picard_text(sample_size, include_bq_histogram),
-    )
+    )?)
 }
 
-fn run_fixmateinformation(args: &[String]) -> Result<(), String> {
+fn run_fixmateinformation(args: &[String]) -> Result<(), CommandError> {
     let args = normalize_picard_args_for_command("FixMateInformation", args)
         .map_err(|error| error.to_string())?;
     reject_unsupported_fixmateinformation_args(&args)?;
     let inputs = required_values_for(&args, "INPUT", "FixMateInformation")?;
     let Some(output) = optional_scalar(&args, "OUTPUT")? else {
-        return Err("unsupported FixMateInformation missing OUTPUT".to_string());
+        return Err(unsupported("unsupported FixMateInformation missing OUTPUT"));
     };
     let add_mate_cigar = optional_bool(&args, "ADD_MATE_CIGAR")?.unwrap_or(true);
     let ignore_missing_mates = optional_bool(&args, "IGNORE_MISSING_MATES")?.unwrap_or(true);
@@ -5781,7 +5799,11 @@ fn run_fixmateinformation(args: &[String]) -> Result<(), String> {
             "queryname" => SortOrder::QueryName,
             "coordinate" => SortOrder::Coordinate,
             "unsorted" => SortOrder::Unsorted,
-            value => return Err(format!("unsupported FixMateInformation SORT_ORDER={value}")),
+            value => {
+                return Err(unsupported(format!(
+                    "unsupported FixMateInformation SORT_ORDER={value}"
+                )));
+            }
         },
         None => match first_input_sort_order.as_deref() {
             Some("coordinate") => SortOrder::Coordinate,
@@ -5791,28 +5813,26 @@ fn run_fixmateinformation(args: &[String]) -> Result<(), String> {
     };
     let output_format = output_format_for(&output, "FixMateInformation")?;
     if create_index && sort_order != SortOrder::Coordinate {
-        return Err(
-            "FixMateInformation CREATE_INDEX=true requires SORT_ORDER=coordinate".to_string(),
-        );
+        return Err("FixMateInformation CREATE_INDEX=true requires SORT_ORDER=coordinate".into());
     }
     if create_index && output_format != bam::Format::Bam {
-        return Err("FixMateInformation CREATE_INDEX=true requires BAM output".to_string());
+        return Err("FixMateInformation CREATE_INDEX=true requires BAM output".into());
     }
 
     let requires_queryname_sort =
         !assume_sorted && first_input_sort_order.as_deref() != Some("queryname");
     if requires_queryname_sort {
-        return Err(
-            "FixMateInformation non-queryname input should use upstream Picard".to_string(),
-        );
+        return Err(unsupported(
+            "FixMateInformation non-queryname input should use upstream Picard",
+        ));
     }
     for input in inputs.iter().skip(1) {
         let reader = open_bam_reader_with_reference(input, reference.as_deref())
             .map_err(|error| error.clone())?;
         if header_sort_order(reader.header()).as_deref() != Some("queryname") {
-            return Err(
-                "FixMateInformation non-queryname input should use upstream Picard".to_string(),
-            );
+            return Err(unsupported(
+                "FixMateInformation non-queryname input should use upstream Picard",
+            ));
         }
     }
     let header = sorted_header_with_group_order(
@@ -5885,7 +5905,11 @@ fn run_fixmateinformation(args: &[String]) -> Result<(), String> {
     }
     drop(writer);
 
-    write_requested_sidecars(&output, create_md5_file, create_index)
+    Ok(write_requested_sidecars(
+        &output,
+        create_md5_file,
+        create_index,
+    )?)
 }
 
 fn process_fixmate_reader(
@@ -5896,7 +5920,7 @@ fn process_fixmate_reader(
     sort_order: SortOrder,
     add_mate_cigar: bool,
     ignore_missing_mates: bool,
-) -> Result<(), String> {
+) -> Result<(), CommandError> {
     let mut coordinate_sorter = coordinate_sorter;
     for record in reader.records() {
         process_fixmate_record(
@@ -5920,7 +5944,7 @@ fn process_fixmate_record(
     sort_order: SortOrder,
     add_mate_cigar: bool,
     ignore_missing_mates: bool,
-) -> Result<(), String> {
+) -> Result<(), CommandError> {
     if pending
         .first()
         .is_some_and(|first| first.qname() != record.qname())
@@ -5941,7 +5965,7 @@ fn process_fixmate_record(
     Ok(())
 }
 
-fn run_qualityscoredistribution(args: &[String]) -> Result<(), String> {
+fn run_qualityscoredistribution(args: &[String]) -> Result<(), CommandError> {
     let args = normalize_picard_args_for_command("QualityScoreDistribution", args)
         .map_err(|error| error.to_string())?;
     reject_unsupported_qualityscoredistribution_args(&args)?;
@@ -5972,10 +5996,10 @@ fn run_qualityscoredistribution(args: &[String]) -> Result<(), String> {
     };
 
     fs::write(output, metrics.to_picard_text()).map_err(|error| error.to_string())?;
-    write_summary_chart_pdf(&chart, "QualityScoreDistribution")
+    Ok(write_summary_chart_pdf(&chart, "QualityScoreDistribution")?)
 }
 
-fn run_meanqualitybycycle(args: &[String]) -> Result<(), String> {
+fn run_meanqualitybycycle(args: &[String]) -> Result<(), CommandError> {
     let args = normalize_picard_args_for_command("MeanQualityByCycle", args)
         .map_err(|error| error.to_string())?;
     reject_unsupported_meanqualitybycycle_args(&args)?;
@@ -6004,10 +6028,10 @@ fn run_meanqualitybycycle(args: &[String]) -> Result<(), String> {
     };
 
     fs::write(output, metrics.to_picard_text()).map_err(|error| error.to_string())?;
-    write_summary_chart_pdf(&chart, "MeanQualityByCycle")
+    Ok(write_summary_chart_pdf(&chart, "MeanQualityByCycle")?)
 }
 
-fn run_createsequencedictionary(args: &[String]) -> Result<(), String> {
+fn run_createsequencedictionary(args: &[String]) -> Result<(), CommandError> {
     let args = normalize_picard_args_for_command("CreateSequenceDictionary", args)
         .map_err(|error| error.to_string())?;
     reject_unsupported_createsequencedictionary_args(&args)?;
@@ -6052,7 +6076,7 @@ fn run_createsequencedictionary(args: &[String]) -> Result<(), String> {
     }
 
     fs::write(&output, dictionary).map_err(|error| error.to_string())?;
-    write_requested_sidecars(&output, create_md5_file, false)
+    Ok(write_requested_sidecars(&output, create_md5_file, false)?)
 }
 
 fn read_alt_names(path: &str) -> Result<BTreeMap<String, Vec<String>>, String> {
@@ -6078,7 +6102,7 @@ fn read_alt_names(path: &str) -> Result<BTreeMap<String, Vec<String>>, String> {
     Ok(alt_names)
 }
 
-fn run_normalizefasta(args: &[String]) -> Result<(), String> {
+fn run_normalizefasta(args: &[String]) -> Result<(), CommandError> {
     let args = normalize_picard_args_for_command("NormalizeFasta", args)
         .map_err(|error| error.to_string())?;
     reject_unsupported_normalizefasta_args(&args)?;
@@ -6088,7 +6112,7 @@ fn run_normalizefasta(args: &[String]) -> Result<(), String> {
     let truncate_names =
         optional_bool(&args, "TRUNCATE_SEQUENCE_NAMES_AT_WHITESPACE")?.unwrap_or(false);
     if line_length == 0 {
-        return Err("unsupported NormalizeFasta LINE_LENGTH=0".to_string());
+        return Err(unsupported("unsupported NormalizeFasta LINE_LENGTH=0"));
     }
 
     let text = read_text_or_gzip(&input)?;
@@ -6111,10 +6135,10 @@ fn run_normalizefasta(args: &[String]) -> Result<(), String> {
         }
     }
     flush_fasta_sequence(&mut normalized, &current_sequence, line_length);
-    fs::write(output, normalized).map_err(|error| error.to_string())
+    Ok(fs::write(output, normalized).map_err(|error| error.to_string())?)
 }
 
-fn run_bedtointervallist(args: &[String]) -> Result<(), String> {
+fn run_bedtointervallist(args: &[String]) -> Result<(), CommandError> {
     let args = normalize_picard_args_for_command("BedToIntervalList", args)
         .map_err(|error| error.to_string())?;
     reject_unsupported_bedtointervallist_args(&args)?;
@@ -6163,7 +6187,7 @@ fn run_bedtointervallist(args: &[String]) -> Result<(), String> {
             interval.contig, interval.start, interval.end, interval.strand, interval.name
         );
     }
-    fs::write(output, text).map_err(|error| error.to_string())
+    Ok(fs::write(output, text).map_err(|error| error.to_string())?)
 }
 
 fn bed_interval_list_header(dictionary_text: &str, _sort: bool) -> String {
@@ -6200,7 +6224,7 @@ fn bed_interval_list_header(dictionary_text: &str, _sort: bool) -> String {
     }
 }
 
-fn run_intervallisttools(args: &[String]) -> Result<(), String> {
+fn run_intervallisttools(args: &[String]) -> Result<(), CommandError> {
     let args = normalize_picard_args_for_command("IntervalListTools", args)
         .map_err(|error| error.to_string())?;
     reject_unsupported_intervallisttools_args(&args)?;
@@ -6270,7 +6294,7 @@ fn run_intervallisttools(args: &[String]) -> Result<(), String> {
         )
         .map_err(|error| error.to_string())?;
     }
-    writer.flush().map_err(|error| error.to_string())
+    Ok(writer.flush().map_err(|error| error.to_string())?)
 }
 
 #[expect(
@@ -6553,7 +6577,7 @@ fn run_revertsam_sam_text_to_bam(
     sort_order: SortOrder,
     create_md5_file: bool,
     create_index: bool,
-) -> Result<(), String> {
+) -> Result<(), CommandError> {
     let (header_lines, records) = collect_revertsam_sam_text_bam_records(
         input,
         remove_duplicate_information,
@@ -6574,11 +6598,11 @@ fn run_revertsam_sam_text_to_bam(
             .map_err(|error| error.to_string())?;
     }
     drop(writer);
-    write_requested_sidecars(
+    Ok(write_requested_sidecars(
         output,
         create_md5_file,
         create_index && sort_order == SortOrder::Coordinate,
-    )
+    )?)
 }
 
 fn reverted_header_from_sam_text(
@@ -6849,7 +6873,7 @@ fn revertsam_default_removed_alignment_tag_field(tag_field: &str) -> bool {
         || tag_field.starts_with("AS:")
 }
 
-fn run_revertsam(args: &[String]) -> Result<(), String> {
+fn run_revertsam(args: &[String]) -> Result<(), CommandError> {
     let args =
         normalize_picard_args_for_command("RevertSam", args).map_err(|error| error.to_string())?;
     reject_unsupported_revertsam_args(&args)?;
@@ -6881,13 +6905,17 @@ fn run_revertsam(args: &[String]) -> Result<(), String> {
         "queryname" => SortOrder::QueryName,
         "coordinate" => SortOrder::Coordinate,
         "unsorted" => SortOrder::Unsorted,
-        value => return Err(format!("unsupported RevertSam SORT_ORDER={value}")),
+        value => {
+            return Err(unsupported(format!(
+                "unsupported RevertSam SORT_ORDER={value}"
+            )));
+        }
     };
     if create_index
         && sort_order == SortOrder::Coordinate
         && !matches!(output_format, bam::Format::Bam)
     {
-        return Err("RevertSam CREATE_INDEX=true requires BAM output".to_string());
+        return Err("RevertSam CREATE_INDEX=true requires BAM output".into());
     }
     let attributes_to_clear = attributes_to_clear_for_revertsam(&args)?;
     let reference = picard_reference(&args)?;
@@ -6903,14 +6931,14 @@ fn run_revertsam(args: &[String]) -> Result<(), String> {
         &attributes_to_reverse_complement,
     ) {
         if has_sam_extension(&output) {
-            return run_revertsam_sam_text(
+            return Ok(run_revertsam_sam_text(
                 &input,
                 &output,
                 remove_alignment_information,
                 remove_duplicate_information,
                 restore_hardclips,
                 sort_order,
-            );
+            )?);
         }
         return run_revertsam_sam_text_to_bam(
             &input,
@@ -6941,11 +6969,11 @@ fn run_revertsam(args: &[String]) -> Result<(), String> {
         &attributes_to_reverse_complement,
         sort_order,
     )? {
-        return write_requested_sidecars(
+        return Ok(write_requested_sidecars(
             &output,
             create_md5_file,
             create_index && sort_order == SortOrder::Coordinate,
-        );
+        )?);
     }
 
     let mut reader = open_bam_reader_with_reference(&input, reference.as_deref())?;
@@ -7004,11 +7032,11 @@ fn run_revertsam(args: &[String]) -> Result<(), String> {
     }
     drop(writer);
 
-    write_requested_sidecars(
+    Ok(write_requested_sidecars(
         &output,
         create_md5_file,
         create_index && sort_order == SortOrder::Coordinate,
-    )
+    )?)
 }
 
 #[expect(
@@ -7030,7 +7058,7 @@ fn try_stream_revertsam(
     attributes_to_reverse: &[[u8; 2]],
     attributes_to_reverse_complement: &[[u8; 2]],
     sort_order: SortOrder,
-) -> Result<Option<()>, String> {
+) -> Result<Option<()>, CommandError> {
     if sort_order == SortOrder::Coordinate {
         return Ok(None);
     }
@@ -7100,7 +7128,7 @@ fn temp_revertsam_output_path(output: &str) -> String {
     format!("{output}.tmp.{}.revertsam", process::id())
 }
 
-fn run_setnmmdanduqtags(args: &[String]) -> Result<(), String> {
+fn run_setnmmdanduqtags(args: &[String]) -> Result<(), CommandError> {
     let args = normalize_picard_args_for_command("SetNmMdAndUqTags", args)
         .map_err(|error| error.to_string())?;
     reject_unsupported_setnmmdanduqtags_args(&args)?;
@@ -7116,7 +7144,9 @@ fn run_setnmmdanduqtags(args: &[String]) -> Result<(), String> {
     let mut reader = open_bam_reader_with_reference(&input, Some(reference_fasta.as_str()))
         .map_err(|error| error.clone())?;
     if header_sort_order(reader.header()).as_deref() != Some("coordinate") {
-        return Err("unsupported SetNmMdAndUqTags input must be coordinate sorted".to_string());
+        return Err(unsupported(
+            "unsupported SetNmMdAndUqTags input must be coordinate sorted",
+        ));
     }
     let header = bam::Header::from_template(reader.header());
     let target_names = reader
@@ -7141,11 +7171,11 @@ fn run_setnmmdanduqtags(args: &[String]) -> Result<(), String> {
     }
     drop(writer);
 
-    write_requested_sidecars(
+    Ok(write_requested_sidecars(
         &output,
         create_md5_file,
         create_index && has_extension(&output, "bam"),
-    )
+    )?)
 }
 
 const VALIDATE_SAM_FILE_VALIDATION_ISSUES: &str = "ValidateSamFile found validation issues";
@@ -7167,7 +7197,7 @@ fn validatesamfile_validation_issue_exit_code(counts: &BTreeMap<String, u64>) ->
     }
 }
 
-fn run_validatesamfile(args: &[String]) -> Result<ValidateSamFileStatus, String> {
+fn run_validatesamfile(args: &[String]) -> Result<ValidateSamFileStatus, CommandError> {
     let args = normalize_picard_args_for_command("ValidateSamFile", args)
         .map_err(|error| error.to_string())?;
     reject_unsupported_validatesamfile_args(&args)?;
@@ -7222,7 +7252,7 @@ fn run_validatesamfile(args: &[String]) -> Result<ValidateSamFileStatus, String>
     }
 }
 
-fn run_viewsam(args: &[String]) -> Result<(), String> {
+fn run_viewsam(args: &[String]) -> Result<(), CommandError> {
     let args =
         normalize_picard_args_for_command("ViewSam", args).map_err(|error| error.to_string())?;
     reject_unsupported_viewsam_args(&args)?;
@@ -7323,11 +7353,13 @@ fn run_viewsam_records_only(
     alignment_status: &str,
     pf_status: &str,
     interval_filter: Option<&IntervalFilter>,
-) -> Result<(), String> {
+) -> Result<(), CommandError> {
     if let Some(output) = output
         && !has_sam_extension(output)
     {
-        return Err("unsupported ViewSam RECORDS_ONLY=true with non-SAM OUTPUT".to_string());
+        return Err(unsupported(
+            "unsupported ViewSam RECORDS_ONLY=true with non-SAM OUTPUT",
+        ));
     }
 
     let temp_path = env::temp_dir().join(format!(
@@ -7352,7 +7384,7 @@ fn run_viewsam_records_only(
 
     let result = write_sam_records_without_header(&temp_path, output);
     let _ = fs::remove_file(&temp_path);
-    result
+    Ok(result?)
 }
 
 fn write_sam_records_without_header(path: &Path, output: Option<&str>) -> Result<(), String> {
@@ -7462,7 +7494,7 @@ fn run_replacesamheader_sam_text(
     write_requested_sidecars(output, create_md5_file, false)
 }
 
-fn run_replacesamheader(args: &[String]) -> Result<(), String> {
+fn run_replacesamheader(args: &[String]) -> Result<(), CommandError> {
     let args = normalize_picard_args_for_command("ReplaceSamHeader", args)
         .map_err(|error| error.to_string())?;
     reject_unsupported_replacesamheader_args(&args)?;
@@ -7478,7 +7510,12 @@ fn run_replacesamheader(args: &[String]) -> Result<(), String> {
         && has_sam_extension(&header_input)
         && has_sam_extension(&output)
     {
-        return run_replacesamheader_sam_text(&input, &header_input, &output, create_md5_file);
+        return Ok(run_replacesamheader_sam_text(
+            &input,
+            &header_input,
+            &output,
+            create_md5_file,
+        )?);
     }
 
     let header_reader = open_bam_reader_with_reference(&header_input, reference.as_deref())
@@ -7496,7 +7533,8 @@ fn run_replacesamheader(args: &[String]) -> Result<(), String> {
             "ReplaceSamHeader sort orders of INPUT ({}) and HEADER ({}) do not agree",
             input_sort_order.unwrap_or_else(|| "unknown".to_string()),
             replacement_sort_order.unwrap_or_else(|| "unknown".to_string())
-        ));
+        )
+        .into());
     }
     let format = output_format_for(&output, "ReplaceSamHeader")?;
     let remove_stale_read_groups = matches!(format, bam::Format::Cram);
@@ -7515,10 +7553,10 @@ fn run_replacesamheader(args: &[String]) -> Result<(), String> {
         writer.write(&record).map_err(|error| error.to_string())?;
     }
     drop(writer);
-    write_requested_sidecars(&output, create_md5_file, false)
+    Ok(write_requested_sidecars(&output, create_md5_file, false)?)
 }
 
-fn run_updatevcfsequencedictionary(args: &[String]) -> Result<(), String> {
+fn run_updatevcfsequencedictionary(args: &[String]) -> Result<(), CommandError> {
     let args = normalize_picard_args_for_command("UpdateVcfSequenceDictionary", args)
         .map_err(|error| error.to_string())?;
     reject_unsupported_updatevcfsequencedictionary_args(&args)?;
@@ -7568,12 +7606,12 @@ fn run_updatevcfsequencedictionary(args: &[String]) -> Result<(), String> {
     }
 
     if !saw_column_header {
-        return Err("VCF input is missing #CHROM header".to_string());
+        return Err("VCF input is missing #CHROM header".into());
     }
-    output_writer.finish()
+    Ok(output_writer.finish()?)
 }
 
-fn run_liftovervcf(args: &[String]) -> Result<(), String> {
+fn run_liftovervcf(args: &[String]) -> Result<(), CommandError> {
     let args = normalize_picard_args_for_command("LiftoverVcf", args)
         .map_err(|error| error.to_string())?;
     reject_unsupported_liftovervcf_args(&args)?;
@@ -7605,7 +7643,7 @@ fn run_liftovervcf(args: &[String]) -> Result<(), String> {
         if create_index && has_extension(&output, "vcf") {
             write_vcf_idx_sidecar(&output, &output_text)?;
         }
-        return write_text_or_gzip(&reject, &reject_text);
+        return Ok(write_text_or_gzip(&reject, &reject_text)?);
     }
 
     let mut lifted = Vec::with_capacity(document.records.len());
@@ -7622,7 +7660,8 @@ fn run_liftovervcf(args: &[String]) -> Result<(), String> {
             return Err(format!(
                 "VCF contig {} is not present in sequence dictionary",
                 record.contig
-            ));
+            )
+            .into());
         }
     }
     lifted.sort_by(|left, right| {
@@ -7638,10 +7677,10 @@ fn run_liftovervcf(args: &[String]) -> Result<(), String> {
     if create_index && has_extension(&output, "vcf") {
         write_vcf_idx_sidecar(&output, &output_text)?;
     }
-    write_text_or_gzip(&reject, &reject_text)
+    Ok(write_text_or_gzip(&reject, &reject_text)?)
 }
 
-fn run_gathervcfs(args: &[String]) -> Result<(), String> {
+fn run_gathervcfs(args: &[String]) -> Result<(), CommandError> {
     let args =
         normalize_picard_args_for_command("GatherVcfs", args).map_err(|error| error.to_string())?;
     reject_unsupported_gathervcfs_args(&args)?;
@@ -7659,12 +7698,14 @@ fn run_gathervcfs(args: &[String]) -> Result<(), String> {
     let first_contig_ids = first.contig_ids();
     for header in headers.iter().skip(1) {
         if header.column_header != first.column_header {
-            return Err("unsupported GatherVcfs inputs with different sample columns".to_string());
+            return Err(unsupported(
+                "unsupported GatherVcfs inputs with different sample columns",
+            ));
         }
         if header.contig_ids() != first_contig_ids {
-            return Err(
-                "unsupported GatherVcfs inputs with different sequence dictionaries".to_string(),
-            );
+            return Err(unsupported(
+                "unsupported GatherVcfs inputs with different sequence dictionaries",
+            ));
         }
     }
     vcf_headers::validate_gather(&inputs, first)?;
@@ -7672,13 +7713,13 @@ fn run_gathervcfs(args: &[String]) -> Result<(), String> {
     output_writer.write_header(&first.header_text())?;
     for input in &inputs {
         stream_vcf_records(input, |record| {
-            output_writer.write_record(record.line.as_bytes())
+            Ok(output_writer.write_record(record.line.as_bytes())?)
         })?;
     }
-    output_writer.finish()
+    Ok(output_writer.finish()?)
 }
 
-fn run_sortvcf(args: &[String]) -> Result<(), String> {
+fn run_sortvcf(args: &[String]) -> Result<(), CommandError> {
     let args =
         normalize_picard_args_for_command("SortVcf", args).map_err(|error| error.to_string())?;
     reject_unsupported_sortvcf_args(&args)?;
@@ -7701,7 +7742,9 @@ fn run_sortvcf(args: &[String]) -> Result<(), String> {
         .ok_or_else(|| "missing required SortVcf argument: INPUT".to_string())?;
     for document in documents.iter().skip(1) {
         if document.column_header != first.column_header {
-            return Err("unsupported SortVcf inputs with different sample columns".to_string());
+            return Err(unsupported(
+                "unsupported SortVcf inputs with different sample columns",
+            ));
         }
     }
 
@@ -7720,7 +7763,9 @@ fn run_sortvcf(args: &[String]) -> Result<(), String> {
         (first.contig_order(), None)
     };
     if contig_order.is_empty() {
-        return Err("unsupported SortVcf input without sequence dictionary".to_string());
+        return Err(unsupported(
+            "unsupported SortVcf input without sequence dictionary",
+        ));
     }
 
     let mut config = ExternalSortConfig::new(&tmp_dir);
@@ -7740,10 +7785,10 @@ fn run_sortvcf(args: &[String]) -> Result<(), String> {
             .write_record(&record.payload)
             .map_err(Into::into)
     })?;
-    output_writer.finish()
+    Ok(output_writer.finish()?)
 }
 
-fn run_mergevcfs(args: &[String]) -> Result<(), String> {
+fn run_mergevcfs(args: &[String]) -> Result<(), CommandError> {
     let args =
         normalize_picard_args_for_command("MergeVcfs", args).map_err(|error| error.to_string())?;
     reject_unsupported_mergevcfs_args(&args)?;
@@ -7766,7 +7811,9 @@ fn run_mergevcfs(args: &[String]) -> Result<(), String> {
         .ok_or_else(|| "missing required MergeVcfs argument: INPUT".to_string())?;
     for document in documents.iter().skip(1) {
         if document.column_header != first.column_header {
-            return Err("unsupported MergeVcfs inputs with different sample columns".to_string());
+            return Err(unsupported(
+                "unsupported MergeVcfs inputs with different sample columns",
+            ));
         }
     }
 
@@ -7785,7 +7832,9 @@ fn run_mergevcfs(args: &[String]) -> Result<(), String> {
         (first.contig_order(), None)
     };
     if contig_order.is_empty() {
-        return Err("unsupported MergeVcfs input without sequence dictionary".to_string());
+        return Err(unsupported(
+            "unsupported MergeVcfs input without sequence dictionary",
+        ));
     }
 
     let mut config = ExternalSortConfig::new(&tmp_dir);
@@ -7805,10 +7854,10 @@ fn run_mergevcfs(args: &[String]) -> Result<(), String> {
             .write_record(&record.payload)
             .map_err(Into::into)
     })?;
-    output_writer.finish()
+    Ok(output_writer.finish()?)
 }
 
-fn reject_unsupported_viewsam_args(args: &PicardArgs) -> Result<(), String> {
+fn reject_unsupported_viewsam_args(args: &PicardArgs) -> Result<(), CommandError> {
     let supported = [
         "INPUT",
         "OUTPUT",
@@ -7831,7 +7880,7 @@ fn reject_unsupported_viewsam_args(args: &PicardArgs) -> Result<(), String> {
     ];
     for key in args.keys() {
         if !supported.contains(&key.as_str()) {
-            return Err(format!("unsupported ViewSam argument: {key}"));
+            return Err(unsupported(format!("unsupported ViewSam argument: {key}")));
         }
     }
     optional_scalar(args, "VALIDATION_STRINGENCY")?;
@@ -7848,7 +7897,9 @@ fn reject_unsupported_viewsam_args(args: &PicardArgs) -> Result<(), String> {
     let header_only = optional_bool(args, "HEADER_ONLY")?.unwrap_or(false);
     let records_only = optional_bool(args, "RECORDS_ONLY")?.unwrap_or(false);
     if header_only && records_only {
-        return Err("unsupported ViewSam HEADER_ONLY=true with RECORDS_ONLY=true".to_string());
+        return Err(unsupported(
+            "unsupported ViewSam HEADER_ONLY=true with RECORDS_ONLY=true",
+        ));
     }
     reject_unsupported_compression_level(args, "ViewSam")?;
     Ok(())
@@ -7859,18 +7910,26 @@ fn viewsam_record_matches(
     alignment_status: &str,
     pf_status: &str,
     interval_filter: Option<&IntervalFilter>,
-) -> Result<bool, String> {
+) -> Result<bool, CommandError> {
     let alignment_matches = match alignment_status {
         "All" => true,
         "Aligned" => !record.is_unmapped(),
         "Unaligned" => record.is_unmapped(),
-        value => return Err(format!("unsupported ViewSam ALIGNMENT_STATUS={value}")),
+        value => {
+            return Err(unsupported(format!(
+                "unsupported ViewSam ALIGNMENT_STATUS={value}"
+            )));
+        }
     };
     let pf_matches = match pf_status {
         "All" => true,
         "PF" => !record.is_quality_check_failed(),
         "NonPF" => record.is_quality_check_failed(),
-        value => return Err(format!("unsupported ViewSam PF_STATUS={value}")),
+        value => {
+            return Err(unsupported(format!(
+                "unsupported ViewSam PF_STATUS={value}"
+            )));
+        }
     };
     Ok(alignment_matches && pf_matches && record_overlaps_intervals(record, interval_filter))
 }
@@ -7954,7 +8013,9 @@ fn record_overlaps_intervals(
     })
 }
 
-fn reject_unsupported_updatevcfsequencedictionary_args(args: &PicardArgs) -> Result<(), String> {
+fn reject_unsupported_updatevcfsequencedictionary_args(
+    args: &PicardArgs,
+) -> Result<(), CommandError> {
     let supported = [
         "INPUT",
         "OUTPUT",
@@ -7973,9 +8034,9 @@ fn reject_unsupported_updatevcfsequencedictionary_args(args: &PicardArgs) -> Res
     ];
     for key in args.keys() {
         if !supported.contains(&key.as_str()) {
-            return Err(format!(
+            return Err(unsupported(format!(
                 "unsupported UpdateVcfSequenceDictionary argument: {key}"
-            ));
+            )));
         }
     }
     optional_scalar(args, "SEQUENCE_DICTIONARY")?;
@@ -7993,7 +8054,7 @@ fn reject_unsupported_updatevcfsequencedictionary_args(args: &PicardArgs) -> Res
     Ok(())
 }
 
-fn reject_unsupported_liftovervcf_args(args: &PicardArgs) -> Result<(), String> {
+fn reject_unsupported_liftovervcf_args(args: &PicardArgs) -> Result<(), CommandError> {
     let supported = [
         "INPUT",
         "OUTPUT",
@@ -8014,7 +8075,9 @@ fn reject_unsupported_liftovervcf_args(args: &PicardArgs) -> Result<(), String> 
     ];
     for key in args.keys() {
         if !supported.contains(&key.as_str()) {
-            return Err(format!("unsupported LiftoverVcf argument: {key}"));
+            return Err(unsupported(format!(
+                "unsupported LiftoverVcf argument: {key}"
+            )));
         }
     }
     optional_bool(args, "WARN_ON_MISSING_CONTIG")?;
@@ -8031,7 +8094,7 @@ fn reject_unsupported_liftovervcf_args(args: &PicardArgs) -> Result<(), String> 
     Ok(())
 }
 
-fn reject_unsupported_gathervcfs_args(args: &PicardArgs) -> Result<(), String> {
+fn reject_unsupported_gathervcfs_args(args: &PicardArgs) -> Result<(), CommandError> {
     let supported = [
         "INPUT",
         "OUTPUT",
@@ -8049,7 +8112,9 @@ fn reject_unsupported_gathervcfs_args(args: &PicardArgs) -> Result<(), String> {
     ];
     for key in args.keys() {
         if !supported.contains(&key.as_str()) {
-            return Err(format!("unsupported GatherVcfs argument: {key}"));
+            return Err(unsupported(format!(
+                "unsupported GatherVcfs argument: {key}"
+            )));
         }
     }
     optional_scalar(args, "VALIDATION_STRINGENCY")?;
@@ -8066,7 +8131,7 @@ fn reject_unsupported_gathervcfs_args(args: &PicardArgs) -> Result<(), String> {
     Ok(())
 }
 
-fn reject_unsupported_sortvcf_args(args: &PicardArgs) -> Result<(), String> {
+fn reject_unsupported_sortvcf_args(args: &PicardArgs) -> Result<(), CommandError> {
     let supported = [
         "INPUT",
         "OUTPUT",
@@ -8085,7 +8150,7 @@ fn reject_unsupported_sortvcf_args(args: &PicardArgs) -> Result<(), String> {
     ];
     for key in args.keys() {
         if !supported.contains(&key.as_str()) {
-            return Err(format!("unsupported SortVcf argument: {key}"));
+            return Err(unsupported(format!("unsupported SortVcf argument: {key}")));
         }
     }
     optional_scalar(args, "SEQUENCE_DICTIONARY")?;
@@ -8096,7 +8161,7 @@ fn reject_unsupported_sortvcf_args(args: &PicardArgs) -> Result<(), String> {
     Ok(())
 }
 
-fn reject_unsupported_mergevcfs_args(args: &PicardArgs) -> Result<(), String> {
+fn reject_unsupported_mergevcfs_args(args: &PicardArgs) -> Result<(), CommandError> {
     let supported = [
         "INPUT",
         "OUTPUT",
@@ -8115,7 +8180,9 @@ fn reject_unsupported_mergevcfs_args(args: &PicardArgs) -> Result<(), String> {
     ];
     for key in args.keys() {
         if !supported.contains(&key.as_str()) {
-            return Err(format!("unsupported MergeVcfs argument: {key}"));
+            return Err(unsupported(format!(
+                "unsupported MergeVcfs argument: {key}"
+            )));
         }
     }
     optional_scalar(args, "SEQUENCE_DICTIONARY")?;
@@ -8173,12 +8240,12 @@ fn validate_vcf_sequence_dictionaries(
     documents: &[VcfDocument],
     expected_contig_lines: &[String],
     command: &str,
-) -> Result<(), String> {
+) -> Result<(), CommandError> {
     for document in documents {
         if document.contig_lines() != expected_contig_lines {
-            return Err(format!(
+            return Err(unsupported(format!(
                 "unsupported {command} input sequence dictionary differs from expected dictionary"
-            ));
+            )));
         }
     }
     Ok(())
@@ -8204,12 +8271,12 @@ struct VcfRecord {
     serial: usize,
 }
 
-fn read_vcf_document(path: &str) -> Result<VcfDocument, String> {
+fn read_vcf_document(path: &str) -> Result<VcfDocument, CommandError> {
     let text = read_text_or_gzip(path)?;
     parse_vcf_document(&text, path)
 }
 
-fn read_vcf_header(path: &str) -> Result<VcfDocument, String> {
+fn read_vcf_header(path: &str) -> Result<VcfDocument, CommandError> {
     let mut reader = open_text_or_gzip_reader(path)?;
     let mut meta_lines = Vec::new();
     let mut column_header = None;
@@ -8229,18 +8296,18 @@ fn read_vcf_header(path: &str) -> Result<VcfDocument, String> {
         let line = line.trim_end_matches(['\r', '\n']);
         if line.starts_with("##") {
             if column_header.is_some() {
-                return Err(format!("malformed VCF header in {path}"));
+                return Err(format!("malformed VCF header in {path}").into());
             }
             meta_lines.push(line.to_string());
         } else if line.starts_with("#CHROM") {
             column_header = Some(line.to_string());
         } else if line.starts_with('#') {
-            return Err(format!(
+            return Err(unsupported(format!(
                 "unsupported VCF header line {line_number} in {path}"
-            ));
+            )));
         } else if !line.trim().is_empty() {
             if column_header.is_none() {
-                return Err(format!("VCF input {path} is missing #CHROM header"));
+                return Err(format!("VCF input {path} is missing #CHROM header").into());
             }
             parse_vcf_record(line, 0, path, line_number)?;
             break;
@@ -8258,8 +8325,8 @@ fn read_vcf_header(path: &str) -> Result<VcfDocument, String> {
 
 fn stream_vcf_records(
     path: &str,
-    mut visit: impl FnMut(VcfRecord) -> Result<(), String>,
-) -> Result<(), String> {
+    mut visit: impl FnMut(VcfRecord) -> Result<(), CommandError>,
+) -> Result<(), CommandError> {
     let mut reader = open_text_or_gzip_reader(path)?;
     let mut column_header = false;
     let mut line = String::new();
@@ -8279,17 +8346,17 @@ fn stream_vcf_records(
         let line = line.trim_end_matches(['\r', '\n']);
         if line.starts_with("##") {
             if column_header {
-                return Err(format!("malformed VCF header in {path}"));
+                return Err(format!("malformed VCF header in {path}").into());
             }
         } else if line.starts_with("#CHROM") {
             column_header = true;
         } else if line.starts_with('#') {
-            return Err(format!(
+            return Err(unsupported(format!(
                 "unsupported VCF header line {line_number} in {path}"
-            ));
+            )));
         } else if !line.trim().is_empty() {
             if !column_header {
-                return Err(format!("VCF input {path} is missing #CHROM header"));
+                return Err(format!("VCF input {path} is missing #CHROM header").into());
             }
             let record = parse_vcf_record(line, serial, path, line_number)?;
             serial = serial
@@ -8299,7 +8366,7 @@ fn stream_vcf_records(
         }
     }
     if !column_header {
-        return Err(format!("VCF input {path} is missing #CHROM header"));
+        return Err(format!("VCF input {path} is missing #CHROM header").into());
     }
     Ok(())
 }
@@ -8308,7 +8375,7 @@ fn push_vcf_records_into_sorter(
     inputs: &[String],
     contig_order: &BTreeMap<String, usize>,
     sorter: &mut ExternalSorter,
-) -> Result<(), String> {
+) -> Result<(), CommandError> {
     let mut serial = 0u64;
     for input in inputs {
         stream_vcf_records(input, |record| {
@@ -8339,7 +8406,7 @@ fn vcf_sort_key(contig_index: usize, position: u64, serial: u64) -> Vec<u8> {
     key
 }
 
-fn parse_vcf_document(text: &str, source: &str) -> Result<VcfDocument, String> {
+fn parse_vcf_document(text: &str, source: &str) -> Result<VcfDocument, CommandError> {
     let mut meta_lines = Vec::new();
     let mut column_header = None;
     let mut records = Vec::new();
@@ -8347,19 +8414,19 @@ fn parse_vcf_document(text: &str, source: &str) -> Result<VcfDocument, String> {
     for (line_index, line) in text.lines().enumerate() {
         if line.starts_with("##") {
             if column_header.is_some() {
-                return Err(format!("malformed VCF header in {source}"));
+                return Err(format!("malformed VCF header in {source}").into());
             }
             meta_lines.push(line.to_string());
         } else if line.starts_with("#CHROM") {
             column_header = Some(line.to_string());
         } else if line.starts_with('#') {
-            return Err(format!(
+            return Err(unsupported(format!(
                 "unsupported VCF header line {} in {source}",
                 line_index + 1
-            ));
+            )));
         } else if !line.trim().is_empty() {
             if column_header.is_none() {
-                return Err(format!("VCF input {source} is missing #CHROM header"));
+                return Err(format!("VCF input {source} is missing #CHROM header").into());
             }
             records.push(parse_vcf_record(
                 line,
@@ -8417,7 +8484,7 @@ enum LiftoverRecordResult {
     Rejected(VcfRecord),
 }
 
-fn read_simple_chain_mappings(path: &str) -> Result<Vec<ChainMapping>, String> {
+fn read_simple_chain_mappings(path: &str) -> Result<Vec<ChainMapping>, CommandError> {
     let text = read_text_or_gzip(path)?;
     let mut mappings = Vec::new();
     let mut lines = text.lines().peekable();
@@ -8426,52 +8493,62 @@ fn read_simple_chain_mappings(path: &str) -> Result<Vec<ChainMapping>, String> {
             continue;
         }
         let Some(header) = line.strip_prefix("chain ") else {
-            return Err("unsupported LiftoverVcf chain file without chain header".to_string());
+            return Err(unsupported(
+                "unsupported LiftoverVcf chain file without chain header",
+            ));
         };
         let fields = header.split_whitespace().collect::<Vec<_>>();
         if fields.len() != 12 {
-            return Err("unsupported LiftoverVcf malformed chain header".to_string());
+            return Err(unsupported(
+                "unsupported LiftoverVcf malformed chain header",
+            ));
         }
         let target_contig = fields[1].to_string();
         let target_size = fields[2]
             .parse::<u64>()
-            .map_err(|_| "unsupported LiftoverVcf malformed target size".to_string())?;
+            .map_err(|_| unsupported("unsupported LiftoverVcf malformed target size"))?;
         let target_strand = fields[3];
         let target_start = fields[4]
             .parse::<u64>()
-            .map_err(|_| "unsupported LiftoverVcf malformed target start".to_string())?;
+            .map_err(|_| unsupported("unsupported LiftoverVcf malformed target start"))?;
         let target_end = fields[5]
             .parse::<u64>()
-            .map_err(|_| "unsupported LiftoverVcf malformed target end".to_string())?;
+            .map_err(|_| unsupported("unsupported LiftoverVcf malformed target end"))?;
         let source_contig = fields[6].to_string();
         let source_size = fields[7]
             .parse::<u64>()
-            .map_err(|_| "unsupported LiftoverVcf malformed source size".to_string())?;
+            .map_err(|_| unsupported("unsupported LiftoverVcf malformed source size"))?;
         let source_strand = fields[8];
         let source_start = fields[9]
             .parse::<u64>()
-            .map_err(|_| "unsupported LiftoverVcf malformed source start".to_string())?;
+            .map_err(|_| unsupported("unsupported LiftoverVcf malformed source start"))?;
         let source_end = fields[10]
             .parse::<u64>()
-            .map_err(|_| "unsupported LiftoverVcf malformed source end".to_string())?;
+            .map_err(|_| unsupported("unsupported LiftoverVcf malformed source end"))?;
         if target_strand != "+" || source_strand != "+" {
-            return Err("unsupported LiftoverVcf reverse-strand chain".to_string());
+            return Err(unsupported("unsupported LiftoverVcf reverse-strand chain"));
         }
         if target_end > target_size || source_end > source_size || target_start >= target_end {
-            return Err("unsupported LiftoverVcf malformed chain bounds".to_string());
+            return Err(unsupported(
+                "unsupported LiftoverVcf malformed chain bounds",
+            ));
         }
         let block = lines
             .next()
-            .ok_or_else(|| "unsupported LiftoverVcf chain without block".to_string())?;
+            .ok_or_else(|| unsupported("unsupported LiftoverVcf chain without block"))?;
         let block_fields = block.split_whitespace().collect::<Vec<_>>();
         if block_fields.len() != 1 {
-            return Err("unsupported LiftoverVcf gapped or multi-block chain".to_string());
+            return Err(unsupported(
+                "unsupported LiftoverVcf gapped or multi-block chain",
+            ));
         }
         let block_size = block_fields[0]
             .parse::<u64>()
-            .map_err(|_| "unsupported LiftoverVcf malformed chain block".to_string())?;
+            .map_err(|_| unsupported("unsupported LiftoverVcf malformed chain block"))?;
         if block_size != source_end - source_start || block_size != target_end - target_start {
-            return Err("unsupported LiftoverVcf chain block does not span interval".to_string());
+            return Err(unsupported(
+                "unsupported LiftoverVcf chain block does not span interval",
+            ));
         }
         mappings.push(ChainMapping {
             source_contig,
@@ -8483,7 +8560,7 @@ fn read_simple_chain_mappings(path: &str) -> Result<Vec<ChainMapping>, String> {
         });
     }
     if mappings.is_empty() {
-        return Err("unsupported LiftoverVcf empty chain".to_string());
+        return Err(unsupported("unsupported LiftoverVcf empty chain"));
     }
     Ok(mappings)
 }
@@ -8589,10 +8666,10 @@ fn liftover_vcf_record(
     record: VcfRecord,
     mappings: &[ChainMapping],
     reference: &BTreeMap<String, Vec<u8>>,
-) -> Result<LiftoverRecordResult, String> {
+) -> Result<LiftoverRecordResult, CommandError> {
     let fields = record.line.split('\t').collect::<Vec<_>>();
     if fields.len() < 8 {
-        return Err("malformed VCF record for LiftoverVcf".to_string());
+        return Err("malformed VCF record for LiftoverVcf".into());
     }
     let ref_allele = fields[3];
     if ref_allele == "."
@@ -8600,7 +8677,9 @@ fn liftover_vcf_record(
             .chars()
             .any(|base| matches!(base, '<' | '>' | '[' | ']'))
     {
-        return Err("unsupported LiftoverVcf symbolic or missing REF allele".to_string());
+        return Err(unsupported(
+            "unsupported LiftoverVcf symbolic or missing REF allele",
+        ));
     }
     let source_start = record.position - 1;
     let source_end = source_start + ref_allele.len() as u64;
@@ -8624,7 +8703,8 @@ fn liftover_vcf_record(
         return Err(format!(
             "LiftoverVcf reference missing contig {}",
             mapping.target_contig
-        ));
+        )
+        .into());
     };
     let reference_slice = target_reference
         .get(usize_or_max(target_start)..usize_or_max(target_end))
@@ -8848,7 +8928,7 @@ fn replace_vcf_contig_header(input_text: &str, contig_lines: &[String]) -> Resul
     Ok(output)
 }
 
-fn reject_unsupported_replacesamheader_args(args: &PicardArgs) -> Result<(), String> {
+fn reject_unsupported_replacesamheader_args(args: &PicardArgs) -> Result<(), CommandError> {
     let supported = [
         "INPUT",
         "OUTPUT",
@@ -8867,7 +8947,9 @@ fn reject_unsupported_replacesamheader_args(args: &PicardArgs) -> Result<(), Str
     ];
     for key in args.keys() {
         if !supported.contains(&key.as_str()) {
-            return Err(format!("unsupported ReplaceSamHeader argument: {key}"));
+            return Err(unsupported(format!(
+                "unsupported ReplaceSamHeader argument: {key}"
+            )));
         }
     }
     optional_scalar(args, "HEADER")?;
@@ -8885,7 +8967,7 @@ fn reject_unsupported_replacesamheader_args(args: &PicardArgs) -> Result<(), Str
     Ok(())
 }
 
-fn reject_unsupported_createsequencedictionary_args(args: &PicardArgs) -> Result<(), String> {
+fn reject_unsupported_createsequencedictionary_args(args: &PicardArgs) -> Result<(), CommandError> {
     let supported = [
         "REFERENCE_SEQUENCE",
         "OUTPUT",
@@ -8909,9 +8991,9 @@ fn reject_unsupported_createsequencedictionary_args(args: &PicardArgs) -> Result
 
     for key in args.keys() {
         if !supported.contains(&key.as_str()) {
-            return Err(format!(
+            return Err(unsupported(format!(
                 "unsupported CreateSequenceDictionary argument: {key}"
-            ));
+            )));
         }
     }
 
@@ -8934,7 +9016,7 @@ fn reject_unsupported_createsequencedictionary_args(args: &PicardArgs) -> Result
     Ok(())
 }
 
-fn reject_unsupported_normalizefasta_args(args: &PicardArgs) -> Result<(), String> {
+fn reject_unsupported_normalizefasta_args(args: &PicardArgs) -> Result<(), CommandError> {
     let supported = [
         "INPUT",
         "OUTPUT",
@@ -8954,7 +9036,9 @@ fn reject_unsupported_normalizefasta_args(args: &PicardArgs) -> Result<(), Strin
     ];
     for key in args.keys() {
         if !supported.contains(&key.as_str()) {
-            return Err(format!("unsupported NormalizeFasta argument: {key}"));
+            return Err(unsupported(format!(
+                "unsupported NormalizeFasta argument: {key}"
+            )));
         }
     }
     optional_u32(args, "LINE_LENGTH")?;
@@ -8973,7 +9057,7 @@ fn reject_unsupported_normalizefasta_args(args: &PicardArgs) -> Result<(), Strin
     Ok(())
 }
 
-fn reject_unsupported_bedtointervallist_args(args: &PicardArgs) -> Result<(), String> {
+fn reject_unsupported_bedtointervallist_args(args: &PicardArgs) -> Result<(), CommandError> {
     let supported = [
         "INPUT",
         "OUTPUT",
@@ -8996,7 +9080,9 @@ fn reject_unsupported_bedtointervallist_args(args: &PicardArgs) -> Result<(), St
     ];
     for key in args.keys() {
         if !supported.contains(&key.as_str()) {
-            return Err(format!("unsupported BedToIntervalList argument: {key}"));
+            return Err(unsupported(format!(
+                "unsupported BedToIntervalList argument: {key}"
+            )));
         }
     }
     optional_bool(args, "SORT")?;
@@ -9017,7 +9103,7 @@ fn reject_unsupported_bedtointervallist_args(args: &PicardArgs) -> Result<(), St
     Ok(())
 }
 
-fn reject_unsupported_intervallisttools_args(args: &PicardArgs) -> Result<(), String> {
+fn reject_unsupported_intervallisttools_args(args: &PicardArgs) -> Result<(), CommandError> {
     let supported = [
         "INPUT",
         "OUTPUT",
@@ -9040,18 +9126,22 @@ fn reject_unsupported_intervallisttools_args(args: &PicardArgs) -> Result<(), St
     ];
     for key in args.keys() {
         if !supported.contains(&key.as_str()) {
-            return Err(format!("unsupported IntervalListTools argument: {key}"));
+            return Err(unsupported(format!(
+                "unsupported IntervalListTools argument: {key}"
+            )));
         }
     }
     if let Some(action) = optional_scalar(args, "ACTION")?
         && action != "CONCAT"
     {
-        return Err(format!("unsupported IntervalListTools ACTION={action}"));
+        return Err(unsupported(format!(
+            "unsupported IntervalListTools ACTION={action}"
+        )));
     }
     optional_bool(args, "SORT")?;
     optional_bool(args, "UNIQUE")?;
     if optional_i64(args, "PADDING")?.unwrap_or(0) < 0 {
-        return Err("Padding values must be >= 0.".to_string());
+        return Err("Padding values must be >= 0.".into());
     }
     optional_bool(args, "DONT_MERGE_ABUTTING")?;
     optional_scalar(args, "VALIDATION_STRINGENCY")?;
@@ -9061,7 +9151,7 @@ fn reject_unsupported_intervallisttools_args(args: &PicardArgs) -> Result<(), St
     Ok(())
 }
 
-fn reject_unsupported_revertsam_args(args: &PicardArgs) -> Result<(), String> {
+fn reject_unsupported_revertsam_args(args: &PicardArgs) -> Result<(), CommandError> {
     let supported = [
         "INPUT",
         "OUTPUT",
@@ -9087,7 +9177,9 @@ fn reject_unsupported_revertsam_args(args: &PicardArgs) -> Result<(), String> {
     ];
     for key in args.keys() {
         if !supported.contains(&key.as_str()) {
-            return Err(format!("unsupported RevertSam argument: {key}"));
+            return Err(unsupported(format!(
+                "unsupported RevertSam argument: {key}"
+            )));
         }
     }
     optional_scalar(args, "REFERENCE_SEQUENCE")?;
@@ -9096,8 +9188,7 @@ fn reject_unsupported_revertsam_args(args: &PicardArgs) -> Result<(), String> {
     let restore_hardclips = optional_bool(args, "RESTORE_HARDCLIPS")?.unwrap_or(true);
     if !remove_alignment_information && restore_hardclips {
         return Err(
-            "Cannot revert sam file when RESTORE_HARDCLIPS is true and REMOVE_ALIGNMENT_INFORMATION is false."
-                .to_string(),
+            "Cannot revert sam file when RESTORE_HARDCLIPS is true and REMOVE_ALIGNMENT_INFORMATION is false.".into(),
         );
     }
     optional_bool(args, "REMOVE_DUPLICATE_INFORMATION")?;
@@ -9109,7 +9200,9 @@ fn reject_unsupported_revertsam_args(args: &PicardArgs) -> Result<(), String> {
         && sort_order != "coordinate"
         && sort_order != "unsorted"
     {
-        return Err(format!("unsupported RevertSam SORT_ORDER={sort_order}"));
+        return Err(unsupported(format!(
+            "unsupported RevertSam SORT_ORDER={sort_order}"
+        )));
     }
     let _ = attributes_to_clear_for_revertsam(args)?;
     let _ = attributes_for_revertsam(args, "ATTRIBUTE_TO_REVERSE")?;
@@ -9126,23 +9219,25 @@ fn reject_unsupported_revertsam_args(args: &PicardArgs) -> Result<(), String> {
     Ok(())
 }
 
-fn attributes_to_clear_for_revertsam(args: &PicardArgs) -> Result<Vec<[u8; 2]>, String> {
+fn attributes_to_clear_for_revertsam(args: &PicardArgs) -> Result<Vec<[u8; 2]>, CommandError> {
     attributes_for_revertsam(args, "ATTRIBUTE_TO_CLEAR")
 }
 
-fn attributes_for_revertsam(args: &PicardArgs, key: &str) -> Result<Vec<[u8; 2]>, String> {
+fn attributes_for_revertsam(args: &PicardArgs, key: &str) -> Result<Vec<[u8; 2]>, CommandError> {
     let mut attributes = Vec::new();
     for attribute in args.get(key).into_iter().flatten() {
         let bytes = attribute.as_bytes();
         if bytes.len() != 2 || !bytes.iter().all(u8::is_ascii_alphanumeric) {
-            return Err(format!("unsupported RevertSam {key}={attribute}"));
+            return Err(unsupported(format!(
+                "unsupported RevertSam {key}={attribute}"
+            )));
         }
         attributes.push([bytes[0], bytes[1]]);
     }
     Ok(attributes)
 }
 
-fn reject_unsupported_setnmmdanduqtags_args(args: &PicardArgs) -> Result<(), String> {
+fn reject_unsupported_setnmmdanduqtags_args(args: &PicardArgs) -> Result<(), CommandError> {
     let supported = [
         "INPUT",
         "OUTPUT",
@@ -9162,11 +9257,15 @@ fn reject_unsupported_setnmmdanduqtags_args(args: &PicardArgs) -> Result<(), Str
     ];
     for key in args.keys() {
         if !supported.contains(&key.as_str()) {
-            return Err(format!("unsupported SetNmMdAndUqTags argument: {key}"));
+            return Err(unsupported(format!(
+                "unsupported SetNmMdAndUqTags argument: {key}"
+            )));
         }
     }
     if optional_bool(args, "IS_BISULFITE_SEQUENCE")?.unwrap_or(false) {
-        return Err("unsupported SetNmMdAndUqTags IS_BISULFITE_SEQUENCE=true".to_string());
+        return Err(unsupported(
+            "unsupported SetNmMdAndUqTags IS_BISULFITE_SEQUENCE=true",
+        ));
     }
     optional_bool(args, "SET_ONLY_UQ")?;
     optional_bool(args, "CREATE_INDEX")?;
@@ -9182,7 +9281,7 @@ fn reject_unsupported_setnmmdanduqtags_args(args: &PicardArgs) -> Result<(), Str
     Ok(())
 }
 
-fn reject_unsupported_validatesamfile_args(args: &PicardArgs) -> Result<(), String> {
+fn reject_unsupported_validatesamfile_args(args: &PicardArgs) -> Result<(), CommandError> {
     let supported = [
         "INPUT",
         "OUTPUT",
@@ -9204,7 +9303,9 @@ fn reject_unsupported_validatesamfile_args(args: &PicardArgs) -> Result<(), Stri
     ];
     for key in args.keys() {
         if !supported.contains(&key.as_str()) {
-            return Err(format!("unsupported ValidateSamFile argument: {key}"));
+            return Err(unsupported(format!(
+                "unsupported ValidateSamFile argument: {key}"
+            )));
         }
     }
     validate_sam_mode(args)?;
@@ -9507,7 +9608,7 @@ fn validate_sam_summary(
     reader: &mut bam::Reader,
     skip_mate_validation: bool,
     reference_by_name: Option<&BTreeMap<String, Vec<u8>>>,
-) -> Result<ValidateSamReport, String> {
+) -> Result<ValidateSamReport, CommandError> {
     let header_text = String::from_utf8_lossy(reader.header().as_bytes()).to_string();
     let read_groups = read_group_platforms(&header_text);
     let mut structure = sam_structure::Structure::default();
@@ -9611,7 +9712,7 @@ fn validate_sam_summary(
 fn validate_sam_summary_sam_text(
     input: &str,
     skip_mate_validation: bool,
-) -> Result<ValidateSamReport, String> {
+) -> Result<ValidateSamReport, CommandError> {
     let file = fs::File::open(input).map_err(|error| error.to_string())?;
     let mut reader = BufReader::with_capacity(1024 * 1024, file);
     let mut line = Vec::new();
@@ -10128,7 +10229,7 @@ fn expected_record_nm(
     Ok(Some(nm))
 }
 
-fn validate_sam_ignored_summary_keys(args: &PicardArgs) -> Result<BTreeSet<String>, String> {
+fn validate_sam_ignored_summary_keys(args: &PicardArgs) -> Result<BTreeSet<String>, CommandError> {
     let mut ignored = BTreeSet::new();
     for value in args.get("IGNORE").into_iter().flatten() {
         let key = match value.as_str() {
@@ -10147,14 +10248,18 @@ fn validate_sam_ignored_summary_keys(args: &PicardArgs) -> Result<BTreeSet<Strin
             "CIGAR_MAPS_OFF_REFERENCE" => "ERROR:CIGAR_MAPS_OFF_REFERENCE",
             "RECORD_OUT_OF_ORDER" => "ERROR:RECORD_OUT_OF_ORDER",
             "INVALID_ALIGNMENT_START" => "ERROR:INVALID_ALIGNMENT_START",
-            _ => return Err(format!("unsupported ValidateSamFile IGNORE={value}")),
+            _ => {
+                return Err(unsupported(format!(
+                    "unsupported ValidateSamFile IGNORE={value}"
+                )));
+            }
         };
         ignored.insert(key.to_string());
     }
     Ok(ignored)
 }
 
-fn validate_sam_mode(args: &PicardArgs) -> Result<ValidateSamMode, String> {
+fn validate_sam_mode(args: &PicardArgs) -> Result<ValidateSamMode, CommandError> {
     match optional_scalar(args, "MODE")?
         .unwrap_or_else(|| "SUMMARY".to_string())
         .to_ascii_uppercase()
@@ -10162,7 +10267,9 @@ fn validate_sam_mode(args: &PicardArgs) -> Result<ValidateSamMode, String> {
     {
         "SUMMARY" => Ok(ValidateSamMode::Summary),
         "VERBOSE" => Ok(ValidateSamMode::Verbose),
-        mode => Err(format!("unsupported ValidateSamFile MODE={mode}")),
+        mode => Err(unsupported(format!(
+            "unsupported ValidateSamFile MODE={mode}"
+        ))),
     }
 }
 
@@ -10811,7 +10918,7 @@ fn read_bed_intervals(
     Ok(intervals)
 }
 
-fn reject_unsupported_collectalignment_args(args: &PicardArgs) -> Result<(), String> {
+fn reject_unsupported_collectalignment_args(args: &PicardArgs) -> Result<(), CommandError> {
     let supported = [
         "INPUT",
         "OUTPUT",
@@ -10830,9 +10937,9 @@ fn reject_unsupported_collectalignment_args(args: &PicardArgs) -> Result<(), Str
 
     for key in args.keys() {
         if !supported.contains(&key.as_str()) {
-            return Err(format!(
+            return Err(unsupported(format!(
                 "unsupported CollectAlignmentSummaryMetrics argument: {key}"
-            ));
+            )));
         }
     }
 
@@ -10843,10 +10950,9 @@ fn reject_unsupported_collectalignment_args(args: &PicardArgs) -> Result<(), Str
     optional_u32(args, "MAX_RECORDS_IN_RAM")?;
     optional_bool(args, "ASSUME_SORTED")?;
     if optional_bool(args, "COLLECT_ALIGNMENT_INFORMATION")? == Some(false) {
-        return Err(
-            "unsupported CollectAlignmentSummaryMetrics COLLECT_ALIGNMENT_INFORMATION=false"
-                .to_string(),
-        );
+        return Err(unsupported(
+            "unsupported CollectAlignmentSummaryMetrics COLLECT_ALIGNMENT_INFORMATION=false",
+        ));
     }
     if let Some(level) = optional_scalar(args, "METRIC_ACCUMULATION_LEVEL")?
         && level != "ALL_READS"
@@ -10854,16 +10960,16 @@ fn reject_unsupported_collectalignment_args(args: &PicardArgs) -> Result<(), Str
         && level != "LIBRARY"
         && level != "READ_GROUP"
     {
-        return Err(format!(
+        return Err(unsupported(format!(
             "unsupported CollectAlignmentSummaryMetrics METRIC_ACCUMULATION_LEVEL={level}"
-        ));
+        )));
     }
     optional_u32(args, "STOP_AFTER")?;
     reject_unsupported_compression_level(args, "CollectAlignmentSummaryMetrics")?;
     Ok(())
 }
 
-fn reject_unsupported_collectqualityyield_args(args: &PicardArgs) -> Result<(), String> {
+fn reject_unsupported_collectqualityyield_args(args: &PicardArgs) -> Result<(), CommandError> {
     let supported = [
         "INPUT",
         "OUTPUT",
@@ -10882,9 +10988,9 @@ fn reject_unsupported_collectqualityyield_args(args: &PicardArgs) -> Result<(), 
 
     for key in args.keys() {
         if !supported.contains(&key.as_str()) {
-            return Err(format!(
+            return Err(unsupported(format!(
                 "unsupported CollectQualityYieldMetrics argument: {key}"
-            ));
+            )));
         }
     }
 
@@ -10902,7 +11008,7 @@ fn reject_unsupported_collectqualityyield_args(args: &PicardArgs) -> Result<(), 
     Ok(())
 }
 
-fn reject_unsupported_collectinsertsize_args(args: &PicardArgs) -> Result<(), String> {
+fn reject_unsupported_collectinsertsize_args(args: &PicardArgs) -> Result<(), CommandError> {
     let supported = [
         "INPUT",
         "OUTPUT",
@@ -10923,9 +11029,9 @@ fn reject_unsupported_collectinsertsize_args(args: &PicardArgs) -> Result<(), St
     ];
     for key in args.keys() {
         if !supported.contains(&key.as_str()) {
-            return Err(format!(
+            return Err(unsupported(format!(
                 "unsupported CollectInsertSizeMetrics argument: {key}"
-            ));
+            )));
         }
     }
     optional_scalar(args, "REFERENCE_SEQUENCE")?;
@@ -10936,9 +11042,9 @@ fn reject_unsupported_collectinsertsize_args(args: &PicardArgs) -> Result<(), St
         && level != "LIBRARY"
         && level != "READ_GROUP"
     {
-        return Err(format!(
+        return Err(unsupported(format!(
             "unsupported CollectInsertSizeMetrics METRIC_ACCUMULATION_LEVEL={level}"
-        ));
+        )));
     }
     optional_bool(args, "INCLUDE_DUPLICATES")?;
     optional_bool(args, "ASSUME_SORTED")?;
@@ -10953,7 +11059,7 @@ fn reject_unsupported_collectinsertsize_args(args: &PicardArgs) -> Result<(), St
     Ok(())
 }
 
-fn reject_unsupported_collectmultiplemetrics_args(args: &PicardArgs) -> Result<(), String> {
+fn reject_unsupported_collectmultiplemetrics_args(args: &PicardArgs) -> Result<(), CommandError> {
     let supported = [
         "INPUT",
         "OUTPUT",
@@ -10982,30 +11088,30 @@ fn reject_unsupported_collectmultiplemetrics_args(args: &PicardArgs) -> Result<(
     ];
     for key in args.keys() {
         if !supported.contains(&key.as_str()) {
-            return Err(format!(
+            return Err(unsupported(format!(
                 "unsupported CollectMultipleMetrics argument: {key}"
-            ));
+            )));
         }
     }
     optional_bool(args, "ASSUME_SORTED")?;
     for value in args.get("EXTRA_ARGUMENT").into_iter().flatten() {
         let Some((program, rest)) = value.split_once("::") else {
-            return Err(format!(
+            return Err(unsupported(format!(
                 "unsupported CollectMultipleMetrics EXTRA_ARGUMENT={value}"
-            ));
+            )));
         };
         if !collectmultiplemetrics_programs(args)?
             .iter()
             .any(|p| p == program)
         {
-            return Err(format!(
+            return Err(unsupported(format!(
                 "unsupported CollectMultipleMetrics EXTRA_ARGUMENT program: {program}"
-            ));
+            )));
         }
         let Some((key, _argument_value)) = rest.split_once('=') else {
-            return Err(format!(
+            return Err(unsupported(format!(
                 "unsupported CollectMultipleMetrics EXTRA_ARGUMENT={value}"
-            ));
+            )));
         };
         match (program, key) {
             (
@@ -11027,9 +11133,9 @@ fn reject_unsupported_collectmultiplemetrics_args(args: &PicardArgs) -> Result<(
                 | "USE_ORIGINAL_QUALITIES",
             ) => {}
             _ => {
-                return Err(format!(
+                return Err(unsupported(format!(
                     "unsupported CollectMultipleMetrics EXTRA_ARGUMENT={value}"
-                ));
+                )));
             }
         }
     }
@@ -11055,18 +11161,18 @@ fn reject_unsupported_collectmultiplemetrics_args(args: &PicardArgs) -> Result<(
             level.as_str(),
             "ALL_READS" | "SAMPLE" | "LIBRARY" | "READ_GROUP"
         ) {
-            return Err(format!(
+            return Err(unsupported(format!(
                 "unsupported CollectMultipleMetrics METRIC_ACCUMULATION_LEVEL={level}"
-            ));
+            )));
         }
         if level != "ALL_READS"
             && programs.iter().any(|program| {
                 program != "CollectInsertSizeMetrics" && program != "CollectAlignmentSummaryMetrics"
             })
         {
-            return Err(format!(
+            return Err(unsupported(format!(
                 "unsupported CollectMultipleMetrics METRIC_ACCUMULATION_LEVEL={level} for selected PROGRAM values"
-            ));
+            )));
         }
     }
     optional_u32(args, "STOP_AFTER")?;
@@ -11074,7 +11180,7 @@ fn reject_unsupported_collectmultiplemetrics_args(args: &PicardArgs) -> Result<(
     Ok(())
 }
 
-fn collectmultiplemetrics_programs(args: &PicardArgs) -> Result<Vec<String>, String> {
+fn collectmultiplemetrics_programs(args: &PicardArgs) -> Result<Vec<String>, CommandError> {
     if !args.contains_key("PROGRAM") {
         return Ok(default_collectmultiplemetrics_programs());
     }
@@ -11094,14 +11200,16 @@ fn collectmultiplemetrics_programs(args: &PicardArgs) -> Result<Vec<String>, Str
             | "CollectQualityYieldMetrics"
             | "CollectWgsMetrics" => programs.push(value.clone()),
             _ => {
-                return Err(format!(
+                return Err(unsupported(format!(
                     "unsupported CollectMultipleMetrics PROGRAM={value}"
-                ));
+                )));
             }
         }
     }
     if programs.is_empty() {
-        return Err("unsupported CollectMultipleMetrics empty PROGRAM set".to_string());
+        return Err(unsupported(
+            "unsupported CollectMultipleMetrics empty PROGRAM set",
+        ));
     }
     Ok(programs)
 }
@@ -11144,7 +11252,9 @@ fn default_collectmultiplemetrics_programs() -> Vec<String> {
     .collect()
 }
 
-fn reject_unsupported_collectbasedistributionbycycle_args(args: &PicardArgs) -> Result<(), String> {
+fn reject_unsupported_collectbasedistributionbycycle_args(
+    args: &PicardArgs,
+) -> Result<(), CommandError> {
     let supported = [
         "INPUT",
         "OUTPUT",
@@ -11163,9 +11273,9 @@ fn reject_unsupported_collectbasedistributionbycycle_args(args: &PicardArgs) -> 
     ];
     for key in args.keys() {
         if !supported.contains(&key.as_str()) {
-            return Err(format!(
+            return Err(unsupported(format!(
                 "unsupported CollectBaseDistributionByCycle argument: {key}"
-            ));
+            )));
         }
     }
     optional_scalar(args, "REFERENCE_SEQUENCE")?;
@@ -11182,7 +11292,7 @@ fn reject_unsupported_collectbasedistributionbycycle_args(args: &PicardArgs) -> 
     Ok(())
 }
 
-fn reject_unsupported_collectgcbiasmetrics_args(args: &PicardArgs) -> Result<(), String> {
+fn reject_unsupported_collectgcbiasmetrics_args(args: &PicardArgs) -> Result<(), CommandError> {
     let supported = [
         "INPUT",
         "OUTPUT",
@@ -11205,7 +11315,9 @@ fn reject_unsupported_collectgcbiasmetrics_args(args: &PicardArgs) -> Result<(),
     ];
     for key in args.keys() {
         if !supported.contains(&key.as_str()) {
-            return Err(format!("unsupported CollectGcBiasMetrics argument: {key}"));
+            return Err(unsupported(format!(
+                "unsupported CollectGcBiasMetrics argument: {key}"
+            )));
         }
     }
     optional_scalar(args, "CHART_OUTPUT")?;
@@ -11214,18 +11326,22 @@ fn reject_unsupported_collectgcbiasmetrics_args(args: &PicardArgs) -> Result<(),
     optional_bool(args, "ASSUME_SORTED")?;
     optional_bool(args, "ALSO_IGNORE_DUPLICATES")?;
     if optional_bool(args, "IS_BISULFITE_SEQUENCED")?.unwrap_or(false) {
-        return Err("unsupported CollectGcBiasMetrics IS_BISULFITE_SEQUENCED=true".to_string());
+        return Err(unsupported(
+            "unsupported CollectGcBiasMetrics IS_BISULFITE_SEQUENCED=true",
+        ));
     }
     if let Some(level) = optional_scalar(args, "METRIC_ACCUMULATION_LEVEL")?
         && level != "ALL_READS"
     {
-        return Err(format!(
+        return Err(unsupported(format!(
             "unsupported CollectGcBiasMetrics METRIC_ACCUMULATION_LEVEL={level}"
-        ));
+        )));
     }
     let window_size = optional_u32(args, "SCAN_WINDOW_SIZE")?.unwrap_or(100);
     if window_size == 0 {
-        return Err("unsupported CollectGcBiasMetrics SCAN_WINDOW_SIZE=0".to_string());
+        return Err(unsupported(
+            "unsupported CollectGcBiasMetrics SCAN_WINDOW_SIZE=0",
+        ));
     }
     optional_f64(args, "MINIMUM_GENOME_FRACTION")?;
     optional_u32(args, "STOP_AFTER")?;
@@ -11236,7 +11352,7 @@ fn reject_unsupported_collectgcbiasmetrics_args(args: &PicardArgs) -> Result<(),
     Ok(())
 }
 
-fn reject_unsupported_collecthsmetrics_args(args: &PicardArgs) -> Result<(), String> {
+fn reject_unsupported_collecthsmetrics_args(args: &PicardArgs) -> Result<(), CommandError> {
     let supported = [
         "INPUT",
         "OUTPUT",
@@ -11266,7 +11382,9 @@ fn reject_unsupported_collecthsmetrics_args(args: &PicardArgs) -> Result<(), Str
     ];
     for key in args.keys() {
         if !supported.contains(&key.as_str()) {
-            return Err(format!("unsupported CollectHsMetrics argument: {key}"));
+            return Err(unsupported(format!(
+                "unsupported CollectHsMetrics argument: {key}"
+            )));
         }
     }
     optional_scalar(args, "PER_TARGET_COVERAGE")?;
@@ -11288,15 +11406,15 @@ fn reject_unsupported_collecthsmetrics_args(args: &PicardArgs) -> Result<(), Str
     if let Some(level) = optional_scalar(args, "METRIC_ACCUMULATION_LEVEL")?
         && level != "ALL_READS"
     {
-        return Err(format!(
+        return Err(unsupported(format!(
             "unsupported CollectHsMetrics METRIC_ACCUMULATION_LEVEL={level}"
-        ));
+        )));
     }
     reject_unsupported_compression_level(args, "CollectHsMetrics")?;
     Ok(())
 }
 
-fn reject_unsupported_collectwgsmetrics_args(args: &PicardArgs) -> Result<(), String> {
+fn reject_unsupported_collectwgsmetrics_args(args: &PicardArgs) -> Result<(), CommandError> {
     let supported = [
         "INPUT",
         "OUTPUT",
@@ -11323,7 +11441,9 @@ fn reject_unsupported_collectwgsmetrics_args(args: &PicardArgs) -> Result<(), St
     ];
     for key in args.keys() {
         if !supported.contains(&key.as_str()) {
-            return Err(format!("unsupported CollectWgsMetrics argument: {key}"));
+            return Err(unsupported(format!(
+                "unsupported CollectWgsMetrics argument: {key}"
+            )));
         }
     }
     let _ = args.get("INTERVALS");
@@ -11348,7 +11468,7 @@ fn reject_unsupported_collectwgsmetrics_args(args: &PicardArgs) -> Result<(), St
     Ok(())
 }
 
-fn reject_unsupported_fixmateinformation_args(args: &PicardArgs) -> Result<(), String> {
+fn reject_unsupported_fixmateinformation_args(args: &PicardArgs) -> Result<(), CommandError> {
     let supported = [
         "INPUT",
         "OUTPUT",
@@ -11368,7 +11488,9 @@ fn reject_unsupported_fixmateinformation_args(args: &PicardArgs) -> Result<(), S
     ];
     for key in args.keys() {
         if !supported.contains(&key.as_str()) {
-            return Err(format!("unsupported FixMateInformation argument: {key}"));
+            return Err(unsupported(format!(
+                "unsupported FixMateInformation argument: {key}"
+            )));
         }
     }
     required_values_for(args, "INPUT", "FixMateInformation")?;
@@ -11377,9 +11499,9 @@ fn reject_unsupported_fixmateinformation_args(args: &PicardArgs) -> Result<(), S
         && sort_order != "coordinate"
         && sort_order != "unsorted"
     {
-        return Err(format!(
+        return Err(unsupported(format!(
             "unsupported FixMateInformation SORT_ORDER={sort_order}"
-        ));
+        )));
     }
     optional_bool(args, "ADD_MATE_CIGAR")?;
     optional_bool(args, "ASSUME_SORTED")?;
@@ -11396,7 +11518,7 @@ fn reject_unsupported_fixmateinformation_args(args: &PicardArgs) -> Result<(), S
     Ok(())
 }
 
-fn reject_unsupported_qualityscoredistribution_args(args: &PicardArgs) -> Result<(), String> {
+fn reject_unsupported_qualityscoredistribution_args(args: &PicardArgs) -> Result<(), CommandError> {
     let supported = [
         "INPUT",
         "OUTPUT",
@@ -11417,9 +11539,9 @@ fn reject_unsupported_qualityscoredistribution_args(args: &PicardArgs) -> Result
 
     for key in args.keys() {
         if !supported.contains(&key.as_str()) {
-            return Err(format!(
+            return Err(unsupported(format!(
                 "unsupported QualityScoreDistribution argument: {key}"
-            ));
+            )));
         }
     }
 
@@ -11438,7 +11560,7 @@ fn reject_unsupported_qualityscoredistribution_args(args: &PicardArgs) -> Result
     Ok(())
 }
 
-fn reject_unsupported_meanqualitybycycle_args(args: &PicardArgs) -> Result<(), String> {
+fn reject_unsupported_meanqualitybycycle_args(args: &PicardArgs) -> Result<(), CommandError> {
     let supported = [
         "INPUT",
         "OUTPUT",
@@ -11458,7 +11580,9 @@ fn reject_unsupported_meanqualitybycycle_args(args: &PicardArgs) -> Result<(), S
 
     for key in args.keys() {
         if !supported.contains(&key.as_str()) {
-            return Err(format!("unsupported MeanQualityByCycle argument: {key}"));
+            return Err(unsupported(format!(
+                "unsupported MeanQualityByCycle argument: {key}"
+            )));
         }
     }
 
@@ -11493,7 +11617,7 @@ enum AlignmentAccumulation {
     ReadGroup,
 }
 
-fn alignment_accumulation_level(args: &PicardArgs) -> Result<AlignmentAccumulation, String> {
+fn alignment_accumulation_level(args: &PicardArgs) -> Result<AlignmentAccumulation, CommandError> {
     match optional_scalar(args, "METRIC_ACCUMULATION_LEVEL")?
         .unwrap_or_else(|| "ALL_READS".to_string())
         .as_str()
@@ -11502,9 +11626,9 @@ fn alignment_accumulation_level(args: &PicardArgs) -> Result<AlignmentAccumulati
         "SAMPLE" => Ok(AlignmentAccumulation::Sample),
         "LIBRARY" => Ok(AlignmentAccumulation::Library),
         "READ_GROUP" => Ok(AlignmentAccumulation::ReadGroup),
-        value => Err(format!(
+        value => Err(unsupported(format!(
             "unsupported CollectAlignmentSummaryMetrics METRIC_ACCUMULATION_LEVEL={value}"
-        )),
+        ))),
     }
 }
 
@@ -15986,7 +16110,9 @@ enum InsertSizeAccumulation {
     ReadGroup,
 }
 
-fn insert_size_accumulation_level(args: &PicardArgs) -> Result<InsertSizeAccumulation, String> {
+fn insert_size_accumulation_level(
+    args: &PicardArgs,
+) -> Result<InsertSizeAccumulation, CommandError> {
     match optional_scalar(args, "METRIC_ACCUMULATION_LEVEL")?
         .unwrap_or_else(|| "ALL_READS".to_string())
         .as_str()
@@ -15995,9 +16121,9 @@ fn insert_size_accumulation_level(args: &PicardArgs) -> Result<InsertSizeAccumul
         "SAMPLE" => Ok(InsertSizeAccumulation::Sample),
         "LIBRARY" => Ok(InsertSizeAccumulation::Library),
         "READ_GROUP" => Ok(InsertSizeAccumulation::ReadGroup),
-        value => Err(format!(
+        value => Err(unsupported(format!(
             "unsupported CollectInsertSizeMetrics METRIC_ACCUMULATION_LEVEL={value}"
-        )),
+        ))),
     }
 }
 
@@ -17435,7 +17561,7 @@ fn fastqtosam_header(read_group: &FastqReadGroup) -> bam::Header {
     header
 }
 
-fn reject_unsupported_addorreplacereadgroups_args(args: &PicardArgs) -> Result<(), String> {
+fn reject_unsupported_addorreplacereadgroups_args(args: &PicardArgs) -> Result<(), CommandError> {
     let supported = [
         "INPUT",
         "OUTPUT",
@@ -17467,9 +17593,9 @@ fn reject_unsupported_addorreplacereadgroups_args(args: &PicardArgs) -> Result<(
 
     for key in args.keys() {
         if !supported.contains(&key.as_str()) {
-            return Err(format!(
+            return Err(unsupported(format!(
                 "unsupported AddOrReplaceReadGroups argument: {key}"
-            ));
+            )));
         }
     }
 
@@ -17561,7 +17687,7 @@ fn set_record_read_group(record: &mut bam::Record, read_group_id: &str) -> Resul
         .map_err(|error| error.to_string())
 }
 
-fn reject_unsupported_samtofastq_args(args: &PicardArgs) -> Result<(), String> {
+fn reject_unsupported_samtofastq_args(args: &PicardArgs) -> Result<(), CommandError> {
     let supported = [
         "INPUT",
         "FASTQ",
@@ -17598,7 +17724,9 @@ fn reject_unsupported_samtofastq_args(args: &PicardArgs) -> Result<(), String> {
 
     for key in args.keys() {
         if !supported.contains(&key.as_str()) {
-            return Err(format!("unsupported SamToFastq argument: {key}"));
+            return Err(unsupported(format!(
+                "unsupported SamToFastq argument: {key}"
+            )));
         }
     }
 
@@ -17615,12 +17743,11 @@ fn reject_unsupported_samtofastq_args(args: &PicardArgs) -> Result<(), String> {
             || args.contains_key("UNPAIRED_FASTQ")
         {
             return Err(
-                "SamToFastq OUTPUT_PER_RG cannot be combined with FASTQ, SECOND_END_FASTQ, or UNPAIRED_FASTQ"
-                    .to_string(),
+                "SamToFastq OUTPUT_PER_RG cannot be combined with FASTQ, SECOND_END_FASTQ, or UNPAIRED_FASTQ".into(),
             );
         }
     } else if args.contains_key("RG_TAG") || args.contains_key("OUTPUT_DIR") {
-        return Err("SamToFastq RG_TAG and OUTPUT_DIR require OUTPUT_PER_RG=true".to_string());
+        return Err("SamToFastq RG_TAG and OUTPUT_DIR require OUTPUT_PER_RG=true".into());
     }
     if compress_outputs_per_rg {
         if args.contains_key("FASTQ")
@@ -17628,20 +17755,17 @@ fn reject_unsupported_samtofastq_args(args: &PicardArgs) -> Result<(), String> {
             || args.contains_key("UNPAIRED_FASTQ")
         {
             return Err(
-                "SamToFastq COMPRESS_OUTPUTS_PER_RG cannot be combined with FASTQ, SECOND_END_FASTQ, or UNPAIRED_FASTQ"
-                    .to_string(),
+                "SamToFastq COMPRESS_OUTPUTS_PER_RG cannot be combined with FASTQ, SECOND_END_FASTQ, or UNPAIRED_FASTQ".into(),
             );
         }
         if !output_per_rg {
-            return Err(
-                "SamToFastq COMPRESS_OUTPUTS_PER_RG requires OUTPUT_PER_RG=true".to_string(),
-            );
+            return Err("SamToFastq COMPRESS_OUTPUTS_PER_RG requires OUTPUT_PER_RG=true".into());
         }
     }
     if let Some(tag) = optional_scalar(args, "RG_TAG")? {
         match tag.as_str() {
             "PU" | "pu" | "ID" | "id" => {}
-            _ => return Err(format!("unsupported SamToFastq RG_TAG: {tag}")),
+            _ => return Err(unsupported(format!("unsupported SamToFastq RG_TAG: {tag}"))),
         }
     }
     optional_u32(args, "READ1_TRIM")?;
@@ -17653,16 +17777,15 @@ fn reject_unsupported_samtofastq_args(args: &PicardArgs) -> Result<(), String> {
     optional_scalar(args, "CLIPPING_ACTION")?;
     optional_u32(args, "CLIPPING_MIN_LENGTH")?;
     if args.contains_key("CLIPPING_ATTRIBUTE") != args.contains_key("CLIPPING_ACTION") {
-        return Err(
-            "unsupported SamToFastq clipping requires both CLIPPING_ATTRIBUTE and CLIPPING_ACTION"
-                .to_string(),
-        );
+        return Err(unsupported(
+            "unsupported SamToFastq clipping requires both CLIPPING_ATTRIBUTE and CLIPPING_ACTION",
+        ));
     }
     if let Some(action) = optional_scalar(args, "CLIPPING_ACTION")?
         && !matches!(action.as_str(), "N" | "X")
         && action.parse::<i32>().is_err()
     {
-        return Err("unsupported SamToFastq CLIPPING_ACTION".to_string());
+        return Err(unsupported("unsupported SamToFastq CLIPPING_ACTION"));
     }
     optional_bool(args, "INCLUDE_NON_PF_READS")?;
     optional_bool(args, "INCLUDE_NON_PRIMARY_ALIGNMENTS")?;
@@ -17677,7 +17800,7 @@ fn reject_unsupported_samtofastq_args(args: &PicardArgs) -> Result<(), String> {
     Ok(())
 }
 
-fn reject_unsupported_fastqtosam_args(args: &PicardArgs) -> Result<(), String> {
+fn reject_unsupported_fastqtosam_args(args: &PicardArgs) -> Result<(), CommandError> {
     let supported = [
         "FASTQ",
         "FASTQ2",
@@ -17715,7 +17838,9 @@ fn reject_unsupported_fastqtosam_args(args: &PicardArgs) -> Result<(), String> {
     ];
     for key in args.keys() {
         if !supported.contains(&key.as_str()) {
-            return Err(format!("unsupported FastqToSam argument: {key}"));
+            return Err(unsupported(format!(
+                "unsupported FastqToSam argument: {key}"
+            )));
         }
     }
     if let Some(sort_order) = optional_scalar(args, "SORT_ORDER")?
@@ -17723,7 +17848,9 @@ fn reject_unsupported_fastqtosam_args(args: &PicardArgs) -> Result<(), String> {
         && sort_order != "coordinate"
         && sort_order != "unsorted"
     {
-        return Err(format!("unsupported FastqToSam SORT_ORDER={sort_order}"));
+        return Err(unsupported(format!(
+            "unsupported FastqToSam SORT_ORDER={sort_order}"
+        )));
     }
     optional_u32(args, "MIN_Q")?;
     optional_u32(args, "MAX_Q")?;
@@ -17991,7 +18118,7 @@ impl SamToFastqPerRgMode {
         output_dir: Option<String>,
         compress: bool,
         interleave: bool,
-    ) -> Result<Self, String> {
+    ) -> Result<Self, CommandError> {
         Ok(Self {
             tag: SamToFastqReadGroupTag::parse(rg_tag)?,
             output_dir,
@@ -18008,11 +18135,13 @@ enum SamToFastqReadGroupTag {
 }
 
 impl SamToFastqReadGroupTag {
-    fn parse(value: &str) -> Result<Self, String> {
+    fn parse(value: &str) -> Result<Self, CommandError> {
         match value {
             "PU" | "pu" => Ok(Self::PlatformUnit),
             "ID" | "id" => Ok(Self::Id),
-            _ => Err(format!("unsupported SamToFastq RG_TAG: {value}")),
+            _ => Err(unsupported(format!(
+                "unsupported SamToFastq RG_TAG: {value}"
+            ))),
         }
     }
 }
@@ -18490,7 +18619,7 @@ impl SamToFastqTransform {
     }
 }
 
-fn samtofastq_clipping(args: &PicardArgs) -> Result<Option<SamToFastqClipping>, String> {
+fn samtofastq_clipping(args: &PicardArgs) -> Result<Option<SamToFastqClipping>, CommandError> {
     let Some(attribute) = optional_scalar(args, "CLIPPING_ATTRIBUTE")? else {
         return Ok(None);
     };
@@ -18502,7 +18631,7 @@ fn samtofastq_clipping(args: &PicardArgs) -> Result<Option<SamToFastqClipping>, 
         value => {
             let phred = value
                 .parse::<u8>()
-                .map_err(|_| "unsupported SamToFastq CLIPPING_ACTION".to_string())?;
+                .map_err(|_| unsupported("unsupported SamToFastq CLIPPING_ACTION"))?;
             SamToFastqClippingAction::SetQuality(phred.saturating_add(33))
         }
     };
@@ -18513,10 +18642,10 @@ fn samtofastq_clipping(args: &PicardArgs) -> Result<Option<SamToFastqClipping>, 
     }))
 }
 
-fn sam_tag_bytes(value: &str, label: &str) -> Result<[u8; 2], String> {
+fn sam_tag_bytes(value: &str, label: &str) -> Result<[u8; 2], CommandError> {
     let bytes = value.as_bytes();
     if bytes.len() != 2 {
-        return Err(format!("unsupported {label}: {value}"));
+        return Err(unsupported(format!("unsupported {label}: {value}")));
     }
     Ok([bytes[0], bytes[1]])
 }
@@ -18876,7 +19005,7 @@ fn reverse_complement(sequence: &mut [u8]) {
     }
 }
 
-fn reject_unsupported_sortsam_args(args: &PicardArgs) -> Result<(), String> {
+fn reject_unsupported_sortsam_args(args: &PicardArgs) -> Result<(), CommandError> {
     let supported = [
         "INPUT",
         "OUTPUT",
@@ -18894,7 +19023,7 @@ fn reject_unsupported_sortsam_args(args: &PicardArgs) -> Result<(), String> {
 
     for key in args.keys() {
         if !supported.contains(&key.as_str()) {
-            return Err(format!("unsupported SortSam argument: {key}"));
+            return Err(unsupported(format!("unsupported SortSam argument: {key}")));
         }
     }
 
@@ -18910,7 +19039,7 @@ fn reject_unsupported_sortsam_args(args: &PicardArgs) -> Result<(), String> {
     Ok(())
 }
 
-fn reject_unsupported_cleansam_args(args: &PicardArgs) -> Result<(), String> {
+fn reject_unsupported_cleansam_args(args: &PicardArgs) -> Result<(), CommandError> {
     let supported = [
         "INPUT",
         "OUTPUT",
@@ -18927,7 +19056,7 @@ fn reject_unsupported_cleansam_args(args: &PicardArgs) -> Result<(), String> {
 
     for key in args.keys() {
         if !supported.contains(&key.as_str()) {
-            return Err(format!("unsupported CleanSam argument: {key}"));
+            return Err(unsupported(format!("unsupported CleanSam argument: {key}")));
         }
     }
 
@@ -18943,7 +19072,7 @@ fn reject_unsupported_cleansam_args(args: &PicardArgs) -> Result<(), String> {
     Ok(())
 }
 
-fn reject_unsupported_mergesamfiles_args(args: &PicardArgs) -> Result<(), String> {
+fn reject_unsupported_mergesamfiles_args(args: &PicardArgs) -> Result<(), CommandError> {
     let supported = [
         "INPUT",
         "OUTPUT",
@@ -18965,7 +19094,9 @@ fn reject_unsupported_mergesamfiles_args(args: &PicardArgs) -> Result<(), String
 
     for key in args.keys() {
         if !supported.contains(&key.as_str()) {
-            return Err(format!("unsupported MergeSamFiles argument: {key}"));
+            return Err(unsupported(format!(
+                "unsupported MergeSamFiles argument: {key}"
+            )));
         }
     }
 
@@ -18984,7 +19115,7 @@ fn reject_unsupported_mergesamfiles_args(args: &PicardArgs) -> Result<(), String
     Ok(())
 }
 
-fn reject_unsupported_buildbamindex_args(args: &PicardArgs) -> Result<(), String> {
+fn reject_unsupported_buildbamindex_args(args: &PicardArgs) -> Result<(), CommandError> {
     let supported = [
         "INPUT",
         "OUTPUT",
@@ -18997,7 +19128,9 @@ fn reject_unsupported_buildbamindex_args(args: &PicardArgs) -> Result<(), String
 
     for key in args.keys() {
         if !supported.contains(&key.as_str()) {
-            return Err(format!("unsupported BuildBamIndex argument: {key}"));
+            return Err(unsupported(format!(
+                "unsupported BuildBamIndex argument: {key}"
+            )));
         }
     }
 
@@ -19014,59 +19147,50 @@ fn required_scalar_for(
     args: &PicardArgs,
     key: &'static str,
     command: &'static str,
-) -> Result<String, String> {
-    args.typed_for(command)
-        .required_string(key)
-        .map_err(|error| error.to_string())
+) -> Result<String, CommandError> {
+    Ok(args.typed_for(command).required_string(key)?)
 }
 
 fn required_values_for(
     args: &PicardArgs,
     key: &'static str,
     command: &'static str,
-) -> Result<Vec<String>, String> {
-    args.typed_for(command)
-        .required_values(key)
-        .map_err(|error| error.to_string())
+) -> Result<Vec<String>, CommandError> {
+    Ok(args.typed_for(command).required_values(key)?)
 }
 
-fn optional_scalar(args: &PicardArgs, key: &str) -> Result<Option<String>, String> {
-    args.typed()
-        .optional_string(key)
-        .map_err(|error| error.to_string())
+fn optional_scalar(args: &PicardArgs, key: &str) -> Result<Option<String>, CommandError> {
+    Ok(args.typed().optional_string(key)?)
 }
 
-fn optional_bool(args: &PicardArgs, key: &str) -> Result<Option<bool>, String> {
-    args.typed()
-        .optional_bool(key)
-        .map_err(|error| error.to_string())
+fn optional_bool(args: &PicardArgs, key: &str) -> Result<Option<bool>, CommandError> {
+    Ok(args.typed().optional_bool(key)?)
 }
 
-fn optional_u32(args: &PicardArgs, key: &str) -> Result<Option<u32>, String> {
-    args.typed()
-        .optional_u32(key)
-        .map_err(|error| error.to_string())
+fn optional_u32(args: &PicardArgs, key: &str) -> Result<Option<u32>, CommandError> {
+    Ok(args.typed().optional_u32(key)?)
 }
 
-fn reject_unsupported_compression_level(args: &PicardArgs, command: &str) -> Result<(), String> {
+fn reject_unsupported_compression_level(
+    args: &PicardArgs,
+    command: &str,
+) -> Result<(), CommandError> {
     if let Some(level) = optional_u32(args, "COMPRESSION_LEVEL")?
         && level > 9
     {
-        return Err(format!("unsupported {command} COMPRESSION_LEVEL: {level}"));
+        return Err(unsupported(format!(
+            "unsupported {command} COMPRESSION_LEVEL: {level}"
+        )));
     }
     Ok(())
 }
 
-fn optional_i64(args: &PicardArgs, key: &str) -> Result<Option<i64>, String> {
-    args.typed()
-        .optional_i64(key)
-        .map_err(|error| error.to_string())
+fn optional_i64(args: &PicardArgs, key: &str) -> Result<Option<i64>, CommandError> {
+    Ok(args.typed().optional_i64(key)?)
 }
 
-fn optional_f64(args: &PicardArgs, key: &str) -> Result<Option<f64>, String> {
-    args.typed()
-        .optional_f64(key)
-        .map_err(|error| error.to_string())
+fn optional_f64(args: &PicardArgs, key: &str) -> Result<Option<f64>, CommandError> {
+    Ok(args.typed().optional_f64(key)?)
 }
 
 fn limited_records<'a>(
@@ -19081,15 +19205,15 @@ fn limited_records<'a>(
     }
 }
 
-fn output_format(output: &str) -> Result<bam::Format, String> {
+fn output_format(output: &str) -> Result<bam::Format, CommandError> {
     Ok(hts_io::output_format_for_path(output, "SortSam")?)
 }
 
-fn output_format_for(output: &str, command: &str) -> Result<bam::Format, String> {
+fn output_format_for(output: &str, command: &str) -> Result<bam::Format, CommandError> {
     Ok(hts_io::output_format_for_path(output, command)?)
 }
 
-fn clean_sam_record(record: &mut bam::Record, target_lengths: &[u64]) -> Result<(), String> {
+fn clean_sam_record(record: &mut bam::Record, target_lengths: &[u64]) -> Result<(), CommandError> {
     if record.is_unmapped() {
         record.set_mapq(0);
         return Ok(());
@@ -19106,7 +19230,9 @@ fn clean_sam_record(record: &mut bam::Record, target_lengths: &[u64]) -> Result<
     }
     let start = u64_or_max(record.pos());
     if start >= target_len {
-        return Err("unsupported CleanSam alignment starting beyond reference end".to_string());
+        return Err(unsupported(
+            "unsupported CleanSam alignment starting beyond reference end",
+        ));
     }
     let reference_end = start.saturating_add(u64_or_max(
         record.cigar().end_pos().saturating_sub(record.pos()),
@@ -19204,25 +19330,25 @@ fn push_merged_cigar(cigars: &mut Vec<Cigar>, cigar: Cigar) {
     cigars.push(cigar);
 }
 
-fn picard_reference(args: &PicardArgs) -> Result<Option<String>, String> {
+fn picard_reference(args: &PicardArgs) -> Result<Option<String>, CommandError> {
     optional_scalar(args, "REFERENCE_SEQUENCE")
 }
 
-fn open_bam_reader(path: impl AsRef<Path>) -> Result<bam::Reader, String> {
+fn open_bam_reader(path: impl AsRef<Path>) -> Result<bam::Reader, CommandError> {
     Ok(hts_io::open_reader(path, None)?)
 }
 
 fn open_bam_reader_with_reference(
     path: impl AsRef<Path>,
     reference: Option<&str>,
-) -> Result<bam::Reader, String> {
+) -> Result<bam::Reader, CommandError> {
     Ok(hts_io::open_reader(path, reference)?)
 }
 
 fn open_bam_reader_for_validate_sam_file(
     path: impl AsRef<Path>,
     reference: Option<&str>,
-) -> Result<bam::Reader, String> {
+) -> Result<bam::Reader, CommandError> {
     let path = path.as_ref();
     let mut reader = open_bam_reader_with_reference(path, reference)?;
     if path
@@ -19243,7 +19369,7 @@ fn open_bam_reader_for_validate_sam_file(
 fn open_bam_reader_for_args(
     path: impl AsRef<Path>,
     args: &PicardArgs,
-) -> Result<bam::Reader, String> {
+) -> Result<bam::Reader, CommandError> {
     let reference = picard_reference(args)?;
     open_bam_reader_with_reference(path, reference.as_deref())
 }
@@ -19253,7 +19379,7 @@ fn bam_writer_for_path(
     header: &bam::Header,
     format: bam::Format,
     compression_level: Option<u32>,
-) -> Result<bam::Writer, String> {
+) -> Result<bam::Writer, CommandError> {
     Ok(hts_io::open_writer(
         output,
         header,
@@ -19269,7 +19395,7 @@ fn bam_writer_for_path_with_reference(
     format: bam::Format,
     reference: Option<&str>,
     compression_level: Option<u32>,
-) -> Result<bam::Writer, String> {
+) -> Result<bam::Writer, CommandError> {
     Ok(hts_io::open_writer(
         output,
         header,
@@ -19824,7 +19950,7 @@ fn set_nm_md_uq_tags(
     record: &mut bam::Record,
     reference: &mut ReferenceWindowCache,
     set_only_uq: bool,
-) -> Result<(), String> {
+) -> Result<(), CommandError> {
     if record.is_unmapped() {
         return Ok(());
     }
@@ -19852,7 +19978,7 @@ fn set_nm_md_uq_tags(
                     "SetNmMdAndUqTags read sequence shorter than CIGAR".to_string()
                 })?;
                 if read_end > read_bases.len() {
-                    return Err("SetNmMdAndUqTags read sequence shorter than CIGAR".to_string());
+                    return Err("SetNmMdAndUqTags read sequence shorter than CIGAR".into());
                 }
                 if let Some(reference_bases) = reference.range(tid, ref_offset, length)? {
                     for (offset, ref_base) in reference_bases.iter().copied().enumerate() {
@@ -19912,7 +20038,7 @@ fn set_nm_md_uq_tags(
             }
             Cigar::HardClip(_) | Cigar::Pad(_) => {}
             Cigar::RefSkip(_) => {
-                return Err("unsupported SetNmMdAndUqTags CIGAR N/ref-skip".to_string());
+                return Err(unsupported("unsupported SetNmMdAndUqTags CIGAR N/ref-skip"));
             }
         }
     }
@@ -20001,7 +20127,7 @@ fn write_fixed_mate_group(
     records: &mut Vec<bam::Record>,
     add_mate_cigar: bool,
     ignore_missing_mates: bool,
-) -> Result<(), String> {
+) -> Result<(), CommandError> {
     if records.len() == 2
         && records[0].is_paired()
         && records[1].is_paired()
@@ -20031,7 +20157,7 @@ fn drain_fixed_mate_group(
     records: &mut Vec<bam::Record>,
     add_mate_cigar: bool,
     ignore_missing_mates: bool,
-) -> Result<Vec<bam::Record>, String> {
+) -> Result<Vec<bam::Record>, CommandError> {
     if records.is_empty() {
         return Ok(Vec::new());
     }
@@ -20053,7 +20179,8 @@ fn drain_fixed_mate_group(
             return Err(format!(
                 "Found two primary records for the same pair end: {}",
                 String::from_utf8_lossy(record.qname())
-            ));
+            )
+            .into());
         }
     }
     let (Some(first_index), Some(second_index)) = (first_primary_index, second_primary_index)
@@ -20067,7 +20194,8 @@ fn drain_fixed_mate_group(
             return Err(format!(
                 "Missing {missing} read of pair: {}",
                 String::from_utf8_lossy(records[index].qname())
-            ));
+            )
+            .into());
         }
         return Ok(std::mem::take(records));
     };
@@ -20092,10 +20220,9 @@ fn drain_fixed_mate_group(
             replace_aux_i32(record, b"MQ", i32::from(first_primary.mapq()))?;
             record.set_insert_size(second_template_length);
         } else {
-            return Err(
-                "unsupported FixMateInformation supplementary alignment without pair side"
-                    .to_string(),
-            );
+            return Err(unsupported(
+                "unsupported FixMateInformation supplementary alignment without pair side",
+            ));
         }
     }
 
@@ -20416,7 +20543,7 @@ fn build_merge_plan(
     sort_order: SortOrder,
     assume_sorted: bool,
     reference: Option<&str>,
-) -> Result<MergePlan, String> {
+) -> Result<MergePlan, CommandError> {
     let first_reader =
         open_bam_reader_with_reference(&inputs[0], reference).map_err(|error| error.clone())?;
     let first_header_text = String::from_utf8_lossy(first_reader.header().as_bytes()).into_owned();
@@ -20436,9 +20563,9 @@ fn build_merge_plan(
             open_bam_reader_with_reference(input, reference).map_err(|error| error.clone())?;
         let header_text = String::from_utf8_lossy(reader.header().as_bytes()).into_owned();
         if sequence_dictionary_lines(&header_text) != first_sequence_dictionary {
-            return Err(
-                "unsupported MergeSamFiles input with different sequence dictionary".to_string(),
-            );
+            return Err(unsupported(
+                "unsupported MergeSamFiles input with different sequence dictionary",
+            ));
         }
         let read_group_renames = header_builder.observe_input_header(&header_text);
         let is_sorted = if assume_sorted {
@@ -20464,8 +20591,8 @@ fn stream_merge_records(
     input_plans: &[MergeInputPlan],
     reference: Option<&str>,
     interval_filter: Option<&BTreeMap<i32, Vec<(u64, u64)>>>,
-    mut emit: impl FnMut(bam::Record) -> Result<(), String>,
-) -> Result<(), String> {
+    mut emit: impl FnMut(bam::Record) -> Result<(), CommandError>,
+) -> Result<(), CommandError> {
     for input in input_plans {
         let mut reader = open_bam_reader_with_reference(&input.path, reference)
             .map_err(|error| error.clone())?;
@@ -20493,10 +20620,10 @@ fn input_is_sorted(
     path: &str,
     sort_order: SortOrder,
     reference: Option<&str>,
-) -> Result<bool, String> {
+) -> Result<bool, CommandError> {
     let mut reader =
         open_bam_reader_with_reference(path, reference).map_err(|error| error.clone())?;
-    input_reader_is_sorted(&mut reader, sort_order)
+    Ok(input_reader_is_sorted(&mut reader, sort_order)?)
 }
 
 fn input_reader_is_sorted(reader: &mut bam::Reader, sort_order: SortOrder) -> Result<bool, String> {
@@ -20524,7 +20651,7 @@ fn write_kway_merged_records(
     sort_order: SortOrder,
     reference: Option<&str>,
     interval_filter: Option<&BTreeMap<i32, Vec<(u64, u64)>>>,
-) -> Result<(), String> {
+) -> Result<(), CommandError> {
     let mut readers = input_plans
         .iter()
         .map(|input| {
@@ -21052,7 +21179,7 @@ fn try_run_fallback(args: &[String]) -> Option<i32> {
     }
 }
 
-fn try_run_fallback_for_native_error(error: &str, args: &[String]) -> Option<i32> {
+fn try_run_fallback_for_native_error(error: &CommandError, args: &[String]) -> Option<i32> {
     if should_delegate_to_picard(error) {
         if require_native() {
             eprintln!("{error}");
@@ -21063,10 +21190,8 @@ fn try_run_fallback_for_native_error(error: &str, args: &[String]) -> Option<i32
     }
 }
 
-fn should_delegate_to_picard(error: &str) -> bool {
-    error.starts_with("unsupported ")
-        || error.contains("not implemented yet")
-        || error.contains("should use upstream Picard")
+fn should_delegate_to_picard(error: &CommandError) -> bool {
+    matches!(error, CommandError::Unsupported(_))
 }
 
 fn fallback_status(fallback_command: &str, args: &[String]) -> Result<i32, String> {
@@ -21224,7 +21349,12 @@ mod tests {
         .expect("args parse");
         let err =
             reject_unsupported_collectmultiplemetrics_args(&args).expect_err("unsupported key");
-        assert_eq!(err, "unsupported CollectMultipleMetrics argument: UNKNOWN");
+        assert_eq!(
+            err,
+            CommandError::Unsupported(
+                "unsupported CollectMultipleMetrics argument: UNKNOWN".to_string()
+            )
+        );
     }
 
     #[test]
@@ -22038,7 +22168,10 @@ mod tests {
         let err = SortSamConfig::try_from_args(&sortsam_args("unsorted", &[]))
             .expect_err("unsorted is rejected");
 
-        assert_eq!(err, "unsupported SortSam SORT_ORDER: unsorted");
+        assert_eq!(
+            err,
+            CommandError::Unsupported("unsupported SortSam SORT_ORDER: unsorted".to_string())
+        );
     }
 
     #[test]
@@ -22049,7 +22182,9 @@ mod tests {
 
         assert_eq!(
             err,
-            "invalid boolean for SortSam argument CREATE_INDEX: sometimes"
+            CommandError::Failed(
+                "invalid boolean for SortSam argument CREATE_INDEX: sometimes".to_string()
+            )
         );
     }
 
@@ -22063,7 +22198,10 @@ mod tests {
 
         let err = SortSamConfig::try_from_args(&args).expect_err("OUTPUT is required");
 
-        assert_eq!(err, "missing required SortSam argument: OUTPUT");
+        assert_eq!(
+            err,
+            CommandError::Failed("missing required SortSam argument: OUTPUT".to_string())
+        );
     }
 
     #[test]
@@ -22074,7 +22212,9 @@ mod tests {
 
         assert_eq!(
             optional_bool(&args, "CREATE_INDEX").expect_err("invalid boolean"),
-            "invalid boolean for CleanSam argument CREATE_INDEX: sometimes"
+            CommandError::Failed(
+                "invalid boolean for CleanSam argument CREATE_INDEX: sometimes".to_string()
+            )
         );
     }
 }

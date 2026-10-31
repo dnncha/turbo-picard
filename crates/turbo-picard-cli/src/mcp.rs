@@ -1,3 +1,4 @@
+use crate::command_error::CommandError;
 use serde_json::{Map, Value, json};
 use std::env;
 use std::io::{self, BufRead, Write};
@@ -162,7 +163,7 @@ fn call_tool(params: &Value) -> Value {
         "explain" => report_tool("explain", &arguments),
         "trial" => report_tool("trial", &arguments),
         "doctor" => doctor_tool(),
-        "run" => run_tool(&arguments),
+        "run" => run_tool(&arguments).map_err(|error| error.to_string()),
         _ => Err(format!("unknown tool: {name}")),
     };
     match outcome {
@@ -297,17 +298,15 @@ fn doctor_json(text: &str) -> Value {
     Value::Object(report)
 }
 
-fn run_tool(arguments: &Map<String, Value>) -> Result<(Value, bool), String> {
+fn run_tool(arguments: &Map<String, Value>) -> Result<(Value, bool), CommandError> {
     let command = required_command(arguments)?;
     if REPORT_SUBCOMMANDS.contains(&command.as_str()) {
-        return Err(format!(
-            "{command} is a report; call its own tool instead of run"
-        ));
+        return Err(format!("{command} is a report; call its own tool instead of run").into());
     }
     if super::command_matrix_entry(&command).is_none()
         && !super::is_picard_reference_command(&command)
     {
-        return Err(format!("unsupported Picard command: {command}"));
+        return Err(CommandError::unsupported_command(&command));
     }
     let args = args_field(arguments)?;
     let cwd = match string_field(arguments, "cwd")? {
@@ -317,7 +316,7 @@ fn run_tool(arguments: &Map<String, Value>) -> Result<(Value, bool), String> {
         }
     };
     if !cwd.is_dir() {
-        return Err(format!("cwd is not a directory: {}", cwd.display()));
+        return Err(format!("cwd is not a directory: {}", cwd.display()).into());
     }
     let overwrite = bool_field(arguments, "overwrite")?;
     let require_native = bool_field(arguments, "require_native")?;
@@ -525,9 +524,15 @@ mod tests {
         let mut arguments = Map::new();
         arguments.insert("command".to_string(), json!("explain"));
         arguments.insert("args".to_string(), json!([]));
-        assert!(run_tool(&arguments).unwrap_err().contains("report"));
+        assert!(matches!(
+            run_tool(&arguments),
+            Err(CommandError::Failed(message)) if message.contains("report")
+        ));
         arguments.insert("command".to_string(), json!("NotAPicardTool"));
-        assert!(run_tool(&arguments).unwrap_err().contains("unsupported"));
+        assert!(matches!(
+            run_tool(&arguments),
+            Err(CommandError::Unsupported(_))
+        ));
     }
 
     #[test]

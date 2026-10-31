@@ -19,12 +19,6 @@ pub enum SortError {
     Sink(String),
 }
 
-impl From<SortError> for String {
-    fn from(error: SortError) -> Self {
-        error.to_string()
-    }
-}
-
 impl From<String> for SortError {
     fn from(message: String) -> Self {
         Self::Sink(message)
