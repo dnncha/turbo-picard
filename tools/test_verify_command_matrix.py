@@ -256,11 +256,25 @@ class CommandMatrixTests(unittest.TestCase):
                     "matrix parity script does not fail closed: tools/parity.sh"
                 ], body
 
-    def test_parity_script_ci_validation_reports_missing_references(self) -> None:
-        assert verify_command_matrix.validate_parity_script_ci_coverage(
-            ["tools/a.sh", "tools/b.sh"], "tools/a.sh\n"
-        ) == ["matrix parity scripts missing from CI: tools/b.sh"]
-        assert verify_command_matrix.validate_parity_script_ci_coverage(["tools/a.sh"], "run tools/a.sh here\n") == []
+    def test_parity_gate_must_fail_closed_and_run_every_matrix_script(self) -> None:
+        gate = "#!/usr/bin/env bash\nset -euo pipefail\n./tools/a.sh\nENV=1 ./tools/c.sh\n"
+        assert verify_command_matrix.validate_parity_gate_coverage(["tools/a.sh", "tools/b.sh"], gate) == [
+            "matrix parity scripts missing from tools/parity_gate.sh: tools/b.sh"
+        ]
+        assert verify_command_matrix.validate_parity_gate_coverage(["tools/a.sh", "tools/c.sh"], gate) == []
+        assert verify_command_matrix.validate_parity_gate_coverage(
+            ["tools/a.sh"], "echo ./tools/a.sh is skipped\n"
+        ) == [
+            "tools/parity_gate.sh does not fail closed",
+            "matrix parity scripts missing from tools/parity_gate.sh: tools/a.sh",
+        ]
+
+    def test_repository_parity_gate_runs_every_matrix_script(self) -> None:
+        gate = verify_command_matrix.PARITY_GATE.read_text(encoding="utf-8")
+        assert (
+            verify_command_matrix.validate_parity_gate_coverage(verify_command_matrix.matrix_parity_scripts(), gate)
+            == []
+        )
 
     def test_command_docs_scope_language_requires_full_picard_surface_wording(self) -> None:
         assert (
