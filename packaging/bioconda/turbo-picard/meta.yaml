@@ -1,5 +1,5 @@
 {% set name = "turbo-picard" %}
-{% set version = "0.1.17" %}
+{% set version = "0.1.18" %}
 
 package:
   name: {{ name|lower }}
@@ -44,6 +44,7 @@ test:
     - turbo-picard doctor --help
     - turbo-picard explain --help
     - turbo-picard trial --help
+    - turbo-picard mcp --help
     - turbo-picard MarkDuplicates --help
     - turbo-picard SortSam --help
     - turbo-picard CleanSam --help

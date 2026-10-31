@@ -8,6 +8,8 @@ turbo-picard capabilities --json
 turbo-picard doctor --help
 turbo-picard explain --help
 turbo-picard trial --help
+turbo-picard mcp --help
+printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"bioconda","version":"0"}}}' '{"jsonrpc":"2.0","id":2,"method":"tools/list"}' | turbo-picard mcp | grep -q '"name":"explain"'
 turbo-picard MarkDuplicates --help
 turbo-picard SortSam --help
 turbo-picard CleanSam --help
