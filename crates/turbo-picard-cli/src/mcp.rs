@@ -27,10 +27,10 @@ pub(crate) fn serve() -> i32 {
         if line.trim().is_empty() {
             continue;
         }
-        if let Some(response) = handle_message(&line) {
-            if writeln!(stdout, "{response}").is_err() || stdout.flush().is_err() {
-                return 1;
-            }
+        if let Some(response) = handle_message(&line)
+            && (writeln!(stdout, "{response}").is_err() || stdout.flush().is_err())
+        {
+            return 1;
         }
     }
     0
@@ -321,7 +321,7 @@ fn run_tool(arguments: &Map<String, Value>) -> Result<(Value, bool), String> {
     }
     let overwrite = bool_field(arguments, "overwrite")?;
     let require_native = bool_field(arguments, "require_native")?;
-    let outputs = guard_outputs(&command, &args, &cwd, overwrite)?;
+    let declared = guard_outputs(&command, &args, &cwd, overwrite)?;
     let mut argv = vec![command.clone()];
     argv.extend(args);
     let captured = run_self(&argv, Some(&cwd), require_native)?;
@@ -336,7 +336,7 @@ fn run_tool(arguments: &Map<String, Value>) -> Result<(Value, bool), String> {
         "require_native": require_native,
         "fallback_ready": readiness.ready && !require_native,
         "exit_code": captured.exit_code,
-        "declared_outputs": outputs,
+        "declared_outputs": declared,
         "stdout_tail": tail(&captured.stdout),
         "stderr_tail": tail(&captured.stderr),
     });
@@ -393,10 +393,10 @@ fn argument_values(args: &[String], keys: &[&str]) -> Vec<String> {
                 }
                 index += 1;
             }
-        } else if let Some((key, value)) = arg.split_once('=') {
-            if keys.contains(&key) {
-                values.push(value.to_string());
-            }
+        } else if let Some((key, value)) = arg.split_once('=')
+            && keys.contains(&key)
+        {
+            values.push(value.to_string());
         }
         index += 1;
     }
