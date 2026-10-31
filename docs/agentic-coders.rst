@@ -73,8 +73,8 @@ scope.
 MCP server
 ----------
 
-``turbo-picard mcp`` runs a Model Context Protocol server on stdio. It needs a
-build from the current source or the next release; 0.1.17 does not include it.
+``turbo-picard mcp`` runs a Model Context Protocol server on stdio. It needs
+0.1.18 or later.
 
 .. code-block:: bash
 
