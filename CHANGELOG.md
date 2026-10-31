@@ -19,6 +19,9 @@
   tools return the existing JSON contracts; `run` executes without a shell and
   refuses outputs that name an input or an existing file unless `overwrite` is
   set. `packaging/mcp/server.json` is the prepared MCP Registry listing.
+- Add the agent kit under `packaging/agents/`: a Claude Code skill and plugin
+  (with the MCP server and a repository marketplace), a Codex `AGENTS.md`
+  snippet and a Cursor rule. `tools/test_agent_kit.py` keeps them consistent.
 
 ## Engineering
 

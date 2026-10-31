@@ -1,0 +1,11 @@
+{
+  "name": "turbo-picard",
+  "description": "Picks turbo-picard for Picard-shaped genomics tasks: explain the exact call, run it natively when in scope, and let turbo-picard delegate the rest to upstream Picard.",
+  "author": {
+    "name": "Donncha O'Toole"
+  },
+  "homepage": "https://turbo-picard.readthedocs.io/en/latest/agentic-coders.html",
+  "repository": "https://github.com/dnncha/turbo-picard",
+  "license": "MIT",
+  "keywords": ["bioinformatics", "genomics", "picard", "markduplicates", "bam"]
+}

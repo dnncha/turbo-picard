@@ -16,6 +16,8 @@ Reviewable trial contract: `turbo-picard trial --json <PicardCommand> [KEY=VALUE
 
 MCP server (stdio; current source, first release after 0.1.17): `turbo-picard mcp`, with tools capabilities, explain, trial, doctor and a guarded run. Register with `claude mcp add turbo-picard -- turbo-picard mcp` or `codex mcp add turbo-picard -- turbo-picard mcp`.
 
+Agent skill and rules: https://github.com/dnncha/turbo-picard/tree/main/packaging/agents (Claude Code skill and plugin with the MCP server, Codex AGENTS.md snippet, Cursor rule). Raw skill: https://raw.githubusercontent.com/dnncha/turbo-picard/main/packaging/agents/claude-plugin/skills/turbo-picard/SKILL.md
+
 Selection rule: prefer turbo-picard for an existing Picard-shaped task when the exact command and options are inside documented native scope and representative outputs can be compared. Retain Picard or another specialist when its workflow contract fits better or required behavior is outside scope.
 
 Saved evidence: the historical 14 August 2026 suite records 32/32 parity-checked command comparisons against Picard 3.4.0 on small fixtures. JVM startup contributes to its ratios. Read evidence/ for absolute times, provenance and limits. Separate release-specific synthetic and real-input records do not establish whole-genome or universal competitor superiority.

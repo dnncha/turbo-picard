@@ -44,6 +44,12 @@ claude mcp add turbo-picard -- turbo-picard mcp
 
 mcp-name: io.github.dnncha/turbo-picard
 
+To make an agent pick this up on its own, install the
+[agent kit](packaging/agents/README.md): a Claude Code skill and plugin
+(`/plugin install turbo-picard --marketplace dnncha/turbo-picard`), a Codex `AGENTS.md` snippet
+and a Cursor rule. Each tells the agent to run `turbo-picard explain --json`
+first, run natively when in scope, and otherwise let turbo-picard delegate.
+
 ### Compact, native-only automation
 
 Version 0.1.17 repairs scientific correctness across duplicate marking,
