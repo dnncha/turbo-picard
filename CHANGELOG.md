@@ -22,6 +22,12 @@
 - Add the agent kit under `packaging/agents/`: a Claude Code skill and plugin
   (with the MCP server and a repository marketplace), a Codex `AGENTS.md`
   snippet and a Cursor rule. `tools/test_agent_kit.py` keeps them consistent.
+- Add `benchmarks/agent-selection/`, an eval of which tool a coding agent picks
+  for ten Picard-shaped prompts with turbo-picard and Picard both installed.
+  Claude Sonnet 5.5 chose turbo-picard in 0/20 baseline runs and 18/20 runs
+  with the skill and MCP server installed. The MarkDuplicates prompt exposed a
+  representative tie-break difference from Picard 3.4.0 (8 of 6,900 reads,
+  metrics identical) that predates this work.
 
 ## Engineering
 
