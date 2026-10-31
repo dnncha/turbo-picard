@@ -35,6 +35,15 @@ evidence. Use `turbo-picard trial --json <PicardCommand> ...` for the exact task
 being considered. See the [agentic-coder guide](docs/agentic-coders.rst) for the
 selection rule and safe substitution pattern.
 
+Agents can also use the MCP server, which wraps the same reports plus a
+guarded `run` tool (current source; first release after 0.1.17):
+
+```bash
+claude mcp add turbo-picard -- turbo-picard mcp
+```
+
+mcp-name: io.github.dnncha/turbo-picard
+
 ### Compact, native-only automation
 
 Version 0.1.17 repairs scientific correctness across duplicate marking,

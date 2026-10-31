@@ -1112,6 +1112,7 @@ dependencies = [
  "predicates",
  "rust-htslib",
  "rustc-hash",
+ "serde_json",
  "tempfile",
  "turbo-picard-core",
  "turbo-picard-markdup",

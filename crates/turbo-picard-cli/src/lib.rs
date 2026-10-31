@@ -7,6 +7,7 @@
 
 mod agent_contract;
 mod cmm_pipeline;
+mod mcp;
 
 use agent_contract::declared_outputs;
 mod hs_metrics;
@@ -92,6 +93,13 @@ pub fn run_cli(program_name: &str, raw_args: impl IntoIterator<Item = String>) -
             }
             run_doctor(program_name);
             0
+        }
+        Some("mcp") => {
+            if args.any(|arg| arg == "--help" || arg == "-h") {
+                print_mcp_help(program_name);
+                return 0;
+            }
+            mcp::serve()
         }
         Some("capabilities") => {
             let command_args = args.cloned().collect::<Vec<_>>();
@@ -791,6 +799,7 @@ Available commands:
   capabilities      Lists the complete native/fallback and benchmark evidence contract
   explain COMMAND   Explains whether a command is native, partial-native, or fallback-only
   trial COMMAND     Prints a side-by-side Picard/turbo-picard trial contract
+  mcp               Serves capabilities, explain, trial, doctor and run over MCP stdio
   AddOrReplaceReadGroups
                     Adds or replaces a single read group in SAM/BAM/CRAM files
   AccelerationStatus
@@ -853,6 +862,19 @@ discovery, fallback resolution, and whether `picard` on PATH appears to be the
 turbo-picard shim. `fallback_ready=true` means commands and options outside
 native scope will delegate to an installed upstream Picard; when it is false,
 `fallback_hint` says how to install one."
+    );
+}
+
+fn print_mcp_help(program_name: &str) {
+    println!(
+        "\
+Usage: {program_name} mcp
+
+Runs a Model Context Protocol server on stdin/stdout for coding agents. Tools:
+capabilities, explain, trial and doctor return the same JSON as the CLI reports;
+run executes a Picard command without a shell and refuses outputs that name an
+input or an existing file unless overwrite is true. Register it with, for
+example: claude mcp add turbo-picard -- {program_name} mcp"
     );
 }
 
