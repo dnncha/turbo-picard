@@ -1,7 +1,12 @@
-use rust_htslib::bam::header::HeaderRecord;
-use rust_htslib::bam::record::{Aux, Cigar, CigarString};
+use rust_htslib::bam::record::Aux;
 use rust_htslib::bam::{self, Read};
 use turbo_picard_core::markdup_config::MarkDuplicatesConfig;
+
+use fixtures::{
+    PairRecordFixture, duplicate_dt_tags, duplicate_fixture_writer, duplicate_set_member_tags,
+    header_text, read_flags, read_has_dt_tags, read_has_no_dt_tags, write_mapped_pair_record,
+    write_mate_unmapped_duplicate_fixture, write_orphaned_pair_fixture, write_q15_scoring_fixture,
+};
 
 #[test]
 fn marks_duplicate_records_in_bam() {
@@ -27,7 +32,6 @@ fn marks_duplicate_records_in_bam() {
         add_pg_tag_to_reads: true,
         tag_duplicate_set_members: false,
         duplicate_scoring_strategy: None,
-        // The small single-BAM planner keeps this no-optical fixture in memory.
         read_name_regex: Some("null".to_string()),
         tagging_policy: None,
         barcode_tag: None,
@@ -70,7 +74,6 @@ fn marks_duplicate_pairs_and_reports_paired_metrics() {
         add_pg_tag_to_reads: true,
         tag_duplicate_set_members: false,
         duplicate_scoring_strategy: None,
-        // The small single-BAM planner keeps this no-optical fixture in memory.
         read_name_regex: Some("null".to_string()),
         tagging_policy: None,
         barcode_tag: None,
@@ -732,16 +735,18 @@ fn respects_mate_specific_barcode_tags() {
         (b"pair-b".as_slice(), "AAAA"),
         (b"pair-c".as_slice(), "CCCC"),
     ] {
-        write_mapped_pair_record_with_tags(
+        write_mapped_pair_record(
             &mut writer,
-            qname,
-            99,
-            10,
-            100,
-            90,
-            b"AAAAAAAAAA",
-            b"FFFFFFFFFF",
-            &[(b"BX", barcode)],
+            &PairRecordFixture {
+                qname,
+                flag: 99,
+                pos: 10,
+                mate_pos: 100,
+                insert_size: 90,
+                seq: b"AAAAAAAAAA",
+                qual: b"FFFFFFFFFF",
+                tags: &[(b"BX", barcode)],
+            },
         );
     }
     for qname in [
@@ -749,16 +754,18 @@ fn respects_mate_specific_barcode_tags() {
         b"pair-b".as_slice(),
         b"pair-c".as_slice(),
     ] {
-        write_mapped_pair_record_with_tags(
+        write_mapped_pair_record(
             &mut writer,
-            qname,
-            147,
-            100,
-            10,
-            -90,
-            b"TTTTTTTTTT",
-            b"FFFFFFFFFF",
-            &[(b"BY", "TTTT")],
+            &PairRecordFixture {
+                qname,
+                flag: 147,
+                pos: 100,
+                mate_pos: 10,
+                insert_size: -90,
+                seq: b"TTTTTTTTTT",
+                qual: b"FFFFFFFFFF",
+                tags: &[(b"BY", "TTTT")],
+            },
         );
     }
     drop(writer);
@@ -1111,13 +1118,61 @@ fn uses_bounded_plan_for_globally_ordered_multiple_bam_inputs() {
     let scratch = tempdir.path().join("scratch");
 
     let mut writer = duplicate_fixture_writer(&input1);
-    write_mapped_pair_record(&mut writer, b"lane-1", 0x63, 10, 20, 14, b"ACGT", b"FFFF");
-    write_mapped_pair_record(&mut writer, b"lane-1", 0x93, 20, 10, -14, b"TGCA", b"FFFF");
+    write_mapped_pair_record(
+        &mut writer,
+        &PairRecordFixture {
+            qname: b"lane-1",
+            flag: 0x63,
+            pos: 10,
+            mate_pos: 20,
+            insert_size: 14,
+            seq: b"ACGT",
+            qual: b"FFFF",
+            tags: &[],
+        },
+    );
+    write_mapped_pair_record(
+        &mut writer,
+        &PairRecordFixture {
+            qname: b"lane-1",
+            flag: 0x93,
+            pos: 20,
+            mate_pos: 10,
+            insert_size: -14,
+            seq: b"TGCA",
+            qual: b"FFFF",
+            tags: &[],
+        },
+    );
     drop(writer);
 
     let mut writer = duplicate_fixture_writer(&input2);
-    write_mapped_pair_record(&mut writer, b"lane-2", 0x63, 30, 40, 14, b"ACGT", b"FFFF");
-    write_mapped_pair_record(&mut writer, b"lane-2", 0x93, 40, 30, -14, b"TGCA", b"FFFF");
+    write_mapped_pair_record(
+        &mut writer,
+        &PairRecordFixture {
+            qname: b"lane-2",
+            flag: 0x63,
+            pos: 30,
+            mate_pos: 40,
+            insert_size: 14,
+            seq: b"ACGT",
+            qual: b"FFFF",
+            tags: &[],
+        },
+    );
+    write_mapped_pair_record(
+        &mut writer,
+        &PairRecordFixture {
+            qname: b"lane-2",
+            flag: 0x93,
+            pos: 40,
+            mate_pos: 30,
+            insert_size: -14,
+            seq: b"TGCA",
+            qual: b"FFFF",
+            tags: &[],
+        },
+    );
     drop(writer);
 
     let config = MarkDuplicatesConfig {
@@ -1296,252 +1351,246 @@ fn preserves_libraries_from_later_bam_inputs() {
     assert!(metrics_text.contains("libB\t0\t1\t0\t0\t0\t0\t0\t0\t\n"));
 }
 
-fn write_mate_unmapped_duplicate_fixture(path: &std::path::Path) {
-    let mut header = bam::Header::new();
-    header.push_record(
-        HeaderRecord::new(b"SQ")
-            .push_tag(b"SN", "chr1")
-            .push_tag(b"LN", 1000),
-    );
-    header.push_record(
-        HeaderRecord::new(b"RG")
-            .push_tag(b"ID", "rg1")
-            .push_tag(b"LB", "lib1")
-            .push_tag(b"SM", "sample1"),
-    );
-    let mut writer =
-        bam::Writer::from_path(path, &header, bam::Format::Bam).expect("fixture writer opens");
-    let cigar = CigarString(vec![Cigar::Match(4)]);
-    for (qname, flag, pos, seq) in [
-        (b"frag-a".as_slice(), 0x449, 10_i64, b"ACGT".as_slice()),
-        (b"frag-b".as_slice(), 0x49, 10_i64, b"ACGT".as_slice()),
-        (b"frag-a".as_slice(), 0x4d, -1_i64, b"TGCA".as_slice()),
-        (b"frag-b".as_slice(), 0x4d, -1_i64, b"TGCA".as_slice()),
-    ] {
-        let mut record = bam::Record::new();
-        if flag & 0x4 == 0 {
-            record.set(qname, Some(&cigar), seq, b"FFFF");
-            record.set_tid(0);
-            record.set_pos(pos);
-            record.set_mapq(60);
-        } else {
-            record.set(qname, None, seq, b"FFFF");
-            record.set_tid(-1);
-            record.set_pos(-1);
-            record.set_mapq(0);
+#[cfg(test)]
+mod fixtures {
+    use rust_htslib::bam::header::HeaderRecord;
+    use rust_htslib::bam::record::{Aux, Cigar, CigarString};
+    use rust_htslib::bam::{self, Read};
+
+    pub fn write_mate_unmapped_duplicate_fixture(path: &std::path::Path) {
+        let mut header = bam::Header::new();
+        header.push_record(
+            HeaderRecord::new(b"SQ")
+                .push_tag(b"SN", "chr1")
+                .push_tag(b"LN", 1000),
+        );
+        header.push_record(
+            HeaderRecord::new(b"RG")
+                .push_tag(b"ID", "rg1")
+                .push_tag(b"LB", "lib1")
+                .push_tag(b"SM", "sample1"),
+        );
+        let mut writer =
+            bam::Writer::from_path(path, &header, bam::Format::Bam).expect("fixture writer opens");
+        let cigar = CigarString(vec![Cigar::Match(4)]);
+        for (qname, flag, pos, seq) in [
+            (b"frag-a".as_slice(), 0x449, 10_i64, b"ACGT".as_slice()),
+            (b"frag-b".as_slice(), 0x49, 10_i64, b"ACGT".as_slice()),
+            (b"frag-a".as_slice(), 0x4d, -1_i64, b"TGCA".as_slice()),
+            (b"frag-b".as_slice(), 0x4d, -1_i64, b"TGCA".as_slice()),
+        ] {
+            let mut record = bam::Record::new();
+            if flag & 0x4 == 0 {
+                record.set(qname, Some(&cigar), seq, b"FFFF");
+                record.set_tid(0);
+                record.set_pos(pos);
+                record.set_mapq(60);
+            } else {
+                record.set(qname, None, seq, b"FFFF");
+                record.set_tid(-1);
+                record.set_pos(-1);
+                record.set_mapq(0);
+            }
+            record.set_flags(flag);
+            record.set_mtid(-1);
+            record.set_mpos(-1);
+            record.set_insert_size(0);
+            record
+                .push_aux(b"RG", Aux::String("rg1"))
+                .expect("RG tag can be written");
+            writer.write(&record).expect("fixture record writes");
         }
-        record.set_flags(flag);
-        record.set_mtid(-1);
-        record.set_mpos(-1);
-        record.set_insert_size(0);
+    }
+
+    pub fn write_q15_scoring_fixture(path: &std::path::Path) {
+        let mut writer = duplicate_fixture_writer(path);
+        for (qname, flag, pos, mate_pos, insert_size, seq, qual) in [
+            (
+                b"low-q-frag".as_slice(),
+                0x63,
+                10_i64,
+                80_i64,
+                74_i64,
+                b"ACGTACGT".as_slice(),
+                b"\x0e\x0e\x0e\x0e\x0e\x0e\x0e\x0e".as_slice(),
+            ),
+            (
+                b"low-q-frag".as_slice(),
+                0x93,
+                80_i64,
+                10_i64,
+                -74_i64,
+                b"TGCATGCA".as_slice(),
+                b"\x0e\x0e\x0e\x0e\x0e\x0e\x0e\x0e".as_slice(),
+            ),
+            (
+                b"q15-frag".as_slice(),
+                0x63,
+                10_i64,
+                80_i64,
+                74_i64,
+                b"ACGTACGT".as_slice(),
+                b"\x0f\x0f\x0f\x0f\0\0\0\0".as_slice(),
+            ),
+            (
+                b"q15-frag".as_slice(),
+                0x93,
+                80_i64,
+                10_i64,
+                -74_i64,
+                b"TGCATGCA".as_slice(),
+                b"\x0f\x0f\x0f\x0f\0\0\0\0".as_slice(),
+            ),
+        ] {
+            write_mapped_pair_record(
+                &mut writer,
+                &PairRecordFixture {
+                    qname,
+                    flag,
+                    pos,
+                    mate_pos,
+                    insert_size,
+                    seq,
+                    qual,
+                    tags: &[],
+                },
+            );
+        }
+    }
+
+    pub fn write_orphaned_pair_fixture(path: &std::path::Path) {
+        let mut writer = duplicate_fixture_writer(path);
+        for qname in [b"orphan-a".as_slice(), b"orphan-b".as_slice()] {
+            write_mapped_pair_record(
+                &mut writer,
+                &PairRecordFixture {
+                    qname,
+                    flag: 0x63,
+                    pos: 10,
+                    mate_pos: 80,
+                    insert_size: 74,
+                    seq: b"ACGT",
+                    qual: b"FFFF",
+                    tags: &[],
+                },
+            );
+        }
+    }
+
+    pub fn duplicate_fixture_writer(path: &std::path::Path) -> bam::Writer {
+        let mut header = bam::Header::new();
+        header.push_record(
+            HeaderRecord::new(b"SQ")
+                .push_tag(b"SN", "chr1")
+                .push_tag(b"LN", 1000),
+        );
+        header.push_record(
+            HeaderRecord::new(b"RG")
+                .push_tag(b"ID", "rg1")
+                .push_tag(b"LB", "lib1")
+                .push_tag(b"SM", "sample1"),
+        );
+        bam::Writer::from_path(path, &header, bam::Format::Bam).expect("fixture writer opens")
+    }
+
+    #[derive(Default)]
+    pub struct PairRecordFixture<'a> {
+        pub qname: &'a [u8],
+        pub flag: u16,
+        pub pos: i64,
+        pub mate_pos: i64,
+        pub insert_size: i64,
+        pub seq: &'a [u8],
+        pub qual: &'a [u8],
+        pub tags: &'a [(&'a [u8], &'a str)],
+    }
+
+    pub fn write_mapped_pair_record(writer: &mut bam::Writer, fixture: &PairRecordFixture<'_>) {
+        let cigar = CigarString(vec![Cigar::Match(
+            u32::try_from(fixture.seq.len()).expect("sequence length fits in CIGAR"),
+        )]);
+        let mut record = bam::Record::new();
+        record.set(fixture.qname, Some(&cigar), fixture.seq, fixture.qual);
+        record.set_tid(0);
+        record.set_pos(fixture.pos);
+        record.set_mapq(60);
+        record.set_flags(fixture.flag);
+        record.set_mtid(0);
+        record.set_mpos(fixture.mate_pos);
+        record.set_insert_size(fixture.insert_size);
         record
             .push_aux(b"RG", Aux::String("rg1"))
             .expect("RG tag can be written");
+        for (tag, value) in fixture.tags {
+            record
+                .push_aux(tag, Aux::String(value))
+                .expect("barcode tag can be written");
+        }
         writer.write(&record).expect("fixture record writes");
     }
-}
 
-fn write_q15_scoring_fixture(path: &std::path::Path) {
-    let mut writer = duplicate_fixture_writer(path);
-    for (qname, flag, pos, mate_pos, insert_size, seq, qual) in [
-        (
-            b"low-q-frag".as_slice(),
-            0x63,
-            10_i64,
-            80_i64,
-            74_i64,
-            b"ACGTACGT".as_slice(),
-            b"\x0e\x0e\x0e\x0e\x0e\x0e\x0e\x0e".as_slice(),
-        ),
-        (
-            b"low-q-frag".as_slice(),
-            0x93,
-            80_i64,
-            10_i64,
-            -74_i64,
-            b"TGCATGCA".as_slice(),
-            b"\x0e\x0e\x0e\x0e\x0e\x0e\x0e\x0e".as_slice(),
-        ),
-        (
-            b"q15-frag".as_slice(),
-            0x63,
-            10_i64,
-            80_i64,
-            74_i64,
-            b"ACGTACGT".as_slice(),
-            b"\x0f\x0f\x0f\x0f\0\0\0\0".as_slice(),
-        ),
-        (
-            b"q15-frag".as_slice(),
-            0x93,
-            80_i64,
-            10_i64,
-            -74_i64,
-            b"TGCATGCA".as_slice(),
-            b"\x0f\x0f\x0f\x0f\0\0\0\0".as_slice(),
-        ),
-    ] {
-        write_mapped_pair_record(
-            &mut writer,
-            qname,
-            flag,
-            pos,
-            mate_pos,
-            insert_size,
-            seq,
-            qual,
-        );
+    pub fn read_flags(path: &std::path::Path) -> Vec<u16> {
+        let mut reader = bam::Reader::from_path(path).expect("BAM opens");
+        reader
+            .records()
+            .map(|record| record.expect("record decodes").flags())
+            .collect()
     }
-}
 
-fn write_orphaned_pair_fixture(path: &std::path::Path) {
-    let mut writer = duplicate_fixture_writer(path);
-    for qname in [b"orphan-a".as_slice(), b"orphan-b".as_slice()] {
-        write_mapped_pair_record(&mut writer, qname, 0x63, 10, 80, 74, b"ACGT", b"FFFF");
+    pub fn header_text(path: &std::path::Path) -> String {
+        let reader = bam::Reader::from_path(path).expect("BAM opens");
+        String::from_utf8_lossy(reader.header().as_bytes()).into_owned()
     }
-}
 
-fn duplicate_fixture_writer(path: &std::path::Path) -> bam::Writer {
-    let mut header = bam::Header::new();
-    header.push_record(
-        HeaderRecord::new(b"SQ")
-            .push_tag(b"SN", "chr1")
-            .push_tag(b"LN", 1000),
-    );
-    header.push_record(
-        HeaderRecord::new(b"RG")
-            .push_tag(b"ID", "rg1")
-            .push_tag(b"LB", "lib1")
-            .push_tag(b"SM", "sample1"),
-    );
-    bam::Writer::from_path(path, &header, bam::Format::Bam).expect("fixture writer opens")
-}
-
-#[allow(clippy::too_many_arguments)]
-fn write_mapped_pair_record(
-    writer: &mut bam::Writer,
-    qname: &[u8],
-    flag: u16,
-    pos: i64,
-    mate_pos: i64,
-    insert_size: i64,
-    seq: &[u8],
-    qual: &[u8],
-) {
-    let cigar = CigarString(vec![Cigar::Match(
-        u32::try_from(seq.len()).expect("sequence length fits in CIGAR"),
-    )]);
-    let mut record = bam::Record::new();
-    record.set(qname, Some(&cigar), seq, qual);
-    record.set_tid(0);
-    record.set_pos(pos);
-    record.set_mapq(60);
-    record.set_flags(flag);
-    record.set_mtid(0);
-    record.set_mpos(mate_pos);
-    record.set_insert_size(insert_size);
-    record
-        .push_aux(b"RG", Aux::String("rg1"))
-        .expect("RG tag can be written");
-    writer.write(&record).expect("fixture record writes");
-}
-
-#[allow(clippy::too_many_arguments)]
-fn write_mapped_pair_record_with_tags(
-    writer: &mut bam::Writer,
-    qname: &[u8],
-    flag: u16,
-    pos: i64,
-    mate_pos: i64,
-    insert_size: i64,
-    seq: &[u8],
-    qual: &[u8],
-    tags: &[(&[u8], &str)],
-) {
-    let cigar = CigarString(vec![Cigar::Match(
-        u32::try_from(seq.len()).expect("sequence length fits in CIGAR"),
-    )]);
-    let mut record = bam::Record::new();
-    record.set(qname, Some(&cigar), seq, qual);
-    record.set_tid(0);
-    record.set_pos(pos);
-    record.set_mapq(60);
-    record.set_flags(flag);
-    record.set_mtid(0);
-    record.set_mpos(mate_pos);
-    record.set_insert_size(insert_size);
-    record
-        .push_aux(b"RG", Aux::String("rg1"))
-        .expect("RG tag can be written");
-    for (tag, value) in tags {
-        record
-            .push_aux(tag, Aux::String(value))
-            .expect("barcode tag can be written");
+    pub fn read_has_no_dt_tags(path: &std::path::Path) -> bool {
+        let mut reader = bam::Reader::from_path(path).expect("BAM opens");
+        reader
+            .records()
+            .all(|record| record.expect("record decodes").aux(b"DT").is_err())
     }
-    writer.write(&record).expect("fixture record writes");
-}
 
-fn read_flags(path: &std::path::Path) -> Vec<u16> {
-    let mut reader = bam::Reader::from_path(path).expect("BAM opens");
-    reader
-        .records()
-        .map(|record| record.expect("record decodes").flags())
-        .collect()
-}
+    pub fn read_has_dt_tags(path: &std::path::Path) -> bool {
+        let mut reader = bam::Reader::from_path(path).expect("BAM opens");
+        reader
+            .records()
+            .any(|record| record.expect("record decodes").aux(b"DT").is_ok())
+    }
 
-fn header_text(path: &std::path::Path) -> String {
-    let reader = bam::Reader::from_path(path).expect("BAM opens");
-    String::from_utf8_lossy(reader.header().as_bytes()).into_owned()
-}
+    pub fn duplicate_dt_tags(path: &std::path::Path) -> Vec<Option<String>> {
+        let mut reader = bam::Reader::from_path(path).expect("BAM opens");
+        reader
+            .records()
+            .filter_map(|record| {
+                let record = record.expect("record decodes");
+                if record.flags() & 0x400 == 0 {
+                    return None;
+                }
+                let tag = match record.aux(b"DT") {
+                    Ok(Aux::String(value)) => Some(value.to_string()),
+                    _ => None,
+                };
+                Some(tag)
+            })
+            .collect()
+    }
 
-fn read_has_no_dt_tags(path: &std::path::Path) -> bool {
-    let mut reader = bam::Reader::from_path(path).expect("BAM opens");
-    reader
-        .records()
-        .all(|record| record.expect("record decodes").aux(b"DT").is_err())
-}
-
-fn read_has_dt_tags(path: &std::path::Path) -> bool {
-    let mut reader = bam::Reader::from_path(path).expect("BAM opens");
-    reader
-        .records()
-        .any(|record| record.expect("record decodes").aux(b"DT").is_ok())
-}
-
-fn duplicate_dt_tags(path: &std::path::Path) -> Vec<Option<String>> {
-    let mut reader = bam::Reader::from_path(path).expect("BAM opens");
-    reader
-        .records()
-        .filter_map(|record| {
-            let record = record.expect("record decodes");
-            if record.flags() & 0x400 == 0 {
-                return None;
-            }
-            let tag = match record.aux(b"DT") {
-                Ok(Aux::String(value)) => Some(value.to_string()),
-                _ => None,
-            };
-            Some(tag)
-        })
-        .collect()
-}
-
-fn duplicate_set_member_tags(path: &std::path::Path) -> Vec<(String, Option<(i32, i32)>)> {
-    let mut reader = bam::Reader::from_path(path).expect("BAM opens");
-    reader
-        .records()
-        .map(|record| {
-            let record = record.expect("record decodes");
-            let name = String::from_utf8_lossy(record.qname()).into_owned();
-            let ds = match record.aux(b"DS") {
-                Ok(Aux::I32(value)) => Some(value),
-                _ => None,
-            };
-            let di = match record.aux(b"DI") {
-                Ok(Aux::I32(value)) => Some(value),
-                _ => None,
-            };
-            (name, ds.zip(di))
-        })
-        .collect()
+    pub fn duplicate_set_member_tags(path: &std::path::Path) -> Vec<(String, Option<(i32, i32)>)> {
+        let mut reader = bam::Reader::from_path(path).expect("BAM opens");
+        reader
+            .records()
+            .map(|record| {
+                let record = record.expect("record decodes");
+                let name = String::from_utf8_lossy(record.qname()).into_owned();
+                let ds = match record.aux(b"DS") {
+                    Ok(Aux::I32(value)) => Some(value),
+                    _ => None,
+                };
+                let di = match record.aux(b"DI") {
+                    Ok(Aux::I32(value)) => Some(value),
+                    _ => None,
+                };
+                (name, ds.zip(di))
+            })
+            .collect()
+    }
 }

@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-"""Tests for marketing-site benchmark evidence consistency checks."""
 
 from __future__ import annotations
 
@@ -7,7 +6,6 @@ import importlib.util
 import sys
 import unittest
 from pathlib import Path
-
 
 MODULE_PATH = Path(__file__).with_name("verify_site_benchmark_evidence.py")
 SPEC = importlib.util.spec_from_file_location("verify_site_benchmark_evidence", MODULE_PATH)
@@ -67,11 +65,9 @@ archived turbo-picard release you used
 12-command release set
 """
 
-        errors = verify_site_benchmark_evidence.validate_site_benchmark_evidence(
-            site, data
-        )
+        errors = verify_site_benchmark_evidence.validate_site_benchmark_evidence(site, data)
 
-        self.assertEqual(errors, [])
+        assert errors == []
 
     def test_missing_site_claims_are_reported(self) -> None:
         data = {
@@ -89,42 +85,22 @@ archived turbo-picard release you used
             },
         }
 
-        errors = verify_site_benchmark_evidence.validate_site_benchmark_evidence(
-            "<html></html>", data
-        )
+        errors = verify_site_benchmark_evidence.validate_site_benchmark_evidence("<html></html>", data)
 
-        self.assertIn("missing site parity claim: 1/1", errors)
-        self.assertIn("missing site raw suite log link: assets/bench-suite-output.txt", errors)
-        self.assertIn(
-            "missing site benchmark-log evidence verifier command",
-            errors,
-        )
-        self.assertIn(
-            "missing site benchmark-suite coverage verifier command",
-            errors,
-        )
-        self.assertIn(
-            "missing site benchmark-threshold verifier command",
-            errors,
-        )
-        self.assertIn(
-            "missing site release-ready real-data verifier command",
-            errors,
-        )
-        self.assertIn("missing site adoption section link", errors)
-        self.assertIn("missing site CITATION.cff link", errors)
-        self.assertIn("missing site pinned input SHA-256 guidance", errors)
-        self.assertIn("missing site archived-release citation guidance", errors)
-        self.assertIn("missing site release command-set guidance", errors)
-        self.assertIn("missing site benchmark date: 2026-05-30", errors)
-        self.assertIn(
-            "missing site benchmark source command: python3 tools/bench_suite.py --repeats 1 --skip-build",
-            errors,
-        )
-        self.assertIn(
-            "missing site benchmark source artifact: docs/site/assets/bench-suite-output.txt",
-            errors,
-        )
+        assert "missing site parity claim: 1/1" in errors
+        assert "missing site raw suite log link: assets/bench-suite-output.txt" in errors
+        assert "missing site benchmark-log evidence verifier command" in errors
+        assert "missing site benchmark-suite coverage verifier command" in errors
+        assert "missing site benchmark-threshold verifier command" in errors
+        assert "missing site release-ready real-data verifier command" in errors
+        assert "missing site adoption section link" in errors
+        assert "missing site CITATION.cff link" in errors
+        assert "missing site pinned input SHA-256 guidance" in errors
+        assert "missing site archived-release citation guidance" in errors
+        assert "missing site release command-set guidance" in errors
+        assert "missing site benchmark date: 2026-05-30" in errors
+        assert "missing site benchmark source command: python3 tools/bench_suite.py --repeats 1 --skip-build" in errors
+        assert "missing site benchmark source artifact: docs/site/assets/bench-suite-output.txt" in errors
 
 
 if __name__ == "__main__":

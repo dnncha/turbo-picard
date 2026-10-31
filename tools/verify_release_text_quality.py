@@ -1,12 +1,10 @@
 #!/usr/bin/env python3
-"""Check release-facing prose for hype, vague claims, and missing reader cues."""
 
 from __future__ import annotations
 
 import re
 import sys
 from pathlib import Path
-
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -141,12 +139,7 @@ REQUIRED_READER_CUES = {
 
 def normalize(text: str) -> str:
     text = re.sub(r"<[^>]+>", " ", text)
-    text = (
-        text.replace("&lt;", "<")
-        .replace("&gt;", ">")
-        .replace("&amp;", "&")
-        .replace("&nbsp;", " ")
-    )
+    text = text.replace("&lt;", "<").replace("&gt;", ">").replace("&amp;", "&").replace("&nbsp;", " ")
     return re.sub(r"\s+", " ", text).strip().lower()
 
 
@@ -154,9 +147,7 @@ def validate_release_text(root: Path = ROOT) -> list[str]:
     errors: list[str] = []
     internal_docs = root / "docs/superpowers"
     if internal_docs.exists() and any(path.is_file() for path in internal_docs.rglob("*")):
-        errors.append(
-            "docs/superpowers contains internal planning notes; keep release-facing docs public"
-        )
+        errors.append("docs/superpowers contains internal planning notes; keep release-facing docs public")
 
     for rel_path in RELEASE_TEXT_PATHS:
         path = root / rel_path

@@ -121,7 +121,7 @@ fn write_pair_fixture(
                 format!("padding-{index:08}").as_bytes(),
                 "rg1",
                 0,
-                1000 + index as i64 * 30,
+                1000 + i64::try_from(index).unwrap() * 30,
                 -1,
                 30,
             ))
@@ -292,7 +292,7 @@ fn no_duplicate_probe_stops_at_its_record_budget() {
                     format!("unique-{index:08}").as_bytes(),
                     "rg1",
                     0,
-                    index as i64 * 30,
+                    i64::try_from(index).unwrap() * 30,
                     -1,
                     30,
                 ))

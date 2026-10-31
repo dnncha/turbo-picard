@@ -1,8 +1,3 @@
-//! Runnable examples that double as tests.
-//!
-//! These mirror the examples in the crate documentation. Keeping them as
-//! tests means a change that breaks the documented usage breaks the build.
-
 use turbo_picard_core::external_sort::{ExternalSortConfig, ExternalSorter};
 use turbo_picard_core::hts_io::output_format_for_path;
 use turbo_picard_core::markdup_config::MarkDuplicatesConfig;
@@ -103,7 +98,7 @@ fn example_select_an_output_format_from_the_path() {
 
     let error = output_format_for_path("out.vcf", "MarkDuplicates").expect_err("unsupported");
     assert_eq!(
-        error,
+        error.to_string(),
         "unsupported MarkDuplicates output format for out.vcf; expected .sam, .bam, or .cram"
     );
 }

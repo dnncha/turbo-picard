@@ -1,6 +1,10 @@
 use std::collections::{BTreeMap, BTreeSet};
 use thiserror::Error;
 
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "public config mirrors Picard's flat boolean options and is read field by field by the CLI and markdup crates"
+)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MarkDuplicatesConfig {
     pub input: String,
@@ -80,9 +84,6 @@ impl MarkDuplicatesConfig {
             )?,
             compression_level: optional_compression_level(args)?,
             reference_sequence: optional_scalar(args, "REFERENCE_SEQUENCE")?,
-            // Picard permits repeated TMP_DIR values.  Keep the last one,
-            // matching the command-line convention used by the native sort
-            // paths while preserving acceptance of repeated options.
             tmp_dir: args
                 .get("TMP_DIR")
                 .and_then(|values| values.last().cloned()),
@@ -258,9 +259,7 @@ fn optional_read_name_regex(
             "READ_NAME_REGEX={value}"
         )))
     } else {
-        let regex_is_valid = regex::Regex::new(&value)
-            .map(|regex| regex.captures_len() == 4)
-            .unwrap_or(false);
+        let regex_is_valid = regex::Regex::new(&value).is_ok_and(|regex| regex.captures_len() == 4);
         if regex_is_valid {
             Ok(Some(value))
         } else {

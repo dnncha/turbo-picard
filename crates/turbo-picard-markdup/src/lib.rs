@@ -3,10 +3,12 @@
 mod bounded_plan;
 #[cfg(test)]
 mod bounded_plan_tests;
+mod error;
 mod external_mates;
 mod fragment_taint;
 mod input_headers;
 
+pub use error::{ExternalPlanError, MarkDuplicatesError};
 use fragment_taint::FragmentTaint;
 use regex::Regex;
 use rust_htslib::bam::header::HeaderRecord;
@@ -21,10 +23,11 @@ use std::io::{BufRead, BufReader, BufWriter, Read as IoRead, Write};
 use std::num::NonZeroU32;
 use std::path::Path;
 use tempfile::{Builder as TempDirBuilder, TempDir, tempdir};
-use thiserror::Error;
 use turbo_picard_core::external_sort::{ExternalSortConfig, ExternalSorter, SortItem};
 use turbo_picard_core::hts_io;
 use turbo_picard_core::markdup_config::MarkDuplicatesConfig;
+#[cfg(test)]
+use turbo_picard_core::sort_error::SortError;
 
 const DUPLICATE_FLAG: u16 = 0x400;
 const UNMAPPED_FLAG: u16 = 0x4;
@@ -49,23 +52,9 @@ pub struct MarkDuplicatesSummary {
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 struct DuplicateSetCounts {
-    all_sets: u64,
-    optical_sets: u64,
-    non_optical_sets: u64,
-}
-
-#[derive(Debug, Error)]
-pub enum MarkDuplicatesError {
-    #[error("unsupported MarkDuplicates input format for {0}; expected SAM, BAM, or CRAM input")]
-    UnsupportedInputFormat(String),
-    #[error(transparent)]
-    Io(#[from] std::io::Error),
-    #[error(transparent)]
-    Htslib(#[from] rust_htslib::errors::Error),
-    #[error("{0}")]
-    Operation(String),
-    #[error("malformed SAM at line {line_number}: {reason}")]
-    MalformedSam { line_number: usize, reason: String },
+    all: u64,
+    optical: u64,
+    non_optical: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -80,13 +69,6 @@ struct BamDuplicateKey {
     barcode: Option<Vec<u8>>,
 }
 
-/// The immutable subset of a BAM record needed by duplicate decisions.
-///
-/// Keeping this separate from `bam::Record` is the foundation for the bounded
-/// two-pass engine: the first pass can eventually retain these compact read
-/// ends while the second pass streams records through the resulting mark plan.
-/// It also ensures that CIGARs, qualities and barcode tags are decoded only
-/// once in the current in-memory implementation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct ReadEndMetadata {
     unclipped_position: i64,
@@ -127,12 +109,7 @@ impl BarcodeRegistry {
             .ok()
             .and_then(|value| value.checked_add(1))
             .and_then(BarcodeId::new)
-            .ok_or_else(|| {
-                MarkDuplicatesError::Operation(
-                    "more than 4,294,967,294 distinct molecular barcodes are not supported"
-                        .to_string(),
-                )
-            })?;
+            .ok_or(MarkDuplicatesError::TooManyBarcodes)?;
         self.by_value.insert(barcode, id);
         Ok(Some(id))
     }
@@ -140,9 +117,7 @@ impl BarcodeRegistry {
 
 pub fn run(config: &MarkDuplicatesConfig) -> Result<MarkDuplicatesSummary, MarkDuplicatesError> {
     if config.inputs.is_empty() {
-        return Err(MarkDuplicatesError::Operation(
-            "MarkDuplicates requires INPUT".into(),
-        ));
+        return Err(MarkDuplicatesError::MissingInput);
     }
     for input in &config.inputs {
         if hts_io::path_format(input).is_none() {
@@ -152,12 +127,9 @@ pub fn run(config: &MarkDuplicatesConfig) -> Result<MarkDuplicatesSummary, MarkD
             validate_sam_input(input)?;
         }
     }
-    // Validate all dictionaries and resolve read-group identities before any
-    // planner or output writer sees records. Only conflicting RG inputs need
-    // staging; ordinary inputs retain their streaming/two-pass behavior.
     let prepared = input_headers::prepare(config)?;
     let mut normalized = config.clone();
-    normalized.inputs = prepared.paths.clone();
+    normalized.inputs.clone_from(&prepared.paths);
     normalized.input = normalized.inputs[0].clone();
     run_hts_container(&normalized)
 }
@@ -195,7 +167,7 @@ fn open_markdup_reader(
     config: &MarkDuplicatesConfig,
     path: &str,
 ) -> Result<bam::Reader, MarkDuplicatesError> {
-    hts_io::open_reader(path, markdup_reference(config)).map_err(MarkDuplicatesError::Operation)
+    Ok(hts_io::open_reader(path, markdup_reference(config))?)
 }
 
 fn open_markdup_writer(
@@ -203,16 +175,14 @@ fn open_markdup_writer(
     output: &str,
     header: &bam::Header,
 ) -> Result<bam::Writer, MarkDuplicatesError> {
-    let format =
-        hts_io::writer_format_for_output(output).map_err(MarkDuplicatesError::Operation)?;
-    hts_io::open_writer(
+    let format = hts_io::writer_format_for_output(output)?;
+    Ok(hts_io::open_writer(
         output,
         header,
         format,
         markdup_reference(config),
         config.compression_level,
-    )
-    .map_err(MarkDuplicatesError::Operation)
+    )?)
 }
 
 fn run_hts_container(
@@ -234,7 +204,7 @@ fn run_hts_container(
     let first_input = &config.inputs[0];
     let mut reader = open_markdup_reader(config, first_input)?;
     let mut library_registry = LibraryRegistry::new();
-    let first_library_lookup = library_lookup(reader.header(), &mut library_registry);
+    let first_library_lookup = library_lookup(reader.header(), &mut library_registry)?;
     let library = library_registry
         .summary(first_library_lookup.first_library_id)
         .library
@@ -279,7 +249,7 @@ fn run_hts_container(
         read_state.read(&mut reader, &first_library_lookup, &mut library_registry)?;
         for input in config.inputs.iter().skip(1) {
             let mut reader = open_markdup_reader(config, input)?;
-            let input_library_lookup = library_lookup(reader.header(), &mut library_registry);
+            let input_library_lookup = library_lookup(reader.header(), &mut library_registry)?;
             read_state.read(&mut reader, &input_library_lookup, &mut library_registry)?;
         }
     }
@@ -315,23 +285,19 @@ fn run_hts_container(
     Ok(summary)
 }
 
-// Keep each bounded sort window large enough to avoid excessive temporary-file
-// churn on ordinary shards while retaining a hard per-sorter memory ceiling.
-// The external path owns two windows during its first pass, so this remains a
-// small fraction of the production-scale memory budget rather than becoming a
-// whole-file retention strategy.
 const EXTERNAL_MARKDUP_MAX_RECORDS_IN_RAM: usize = 500_000;
 const EXTERNAL_MARKDUP_MAX_BYTES_IN_RAM: usize = 256 * 1024 * 1024;
 const DEFAULT_MAX_OPTICAL_DUPLICATE_SET_SIZE: usize = 300_000;
 const EXTERNAL_DECISION_OPTICAL: u8 = 0x01;
 const EXTERNAL_DECISION_DUPLICATE: u8 = 0x02;
 const EXTERNAL_DECISION_SET_MEMBERS: u8 = 0x04;
-const EXTERNAL_DECISION_PAYLOAD_BYTES: usize = 1 + (2 * std::mem::size_of::<i32>());
+const EXTERNAL_DECISION_PAYLOAD_BYTES: usize = 1 + (2 * size_of::<i32>());
 const EXTERNAL_DECISION_ABSENT_TAG: i32 = i32::MIN;
 
 struct ExternalDuplicateProcessingConfig<'a> {
     config: &'a MarkDuplicatesConfig,
     read_name_parser: &'a ReadNameLocationParser,
+    track_duplicate_set_histogram: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -341,10 +307,6 @@ struct ExternalDecision {
     duplicate_set_index: Option<i32>,
 }
 
-/// Barcode dimensions retained by the bounded external duplicate-group sort.
-/// The three fields mirror Picard's primary, read-one, and read-two barcode
-/// comparisons while keeping their presence independent for mate-specific
-/// tags.
 #[derive(Debug, Clone)]
 struct ExternalBarcodeValues {
     primary: Option<Vec<u8>>,
@@ -352,11 +314,6 @@ struct ExternalBarcodeValues {
     read_two: Option<Vec<u8>>,
 }
 
-/// The fixed-width part of a record plan.  The original alignment payload is
-/// deliberately absent: the second pass reopens the input and only needs the
-/// ordinal plus the duplicate decision.  QNAMEs and barcode values are
-/// retained only in the external sort payloads where they are needed to form
-/// duplicate groups.
 #[derive(Debug, Clone)]
 struct ExternalPlanRecord {
     ordinal: u64,
@@ -471,7 +428,7 @@ fn external_sorter_with_bytes(
     sort_config.max_records_in_ram = EXTERNAL_MARKDUP_MAX_RECORDS_IN_RAM;
     sort_config.max_bytes_in_ram = max_bytes;
     sort_config.prefix = prefix.to_string();
-    ExternalSorter::new(sort_config).map_err(MarkDuplicatesError::Operation)
+    Ok(ExternalSorter::new(sort_config)?)
 }
 
 fn external_plan_tempdir(config: &MarkDuplicatesConfig) -> Result<TempDir, MarkDuplicatesError> {
@@ -517,12 +474,13 @@ fn try_run_external_plan(
     let processing_config = ExternalDuplicateProcessingConfig {
         config,
         read_name_parser: &read_name_parser,
+        track_duplicate_set_histogram: tracks_duplicate_set_histogram(config),
     };
 
     let first_input = &config.inputs[0];
     let reader = open_markdup_reader(config, first_input)?;
     let mut library_registry = LibraryRegistry::new();
-    let first_library_lookup = library_lookup(reader.header(), &mut library_registry);
+    let first_library_lookup = library_lookup(reader.header(), &mut library_registry)?;
     let library = library_registry
         .summary(first_library_lookup.first_library_id)
         .library
@@ -537,7 +495,6 @@ fn try_run_external_plan(
         push_markdup_pg_header_if_needed(&mut header);
     }
 
-    // The header-only reader must not retain an idle HTS worker pool.
     drop(reader);
     let mut summary = MarkDuplicatesSummary {
         library,
@@ -552,9 +509,6 @@ fn try_run_external_plan(
         duplicate_set_histogram: BTreeMap::new(),
     };
     let temporary = external_plan_tempdir(config)?;
-    // The two mate stages share the former QNAME window's allocation budget.
-    // The pair window fills alongside the fragment window for nearby mates;
-    // reserve more of their shared budget for the distant-mate fallback.
     let pair_bytes = EXTERNAL_MARKDUP_MAX_BYTES_IN_RAM / 8 * 3;
     let qname_bytes = EXTERNAL_MARKDUP_MAX_BYTES_IN_RAM - pair_bytes;
     let mut qname_sorter =
@@ -572,7 +526,7 @@ fn try_run_external_plan(
 
     for input in &config.inputs {
         let mut reader = open_markdup_reader(config, input)?;
-        let input_library_lookup = library_lookup(reader.header(), &mut library_registry);
+        let input_library_lookup = library_lookup(reader.header(), &mut library_registry)?;
         let mut record = bam::Record::new();
         while let Some(result) = reader.read(&mut record) {
             result?;
@@ -581,16 +535,12 @@ fn try_run_external_plan(
                 record.set_flags(flag);
             }
             if config.inputs.len() == 1 {
-                // A single input is replayed unchanged. Coordinate order permits
-                // arbitrary QNAME/flag ties and puts unplaced records last.
                 let coordinate = bounded_plan::coordinate_key(record.tid(), record.pos());
                 if last_coordinate.is_some_and(|previous| coordinate < previous) {
                     return Ok(None);
                 }
                 last_coordinate = Some(coordinate);
             } else {
-                // Preserve the existing multi-input output-order contract. This
-                // is deliberately separate from single-input eligibility.
                 let output_order = (record.tid(), record.pos(), record.qname().to_vec(), flag);
                 if last_output_order
                     .as_ref()
@@ -603,9 +553,9 @@ fn try_run_external_plan(
 
             let library_id = record_library_id(&record, &input_library_lookup);
             let ordinal = record_count;
-            record_count = record_count.checked_add(1).ok_or_else(|| {
-                MarkDuplicatesError::Operation("too many BAM records".to_string())
-            })?;
+            record_count = record_count
+                .checked_add(1)
+                .ok_or(MarkDuplicatesError::TooManyRecords)?;
 
             if flag & UNMAPPED_FLAG != 0 {
                 summary.unmapped_records += 1;
@@ -638,13 +588,9 @@ fn try_run_external_plan(
 
             let plan = external_plan_record(ordinal, &record, library_id, config);
             if duplicate_candidate_is_pair(flag) {
-                mate_cache
-                    .push(plan, &mut qname_sorter, &mut pair_sorter)
-                    .map_err(MarkDuplicatesError::Operation)?;
+                mate_cache.push(plan, &mut qname_sorter, &mut pair_sorter)?;
             } else {
-                fragment_stage
-                    .push_required(&plan)
-                    .map_err(MarkDuplicatesError::Operation)?;
+                fragment_stage.push_required(&plan)?;
             }
         }
     }
@@ -652,14 +598,8 @@ fn try_run_external_plan(
     if !config.quiet {
         eprintln!("MarkDuplicates: using external-sort plan ({record_count} records)");
     }
-    mate_cache
-        .flush(&mut qname_sorter)
-        .map_err(MarkDuplicatesError::Operation)?;
+    mate_cache.flush(&mut qname_sorter)?;
     drop(mate_cache);
-    // Paired records only dominate unpaired candidates in the fragment stage.
-    // Only unpaired candidates have entered this sorter. Recover paired ends
-    // from the exact mate join and pair payloads only when they can dominate an
-    // unpaired candidate; paired-only inputs never build fragment entries.
     if summary.unpaired_reads_examined == 0 {
         fragment_stage.release();
     }
@@ -669,8 +609,7 @@ fn try_run_external_plan(
         qname_sorter,
         &mut pair_sorter,
         has_fragments.then_some(&mut fragment_stage),
-    )
-    .map_err(MarkDuplicatesError::Operation)?;
+    )?;
 
     process_external_duplicate_groups(
         pair_sorter,
@@ -678,7 +617,6 @@ fn try_run_external_plan(
         &mut summary,
         &mut library_registry,
         true,
-        tracks_duplicate_set_histogram(config),
         &processing_config,
         has_fragments.then_some(&mut fragment_stage),
     )?;
@@ -689,7 +627,6 @@ fn try_run_external_plan(
             &mut summary,
             &mut library_registry,
             false,
-            tracks_duplicate_set_histogram(config),
             &processing_config,
             None,
         )?;
@@ -713,14 +650,10 @@ fn try_run_external_plan(
         )?;
     }
     if replay_ordinal != record_count {
-        return Err(MarkDuplicatesError::Operation(
-            "MarkDuplicates replay record count differs from external plan".to_string(),
-        ));
+        return Err(MarkDuplicatesError::ReplayCountDiffersFromExternalPlan);
     }
     if next_duplicate.is_some() {
-        return Err(MarkDuplicatesError::Operation(
-            "external MarkDuplicates decision ordinal exceeds replay record count".to_string(),
-        ));
+        return Err(ExternalPlanError::DecisionOrdinalExceedsReplay.into());
     }
     drop(writer);
 
@@ -783,9 +716,6 @@ fn append_external_plan_record(
     encode_external_barcode(payload, record.read_group.as_deref());
 }
 
-// A completed template needs one pair key and one sort slot. Keep both original
-// records in the framed payload: scores, identities and input ordinals still
-// drive the same representative, optical and duplicate-set decisions.
 fn encode_external_pair(first: &ExternalPlanRecord, second: &ExternalPlanRecord) -> Vec<u8> {
     let mut payload = Vec::with_capacity(
         8 + external_plan_record_encoded_len(first, true)
@@ -802,15 +732,15 @@ fn encode_external_pair(first: &ExternalPlanRecord, second: &ExternalPlanRecord)
 fn decode_borrowed_external_pair<'a>(
     key: &'a [u8],
     payload: &'a [u8],
-) -> Result<[BorrowedExternalPlanRecord<'a>; 2], String> {
+) -> Result<[BorrowedExternalPlanRecord<'a>; 2], ExternalPlanError> {
     let mut offset = 0;
     let first_length = usize::try_from(read_external_u64(payload, &mut offset)?)
-        .map_err(|_| "external MarkDuplicates pair length is too large".to_string())?;
+        .map_err(|_| ExternalPlanError::PairLengthTooLarge)?;
     let first = read_external_bytes(payload, &mut offset, first_length)?;
     let first = decode_borrowed_external_plan_record(key, first, true)?;
     let second = decode_borrowed_external_plan_record(key, &payload[offset..], true)?;
     if first.qname != second.qname || first.read_group != second.read_group {
-        return Err("external MarkDuplicates pair identities disagree".to_string());
+        return Err(ExternalPlanError::PairIdentitiesDisagree);
     }
     Ok([first, second])
 }
@@ -819,7 +749,7 @@ fn append_external_group_item(
     group: &mut Vec<ExternalPlanRecord>,
     item: &SortItem,
     paired: bool,
-) -> Result<(), String> {
+) -> Result<(), ExternalPlanError> {
     if paired {
         group.extend(
             decode_borrowed_external_pair(&item.key, &item.payload)?
@@ -852,9 +782,6 @@ fn encode_external_barcode(payload: &mut Vec<u8>, barcode: Option<&[u8]>) {
     }
 }
 
-// Views into a sort payload let singleton reads and ordinary pairs pass without
-// allocating QNAME, read-group, barcode, or template-key copies. All fields are
-// still decoded and validated before a no-decision group can be discarded.
 struct BorrowedExternalPlanRecord<'a> {
     ordinal: u64,
     library_id: LibraryId,
@@ -900,7 +827,7 @@ fn decode_external_plan_record(
     key: &[u8],
     payload: &[u8],
     qname_in_payload: bool,
-) -> Result<ExternalPlanRecord, String> {
+) -> Result<ExternalPlanRecord, ExternalPlanError> {
     decode_borrowed_external_plan_record(key, payload, qname_in_payload)
         .map(BorrowedExternalPlanRecord::into_owned)
 }
@@ -909,7 +836,7 @@ fn decode_borrowed_external_plan_record<'a>(
     key: &'a [u8],
     payload: &'a [u8],
     qname_in_payload: bool,
-) -> Result<BorrowedExternalPlanRecord<'a>, String> {
+) -> Result<BorrowedExternalPlanRecord<'a>, ExternalPlanError> {
     let mut offset = 0usize;
     let ordinal = read_external_u64(payload, &mut offset)?;
     let library_id = read_external_u32(payload, &mut offset)?;
@@ -923,7 +850,7 @@ fn decode_borrowed_external_plan_record<'a>(
     let quality_score = read_external_u64(payload, &mut offset)?;
     let qname = if qname_in_payload {
         let length = usize::try_from(read_external_u32(payload, &mut offset)?)
-            .map_err(|_| "external MarkDuplicates QNAME length is too large".to_string())?;
+            .map_err(|_| ExternalPlanError::QnameLengthTooLarge)?;
         read_external_bytes(payload, &mut offset, length)?
     } else {
         bounded_plan::template_qname(key)?
@@ -935,10 +862,10 @@ fn decode_borrowed_external_plan_record<'a>(
     ];
     let read_group = decode_borrowed_external_barcode(payload, &mut offset)?;
     if offset != payload.len() {
-        return Err("external MarkDuplicates record payload has trailing bytes".to_string());
+        return Err(ExternalPlanError::TrailingPayloadBytes);
     }
     if !qname_in_payload && bounded_plan::template_key(read_group, qname) != key {
-        return Err("external MarkDuplicates template key disagrees with its payload".to_string());
+        return Err(ExternalPlanError::TemplateKeyDisagrees);
     }
     Ok(BorrowedExternalPlanRecord {
         ordinal,
@@ -960,15 +887,15 @@ fn decode_borrowed_external_plan_record<'a>(
 fn decode_borrowed_external_barcode<'a>(
     payload: &'a [u8],
     offset: &mut usize,
-) -> Result<Option<&'a [u8]>, String> {
+) -> Result<Option<&'a [u8]>, ExternalPlanError> {
     match read_external_u8(payload, offset)? {
         0 => Ok(None),
         1 => {
             let length = usize::try_from(read_external_u64(payload, offset)?)
-                .map_err(|_| "external MarkDuplicates barcode length is too large".to_string())?;
+                .map_err(|_| ExternalPlanError::BarcodeLengthTooLarge)?;
             Ok(Some(read_external_bytes(payload, offset, length)?))
         }
-        _ => Err("external MarkDuplicates barcode marker is invalid".to_string()),
+        _ => Err(ExternalPlanError::InvalidBarcodeMarker),
     }
 }
 
@@ -976,52 +903,53 @@ fn read_external_bytes<'a>(
     payload: &'a [u8],
     offset: &mut usize,
     length: usize,
-) -> Result<&'a [u8], String> {
+) -> Result<&'a [u8], ExternalPlanError> {
     let end = offset
         .checked_add(length)
-        .ok_or_else(|| "external MarkDuplicates payload length overflow".to_string())?;
+        .ok_or(ExternalPlanError::PayloadLengthOverflow)?;
     let bytes = payload
         .get(*offset..end)
-        .ok_or_else(|| "external MarkDuplicates record payload is truncated".to_string())?;
+        .ok_or(ExternalPlanError::TruncatedPayload)?;
     *offset = end;
     Ok(bytes)
 }
 
-fn read_external_u8(payload: &[u8], offset: &mut usize) -> Result<u8, String> {
-    Ok(*read_external_bytes(payload, offset, 1)?
-        .first()
-        .expect("one byte was requested"))
+fn read_external_u8(payload: &[u8], offset: &mut usize) -> Result<u8, ExternalPlanError> {
+    let &[byte] = read_external_bytes(payload, offset, 1)? else {
+        return Err(ExternalPlanError::TruncatedPayload);
+    };
+    Ok(byte)
 }
 
-fn read_external_u16(payload: &[u8], offset: &mut usize) -> Result<u16, String> {
+fn read_external_u16(payload: &[u8], offset: &mut usize) -> Result<u16, ExternalPlanError> {
     let mut bytes = [0_u8; 2];
     let length = bytes.len();
     bytes.copy_from_slice(read_external_bytes(payload, offset, length)?);
     Ok(u16::from_le_bytes(bytes))
 }
 
-fn read_external_u32(payload: &[u8], offset: &mut usize) -> Result<u32, String> {
+fn read_external_u32(payload: &[u8], offset: &mut usize) -> Result<u32, ExternalPlanError> {
     let mut bytes = [0_u8; 4];
     let length = bytes.len();
     bytes.copy_from_slice(read_external_bytes(payload, offset, length)?);
     Ok(u32::from_le_bytes(bytes))
 }
 
-fn read_external_u64(payload: &[u8], offset: &mut usize) -> Result<u64, String> {
+fn read_external_u64(payload: &[u8], offset: &mut usize) -> Result<u64, ExternalPlanError> {
     let mut bytes = [0_u8; 8];
     let length = bytes.len();
     bytes.copy_from_slice(read_external_bytes(payload, offset, length)?);
     Ok(u64::from_le_bytes(bytes))
 }
 
-fn read_external_i32(payload: &[u8], offset: &mut usize) -> Result<i32, String> {
+fn read_external_i32(payload: &[u8], offset: &mut usize) -> Result<i32, ExternalPlanError> {
     let mut bytes = [0_u8; 4];
     let length = bytes.len();
     bytes.copy_from_slice(read_external_bytes(payload, offset, length)?);
     Ok(i32::from_le_bytes(bytes))
 }
 
-fn read_external_i64(payload: &[u8], offset: &mut usize) -> Result<i64, String> {
+fn read_external_i64(payload: &[u8], offset: &mut usize) -> Result<i64, ExternalPlanError> {
     let mut bytes = [0_u8; 8];
     let length = bytes.len();
     bytes.copy_from_slice(read_external_bytes(payload, offset, length)?);
@@ -1039,7 +967,7 @@ struct ExternalKey<'a> {
     barcode: &'a ExternalBarcodeValues,
 }
 
-fn external_key(key_fields: ExternalKey<'_>) -> Vec<u8> {
+fn external_key(key_fields: &ExternalKey<'_>) -> Vec<u8> {
     let barcode_bytes = [
         key_fields.barcode.primary.as_deref(),
         key_fields.barcode.read_one.as_deref(),
@@ -1073,7 +1001,7 @@ fn external_pair_key(first: &ExternalPlanRecord, second: &ExternalPlanRecord) ->
     let left_reverse = u8::from(left.flags & 0x10 != 0);
     let right_reverse = u8::from(right.flags & 0x10 != 0);
     let barcode = paired_external_barcode_values(first, second);
-    external_key(ExternalKey {
+    external_key(&ExternalKey {
         library_id: first.library_id,
         reference_id: left.reference_id,
         position: left.unclipped_position,
@@ -1086,7 +1014,7 @@ fn external_pair_key(first: &ExternalPlanRecord, second: &ExternalPlanRecord) ->
 }
 
 fn external_fragment_key(record: &ExternalPlanRecord) -> Vec<u8> {
-    external_key(ExternalKey {
+    external_key(&ExternalKey {
         library_id: record.library_id,
         reference_id: record.reference_id,
         position: record.unclipped_position,
@@ -1102,21 +1030,13 @@ fn external_fragment_key(record: &ExternalPlanRecord) -> Vec<u8> {
 fn push_external_fragment(
     plan: &ExternalPlanRecord,
     fragments: &mut ExternalSorter,
-) -> Result<(), String> {
+) -> Result<(), SortError> {
     fragments.push(
         external_fragment_key(plan),
         encode_external_plan_record(plan, true),
     )
 }
 
-/// The fragment stage plus the set of keys an unpaired candidate has claimed.
-///
-/// A pair read end only changes a duplicate decision when it shares its
-/// fragment key with an unpaired candidate: the fragment stage then marks every
-/// non-pair member of that group. Pair ends with an untouched key can only join
-/// a group that holds pairs alone, which marks nothing. The taint filter
-/// answers that question with false positives only, so a false positive adds a
-/// pair to a group that marks nothing and duplicate decisions are unchanged.
 struct FragmentStage {
     sorter: Option<ExternalSorter>,
     taint: FragmentTaint,
@@ -1134,8 +1054,6 @@ impl FragmentStage {
         self.sorter.is_some()
     }
 
-    /// Release the sorter when the input has no unpaired candidate. Pair-only
-    /// inputs cannot produce a fragment decision.
     fn release(&mut self) {
         self.sorter = None;
     }
@@ -1144,9 +1062,7 @@ impl FragmentStage {
         self.sorter.take()
     }
 
-    /// An unpaired candidate, or a pair candidate whose mate is absent. It
-    /// always participates and taints its fragment key.
-    fn push_required(&mut self, plan: &ExternalPlanRecord) -> Result<(), String> {
+    fn push_required(&mut self, plan: &ExternalPlanRecord) -> Result<(), ExternalPlanError> {
         if self.sorter.is_none() {
             return Ok(());
         }
@@ -1155,12 +1071,12 @@ impl FragmentStage {
         let Some(sorter) = self.sorter.as_mut() else {
             return Ok(());
         };
-        sorter.push(key, encode_external_plan_record(plan, true))
+        sorter
+            .push(key, encode_external_plan_record(plan, true))
+            .map_err(ExternalPlanError::Sort)
     }
 
-    /// A pair read end that only matters when an unpaired candidate shares its
-    /// fragment key.
-    fn push_paired(&mut self, plan: &ExternalPlanRecord) -> Result<(), String> {
+    fn push_paired(&mut self, plan: &ExternalPlanRecord) -> Result<(), ExternalPlanError> {
         if self.sorter.is_none() {
             return Ok(());
         }
@@ -1171,7 +1087,9 @@ impl FragmentStage {
         let Some(sorter) = self.sorter.as_mut() else {
             return Ok(());
         };
-        sorter.push(key, encode_external_plan_record(plan, true))
+        sorter
+            .push(key, encode_external_plan_record(plan, true))
+            .map_err(ExternalPlanError::Sort)
     }
 }
 
@@ -1179,7 +1097,7 @@ impl FragmentStage {
 fn push_external_pair_fragments(
     item: &SortItem,
     fragments: &mut ExternalSorter,
-) -> Result<(), String> {
+) -> Result<(), SortError> {
     for member in decode_borrowed_external_pair(&item.key, &item.payload)? {
         push_external_fragment(&member.into_owned(), fragments)?;
     }
@@ -1189,7 +1107,7 @@ fn push_external_pair_fragments(
 fn push_external_pair_fragments_filtered(
     item: &SortItem,
     stage: &mut FragmentStage,
-) -> Result<(), String> {
+) -> Result<(), ExternalPlanError> {
     for member in decode_borrowed_external_pair(&item.key, &item.payload)? {
         stage.push_paired(&member.into_owned())?;
     }
@@ -1202,7 +1120,6 @@ fn process_external_duplicate_groups(
     summary: &mut MarkDuplicatesSummary,
     library_registry: &mut LibraryRegistry,
     paired_groups: bool,
-    track_duplicate_set_histogram: bool,
     processing_config: &ExternalDuplicateProcessingConfig<'_>,
     mut paired_fragments: Option<&mut FragmentStage>,
 ) -> Result<(), MarkDuplicatesError> {
@@ -1220,9 +1137,6 @@ fn process_external_duplicate_groups(
                 pending.clear();
                 return Ok(());
             }
-            // Even groups that cannot produce a duplicate decision must reject
-            // corrupt spill payloads. Compare framed identity (RG plus QNAME),
-            // keeping missing and empty read groups distinct.
             let first = pending
                 .first()
                 .map(|item| decode_borrowed_external_plan_record(&item.key, &item.payload, true))
@@ -1254,36 +1168,33 @@ fn process_external_duplicate_groups(
             summary,
             library_registry,
             paired_groups,
-            track_duplicate_set_histogram,
             processing_config,
         )?;
         group.clear();
-        Ok::<(), String>(())
+        Ok::<(), ExternalPlanError>(())
     };
-    sorter
-        .finish_into(|item: SortItem| {
-            if let Some(stage) = paired_fragments.as_deref_mut() {
-                push_external_pair_fragments_filtered(&item, stage)?;
-            }
-            if current_key.as_deref() != Some(item.key.as_slice()) {
-                flush(&mut pending, &mut group)?;
-                let key = current_key.get_or_insert_with(Vec::new);
-                key.clear();
-                key.extend_from_slice(&item.key);
-            }
-            let pending_limit = if paired_groups { 1 } else { 2 };
-            if group.is_empty() && pending.len() < pending_limit {
-                pending.push(item);
-            } else {
-                for item in pending.drain(..) {
-                    append_external_group_item(&mut group, &item, paired_groups)?;
-                }
+    sorter.finish_into(|item: SortItem| {
+        if let Some(stage) = paired_fragments.as_deref_mut() {
+            push_external_pair_fragments_filtered(&item, stage)?;
+        }
+        if current_key.as_deref() != Some(item.key.as_slice()) {
+            flush(&mut pending, &mut group)?;
+            let key = current_key.get_or_insert_with(Vec::new);
+            key.clear();
+            key.extend_from_slice(&item.key);
+        }
+        let pending_limit = if paired_groups { 1 } else { 2 };
+        if group.is_empty() && pending.len() < pending_limit {
+            pending.push(item);
+        } else {
+            for item in pending.drain(..) {
                 append_external_group_item(&mut group, &item, paired_groups)?;
             }
-            Ok(())
-        })
-        .map_err(MarkDuplicatesError::Operation)?;
-    flush(&mut pending, &mut group).map_err(MarkDuplicatesError::Operation)
+            append_external_group_item(&mut group, &item, paired_groups)?;
+        }
+        Ok(())
+    })?;
+    Ok(flush(&mut pending, &mut group)?)
 }
 
 fn process_external_duplicate_group(
@@ -1292,9 +1203,8 @@ fn process_external_duplicate_group(
     summary: &mut MarkDuplicatesSummary,
     library_registry: &mut LibraryRegistry,
     paired_groups: bool,
-    track_duplicate_set_histogram: bool,
     processing_config: &ExternalDuplicateProcessingConfig<'_>,
-) -> Result<(), String> {
+) -> Result<(), ExternalPlanError> {
     if group.len() < 2 {
         return Ok(());
     }
@@ -1333,18 +1243,16 @@ fn process_external_duplicate_group(
         return Ok(());
     }
 
-    let representative_name = representative_external_name(&names);
+    let Some(representative_name) = representative_external_name(&names) else {
+        return Ok(());
+    };
     let optical_names = if matches!(
         processing_config.read_name_parser,
         ReadNameLocationParser::Disabled
     ) || names.len() > DEFAULT_MAX_OPTICAL_DUPLICATE_SET_SIZE
     {
-        // Optical discovery is known to be empty in these cases. Avoid
-        // cloning and sorting every template merely to return an empty set.
         HashSet::default()
     } else {
-        // Visit the family once instead of searching the entire family for each
-        // distinct template (quadratic on large PCR duplicate families).
         let mut reads = group
             .iter()
             .filter(|member| {
@@ -1368,8 +1276,7 @@ fn process_external_duplicate_group(
         reads.sort_by_key(|read| {
             names
                 .get(read.name.as_slice())
-                .map(|(_, ordinal)| *ordinal)
-                .unwrap_or(u64::MAX)
+                .map_or(u64::MAX, |(_, ordinal)| *ordinal)
         });
         find_optical_duplicate_names(
             &reads,
@@ -1382,7 +1289,7 @@ fn process_external_duplicate_group(
             ),
         )
     };
-    if track_duplicate_set_histogram {
+    if processing_config.track_duplicate_set_histogram {
         let optical_names_count = u64::try_from(optical_names.len()).unwrap_or(u64::MAX);
         let non_optical_size =
             (optical_names_count < set_size).then_some(set_size - optical_names_count);
@@ -1443,7 +1350,7 @@ fn process_external_fragment_group(
     decisions: &mut ExternalSorter,
     summary: &mut MarkDuplicatesSummary,
     library_registry: &mut LibraryRegistry,
-) -> Result<(), String> {
+) -> Result<(), ExternalPlanError> {
     if group
         .iter()
         .any(|member| duplicate_candidate_is_pair(member.flags))
@@ -1456,7 +1363,9 @@ fn process_external_fragment_group(
         return Ok(());
     }
 
-    let representative_name = representative_external_name(names);
+    let Some(representative_name) = representative_external_name(names) else {
+        return Ok(());
+    };
     for member in group {
         if member.template_key.as_slice() != representative_name {
             mark_external_duplicate(member, decisions, summary, library_registry, false)?;
@@ -1465,7 +1374,7 @@ fn process_external_fragment_group(
     Ok(())
 }
 
-fn representative_external_name<'a>(names: &HashMap<&'a [u8], (u64, u64)>) -> &'a [u8] {
+fn representative_external_name<'a>(names: &HashMap<&'a [u8], (u64, u64)>) -> Option<&'a [u8]> {
     names
         .iter()
         .max_by(|left, right| {
@@ -1475,7 +1384,6 @@ fn representative_external_name<'a>(names: &HashMap<&'a [u8], (u64, u64)>) -> &'
                 .then_with(|| right.1.1.cmp(&left.1.1))
         })
         .map(|(name, _)| *name)
-        .expect("external duplicate group has a name")
 }
 
 fn mark_external_duplicate(
@@ -1484,7 +1392,7 @@ fn mark_external_duplicate(
     summary: &mut MarkDuplicatesSummary,
     library_registry: &mut LibraryRegistry,
     is_optical_duplicate: bool,
-) -> Result<(), String> {
+) -> Result<(), ExternalPlanError> {
     mark_external_decision(
         member,
         decisions,
@@ -1504,7 +1412,7 @@ fn mark_external_decision(
     is_duplicate: bool,
     is_optical_duplicate: bool,
     duplicate_set_tags: Option<(i32, i32)>,
-) -> Result<(), String> {
+) -> Result<(), ExternalPlanError> {
     let mut flags = 0_u8;
     if is_duplicate {
         flags |= EXTERNAL_DECISION_DUPLICATE;
@@ -1524,7 +1432,7 @@ fn mark_external_decision(
                 duplicate_set_index: duplicate_set_tags.map(|(_, index)| index),
             }),
         )
-        .map_err(|error| error.to_string())?;
+        .map_err(ExternalPlanError::Sort)?;
     if !is_duplicate {
         return Ok(());
     }
@@ -1560,27 +1468,33 @@ fn encode_external_decision_payload(decision: &ExternalDecision) -> Vec<u8> {
     payload
 }
 
-fn decode_external_decision_payload(payload: &[u8]) -> Result<ExternalDecision, String> {
-    if payload.len() != EXTERNAL_DECISION_PAYLOAD_BYTES {
-        return Err("external MarkDuplicates decision payload has invalid length".to_string());
-    }
-    let flags = payload[0];
+fn decode_external_decision_payload(payload: &[u8]) -> Result<ExternalDecision, ExternalPlanError> {
+    let &[
+        flags,
+        size0,
+        size1,
+        size2,
+        size3,
+        index0,
+        index1,
+        index2,
+        index3,
+    ] = payload
+    else {
+        return Err(ExternalPlanError::InvalidDecisionPayloadLength);
+    };
     let known_flags =
         EXTERNAL_DECISION_OPTICAL | EXTERNAL_DECISION_DUPLICATE | EXTERNAL_DECISION_SET_MEMBERS;
     if flags & !known_flags != 0 {
-        return Err("external MarkDuplicates decision flags are invalid".to_string());
+        return Err(ExternalPlanError::InvalidDecisionFlags);
     }
-    let mut size_bytes = [0_u8; std::mem::size_of::<i32>()];
-    size_bytes.copy_from_slice(&payload[1..1 + std::mem::size_of::<i32>()]);
-    let mut index_bytes = [0_u8; std::mem::size_of::<i32>()];
-    index_bytes.copy_from_slice(&payload[1 + std::mem::size_of::<i32>()..]);
-    let size = i32::from_le_bytes(size_bytes);
-    let index = i32::from_le_bytes(index_bytes);
+    let size = i32::from_le_bytes([size0, size1, size2, size3]);
+    let index = i32::from_le_bytes([index0, index1, index2, index3]);
     let has_set_members = flags & EXTERNAL_DECISION_SET_MEMBERS != 0;
     if has_set_members
         == (size == EXTERNAL_DECISION_ABSENT_TAG || index == EXTERNAL_DECISION_ABSENT_TAG)
     {
-        return Err("external MarkDuplicates duplicate-set metadata is incomplete".to_string());
+        return Err(ExternalPlanError::IncompleteDuplicateSetMetadata);
     }
     Ok(ExternalDecision {
         flags,
@@ -1592,17 +1506,17 @@ fn decode_external_decision_payload(payload: &[u8]) -> Result<ExternalDecision, 
 fn merge_external_decisions(
     left: ExternalDecision,
     right: ExternalDecision,
-) -> Result<ExternalDecision, String> {
+) -> Result<ExternalDecision, ExternalPlanError> {
     let duplicate_set_size = match (left.duplicate_set_size, right.duplicate_set_size) {
         (Some(left), Some(right)) if left != right => {
-            return Err("external MarkDuplicates duplicate-set sizes conflict".to_string());
+            return Err(ExternalPlanError::ConflictingDuplicateSetSizes);
         }
         (Some(value), _) | (_, Some(value)) => Some(value),
         (None, None) => None,
     };
     let duplicate_set_index = match (left.duplicate_set_index, right.duplicate_set_index) {
         (Some(left), Some(right)) if left != right => {
-            return Err("external MarkDuplicates duplicate-set indices conflict".to_string());
+            return Err(ExternalPlanError::ConflictingDuplicateSetIndices);
         }
         (Some(value), _) | (_, Some(value)) => Some(value),
         (None, None) => None,
@@ -1618,41 +1532,34 @@ fn write_external_duplicate_ordinals(
     sorter: ExternalSorter,
     path: &Path,
 ) -> Result<(), MarkDuplicatesError> {
-    // Duplicate groups arrive in fragment/pair sort order. Normalize their
-    // ordinals once so BAM replay can consume a sequential stream instead of
-    // performing one random seek for every duplicate record. The fixed-width
-    // decision payload preserves optical status and optional DS/DI metadata.
     let file = File::create(path)?;
     let mut writer = BufWriter::new(file);
     let mut previous = None::<(u64, ExternalDecision)>;
-    sorter
-        .finish_into(|item| {
-            if item.key.len() != std::mem::size_of::<u64>() {
-                return Err("external MarkDuplicates decision key has invalid length".to_string());
+    sorter.finish_into(|item| {
+        if item.key.len() != size_of::<u64>() {
+            return Err(ExternalPlanError::InvalidDecisionKeyLength.into());
+        }
+        let decision = decode_external_decision_payload(&item.payload)?;
+        let mut bytes = [0_u8; 8];
+        bytes.copy_from_slice(&item.key);
+        let ordinal = u64::from_be_bytes(bytes);
+        match previous {
+            Some((previous_ordinal, previous_decision)) if previous_ordinal == ordinal => {
+                previous = Some((
+                    previous_ordinal,
+                    merge_external_decisions(previous_decision, decision)?,
+                ));
             }
-            let decision = decode_external_decision_payload(&item.payload)?;
-            let mut bytes = [0_u8; 8];
-            bytes.copy_from_slice(&item.key);
-            let ordinal = u64::from_be_bytes(bytes);
-            match previous {
-                Some((previous_ordinal, previous_decision)) if previous_ordinal == ordinal => {
-                    previous = Some((
-                        previous_ordinal,
-                        merge_external_decisions(previous_decision, decision)?,
-                    ));
-                }
-                Some((previous_ordinal, previous_decision)) => {
-                    write_external_decision(&mut writer, previous_ordinal, previous_decision)?;
-                    previous = Some((ordinal, decision));
-                }
-                None => previous = Some((ordinal, decision)),
+            Some((previous_ordinal, previous_decision)) => {
+                write_external_decision(&mut writer, previous_ordinal, previous_decision)?;
+                previous = Some((ordinal, decision));
             }
-            Ok(())
-        })
-        .map_err(MarkDuplicatesError::Operation)?;
+            None => previous = Some((ordinal, decision)),
+        }
+        Ok(())
+    })?;
     if let Some((ordinal, decision)) = previous {
-        write_external_decision(&mut writer, ordinal, decision)
-            .map_err(MarkDuplicatesError::Operation)?;
+        write_external_decision(&mut writer, ordinal, decision)?;
     }
     writer.flush()?;
     Ok(())
@@ -1662,13 +1569,10 @@ fn write_external_decision(
     writer: &mut BufWriter<File>,
     ordinal: u64,
     decision: ExternalDecision,
-) -> Result<(), String> {
-    writer
-        .write_all(&ordinal.to_be_bytes())
-        .map_err(|error| error.to_string())?;
-    writer
-        .write_all(&encode_external_decision_payload(&decision))
-        .map_err(|error| error.to_string())
+) -> Result<(), ExternalPlanError> {
+    writer.write_all(&ordinal.to_be_bytes())?;
+    writer.write_all(&encode_external_decision_payload(&decision))?;
+    Ok(())
 }
 
 fn read_external_duplicate_decision(
@@ -1700,9 +1604,7 @@ fn write_external_plan_records(
         let mut is_optical_duplicate = false;
         if let Some((duplicate_ordinal, decision)) = *next_duplicate {
             if duplicate_ordinal < *ordinal {
-                return Err(MarkDuplicatesError::Operation(
-                    "external MarkDuplicates decision ordinals are not monotonic".to_string(),
-                ));
+                return Err(ExternalPlanError::DecisionOrdinalsNotMonotonic.into());
             }
             if duplicate_ordinal == *ordinal {
                 if decision.flags & EXTERNAL_DECISION_DUPLICATE != 0 {
@@ -1724,7 +1626,7 @@ fn write_external_plan_records(
         write_bam_record(record, is_optical_duplicate, config, writer)?;
         *ordinal = (*ordinal)
             .checked_add(1)
-            .ok_or_else(|| MarkDuplicatesError::Operation("too many BAM records".to_string()))?;
+            .ok_or(MarkDuplicatesError::TooManyRecords)?;
     }
     Ok(())
 }
@@ -1739,7 +1641,7 @@ fn try_run_single_bam_compact_plan(
     let first_input = &config.inputs[0];
     let mut reader = open_markdup_reader(config, first_input)?;
     let mut library_registry = LibraryRegistry::new();
-    let first_library_lookup = library_lookup(reader.header(), &mut library_registry);
+    let first_library_lookup = library_lookup(reader.header(), &mut library_registry)?;
     let library = library_registry
         .summary(first_library_lookup.first_library_id)
         .library
@@ -1835,7 +1737,11 @@ fn mark_duplicate_plan(
             continue;
         }
 
-        let representative_index = best_duplicate_representative_index(group, records, read_ends);
+        let Some(representative_index) =
+            best_duplicate_representative_index(group, records, read_ends)
+        else {
+            continue;
+        };
         let representative_name = records[representative_index].qname().to_vec();
         let optical_duplicates = optical_duplicate_record_indices(
             group,
@@ -1908,11 +1814,9 @@ fn write_compact_plan_records(
     let mut record_count = 0usize;
     for result in reader.records() {
         let mut record = result?;
-        let plan = plan_records.get(record_count).ok_or_else(|| {
-            MarkDuplicatesError::Operation(
-                "MarkDuplicates replay read more records than its compact plan".to_string(),
-            )
-        })?;
+        let plan = plan_records
+            .get(record_count)
+            .ok_or(MarkDuplicatesError::ReplayReadMoreThanCompactPlan)?;
         record.set_flags(plan.flags());
         if config.tag_duplicate_set_members && !config.remove_duplicates {
             copy_duplicate_set_member_tags(plan, &mut record)?;
@@ -1920,19 +1824,12 @@ fn write_compact_plan_records(
         let optical_duplicate = optical_duplicate_records
             .get(record_count)
             .copied()
-            .ok_or_else(|| {
-                MarkDuplicatesError::Operation(
-                    "MarkDuplicates compact plan is missing an optical-duplicate decision"
-                        .to_string(),
-                )
-            })?;
+            .ok_or(MarkDuplicatesError::MissingOpticalDuplicateDecision)?;
         write_bam_record(record, optical_duplicate, config, writer)?;
         record_count += 1;
     }
     if record_count != plan_records.len() {
-        return Err(MarkDuplicatesError::Operation(
-            "MarkDuplicates replay read fewer records than its compact plan".to_string(),
-        ));
+        return Err(MarkDuplicatesError::ReplayReadFewerThanCompactPlan);
     }
     Ok(())
 }
@@ -2026,7 +1923,7 @@ fn try_run_single_bam_no_duplicate_fast_path(
         return Ok(None);
     }
     let mut library_registry = LibraryRegistry::new();
-    let library_lookup = library_lookup(reader.header(), &mut library_registry);
+    let library_lookup = library_lookup(reader.header(), &mut library_registry)?;
     let library = library_registry
         .summary(library_lookup.first_library_id)
         .library
@@ -2063,8 +1960,6 @@ fn try_run_single_bam_no_duplicate_fast_path(
 
     for (record_index, result) in reader.records().enumerate() {
         let record = result?;
-        // A speculative no-duplicate probe must not grow whole-file hash tables.
-        // Its temporary output is discarded by the existing fallback cleanup.
         if record_index >= COMPACT_MARKDUP_MAX_RECORDS {
             should_fallback = true;
             break;
@@ -2155,8 +2050,12 @@ fn try_run_single_bam_no_duplicate_fast_path(
             library_registry
                 .summary_mut(library_id)
                 .unpaired_reads_examined += 1;
-            let key = single_duplicate_key_bam(&record, library_id, &bam_barcode(&record, config));
-            if duplicate_key_seen_with_different_name(&mut seen_single_keys, key, record.qname())? {
+            let key = single_duplicate_key_bam(
+                &record,
+                library_id,
+                bam_barcode(&record, config).as_deref(),
+            );
+            if duplicate_key_seen_with_different_name(&mut seen_single_keys, key, record.qname()) {
                 should_fallback = true;
                 break;
             }
@@ -2168,7 +2067,7 @@ fn try_run_single_bam_no_duplicate_fast_path(
 
     if !should_fallback && let Some((qname, record)) = adjacent_pending_pair {
         let key = fast_single_duplicate_key(&record);
-        if duplicate_key_seen_with_different_name(&mut seen_single_keys, key, &qname)? {
+        if duplicate_key_seen_with_different_name(&mut seen_single_keys, key, &qname) {
             should_fallback = true;
         }
     }
@@ -2176,7 +2075,7 @@ fn try_run_single_bam_no_duplicate_fast_path(
     if !should_fallback {
         for (qname, record) in pending_pairs {
             let key = fast_single_duplicate_key(&record);
-            if duplicate_key_seen_with_different_name(&mut seen_single_keys, key, &qname)? {
+            if duplicate_key_seen_with_different_name(&mut seen_single_keys, key, &qname) {
                 should_fallback = true;
                 break;
             }
@@ -2271,8 +2170,7 @@ fn ordered_duplicate_key_state(
             DuplicateKeyState::Unique
         }
         Ordering::Equal if last_qname.as_slice() != qname => DuplicateKeyState::Duplicate,
-        Ordering::Equal => DuplicateKeyState::OutOfOrder,
-        Ordering::Less => DuplicateKeyState::OutOfOrder,
+        Ordering::Equal | Ordering::Less => DuplicateKeyState::OutOfOrder,
     }
 }
 
@@ -2280,12 +2178,12 @@ fn duplicate_key_seen_with_different_name(
     seen_keys: &mut HashMap<BamDuplicateKey, Vec<u8>>,
     key: BamDuplicateKey,
     qname: &[u8],
-) -> Result<bool, MarkDuplicatesError> {
+) -> bool {
     if let Some(existing_qname) = seen_keys.get(&key) {
-        return Ok(existing_qname.as_slice() != qname);
+        return existing_qname.as_slice() != qname;
     }
     seen_keys.insert(key, qname.to_vec());
-    Ok(false)
+    false
 }
 
 fn fast_pair_record(
@@ -2355,7 +2253,7 @@ struct BamRecordReadState<'a> {
 }
 
 impl BamRecordReadState<'_> {
-    fn read<R: bam::Read>(
+    fn read<R: Read>(
         &mut self,
         reader: &mut R,
         library_lookup: &LibraryLookup,
@@ -2550,9 +2448,9 @@ impl ReadNameLocationParser {
     fn from_config(config: &MarkDuplicatesConfig) -> Result<Self, MarkDuplicatesError> {
         match config.read_name_regex.as_deref() {
             Some("null") => Ok(Self::Disabled),
-            Some(pattern) => Regex::new(pattern).map(Self::Custom).map_err(|error| {
-                MarkDuplicatesError::Operation(format!("invalid READ_NAME_REGEX: {error}"))
-            }),
+            Some(pattern) => Regex::new(pattern)
+                .map(Self::Custom)
+                .map_err(MarkDuplicatesError::InvalidReadNameRegex),
             None => Ok(Self::Default),
         }
     }
@@ -2585,8 +2483,6 @@ fn optical_duplicate_record_indices(
     read_name_parser: &ReadNameLocationParser,
     optical_duplicate_pixel_distance: Option<u32>,
 ) -> OpticalDuplicateRecords {
-    // Records remain borrowed throughout this pass. Allocate a name only for
-    // each unique optical read, not twice for every candidate record.
     let mut seen_names = HashSet::<&[u8]>::default();
     let mut reads = Vec::new();
     for index in group.iter().copied() {
@@ -2616,9 +2512,6 @@ fn optical_duplicate_record_indices(
 }
 
 fn tracks_duplicate_set_histogram(config: &MarkDuplicatesConfig) -> bool {
-    // Picard only populates duplicate-set histograms while discovering optical
-    // duplicates. Its explicit READ_NAME_REGEX=null mode still records
-    // singleton pairs, but it does not record duplicate-pair set sizes.
     config.read_name_regex.as_deref() != Some("null")
 }
 
@@ -2635,8 +2528,8 @@ impl ReadLocation {
         pixel_distance >= 0
             && self.read_group == other.read_group
             && self.tile == other.tile
-            && self.x.abs_diff(other.x) <= pixel_distance as u64
-            && self.y.abs_diff(other.y) <= pixel_distance as u64
+            && self.x.abs_diff(other.x) <= pixel_distance.cast_unsigned()
+            && self.y.abs_diff(other.y) <= pixel_distance.cast_unsigned()
     }
 }
 
@@ -2654,8 +2547,6 @@ fn read_location_for_record(
 }
 
 fn parse_default_read_coordinates(text: &str) -> Option<(i64, i64, i64)> {
-    // Picard's default name shape has exactly five or seven colon-separated
-    // fields. Parse from the end without allocating a Vec for every read.
     let mut fields = text.rsplit(':');
     let y = parse_numeric_prefix(fields.next()?)?;
     let x = parse_numeric_prefix(fields.next()?)?;
@@ -2782,24 +2673,19 @@ fn find_optical_duplicate_names(
             }
         }
         for (root, indices) in components {
-            let representative = if keeper_root == Some(root) {
-                keeper_index.expect("keeper root has a keeper index")
-            } else {
-                indices
-                    .iter()
-                    .copied()
-                    .min_by(|left, right| {
-                        let left = reads[*left]
-                            .location
-                            .as_ref()
-                            .expect("component members have locations");
-                        let right = reads[*right]
-                            .location
-                            .as_ref()
-                            .expect("component members have locations");
-                        left.x.cmp(&right.x).then_with(|| left.y.cmp(&right.y))
+            let Some(representative) =
+                keeper_index
+                    .filter(|_| keeper_root == Some(root))
+                    .or_else(|| {
+                        indices.iter().copied().min_by_key(|index| {
+                            reads[*index]
+                                .location
+                                .as_ref()
+                                .map(|location| (location.x, location.y))
+                        })
                     })
-                    .expect("optical component is non-empty")
+            else {
+                continue;
             };
             for index in indices {
                 if index != representative {
@@ -2998,8 +2884,6 @@ fn duplicate_groups(
     read_ends: &[ReadEndMetadata],
     eligible_indices: &[usize],
 ) -> HashMap<ReadEndDuplicateKey, Vec<usize>> {
-    // Qnames live in the immutable record buffer for the duration of grouping.
-    // Borrow them instead of allocating a Vec<u8> for every pending mate.
     let mut paired_by_name = HashMap::<&[u8], usize>::default();
     let mut duplicate_groups = HashMap::<ReadEndDuplicateKey, Vec<usize>>::default();
 
@@ -3065,7 +2949,11 @@ fn mark_fragment_duplicate_groups(
             continue;
         }
 
-        let representative_index = best_duplicate_representative_index(group, records, read_ends);
+        let Some(representative_index) =
+            best_duplicate_representative_index(group, records, read_ends)
+        else {
+            continue;
+        };
         let representative_name = records[representative_index].qname().to_vec();
         for index in group.iter().copied() {
             if records[index].qname() == representative_name.as_slice() {
@@ -3142,7 +3030,7 @@ where
 fn single_duplicate_key_bam(
     record: &bam::Record,
     library_id: LibraryId,
-    barcode: &Option<Vec<u8>>,
+    barcode: Option<&[u8]>,
 ) -> BamDuplicateKey {
     let reverse_strand = record.flags() & 0x10 != 0;
     let position = unclipped_record_position(record);
@@ -3154,7 +3042,7 @@ fn single_duplicate_key_bam(
         mate_position: record.mpos(),
         template_length: record.insert_size(),
         reverse_strand,
-        barcode: barcode.clone(),
+        barcode: barcode.map(<[u8]>::to_vec),
     }
 }
 
@@ -3368,10 +3256,7 @@ fn best_duplicate_representative_index(
     group: &[usize],
     records: &[bam::Record],
     read_ends: &mut [ReadEndMetadata],
-) -> usize {
-    // The records outlive this map, so use borrowed qname slices. This keeps
-    // representative selection allocation-free while preserving Picard's
-    // stable first-record tie break.
+) -> Option<usize> {
     let mut scores_by_name = HashMap::<&[u8], (usize, u64)>::default();
 
     for index in group.iter().copied() {
@@ -3391,7 +3276,6 @@ fn best_duplicate_representative_index(
         .into_values()
         .max_by(|left, right| left.1.cmp(&right.1).then_with(|| right.0.cmp(&left.0)))
         .map(|(index, _)| index)
-        .expect("non-empty duplicate group")
 }
 
 fn add_duplicate_set(
@@ -3406,13 +3290,13 @@ fn add_duplicate_set(
         .duplicate_set_histogram
         .entry(all_set_size)
         .or_default()
-        .all_sets += 1;
+        .all += 1;
     if let Some(non_optical_set_size) = non_optical_set_size.filter(|size| *size > 0) {
         summary
             .duplicate_set_histogram
             .entry(non_optical_set_size)
             .or_default()
-            .non_optical_sets += 1;
+            .non_optical += 1;
     }
     let optical_set_size = non_optical_set_size
         .and_then(|non_optical| all_set_size.checked_sub(non_optical))
@@ -3423,7 +3307,7 @@ fn add_duplicate_set(
             .duplicate_set_histogram
             .entry(optical_set_size)
             .or_default()
-            .optical_sets += 1;
+            .optical += 1;
     }
 }
 
@@ -3446,9 +3330,6 @@ fn metrics_text_for_libraries<'a>(
         output.push_str(&metrics_row(summary));
     }
     let histogram = combined_duplicate_set_histogram(summaries.iter().copied());
-    // Picard writes ROI only for one library, independently of whether optical
-    // discovery recorded any duplicate-set histogram. Library-size estimation
-    // excludes optical duplicates; ROI uses all examined/unique pairs.
     let roi = if let [summary] = summaries.as_slice() {
         let pairs = summary.effective_read_pairs_examined();
         let unique = pairs.saturating_sub(summary.read_pair_duplicates());
@@ -3460,9 +3341,9 @@ fn metrics_text_for_libraries<'a>(
     } else {
         None
     };
-    let all_sets = histogram.values().any(|counts| counts.all_sets > 0);
-    let optical_sets = histogram.values().any(|counts| counts.optical_sets > 0);
-    let non_optical_sets = histogram.values().any(|counts| counts.non_optical_sets > 0);
+    let all_sets = histogram.values().any(|counts| counts.all > 0);
+    let optical_sets = histogram.values().any(|counts| counts.optical > 0);
+    let non_optical_sets = histogram.values().any(|counts| counts.non_optical > 0);
     if roi.is_some() || all_sets || optical_sets || non_optical_sets {
         output.push_str("\n## HISTOGRAM\tjava.lang.Double\n");
         output.push_str(if roi.is_some() { "BIN" } else { "set_size" });
@@ -3479,33 +3360,32 @@ fn metrics_text_for_libraries<'a>(
             output.push_str("\tnon_optical_sets");
         }
         output.push('\n');
-        // The writer takes the union of existing histogram bins, not every
-        // integer up to the largest duplicate family.
         let mut bins = histogram.keys().copied().collect::<BTreeSet<_>>();
         if roi.is_some() {
             bins.extend(1..=100);
         }
         for bin in bins {
             let counts = histogram.get(&bin).copied().unwrap_or_default();
-            output.push_str(&format!("{:.1}", bin as f64));
+            let mut cells = vec![format!("{:.1}", bin as f64)];
             if let Some((size, pairs, unique)) = roi {
                 let value = if bin <= 100 {
                     estimate_roi(size, bin as f64, pairs, unique)
                 } else {
                     0.0
                 };
-                output.push_str(&format!("\t{}", format_metric_float(value)));
+                cells.push(format!("\t{}", format_metric_float(value)));
             }
             if all_sets {
-                output.push_str(&format!("\t{}", counts.all_sets));
+                cells.push(format!("\t{}", counts.all));
             }
             if optical_sets {
-                output.push_str(&format!("\t{}", counts.optical_sets));
+                cells.push(format!("\t{}", counts.optical));
             }
             if non_optical_sets {
-                output.push_str(&format!("\t{}", counts.non_optical_sets));
+                cells.push(format!("\t{}", counts.non_optical));
             }
-            output.push('\n');
+            cells.push("\n".to_string());
+            output.push_str(&cells.concat());
         }
     }
 
@@ -3556,9 +3436,9 @@ fn combined_duplicate_set_histogram<'a>(
     for summary in summaries {
         for (set_size, counts) in &summary.duplicate_set_histogram {
             let target = combined.entry(*set_size).or_default();
-            target.all_sets += counts.all_sets;
-            target.optical_sets += counts.optical_sets;
-            target.non_optical_sets += counts.non_optical_sets;
+            target.all += counts.all;
+            target.optical += counts.optical;
+            target.non_optical += counts.non_optical;
         }
     }
     combined
@@ -3596,7 +3476,7 @@ fn estimate_library_size(read_pairs: u64, unique_read_pairs: u64) -> Option<u64>
     }
 
     for _ in 0..40 {
-        let midpoint = (lower + upper) / 2.0;
+        let midpoint = f64::midpoint(lower, upper);
         let value = estimate_library_size_function(
             midpoint * unique_read_pairs,
             unique_read_pairs,
@@ -3609,7 +3489,16 @@ fn estimate_library_size(read_pairs: u64, unique_read_pairs: u64) -> Option<u64>
         }
     }
 
-    Some((unique_read_pairs * (lower + upper) / 2.0) as u64)
+    Some(truncate_to_u64(unique_read_pairs * (lower + upper) / 2.0))
+}
+
+#[expect(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    reason = "library size estimates are finite non-negative and are truncated toward zero by definition"
+)]
+fn truncate_to_u64(value: f64) -> u64 {
+    value as u64
 }
 
 fn estimate_roi(
@@ -3675,11 +3564,12 @@ impl LibraryRegistry {
         }
     }
 
-    fn intern(&mut self, library: &str) -> LibraryId {
+    fn intern(&mut self, library: &str) -> Result<LibraryId, MarkDuplicatesError> {
         if let Some(id) = self.ids_by_name.get(library) {
-            return *id;
+            return Ok(*id);
         }
-        let id = LibraryId::try_from(self.summaries.len()).expect("library id fits in u32");
+        let id = LibraryId::try_from(self.summaries.len())
+            .map_err(|_| MarkDuplicatesError::TooManyLibraries)?;
         self.ids_by_name.insert(library.to_string(), id);
         self.summaries.push(MarkDuplicatesSummary {
             library: library.to_string(),
@@ -3693,7 +3583,7 @@ impl LibraryRegistry {
             unmapped_records: 0,
             duplicate_set_histogram: BTreeMap::new(),
         });
-        id
+        Ok(id)
     }
 
     fn summary(&self, id: LibraryId) -> &MarkDuplicatesSummary {
@@ -3726,9 +3616,12 @@ impl MarkDuplicatesSummary {
     }
 }
 
-fn library_lookup(header: &bam::HeaderView, registry: &mut LibraryRegistry) -> LibraryLookup {
+fn library_lookup(
+    header: &bam::HeaderView,
+    registry: &mut LibraryRegistry,
+) -> Result<LibraryLookup, MarkDuplicatesError> {
     let mut lookup = HashMap::<Vec<u8>, LibraryId>::default();
-    let unknown_id = registry.intern("Unknown Library");
+    let unknown_id = registry.intern("Unknown Library")?;
     let mut first_library_id = None::<LibraryId>;
     let header_text = String::from_utf8_lossy(header.as_bytes());
     for line in header_text.lines() {
@@ -3746,17 +3639,17 @@ fn library_lookup(header: &bam::HeaderView, registry: &mut LibraryRegistry) -> L
             }
         }
         if let Some(read_group) = read_group {
-            let library_id = registry.intern(library_name.unwrap_or("Unknown Library"));
+            let library_id = registry.intern(library_name.unwrap_or("Unknown Library"))?;
             first_library_id.get_or_insert(library_id);
             lookup.insert(read_group, library_id);
         }
     }
 
-    LibraryLookup {
+    Ok(LibraryLookup {
         by_read_group: lookup,
         first_library_id: first_library_id.unwrap_or(unknown_id),
         unknown_id,
-    }
+    })
 }
 
 fn read_group_ids(header: &bam::HeaderView) -> HashSet<Vec<u8>> {
@@ -3819,6 +3712,7 @@ fn record_library_id(record: &bam::Record, lookup: &LibraryLookup) -> LibraryId 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fmt::Write as _;
 
     fn sam_markdup_config() -> MarkDuplicatesConfig {
         MarkDuplicatesConfig {
@@ -3897,23 +3791,18 @@ mod tests {
         let config = sam_markdup_config();
         let mut stage = FragmentStage::new(external_sorter(tmp.path(), "fragment").unwrap());
 
-        // An unpaired candidate taints the fragment key at position 100.
         let mut candidate = record_with_name_and_qualities(b"candidate", &[30], 0);
         candidate.set_tid(0);
         candidate.set_pos(100);
         let candidate_plan = external_plan_record(0, &candidate, 0, &config);
         stage.push_required(&candidate_plan).unwrap();
 
-        // A pair sharing that fragment key can join the group the candidate
-        // would mark, so it must be retained.
         let mut same_key = record_with_name_and_qualities(b"same-key", &[30], 0x1);
         same_key.set_tid(0);
         same_key.set_pos(100);
         let same_key_plan = external_plan_record(1, &same_key, 0, &config);
         stage.push_paired(&same_key_plan).unwrap();
 
-        // A pair at a different fragment key can only ever join a group that
-        // holds pairs alone, which marks nothing, so it must be dropped.
         let mut other_key = record_with_name_and_qualities(b"other-key", &[30], 0x1);
         other_key.set_tid(0);
         other_key.set_pos(500);
@@ -3925,7 +3814,7 @@ mod tests {
         sorter
             .finish_into(|item| {
                 keys.push(item.key);
-                Ok::<(), String>(())
+                Ok::<(), SortError>(())
             })
             .unwrap();
         assert_eq!(
@@ -3959,7 +3848,7 @@ mod tests {
         let mut read_ends = read_ends_for_records(&records);
         let representative_index =
             best_duplicate_representative_index(&[0, 1, 2, 3], &records, &mut read_ends);
-        assert_eq!(representative_index, 0);
+        assert_eq!(representative_index, Some(0));
     }
 
     #[test]
@@ -3973,7 +3862,7 @@ mod tests {
         let mut read_ends = read_ends_for_records(&records);
         let representative_index =
             best_duplicate_representative_index(&[0, 1, 2], &records, &mut read_ends);
-        assert_eq!(representative_index, 0);
+        assert_eq!(representative_index, Some(0));
     }
 
     #[test]
@@ -3997,8 +3886,8 @@ mod tests {
 
     #[test]
     fn read_end_metadata_stays_compact() {
-        assert!(std::mem::size_of::<ReadEndMetadata>() <= 24);
-        assert!(std::mem::size_of::<ReadEndDuplicateKey>() <= 40);
+        assert!(size_of::<ReadEndMetadata>() <= 24);
+        assert!(size_of::<ReadEndDuplicateKey>() <= 40);
     }
 
     #[test]
@@ -4031,10 +3920,6 @@ mod tests {
 
     #[test]
     fn lazy_external_groups_match_eager_decisions_and_histograms() {
-        // Exercise empty groups, singleton reads, ordinary mates, real duplicate
-        // families, reused QNAMEs across RGs, and absent versus empty RGs. Run
-        // both in RAM and through spill files; compare the entire decision stream
-        // and per-library metrics against the existing eager group processor.
         for spill in [false, true] {
             for paired in [false, true] {
                 for histogram in [false, true] {
@@ -4047,6 +3932,7 @@ mod tests {
                             let processing = ExternalDuplicateProcessingConfig {
                                 config: &config,
                                 read_name_parser: &parser,
+                                track_duplicate_set_histogram: histogram,
                             };
                             let mut families = vec![Vec::new()];
                             for size in 1..=6 {
@@ -4056,11 +3942,11 @@ mod tests {
                                         format!("INST:RUN:FLOW:1:1:{}:{}", 100 + index / 2, 100);
                                     let record = record_with_name_and_qualities(
                                         name.as_bytes(),
-                                        &[20 + index as u8],
+                                        &[20 + u8::try_from(index).unwrap()],
                                         if paired { 0x41 } else { 0 },
                                     );
                                     family.push(external_plan_record(
-                                        index as u64,
+                                        u64::try_from(index).unwrap(),
                                         &record,
                                         0,
                                         &config,
@@ -4111,7 +3997,7 @@ mod tests {
                                 sort_config.prefix = "decisions".into();
                                 let mut decisions = ExternalSorter::new(sort_config).unwrap();
                                 let mut libraries = LibraryRegistry::new();
-                                let id = libraries.intern("library");
+                                let id = libraries.intern("library").unwrap();
                                 let mut summary = libraries.summary(id).clone();
                                 for (index, family) in families.iter().enumerate() {
                                     if lazy {
@@ -4135,7 +4021,6 @@ mod tests {
                                             &mut summary,
                                             &mut libraries,
                                             paired,
-                                            histogram,
                                             &processing,
                                         )
                                         .unwrap();
@@ -4148,7 +4033,6 @@ mod tests {
                                         &mut summary,
                                         &mut libraries,
                                         paired,
-                                        histogram,
                                         &processing,
                                         None,
                                     )
@@ -4189,7 +4073,6 @@ mod tests {
         let mut trailing = payload.clone();
         trailing.push(0);
         malformed.push(trailing);
-        // Invalid presence markers must be rejected as well as truncation.
         let marker = 62 + 4 + plan.qname.len();
         let mut bad_marker = payload.clone();
         bad_marker[marker] = 2;
@@ -4198,6 +4081,7 @@ mod tests {
         let processing = ExternalDuplicateProcessingConfig {
             config: &config,
             read_name_parser: &parser,
+            track_duplicate_set_histogram: false,
         };
         for invalid in malformed {
             let tmp = tempdir().unwrap();
@@ -4205,7 +4089,7 @@ mod tests {
             groups.push(b"key".to_vec(), invalid).unwrap();
             let mut decisions = external_sorter(tmp.path(), "decisions").unwrap();
             let mut libraries = LibraryRegistry::new();
-            let id = libraries.intern("library");
+            let id = libraries.intern("library").unwrap();
             let mut summary = libraries.summary(id).clone();
             assert!(
                 process_external_duplicate_groups(
@@ -4213,7 +4097,6 @@ mod tests {
                     &mut decisions,
                     &mut summary,
                     &mut libraries,
-                    false,
                     false,
                     &processing,
                     None
@@ -4264,6 +4147,7 @@ mod tests {
         let processing = ExternalDuplicateProcessingConfig {
             config: &config,
             read_name_parser: &parser,
+            track_duplicate_set_histogram: true,
         };
         for payload in invalid {
             let tmp = tempdir().unwrap();
@@ -4271,7 +4155,7 @@ mod tests {
             groups.push(b"key".to_vec(), payload).unwrap();
             let mut decisions = external_sorter(tmp.path(), "decisions").unwrap();
             let mut libraries = LibraryRegistry::new();
-            let id = libraries.intern("library");
+            let id = libraries.intern("library").unwrap();
             let mut summary = libraries.summary(id).clone();
             assert!(
                 process_external_duplicate_groups(
@@ -4279,7 +4163,6 @@ mod tests {
                     &mut decisions,
                     &mut summary,
                     &mut libraries,
-                    true,
                     true,
                     &processing,
                     None,
@@ -4292,7 +4175,9 @@ mod tests {
     #[test]
     fn randomized_plan_and_pair_payloads_round_trip() {
         fn next(state: &mut u64) -> u64 {
-            *state = state.wrapping_mul(6364136223846793005).wrapping_add(1);
+            *state = state
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1);
             *state
         }
         fn bytes(state: &mut u64, len: usize) -> Vec<u8> {
@@ -4302,17 +4187,17 @@ mod tests {
         for iteration in 0..400 {
             let qname_len = 1 + (next(&mut state) % 12) as usize;
             let qname = bytes(&mut state, qname_len);
-            let has_read_group = next(&mut state) % 2 == 0;
+            let has_read_group = next(&mut state).is_multiple_of(2);
             let read_group_len = 1 + (next(&mut state) % 6) as usize;
             let read_group = has_read_group.then(|| bytes(&mut state, read_group_len));
             let primary_len = (next(&mut state) % 5) as usize;
-            let has_primary = next(&mut state) % 2 == 0;
+            let has_primary = next(&mut state).is_multiple_of(2);
             let primary = has_primary.then(|| bytes(&mut state, primary_len));
             let read_one_len = (next(&mut state) % 5) as usize;
-            let has_read_one = next(&mut state) % 2 == 0;
+            let has_read_one = next(&mut state).is_multiple_of(2);
             let read_one = has_read_one.then(|| bytes(&mut state, read_one_len));
             let read_two_len = (next(&mut state) % 5) as usize;
-            let has_read_two = next(&mut state) % 2 == 0;
+            let has_read_two = next(&mut state).is_multiple_of(2);
             let read_two = has_read_two.then(|| bytes(&mut state, read_two_len));
             let barcode = ExternalBarcodeValues {
                 primary,
@@ -4323,11 +4208,11 @@ mod tests {
             let ordinal = next(&mut state) % 10_000;
             let library_id = (next(&mut state) % 4) as LibraryId;
             let reference_id = (next(&mut state) % 7) as i32;
-            let position = (next(&mut state) % 100_000) as i64;
+            let position = (next(&mut state) % 100_000).cast_signed();
             let mate_reference_id = (next(&mut state) % 7) as i32;
-            let mate_position = (next(&mut state) % 100_000) as i64;
-            let template_length = (next(&mut state) % 2000) as i64 - 1000;
-            let unclipped_position = (next(&mut state) % 100_000) as i64;
+            let mate_position = (next(&mut state) % 100_000).cast_signed();
+            let template_length = (next(&mut state) % 2000).cast_signed() - 1000;
+            let unclipped_position = (next(&mut state) % 100_000).cast_signed();
             let quality_score = next(&mut state) % 1000;
             let first = ExternalPlanRecord {
                 ordinal,
@@ -4388,7 +4273,10 @@ mod tests {
 
         let encoded = encode_external_decision_payload(&decision);
 
-        assert_eq!(decode_external_decision_payload(&encoded), Ok(decision));
+        assert_eq!(
+            decode_external_decision_payload(&encoded).unwrap(),
+            decision
+        );
     }
 
     #[test]
@@ -4405,12 +4293,12 @@ mod tests {
         };
 
         assert_eq!(
-            merge_external_decisions(duplicate, tags),
-            Ok(ExternalDecision {
+            merge_external_decisions(duplicate, tags).unwrap(),
+            ExternalDecision {
                 flags: EXTERNAL_DECISION_DUPLICATE | EXTERNAL_DECISION_SET_MEMBERS,
                 duplicate_set_size: Some(2),
                 duplicate_set_index: Some(0),
-            })
+            }
         );
     }
 
@@ -4481,14 +4369,12 @@ mod tests {
             record_with_name_and_qualities(b"second", &[10], 0),
         ];
         let mut read_ends = read_ends_for_records(&records);
-        // The mark-plan consumes cached metadata; it must not rescan the BAM
-        // quality payload while grouping duplicate families.
         read_ends[0].quality_score = 1;
         read_ends[1].quality_score = 100;
 
         assert_eq!(
             best_duplicate_representative_index(&[0, 1], &records, &mut read_ends),
-            1
+            Some(1)
         );
     }
 
@@ -4576,11 +4462,8 @@ mod tests {
 
     #[test]
     fn metrics_write_roi_without_duplicate_set_bins() {
-        // Picard 3.4.0 emits 100 ROI bins for this one-library, no-optical
-        // 20,000-pair family. Its library estimate and unique-pair count are
-        // both one, so every coverage multiplier rounds to one.
         let mut libraries = LibraryRegistry::new();
-        let id = libraries.intern("library");
+        let id = libraries.intern("library").unwrap();
         let summary = libraries.summary_mut(id);
         summary.read_pairs_examined = 20_000;
         summary.paired_records_examined = 40_000;
@@ -4590,9 +4473,9 @@ mod tests {
             .split("## HISTOGRAM\tjava.lang.Double\n")
             .nth(1)
             .unwrap();
-        let mut expected = "BIN\tCoverageMult\n".to_string();
+        let mut expected = String::from("BIN\tCoverageMult\n");
         for bin in 1..=100 {
-            expected.push_str(&format!("{bin}.0\t1\n"));
+            writeln!(expected, "{bin}.0\t1").unwrap();
         }
         assert_eq!(histogram, expected);
     }
@@ -4600,8 +4483,8 @@ mod tests {
     #[test]
     fn metrics_do_not_compute_roi_across_distinct_libraries() {
         let mut libraries = LibraryRegistry::new();
-        let first = libraries.intern("first");
-        let second = libraries.intern("second");
+        let first = libraries.intern("first").unwrap();
+        let second = libraries.intern("second").unwrap();
         for id in [first, second] {
             let summary = libraries.summary_mut(id);
             summary.paired_records_examined = 4;
@@ -4617,7 +4500,7 @@ mod tests {
     #[test]
     fn metrics_use_sparse_family_bins_beyond_roi_range() {
         let mut libraries = LibraryRegistry::new();
-        let id = libraries.intern("library");
+        let id = libraries.intern("library").unwrap();
         let summary = libraries.summary_mut(id);
         summary.read_pairs_examined = 20_000;
         summary.paired_records_examined = 40_000;
@@ -4712,7 +4595,7 @@ mod tests {
     #[test]
     fn duplicate_key_rejects_empty_cigar() {
         let mut fields = valid_sam_fields();
-        fields[5] = "".to_string();
+        fields[5] = String::new();
 
         let key = validate_sam_fields(&fields, 0, 23);
         assert_malformed_sam_err(key, 23, "CIGAR");
@@ -4790,7 +4673,6 @@ mod optical_hot_path_tests {
         assert!(!location(0, i64::MIN).is_within(&location(0, i64::MAX), 100));
         assert!(location(i64::MIN, 0).is_within(&location(i64::MIN + 100, 0), 100));
         assert!(!location(0, 0).is_within(&location(0, 0), -1));
-        // Five members force the spatial-bucket path, including extreme cells.
         let reads = [i64::MIN, i64::MIN, 0, i64::MAX, i64::MAX]
             .iter()
             .enumerate()
@@ -4826,7 +4708,6 @@ mod optical_hot_path_tests {
         };
         let mut before = Vec::new();
         let mut after = Vec::new();
-        // Alternate ordering rather than always giving the new parser warm caches.
         for run in 0..7 {
             if run % 2 == 0 {
                 before.push(measure(previous_parser));
@@ -4844,7 +4725,5 @@ mod optical_hot_path_tests {
             after[3],
             before[3] / after[3]
         );
-        // No performance assertion: shared CI hardware is noisy. Correctness is
-        // gated by the oracle and end-to-end tests, not an arbitrary timing bar.
     }
 }

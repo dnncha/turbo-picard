@@ -1,26 +1,71 @@
-//! Native, bounded-scope implementation of Picard `CollectHsMetrics`.
-//!
-//! The collector intentionally keeps the scope explicit.  It implements the
-//! core ALL_READS metrics, histogram, and optional per-target/per-base sidecar
-//! reports that capture/QC workflows consume. Unsupported accumulation levels
-//! and advanced options remain explicitly outside this native scope.
-
 use rust_htslib::bam::record::Cigar;
 use rust_htslib::bam::{self, Read};
 use rustc_hash::{FxHashMap, FxHashSet};
 use std::collections::BTreeMap;
+use std::fmt::Write as FmtWrite;
 use std::fs;
 use std::io::{BufWriter, Write};
+use thiserror::Error;
+
+#[derive(Debug, Error)]
+pub enum HsMetricsError {
+    #[error("CollectHsMetrics bait intervals are empty")]
+    EmptyBaitIntervals,
+    #[error("CollectHsMetrics target intervals are empty")]
+    EmptyTargetIntervals,
+    #[error("CollectHsMetrics target contig {contig} sequence is not loaded from reference")]
+    TargetSequenceNotLoaded { contig: String },
+    #[error("CollectHsMetrics record has invalid target")]
+    InvalidRecordTarget,
+    #[error("CollectHsMetrics record references unknown target")]
+    UnknownRecordTarget,
+    #[error("CollectHsMetrics interval contig {contig} is not present in reference")]
+    IntervalContigMissing { contig: String },
+    #[error("CollectHsMetrics interval has invalid coordinates {contig}:{start}-{end}")]
+    InvalidIntervalCoordinates {
+        contig: String,
+        start: u64,
+        end: u64,
+    },
+    #[error("CollectHsMetrics interval extends beyond reference {contig}:{start}-{end}")]
+    IntervalBeyondReference {
+        contig: String,
+        start: u64,
+        end: u64,
+    },
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
+    #[error(transparent)]
+    Bam(#[from] rust_htslib::errors::Error),
+}
+
+impl From<HsMetricsError> for String {
+    fn from(error: HsMetricsError) -> Self {
+        error.to_string()
+    }
+}
 
 const HS_METRICS_HEADER: &str = "BAIT_SET\tBAIT_TERRITORY\tBAIT_DESIGN_EFFICIENCY\tON_BAIT_BASES\tNEAR_BAIT_BASES\tOFF_BAIT_BASES\tPCT_SELECTED_BASES\tPCT_OFF_BAIT\tON_BAIT_VS_SELECTED\tMEAN_BAIT_COVERAGE\tPCT_USABLE_BASES_ON_BAIT\tPCT_USABLE_BASES_ON_TARGET\tFOLD_ENRICHMENT\tHS_LIBRARY_SIZE\tHS_PENALTY_10X\tHS_PENALTY_20X\tHS_PENALTY_30X\tHS_PENALTY_40X\tHS_PENALTY_50X\tHS_PENALTY_100X\tTARGET_TERRITORY\tGENOME_SIZE\tTOTAL_READS\tPF_READS\tPF_BASES\tPF_UNIQUE_READS\tPF_UQ_READS_ALIGNED\tPF_BASES_ALIGNED\tPF_UQ_BASES_ALIGNED\tON_TARGET_BASES\tPCT_PF_READS\tPCT_PF_UQ_READS\tPCT_PF_UQ_READS_ALIGNED\tMEAN_TARGET_COVERAGE\tMEDIAN_TARGET_COVERAGE\tMAX_TARGET_COVERAGE\tMIN_TARGET_COVERAGE\tZERO_CVG_TARGETS_PCT\tPCT_EXC_DUPE\tPCT_EXC_ADAPTER\tPCT_EXC_MAPQ\tPCT_EXC_BASEQ\tPCT_EXC_OVERLAP\tPCT_EXC_OFF_TARGET\tFOLD_80_BASE_PENALTY\tPCT_TARGET_BASES_1X\tPCT_TARGET_BASES_2X\tPCT_TARGET_BASES_10X\tPCT_TARGET_BASES_20X\tPCT_TARGET_BASES_30X\tPCT_TARGET_BASES_40X\tPCT_TARGET_BASES_50X\tPCT_TARGET_BASES_100X\tPCT_TARGET_BASES_250X\tPCT_TARGET_BASES_500X\tPCT_TARGET_BASES_1000X\tPCT_TARGET_BASES_2500X\tPCT_TARGET_BASES_5000X\tPCT_TARGET_BASES_10000X\tPCT_TARGET_BASES_25000X\tPCT_TARGET_BASES_50000X\tPCT_TARGET_BASES_100000X\tAT_DROPOUT\tGC_DROPOUT\tHET_SNP_SENSITIVITY\tHET_SNP_Q\tSAMPLE\tLIBRARY\tREAD_GROUP";
 
 const TARGET_DEPTH_THRESHOLDS: [usize; 17] = [
-    1, 2, 10, 20, 30, 40, 50, 100, 250, 500, 1000, 2500, 5000, 10000, 25000, 50000, 100000,
+    1, 2, 10, 20, 30, 40, 50, 100, 250, 500, 1000, 2500, 5000, 10_000, 25_000, 50_000, 100_000,
 ];
+
+fn index_from(value: u64) -> usize {
+    usize::try_from(value).unwrap_or(usize::MAX)
+}
+
+#[expect(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    reason = "float-to-integer casts saturate, which is the intended behaviour for these non-negative statistics"
+)]
+fn float_to_u64(value: f64) -> u64 {
+    value as u64
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GenomicInterval {
-    /// Picard interval-list coordinates: one-based, inclusive.
     pub contig: String,
     pub start: u64,
     pub end: u64,
@@ -67,11 +112,16 @@ struct IntervalIndex {
     by_contig: BTreeMap<String, Vec<IndexedSpan>>,
 }
 
-// A single read visits nondecreasing reference positions on one contig.
 #[derive(Debug, Default)]
 struct TargetCursor {
     index: Option<usize>,
     end: u64,
+}
+
+struct ReadScan<'a> {
+    covered_targets: FxHashSet<usize>,
+    target_cursor: TargetCursor,
+    overlap_mode: Option<OverlapMode<'a>>,
 }
 
 impl IntervalIndex {
@@ -129,7 +179,7 @@ fn first_span_with_end_after(spans: &[IndexedSpan], position: u64) -> usize {
     let mut low = 0;
     let mut high = spans.len();
     while low < high {
-        let middle = (low + high) / 2;
+        let middle = usize::midpoint(low, high);
         if spans[middle].end <= position {
             low = middle + 1;
         } else {
@@ -183,7 +233,7 @@ struct CachedOverlap {
 
 impl CachedOverlap {
     fn covered_at(&self, position: u64) -> bool {
-        position >= self.overlap_start && self.bitmap.get((position - self.overlap_start) as usize)
+        position >= self.overlap_start && self.bitmap.get(index_from(position - self.overlap_start))
     }
 }
 
@@ -217,8 +267,8 @@ impl MateBuffer {
             return MateProbe::PairWith(cached);
         }
 
-        let read_start = record.pos().max(0) as u64;
-        let mate_start = record.mpos().max(0) as u64;
+        let read_start = record.pos().max(0).cast_unsigned();
+        let mate_start = record.mpos().max(0).cast_unsigned();
         let read_end = read_start.saturating_add(reference_consumed_len(record));
         if mate_start >= read_start && mate_start < read_end {
             return MateProbe::WouldBuffer {
@@ -268,30 +318,30 @@ pub struct HsMetricsCollector {
 }
 
 impl HsMetricsCollector {
-    pub fn new(config: &HsMetricsConfig) -> Result<Self, String> {
+    pub fn new(config: &HsMetricsConfig) -> Result<Self, HsMetricsError> {
         let bait_spans = normalize_intervals(&config.bait_intervals, &config.reference_lengths)?;
         let target_spans =
             normalize_intervals(&config.target_intervals, &config.reference_lengths)?;
         if bait_spans.is_empty() {
-            return Err("CollectHsMetrics bait intervals are empty".to_string());
+            return Err(HsMetricsError::EmptyBaitIntervals);
         }
         if target_spans.is_empty() {
-            return Err("CollectHsMetrics target intervals are empty".to_string());
+            return Err(HsMetricsError::EmptyTargetIntervals);
         }
 
         let targets = target_spans
             .iter()
             .cloned()
             .map(|span| {
-                let sequence = config.reference_sequences.get(&span.contig).ok_or_else(|| {
-                    format!(
-                        "CollectHsMetrics target contig {} sequence is not loaded from reference",
-                        span.contig
-                    )
-                })?;
+                let sequence = config
+                    .reference_sequences
+                    .get(&span.contig)
+                    .ok_or_else(|| HsMetricsError::TargetSequenceNotLoaded {
+                        contig: span.contig.clone(),
+                    })?;
                 let gc_fraction = gc_fraction_for_slice(sequence, span.start, span.end);
-                let gc_percent = (gc_fraction * 100.0).round() as usize;
-                let length = span.end.saturating_sub(span.start) as usize;
+                let gc_percent = index_from(float_to_u64((gc_fraction * 100.0).round()));
+                let length = index_from(span.end.saturating_sub(span.start));
                 Ok(TargetCoverage {
                     span,
                     high_quality_depths: vec![0; length],
@@ -301,7 +351,7 @@ impl HsMetricsCollector {
                     read_count: 0,
                 })
             })
-            .collect::<Result<Vec<_>, String>>()?;
+            .collect::<Result<Vec<_>, HsMetricsError>>()?;
 
         let target_territory = targets
             .iter()
@@ -345,9 +395,11 @@ impl HsMetricsCollector {
         })
     }
 
-    pub fn observe(&mut self, record: &bam::Record, target_names: &[String]) -> Result<(), String> {
-        // Picard ignores secondary alignments altogether and does not include
-        // supplementary records in read-based metrics.
+    pub fn observe(
+        &mut self,
+        record: &bam::Record,
+        target_names: &[String],
+    ) -> Result<(), HsMetricsError> {
         if record.is_secondary() {
             return Ok(());
         }
@@ -391,22 +443,17 @@ impl HsMetricsCollector {
 
         let tid = record.tid();
         let contig = target_names
-            .get(
-                usize::try_from(tid)
-                    .map_err(|_| "CollectHsMetrics record has invalid target".to_string())?,
-            )
-            .ok_or_else(|| "CollectHsMetrics record references unknown target".to_string())?;
-        let read_start = record.pos().max(0) as u64;
+            .get(usize::try_from(tid).map_err(|_| HsMetricsError::InvalidRecordTarget)?)
+            .ok_or(HsMetricsError::UnknownRecordTarget)?;
+        let read_start = record.pos().max(0).cast_unsigned();
         let read_end = read_start.saturating_add(reference_consumed_len(record));
 
-        // Bait metrics deliberately precede duplicate, adapter, mapQ, baseQ,
-        // and overlap filters, matching Picard's assay-level contract.
         let near_bait = expanded_bait_overlaps(
             &self.bait_index,
             contig,
             read_start,
             read_end,
-            self.config.near_distance as u64,
+            u64::from(self.config.near_distance),
         );
         let on_bait = aligned_bases_in_baits(record, &self.bait_index, contig);
         if near_bait {
@@ -448,7 +495,8 @@ impl HsMetricsCollector {
         }
 
         if !self.config.clip_overlapping_reads {
-            return self.observe_cigar_ops(record, contig, mapped_in_pair, None);
+            self.observe_cigar_ops(record, contig, mapped_in_pair, None);
+            return Ok(());
         }
 
         match self.mate_buffer.probe(record) {
@@ -457,7 +505,7 @@ impl HsMetricsCollector {
                 overlap_start,
                 overlap_len,
             } => {
-                let mut bitmap = OverlapBitmap::with_bit_len(overlap_len as usize);
+                let mut bitmap = OverlapBitmap::with_bit_len(index_from(overlap_len));
                 self.observe_cigar_ops(
                     record,
                     contig,
@@ -466,7 +514,7 @@ impl HsMetricsCollector {
                         overlap_start,
                         bitmap: &mut bitmap,
                     }),
-                )?;
+                );
                 self.mate_buffer.insert(
                     record.qname(),
                     CachedOverlap {
@@ -474,7 +522,6 @@ impl HsMetricsCollector {
                         bitmap,
                     },
                 );
-                Ok(())
             }
             MateProbe::PairWith(cached) => self.observe_cigar_ops(
                 record,
@@ -483,6 +530,7 @@ impl HsMetricsCollector {
                 Some(OverlapMode::Pair(&cached)),
             ),
         }
+        Ok(())
     }
 
     fn observe_cigar_ops(
@@ -490,12 +538,15 @@ impl HsMetricsCollector {
         record: &bam::Record,
         contig: &str,
         mapped_in_pair: bool,
-        mut overlap_mode: Option<OverlapMode<'_>>,
-    ) -> Result<(), String> {
-        let mut covered_targets = FxHashSet::default();
-        let mut target_cursor = TargetCursor::default();
+        overlap_mode: Option<OverlapMode<'_>>,
+    ) {
+        let mut scan = ReadScan {
+            covered_targets: FxHashSet::default(),
+            target_cursor: TargetCursor::default(),
+            overlap_mode,
+        };
         let mut read_offset = 0usize;
-        let mut reference_offset = record.pos().max(0) as u64;
+        let mut reference_offset = record.pos().max(0).cast_unsigned();
         let qualities = super::hts_io::base_qualities(record);
 
         for cigar in record.cigar().iter().copied() {
@@ -520,9 +571,7 @@ impl HsMetricsCollector {
                             quality,
                             mapped_in_pair,
                             true,
-                            &mut covered_targets,
-                            &mut target_cursor,
-                            &mut overlap_mode,
+                            &mut scan,
                         );
                     }
                     read_offset += length;
@@ -538,9 +587,7 @@ impl HsMetricsCollector {
                                 quality,
                                 mapped_in_pair,
                                 false,
-                                &mut covered_targets,
-                                &mut target_cursor,
-                                &mut overlap_mode,
+                                &mut scan,
                             );
                         }
                     }
@@ -556,9 +603,7 @@ impl HsMetricsCollector {
                                 quality,
                                 mapped_in_pair,
                                 false,
-                                &mut covered_targets,
-                                &mut target_cursor,
-                                &mut overlap_mode,
+                                &mut scan,
                             );
                         }
                     }
@@ -569,7 +614,6 @@ impl HsMetricsCollector {
                 CigarOp::Other => {}
             }
         }
-        Ok(())
     }
 
     fn observe_base(
@@ -579,10 +623,13 @@ impl HsMetricsCollector {
         quality: u8,
         mapped_in_pair: bool,
         contributes_coverage: bool,
-        covered_targets: &mut FxHashSet<usize>,
-        target_cursor: &mut TargetCursor,
-        overlap_mode: &mut Option<OverlapMode<'_>>,
+        scan: &mut ReadScan<'_>,
     ) {
+        let ReadScan {
+            covered_targets,
+            target_cursor,
+            overlap_mode,
+        } = scan;
         if overlap_mode
             .as_ref()
             .is_some_and(|mode| mode.is_mate_covered(reference_position))
@@ -626,7 +673,7 @@ impl HsMetricsCollector {
         }
 
         let target = &mut self.targets[target_index];
-        let target_offset = reference_position.saturating_sub(target.span.start) as usize;
+        let target_offset = index_from(reference_position.saturating_sub(target.span.start));
         let Some(unfiltered_depth) = target.unfiltered_depths.get_mut(target_offset) else {
             return;
         };
@@ -819,20 +866,21 @@ impl HsMetricsCollector {
             "coverage_or_base_quality\thigh_quality_coverage_count\tunfiltered_baseq_count\n",
         );
         for coverage_or_quality in 0..=126 {
-            output.push_str(&format!(
-                "{}\t{}\t{}\n",
+            let _ = writeln!(
+                output,
+                "{}\t{}\t{}",
                 coverage_or_quality,
                 high_quality_histogram
                     .get(coverage_or_quality)
                     .copied()
                     .unwrap_or(0),
                 self.uncapped_baseq_histogram[coverage_or_quality]
-            ));
+            );
         }
         output
     }
 
-    fn write_sidecar_outputs(&self) -> Result<(), String> {
+    fn write_sidecar_outputs(&self) -> Result<(), HsMetricsError> {
         let high_quality_histogram = self.high_quality_depth_histogram();
         let mean_target_coverage = ratio(
             high_quality_histogram
@@ -843,15 +891,13 @@ impl HsMetricsCollector {
             self.target_territory,
         );
         if let Some(path) = self.config.per_target_coverage.as_deref() {
-            fs::write(path, self.per_target_coverage_text(mean_target_coverage))
-                .map_err(|error| error.to_string())?;
+            fs::write(path, self.per_target_coverage_text(mean_target_coverage))?;
         }
         if let Some(path) = self.config.per_base_coverage.as_deref() {
-            let file = fs::File::create(path).map_err(|error| error.to_string())?;
+            let file = fs::File::create(path)?;
             let mut writer = BufWriter::new(file);
-            self.write_per_base_coverage(&mut writer)
-                .map_err(|error| error.to_string())?;
-            writer.flush().map_err(|error| error.to_string())?;
+            self.write_per_base_coverage(&mut writer)?;
+            writer.flush()?;
         }
         Ok(())
     }
@@ -868,7 +914,7 @@ impl HsMetricsCollector {
             let total_coverage = target
                 .high_quality_depths
                 .iter()
-                .map(|depth| *depth as u64)
+                .map(|depth| u64::from(*depth))
                 .sum::<u64>();
             let mean_coverage = ratio(total_coverage, length);
             let min_coverage = target
@@ -889,10 +935,11 @@ impl HsMetricsCollector {
                 .filter(|depth| **depth == 0)
                 .count() as u64;
             let normalized = ratio_f64(mean_coverage, mean_target_coverage);
-            let min_normalized = ratio_f64(min_coverage as f64, mean_target_coverage);
-            let max_normalized = ratio_f64(max_coverage as f64, mean_target_coverage);
-            output.push_str(&format!(
-                "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
+            let min_normalized = ratio_f64(f64::from(min_coverage), mean_target_coverage);
+            let max_normalized = ratio_f64(f64::from(max_coverage), mean_target_coverage);
+            let _ = writeln!(
+                output,
+                "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
                 target.span.contig,
                 target.span.start.saturating_add(1),
                 target.span.end,
@@ -907,7 +954,7 @@ impl HsMetricsCollector {
                 max_coverage,
                 super::format_float(ratio(zero_coverage, length)),
                 target.read_count,
-            ));
+            );
         }
         output
     }
@@ -1015,7 +1062,7 @@ impl HsMetricsCollector {
             aligned_bases_by_gc[gc] += target
                 .high_quality_depths
                 .iter()
-                .map(|depth| *depth as u64)
+                .map(|depth| u64::from(*depth))
                 .sum::<u64>();
         }
         let total_target = target_bases_by_gc.iter().sum::<u64>();
@@ -1065,7 +1112,7 @@ impl OverlapMode<'_> {
         } = self
             && position >= *overlap_start
         {
-            bitmap.set((position - *overlap_start) as usize);
+            bitmap.set(index_from(position - *overlap_start));
         }
     }
 }
@@ -1083,26 +1130,27 @@ enum CigarOp {
 fn normalize_intervals(
     intervals: &[GenomicInterval],
     reference_lengths: &BTreeMap<String, u64>,
-) -> Result<Vec<Span>, String> {
+) -> Result<Vec<Span>, HsMetricsError> {
     let mut spans = Vec::with_capacity(intervals.len());
     for interval in intervals {
         let reference_length = reference_lengths.get(&interval.contig).ok_or_else(|| {
-            format!(
-                "CollectHsMetrics interval contig {} is not present in reference",
-                interval.contig
-            )
+            HsMetricsError::IntervalContigMissing {
+                contig: interval.contig.clone(),
+            }
         })?;
         if interval.start == 0 || interval.end < interval.start {
-            return Err(format!(
-                "CollectHsMetrics interval has invalid coordinates {}:{}-{}",
-                interval.contig, interval.start, interval.end
-            ));
+            return Err(HsMetricsError::InvalidIntervalCoordinates {
+                contig: interval.contig.clone(),
+                start: interval.start,
+                end: interval.end,
+            });
         }
         if interval.end > *reference_length {
-            return Err(format!(
-                "CollectHsMetrics interval extends beyond reference {}:{}-{}",
-                interval.contig, interval.start, interval.end
-            ));
+            return Err(HsMetricsError::IntervalBeyondReference {
+                contig: interval.contig.clone(),
+                start: interval.start,
+                end: interval.end,
+            });
         }
         spans.push(Span {
             contig: interval.contig.clone(),
@@ -1145,7 +1193,7 @@ fn expanded_bait_overlaps(
 }
 
 fn aligned_bases_in_baits(record: &bam::Record, bait_index: &IntervalIndex, contig: &str) -> u64 {
-    let mut reference_position = record.pos().max(0) as u64;
+    let mut reference_position = record.pos().max(0).cast_unsigned();
     let mut total = 0;
     for cigar in record.cigar().iter().copied() {
         match cigar {
@@ -1153,11 +1201,11 @@ fn aligned_bases_in_baits(record: &bam::Record, bait_index: &IntervalIndex, cont
                 total += bait_index.overlap_bases(
                     contig,
                     reference_position,
-                    reference_position.saturating_add(length as u64),
+                    reference_position.saturating_add(u64::from(length)),
                 );
-                reference_position += length as u64;
+                reference_position += u64::from(length);
             }
-            Cigar::Del(length) | Cigar::RefSkip(length) => reference_position += length as u64,
+            Cigar::Del(length) | Cigar::RefSkip(length) => reference_position += u64::from(length),
             _ => {}
         }
     }
@@ -1173,7 +1221,7 @@ fn reference_consumed_len(record: &bam::Record) -> u64 {
             | Cigar::Equal(length)
             | Cigar::Diff(length)
             | Cigar::Del(length)
-            | Cigar::RefSkip(length) => length as u64,
+            | Cigar::RefSkip(length) => u64::from(length),
             _ => 0,
         })
         .sum()
@@ -1184,14 +1232,14 @@ fn aligned_block_len(record: &bam::Record) -> u64 {
         .cigar()
         .iter()
         .map(|cigar| match *cigar {
-            Cigar::Match(length) | Cigar::Equal(length) | Cigar::Diff(length) => length as u64,
+            Cigar::Match(length) | Cigar::Equal(length) | Cigar::Diff(length) => u64::from(length),
             _ => 0,
         })
         .sum()
 }
 
 fn gc_fraction_for_slice(sequence: &[u8], start: u64, end: u64) -> f64 {
-    let Some(slice) = sequence.get(start as usize..end as usize) else {
+    let Some(slice) = sequence.get(index_from(start)..index_from(end)) else {
         return 0.0;
     };
     if slice.is_empty() {
@@ -1239,8 +1287,8 @@ fn histogram_percentile(histogram: &[u64], percentile: f64) -> f64 {
         return 0.0;
     }
     let rank = percentile.clamp(0.0, 1.0) * (total.saturating_sub(1) as f64);
-    let left_rank = rank.floor() as u64;
-    let right_rank = rank.ceil() as u64;
+    let left_rank = float_to_u64(rank.floor());
+    let right_rank = float_to_u64(rank.ceil());
     let left = histogram_value_at_rank(histogram, left_rank) as f64;
     let right = histogram_value_at_rank(histogram, right_rank) as f64;
     left + (right - left) * (rank - left_rank as f64)
@@ -1272,7 +1320,7 @@ fn estimate_library_size(read_pairs: u64, unique_read_pairs: u64) -> Option<u64>
         upper *= 10.0;
     }
     for _ in 0..40 {
-        let middle = (lower + upper) / 2.0;
+        let middle = f64::midpoint(lower, upper);
         let value = library_size_equation(
             middle * unique_read_pairs as f64,
             unique_read_pairs,
@@ -1284,7 +1332,9 @@ fn estimate_library_size(read_pairs: u64, unique_read_pairs: u64) -> Option<u64>
             upper = middle;
         }
     }
-    Some((unique_read_pairs as f64 * (lower + upper) / 2.0) as u64)
+    Some(float_to_u64(
+        unique_read_pairs as f64 * (lower + upper) / 2.0,
+    ))
 }
 
 fn library_size_equation(library_size: f64, unique_read_pairs: u64, read_pairs: u64) -> f64 {
@@ -1308,7 +1358,7 @@ fn estimate_roi(
 pub fn collect_hs_metrics<R: Read>(
     reader: &mut R,
     config: &HsMetricsConfig,
-) -> Result<String, String> {
+) -> Result<String, HsMetricsError> {
     let target_names = reader
         .header()
         .target_names()
@@ -1318,7 +1368,7 @@ pub fn collect_hs_metrics<R: Read>(
     let mut collector = HsMetricsCollector::new(config)?;
     let mut observed = 0_u32;
     for record in reader.records() {
-        let record = record.map_err(|error| error.to_string())?;
+        let record = record?;
         collector.observe(&record, &target_names)?;
         observed = observed.saturating_add(1);
         if config.stop_after > 0 && observed >= config.stop_after {
@@ -1476,9 +1526,11 @@ mod tests {
                 30,
                 true,
                 true,
-                &mut FxHashSet::default(),
-                &mut TargetCursor::default(),
-                &mut None,
+                &mut ReadScan {
+                    covered_targets: FxHashSet::default(),
+                    target_cursor: TargetCursor::default(),
+                    overlap_mode: None,
+                },
             );
         }
         assert_eq!(collector.targets[0].unfiltered_depths[0], 2);
@@ -1505,25 +1557,27 @@ mod tests {
         let mut collector = HsMetricsCollector::new(&config).expect("collector");
         let names = vec!["chr1".into(), "chr2".into()];
         for tid in 0..2 {
-            for start in 0..10 {
+            for start in 0_u32..10 {
                 let length = 10 - start;
                 let mut record = bam::Record::new();
                 record.set(
                     b"target-or-gap",
-                    Some(&CigarString(vec![Cigar::Match(length as u32)])),
-                    &vec![b'A'; length],
-                    &vec![30; length],
+                    Some(&CigarString(vec![Cigar::Match(length)])),
+                    &vec![b'A'; length as usize],
+                    &vec![30; length as usize],
                 );
                 record.set_flags(0);
                 record.set_tid(tid);
-                record.set_pos(start as i64);
+                record.set_pos(i64::from(start));
                 record.set_mapq(60);
                 collector.observe(&record, &names).expect("read");
             }
         }
         for target in &collector.targets {
             let expected: Vec<u32> = (target.span.start..target.span.end)
-                .map(|position| (0..10).filter(|&start| start <= position).count() as u32)
+                .map(|position| {
+                    u32::try_from((0..10).filter(|&start| start <= position).count()).unwrap()
+                })
                 .collect();
             assert_eq!(target.high_quality_depths, expected);
             assert_eq!(target.read_count, target.span.end);

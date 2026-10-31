@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-"""Tests for parity documentation checks."""
 
 from __future__ import annotations
 
@@ -7,7 +6,6 @@ import importlib.util
 import sys
 import unittest
 from pathlib import Path
-
 
 MODULE_PATH = Path(__file__).with_name("verify_parity_docs.py")
 SPEC = importlib.util.spec_from_file_location("verify_parity_docs", MODULE_PATH)
@@ -46,7 +44,7 @@ class ParityDocsTests(unittest.TestCase):
             "Fallback is a compatibility bridge, not proof of readiness. See :doc:`parity` so unsupported surfaces remain visible.",
         )
 
-        self.assertEqual(errors, [])
+        assert errors == []
 
     def test_reports_missing_required_content(self) -> None:
         errors = verify_parity_docs.validate_parity_docs(
@@ -58,16 +56,16 @@ class ParityDocsTests(unittest.TestCase):
             "Fallback is " + "ma" + "gic.",
         )
 
-        self.assertIn("parity docs missing command-specific parity scope", errors)
-        self.assertIn("parity docs missing broad switching caveat", errors)
-        self.assertIn("parity docs missing comparison boundary for markduplicates", errors)
-        self.assertIn("docs index missing parity page in user-guide toctree", errors)
-        self.assertIn("README missing parity guide link", errors)
-        self.assertIn("site missing parity guide link", errors)
-        self.assertIn("adoption docs missing parity page cross-reference", errors)
-        self.assertIn("fallback docs missing fallback compatibility-bridge wording", errors)
-        self.assertIn("fallback docs missing fallback not-proof caveat", errors)
-        self.assertIn("fallback docs missing fallback parity cross-reference", errors)
+        assert "parity docs missing command-specific parity scope" in errors
+        assert "parity docs missing broad switching caveat" in errors
+        assert "parity docs missing comparison boundary for markduplicates" in errors
+        assert "docs index missing parity page in user-guide toctree" in errors
+        assert "README missing parity guide link" in errors
+        assert "site missing parity guide link" in errors
+        assert "adoption docs missing parity page cross-reference" in errors
+        assert "fallback docs missing fallback compatibility-bridge wording" in errors
+        assert "fallback docs missing fallback not-proof caveat" in errors
+        assert "fallback docs missing fallback parity cross-reference" in errors
 
     def test_rejects_overclaims(self) -> None:
         errors = verify_parity_docs.validate_parity_docs(
@@ -79,14 +77,8 @@ class ParityDocsTests(unittest.TestCase):
             "compatibility bridge not proof :doc:`parity` unsupported surfaces remain visible",
         )
 
-        self.assertIn(
-            "parity docs contain unsupported overclaim: drop-in replacement",
-            errors,
-        )
-        self.assertIn(
-            "parity docs contain unsupported overclaim: production genomics workflows",
-            errors,
-        )
+        assert "parity docs contain unsupported overclaim: drop-in replacement" in errors
+        assert "parity docs contain unsupported overclaim: production genomics workflows" in errors
 
 
 if __name__ == "__main__":

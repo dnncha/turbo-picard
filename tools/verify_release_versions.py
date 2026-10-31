@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-"""Verify release version references stay aligned across packaging files."""
 
 from __future__ import annotations
 
@@ -10,7 +9,6 @@ import sys
 from pathlib import Path
 
 import yaml
-
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -87,10 +85,7 @@ def collect_errors(root: Path = ROOT) -> list[str]:
     errors: list[str] = []
     version = workspace_version(root)
     tag = f"v{version}"
-    archive_url = (
-        "https://github.com/dnncha/turbo-picard/archive/refs/tags/"
-        f"{tag}.tar.gz"
-    )
+    archive_url = f"https://github.com/dnncha/turbo-picard/archive/refs/tags/{tag}.tar.gz"
     archive_sha_placeholder = f"<github-{tag}-source-archive-sha256>"
     archive_filename = f"turbo-picard-{version}.tar.gz"
     github_archive_filename = f"{tag}.tar.gz"
@@ -111,10 +106,7 @@ def collect_errors(root: Path = ROOT) -> list[str]:
             if lock_version is None:
                 errors.append(f"Cargo.lock missing {crate_name} package")
             elif lock_version != version:
-                errors.append(
-                    f"Cargo.lock {crate_name} version {lock_version} "
-                    f"must match workspace {version}"
-                )
+                errors.append(f"Cargo.lock {crate_name} version {lock_version} must match workspace {version}")
 
     for cargo_toml in sorted((root / "crates").glob("*/Cargo.toml")):
         text = cargo_toml.read_text(encoding="utf-8")
@@ -135,10 +127,7 @@ def collect_errors(root: Path = ROOT) -> list[str]:
             text,
         ):
             if dep_version != version:
-                errors.append(
-                    f"{rel} dependency {dep_name} version {dep_version} "
-                    f"must match workspace {version}"
-                )
+                errors.append(f"{rel} dependency {dep_name} version {dep_version} must match workspace {version}")
 
     for recipe in RECIPE_PATHS:
         text = read(recipe, root)
@@ -146,9 +135,7 @@ def collect_errors(root: Path = ROOT) -> list[str]:
         if not match:
             errors.append(f"{recipe} missing Jinja version declaration")
         elif match.group(1) != version:
-            errors.append(
-                f"{recipe} version {match.group(1)} must match workspace {version}"
-            )
+            errors.append(f"{recipe} version {match.group(1)} must match workspace {version}")
 
     pyproject_file = root / "pyproject.toml"
     if not pyproject_file.exists():
@@ -159,9 +146,7 @@ def collect_errors(root: Path = ROOT) -> list[str]:
         if not match:
             errors.append("pyproject.toml missing project version")
         elif match.group(1) != version:
-            errors.append(
-                f"pyproject.toml version {match.group(1)} must match workspace {version}"
-            )
+            errors.append(f"pyproject.toml version {match.group(1)} must match workspace {version}")
         if 'manifest-path = "crates/turbo-picard-cli/Cargo.toml"' not in pyproject:
             errors.append("pyproject.toml must build the turbo-picard CLI crate")
         if 'bindings = "bin"' not in pyproject:
@@ -204,10 +189,7 @@ def collect_errors(root: Path = ROOT) -> list[str]:
             errors.append("CITATION.cff title must be turbo-picard")
         citation_version = cff_scalar(citation, "version")
         if citation_version != version:
-            errors.append(
-                f"CITATION.cff version {citation_version or '<missing>'} "
-                f"must match workspace {version}"
-            )
+            errors.append(f"CITATION.cff version {citation_version or '<missing>'} must match workspace {version}")
         identifiers = citation_yaml.get("identifiers")
         zenodo_description = f"Zenodo archive for v{version}"
         zenodo_identifiers = (
@@ -223,14 +205,10 @@ def collect_errors(root: Path = ROOT) -> list[str]:
             else []
         )
         has_current_zenodo_identifier = any(
-            identifier.get("description") == zenodo_description
-            for identifier in zenodo_identifiers
+            identifier.get("description") == zenodo_description for identifier in zenodo_identifiers
         )
         if zenodo_identifiers and not has_current_zenodo_identifier:
-            errors.append(
-                "CITATION.cff must include a Zenodo DOI identifier for "
-                + zenodo_description
-            )
+            errors.append("CITATION.cff must include a Zenodo DOI identifier for " + zenodo_description)
         if cff_scalar(citation, "repository-code") != repository:
             errors.append(f"CITATION.cff repository-code must be {repository}")
         if cff_scalar(citation, "url") != "https://turbo-picard.readthedocs.io/":
@@ -245,10 +223,7 @@ def collect_errors(root: Path = ROOT) -> list[str]:
         citation_prose = prose_text(citation)
         missing_terms = [term for term in required_terms if term not in citation_prose]
         if missing_terms:
-            errors.append(
-                "CITATION.cff message or abstract must mention "
-                + ", ".join(missing_terms)
-            )
+            errors.append("CITATION.cff message or abstract must mention " + ", ".join(missing_terms))
         input_citation_terms = [
             "source_url",
             "source URL",
@@ -265,8 +240,7 @@ def collect_errors(root: Path = ROOT) -> list[str]:
         if leaked_terms:
             errors.append(
                 "CITATION.cff must cite only the software release; "
-                "move input-data citation details to evidence manifests/docs: "
-                + ", ".join(leaked_terms)
+                "move input-data citation details to evidence manifests/docs: " + ", ".join(leaked_terms)
             )
 
     biotools_record = root / BIOTOOLS_RECORD_PATH
@@ -287,17 +261,11 @@ def collect_errors(root: Path = ROOT) -> list[str]:
             errors.append("bio.tools registration record must use name turbo-picard")
         description = biotools.get("description")
         if not isinstance(description, str) or not 10 <= len(description) <= 1000:
-            errors.append(
-                "bio.tools registration record description must contain 10-1000 characters"
-            )
+            errors.append("bio.tools registration record description must contain 10-1000 characters")
         if biotools.get("homepage") != "https://turbo-picard.readthedocs.io/":
-            errors.append(
-                "bio.tools registration record homepage must use the hosted documentation"
-            )
+            errors.append("bio.tools registration record homepage must use the hosted documentation")
         if biotools.get("version") != [version]:
-            errors.append(
-                f"bio.tools registration record version must match workspace {version}"
-            )
+            errors.append(f"bio.tools registration record version must match workspace {version}")
         if biotools.get("toolType") != ["Command-line tool"]:
             errors.append("bio.tools registration record must be a command-line tool")
         if biotools.get("operatingSystem") != ["Linux", "Mac"]:
@@ -310,9 +278,7 @@ def collect_errors(root: Path = ROOT) -> list[str]:
         if not isinstance(links, list):
             links = []
         if not any(
-            isinstance(link, dict)
-            and link.get("url") == repository
-            and link.get("type") == ["Repository"]
+            isinstance(link, dict) and link.get("url") == repository and link.get("type") == ["Repository"]
             for link in links
         ):
             errors.append("bio.tools registration record must link to the source repository")
@@ -336,21 +302,15 @@ def collect_errors(root: Path = ROOT) -> list[str]:
             and {"Developer", "Primary contact"}.issubset(credit.get("typeRole", []))
             for credit in credits
         ):
-            errors.append(
-                "bio.tools registration record must identify the developer and primary contact"
-            )
+            errors.append("bio.tools registration record must identify the developer and primary contact")
 
     for doc in VERSIONED_DOC_PATHS:
         text = read(doc, root)
         prose = prose_text(text)
-        for container_match in re.finditer(
-            r"ghcr\.io/dnncha/turbo-picard:(\d+\.\d+\.\d+)", text
-        ):
+        for container_match in re.finditer(r"ghcr\.io/dnncha/turbo-picard:(\d+\.\d+\.\d+)", text):
             container_version = container_match.group(1)
             if container_version != version:
-                context = prose_text(
-                    text[max(0, container_match.start() - 500) : container_match.end() + 500]
-                ).lower()
+                context = prose_text(text[max(0, container_match.start() - 500) : container_match.end() + 500]).lower()
                 if "published" in context:
                     continue
                 errors.append(
@@ -361,9 +321,7 @@ def collect_errors(root: Path = ROOT) -> list[str]:
             if "CITATION.cff" not in text:
                 errors.append(f"{doc} must mention CITATION.cff")
             if "input" not in prose or "SHA-256" not in text:
-                errors.append(
-                    f"{doc} must distinguish software citation from pinned input data"
-                )
+                errors.append(f"{doc} must distinguish software citation from pinned input data")
         if doc == Path("docs/citation.rst"):
             required_needles = [
                 ("archived release", "archived-release citation rule"),
@@ -388,14 +346,11 @@ def collect_errors(root: Path = ROOT) -> list[str]:
             ]:
                 if all(needle not in prose for needle in needles):
                     errors.append(f"{doc} must mention {description}")
-        if re.search(r"github-v\d+\.\d+\.\d+-source-archive-sha256", text):
-            if archive_sha_placeholder not in text:
-                errors.append(f"{doc} archive sha256 placeholder must use {tag}")
+        if re.search(r"github-v\d+\.\d+\.\d+-source-archive-sha256", text) and archive_sha_placeholder not in text:
+            errors.append(f"{doc} archive sha256 placeholder must use {tag}")
         if "archive/refs/tags/" in text and archive_url not in text:
             errors.append(f"{doc} archive URL must use {tag}")
-        for found_archive in sorted(
-            set(re.findall(r"turbo-picard-\d+\.\d+\.\d+\.tar\.gz", text))
-        ):
+        for found_archive in sorted(set(re.findall(r"turbo-picard-\d+\.\d+\.\d+\.tar\.gz", text))):
             if found_archive != archive_filename:
                 errors.append(f"{doc} archive command must use {version}")
         for found_archive in sorted(set(re.findall(r"v\d+\.\d+\.\d+\.tar\.gz", text))):
@@ -403,18 +358,12 @@ def collect_errors(root: Path = ROOT) -> list[str]:
                 errors.append(f"{doc} GitHub archive filename must use {tag}")
         if "prepare_bioconda_release.py" in text and "filename" in text:
             if archive_filename not in text:
-                errors.append(
-                    f"{doc} release-helper filename note must mention {archive_filename}"
-                )
+                errors.append(f"{doc} release-helper filename note must mention {archive_filename}")
             if github_archive_filename not in text:
-                errors.append(
-                    f"{doc} release-helper filename note must mention {github_archive_filename}"
-                )
+                errors.append(f"{doc} release-helper filename note must mention {github_archive_filename}")
         if "prepare_bioconda_release.py" in text and "top-level" in text:
             if github_archive_prefix not in text:
-                errors.append(
-                    f"{doc} release-helper archive layout note must mention {github_archive_prefix}"
-                )
+                errors.append(f"{doc} release-helper archive layout note must mention {github_archive_prefix}")
             required_archive_paths = [
                 "Cargo.toml",
                 "Cargo.lock",
@@ -426,13 +375,10 @@ def collect_errors(root: Path = ROOT) -> list[str]:
                 "packaging/bioconda/turbo-picard/meta.yaml",
                 "packaging/bioconda/turbo-picard-picard-shim/meta.yaml",
             ]
-            missing_archive_paths = [
-                path for path in required_archive_paths if path not in text
-            ]
+            missing_archive_paths = [path for path in required_archive_paths if path not in text]
             if missing_archive_paths:
                 errors.append(
-                    f"{doc} release-helper archive layout note must mention "
-                    + ", ".join(missing_archive_paths)
+                    f"{doc} release-helper archive layout note must mention " + ", ".join(missing_archive_paths)
                 )
             required_policy_terms = [
                 "unsafe paths",
@@ -440,13 +386,10 @@ def collect_errors(root: Path = ROOT) -> list[str]:
                 "unsupported tar member types",
                 "empty required source files",
             ]
-            missing_policy_terms = [
-                term for term in required_policy_terms if term not in prose
-            ]
+            missing_policy_terms = [term for term in required_policy_terms if term not in prose]
             if missing_policy_terms:
                 errors.append(
-                    f"{doc} release-helper archive policy note must mention "
-                    + ", ".join(missing_policy_terms)
+                    f"{doc} release-helper archive policy note must mention " + ", ".join(missing_policy_terms)
                 )
             required_metadata_terms = [
                 ("workspace version", "workspace version"),
@@ -466,35 +409,28 @@ def collect_errors(root: Path = ROOT) -> list[str]:
             ]
             if missing_metadata_terms:
                 errors.append(
-                    f"{doc} release-helper archive metadata note must mention "
-                    + ", ".join(missing_metadata_terms)
+                    f"{doc} release-helper archive metadata note must mention " + ", ".join(missing_metadata_terms)
                 )
-        if "prepare_bioconda_release.py" in text and "PR body" in text:
-            if "BIOCONDA_PR.md" not in text:
-                errors.append(
-                    f"{doc} release-helper PR body note must mention BIOCONDA_PR.md"
-                )
+        if "prepare_bioconda_release.py" in text and "PR body" in text and "BIOCONDA_PR.md" not in text:
+            errors.append(f"{doc} release-helper PR body note must mention BIOCONDA_PR.md")
         if "prepare_bioconda_release.py" in text and "--sha256" in text:
             if "Prefer" not in text or "--archive" not in text:
-                errors.append(
-                    f"{doc} release-helper sha256 fallback must prefer --archive"
-                )
+                errors.append(f"{doc} release-helper sha256 fallback must prefer --archive")
             if "downloaded GitHub source archive" not in prose:
                 errors.append(
-                    f"{doc} release-helper sha256 fallback must tie digest to "
-                    "the downloaded GitHub source archive"
+                    f"{doc} release-helper sha256 fallback must tie digest to the downloaded GitHub source archive"
                 )
             if "skips archive filename and content validation" not in prose:
-                errors.append(
-                    f"{doc} release-helper sha256 fallback must disclose skipped "
-                    "archive validation"
-                )
+                errors.append(f"{doc} release-helper sha256 fallback must disclose skipped archive validation")
 
     return errors
 
 
+_DESCRIPTION = "Verify release version references stay aligned across packaging files."
+
+
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(description=_DESCRIPTION)
     parser.parse_args(argv)
 
     errors = collect_errors()

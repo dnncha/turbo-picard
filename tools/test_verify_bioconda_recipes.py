@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-"""Tests for Bioconda recipe readiness checks."""
 
 from __future__ import annotations
 
@@ -10,7 +9,7 @@ import tempfile
 import unittest
 from contextlib import redirect_stderr
 from pathlib import Path
-
+from unittest.mock import patch
 
 MODULE_PATH = Path(__file__).with_name("verify_bioconda_recipes.py")
 SPEC = importlib.util.spec_from_file_location("verify_bioconda_recipes", MODULE_PATH)
@@ -23,9 +22,7 @@ SPEC.loader.exec_module(verify_bioconda_recipes)
 
 def recipe_meta(*, source: str = "", shim: bool = False) -> str:
     package_name = "turbo-picard-picard-shim" if shim else "turbo-picard"
-    run_dependency = (
-        "    - turbo-picard =={{ version }}\n" if shim else ""
-    )
+    run_dependency = "    - turbo-picard =={{ version }}\n" if shim else ""
     run_constrained = "  run_constrained:\n    - picard ==0\n" if shim else ""
     summary = (
         "Optional picard command shim for turbo-picard."
@@ -72,34 +69,24 @@ extra:
     - dnncha
 """
     test_commands = (
-        "test:\n"
-        "  commands:\n"
-        "    - picard --version\n"
-        "    - picard MarkDuplicates --help\n"
+        "test:\n  commands:\n    - picard --version\n    - picard MarkDuplicates --help\n"
         if shim
-        else "test:\n"
-        "  commands:\n"
-        "    - turbo-picard --version\n"
+        else "test:\n  commands:\n    - turbo-picard --version\n"
     )
     return meta.replace("about:\n", f"{test_commands}\nabout:\n", 1)
 
 
 class BiocondaRecipeTests(unittest.TestCase):
     def test_replacement_overclaim_scanner_allows_cautionary_language(self) -> None:
-        self.assertEqual(
-            verify_bioconda_recipes.replacement_overclaims(
-                "Do not describe them as complete cohort-scale validation."
-            ),
-            [],
+        assert (
+            verify_bioconda_recipes.replacement_overclaims("Do not describe them as complete cohort-scale validation.")
+            == []
         )
 
     def test_replacement_overclaim_scanner_rejects_positive_claims(self) -> None:
-        self.assertEqual(
-            verify_bioconda_recipes.replacement_overclaims(
-                "This is a drop-in replacement for production genomics workflows."
-            ),
-            ["drop-in replacement", "production genomics workflows"],
-        )
+        assert verify_bioconda_recipes.replacement_overclaims(
+            "This is a drop-in replacement for production genomics workflows."
+        ) == ["drop-in replacement", "production genomics workflows"]
 
     def test_main_recipe_accepts_required_rust_packaging_bits(self) -> None:
         build_sh = """
@@ -125,7 +112,7 @@ turbo-picard ViewSam --help
             is_shim=False,
         )
 
-        self.assertEqual(errors, [])
+        assert errors == []
 
     def test_recipe_package_identity_and_summary_match_expected_package(self) -> None:
         main_build_sh = (
@@ -158,9 +145,9 @@ turbo-picard ViewSam --help
             is_shim=True,
         )
 
-        self.assertIn(
-            "turbo-picard-picard-shim meta.yaml package.name is turbo-picard, expected turbo-picard-picard-shim",
-            errors,
+        assert (
+            "turbo-picard-picard-shim meta.yaml package.name is turbo-picard, expected turbo-picard-picard-shim"
+            in errors
         )
 
         main_errors = verify_bioconda_recipes.validate_recipe(
@@ -175,10 +162,7 @@ turbo-picard ViewSam --help
             is_shim=False,
         )
 
-        self.assertIn(
-            "turbo-picard meta.yaml summary must describe the Picard-compatible toolkit",
-            main_errors,
-        )
+        assert "turbo-picard meta.yaml summary must describe the Picard-compatible toolkit" in main_errors
 
         shim_errors = verify_bioconda_recipes.validate_recipe(
             name="turbo-picard-picard-shim",
@@ -192,16 +176,12 @@ turbo-picard ViewSam --help
             is_shim=True,
         )
 
-        self.assertIn(
-            "turbo-picard-picard-shim meta.yaml summary must describe the opt-in picard shim",
-            shim_errors,
-        )
+        assert "turbo-picard-picard-shim meta.yaml summary must describe the opt-in picard shim" in shim_errors
 
     def test_recipe_metadata_rejects_replacement_overclaims(self) -> None:
         errors = verify_bioconda_recipes.validate_recipe(
             name="turbo-picard",
-            meta_yaml=recipe_meta()
-            + "This package is a drop-in replacement for production genomics workflows.\n",
+            meta_yaml=recipe_meta() + "This package is a drop-in replacement for production genomics workflows.\n",
             build_sh=(
                 "export OPENSSL_NO_VENDOR=1\n"
                 "export CARGO_NET_GIT_FETCH_WITH_CLI=true\n"
@@ -212,13 +192,9 @@ turbo-picard ViewSam --help
             is_shim=False,
         )
 
-        self.assertIn(
-            "turbo-picard meta.yaml contains unsupported replacement overclaim: drop-in replacement",
-            errors,
-        )
-        self.assertIn(
-            "turbo-picard meta.yaml contains unsupported replacement overclaim: production genomics workflows",
-            errors,
+        assert "turbo-picard meta.yaml contains unsupported replacement overclaim: drop-in replacement" in errors
+        assert (
+            "turbo-picard meta.yaml contains unsupported replacement overclaim: production genomics workflows" in errors
         )
 
     def test_missing_rust_packaging_bits_are_reported(self) -> None:
@@ -241,32 +217,23 @@ extra:
             is_shim=False,
         )
 
-        self.assertIn("turbo-picard meta.yaml missing {{ compiler('rust') }}", errors)
-        self.assertIn("turbo-picard meta.yaml missing cargo-bundle-licenses", errors)
-        self.assertIn("turbo-picard meta.yaml missing THIRDPARTY.yml license_file", errors)
-        self.assertIn(
-            "turbo-picard build.sh must write bundled Rust dependency licenses to THIRDPARTY.yml",
-            errors,
-        )
-        self.assertIn("turbo-picard meta.yaml missing MIT license metadata", errors)
-        self.assertIn("turbo-picard meta.yaml missing documentation URL", errors)
-        self.assertIn("turbo-picard meta.yaml missing source development URL", errors)
-        self.assertIn("turbo-picard meta.yaml description missing CITATION.cff", errors)
-        self.assertIn(
-            "turbo-picard meta.yaml description missing evidence citation boundary",
-            errors,
-        )
-        self.assertIn("turbo-picard meta.yaml contains maintainer placeholder", errors)
-        self.assertIn("turbo-picard build.sh missing cargo-bundle-licenses invocation", errors)
-        self.assertIn("turbo-picard build.sh missing OPENSSL_NO_VENDOR=1", errors)
-        self.assertIn(
-            "turbo-picard build.sh missing CARGO_NET_GIT_FETCH_WITH_CLI=true",
-            errors,
-        )
-        self.assertIn("turbo-picard build.sh missing cargo install --locked", errors)
-        self.assertIn("turbo-picard build.sh missing cargo install --no-track", errors)
-        self.assertIn("turbo-picard build.sh missing cargo install --root ${PREFIX}", errors)
-        self.assertIn("turbo-picard run_test.sh missing turbo-picard smoke test", errors)
+        assert "turbo-picard meta.yaml missing {{ compiler('rust') }}" in errors
+        assert "turbo-picard meta.yaml missing cargo-bundle-licenses" in errors
+        assert "turbo-picard meta.yaml missing THIRDPARTY.yml license_file" in errors
+        assert "turbo-picard build.sh must write bundled Rust dependency licenses to THIRDPARTY.yml" in errors
+        assert "turbo-picard meta.yaml missing MIT license metadata" in errors
+        assert "turbo-picard meta.yaml missing documentation URL" in errors
+        assert "turbo-picard meta.yaml missing source development URL" in errors
+        assert "turbo-picard meta.yaml description missing CITATION.cff" in errors
+        assert "turbo-picard meta.yaml description missing evidence citation boundary" in errors
+        assert "turbo-picard meta.yaml contains maintainer placeholder" in errors
+        assert "turbo-picard build.sh missing cargo-bundle-licenses invocation" in errors
+        assert "turbo-picard build.sh missing OPENSSL_NO_VENDOR=1" in errors
+        assert "turbo-picard build.sh missing CARGO_NET_GIT_FETCH_WITH_CLI=true" in errors
+        assert "turbo-picard build.sh missing cargo install --locked" in errors
+        assert "turbo-picard build.sh missing cargo install --no-track" in errors
+        assert "turbo-picard build.sh missing cargo install --root ${PREFIX}" in errors
+        assert "turbo-picard run_test.sh missing turbo-picard smoke test" in errors
 
     def test_recipe_rejects_noarch_for_compiled_rust_binary(self) -> None:
         errors = verify_bioconda_recipes.validate_recipe(
@@ -293,22 +260,19 @@ extra:
             is_shim=False,
         )
 
-        self.assertIn(
-            "turbo-picard meta.yaml must not use noarch for compiled Rust binaries",
-            errors,
-        )
+        assert "turbo-picard meta.yaml must not use noarch for compiled Rust binaries" in errors
 
     def test_shim_recipe_requires_main_package_pin_and_picard_conflict(self) -> None:
         errors = verify_bioconda_recipes.validate_recipe(
             name="turbo-picard-picard-shim",
             meta_yaml=recipe_meta(shim=True),
-            build_sh="export OPENSSL_NO_VENDOR=1\nexport CARGO_NET_GIT_FETCH_WITH_CLI=true\ncargo-bundle-licenses --format yaml --output THIRDPARTY.yml\ncargo install --locked --no-track --root \"${PREFIX}\" --path crates/turbo-picard-cli --bin picard",
+            build_sh='export OPENSSL_NO_VENDOR=1\nexport CARGO_NET_GIT_FETCH_WITH_CLI=true\ncargo-bundle-licenses --format yaml --output THIRDPARTY.yml\ncargo install --locked --no-track --root "${PREFIX}" --path crates/turbo-picard-cli --bin picard',
             run_test_sh="picard --version\npicard MarkDuplicates --help",
             expected_bin="picard",
             is_shim=True,
         )
 
-        self.assertEqual(errors, [])
+        assert errors == []
 
     def test_shim_recipe_reports_missing_pin_and_conflict(self) -> None:
         errors = verify_bioconda_recipes.validate_recipe(
@@ -326,44 +290,21 @@ extra:
   recipe-maintainers:
     - dnncha
 """,
-            build_sh="export OPENSSL_NO_VENDOR=1\nexport CARGO_NET_GIT_FETCH_WITH_CLI=true\ncargo-bundle-licenses --format yaml --output THIRDPARTY.yml\ncargo install --locked --no-track --root \"${PREFIX}\" --path crates/turbo-picard-cli --bin picard",
+            build_sh='export OPENSSL_NO_VENDOR=1\nexport CARGO_NET_GIT_FETCH_WITH_CLI=true\ncargo-bundle-licenses --format yaml --output THIRDPARTY.yml\ncargo install --locked --no-track --root "${PREFIX}" --path crates/turbo-picard-cli --bin picard',
             run_test_sh="picard --version",
             expected_bin="picard",
             is_shim=True,
         )
 
-        self.assertIn(
-            "turbo-picard-picard-shim meta.yaml missing exact turbo-picard version run dependency",
-            errors,
-        )
-        self.assertIn(
-            "turbo-picard-picard-shim meta.yaml missing picard ==0 run_constrained conflict",
-            errors,
-        )
-        self.assertIn(
-            "turbo-picard-picard-shim meta.yaml test commands missing picard --version",
-            errors,
-        )
-        self.assertIn(
-            "turbo-picard-picard-shim meta.yaml test commands missing picard MarkDuplicates --help",
-            errors,
-        )
-        self.assertIn(
-            "turbo-picard-picard-shim meta.yaml description must disclose upstream picard conflict",
-            errors,
-        )
-        self.assertIn(
-            "turbo-picard-picard-shim meta.yaml description must disclose picard command shadowing",
-            errors,
-        )
+        assert "turbo-picard-picard-shim meta.yaml missing exact turbo-picard version run dependency" in errors
+        assert "turbo-picard-picard-shim meta.yaml missing picard ==0 run_constrained conflict" in errors
+        assert "turbo-picard-picard-shim meta.yaml test commands missing picard --version" in errors
+        assert "turbo-picard-picard-shim meta.yaml test commands missing picard MarkDuplicates --help" in errors
+        assert "turbo-picard-picard-shim meta.yaml description must disclose upstream picard conflict" in errors
+        assert "turbo-picard-picard-shim meta.yaml description must disclose picard command shadowing" in errors
 
     def test_main_recipe_rejects_shim_only_metadata(self) -> None:
-        meta_yaml = (
-            recipe_meta()
-            + "\n    - turbo-picard =={{ version }}\n"
-            + "run_constrained:\n"
-            + "  - picard ==0\n"
-        )
+        meta_yaml = recipe_meta() + "\n    - turbo-picard =={{ version }}\n" + "run_constrained:\n" + "  - picard ==0\n"
 
         errors = verify_bioconda_recipes.validate_recipe(
             name="turbo-picard",
@@ -378,18 +319,9 @@ extra:
             is_shim=False,
         )
 
-        self.assertIn(
-            "turbo-picard meta.yaml must not depend on itself as a shim dependency",
-            errors,
-        )
-        self.assertIn(
-            "turbo-picard meta.yaml must not declare shim-only picard conflict",
-            errors,
-        )
-        self.assertIn(
-            "turbo-picard meta.yaml description must disclose non-shadowing entrypoint",
-            errors,
-        )
+        assert "turbo-picard meta.yaml must not depend on itself as a shim dependency" in errors
+        assert "turbo-picard meta.yaml must not declare shim-only picard conflict" in errors
+        assert "turbo-picard meta.yaml description must disclose non-shadowing entrypoint" in errors
 
     def test_recipe_meta_tests_must_match_package_entrypoint(self) -> None:
         errors = verify_bioconda_recipes.validate_recipe(
@@ -405,14 +337,8 @@ extra:
             is_shim=False,
         )
 
-        self.assertIn(
-            "turbo-picard meta.yaml test commands missing turbo-picard --version",
-            errors,
-        )
-        self.assertIn(
-            "turbo-picard meta.yaml main package tests must not use picard shim",
-            errors,
-        )
+        assert "turbo-picard meta.yaml test commands missing turbo-picard --version" in errors
+        assert "turbo-picard meta.yaml main package tests must not use picard shim" in errors
 
         shim_errors = verify_bioconda_recipes.validate_recipe(
             name="turbo-picard-picard-shim",
@@ -427,14 +353,8 @@ extra:
             is_shim=True,
         )
 
-        self.assertIn(
-            "turbo-picard-picard-shim meta.yaml test commands missing picard --version",
-            shim_errors,
-        )
-        self.assertIn(
-            "turbo-picard-picard-shim meta.yaml shim tests must not use turbo-picard",
-            shim_errors,
-        )
+        assert "turbo-picard-picard-shim meta.yaml test commands missing picard --version" in shim_errors
+        assert "turbo-picard-picard-shim meta.yaml shim tests must not use turbo-picard" in shim_errors
 
     def test_main_run_test_command_surface_tracks_command_matrix(self) -> None:
         matrix_text = """
@@ -447,20 +367,15 @@ commands:
     status: fallback-only
 """
 
-        self.assertEqual(
+        assert (
             verify_bioconda_recipes.validate_main_run_test_command_surface(
-                run_test_sh="turbo-picard MarkDuplicates --help\nturbo-picard SortSam --help\n",
-                matrix_text=matrix_text,
-            ),
-            [],
+                run_test_sh="turbo-picard MarkDuplicates --help\nturbo-picard SortSam --help\n", matrix_text=matrix_text
+            )
+            == []
         )
-        self.assertEqual(
-            verify_bioconda_recipes.validate_main_run_test_command_surface(
-                run_test_sh="turbo-picard MarkDuplicates --help\n",
-                matrix_text=matrix_text,
-            ),
-            ["turbo-picard run_test.sh missing command smoke: SortSam"],
-        )
+        assert verify_bioconda_recipes.validate_main_run_test_command_surface(
+            run_test_sh="turbo-picard MarkDuplicates --help\n", matrix_text=matrix_text
+        ) == ["turbo-picard run_test.sh missing command smoke: SortSam"]
 
     def test_main_meta_test_command_surface_tracks_command_matrix(self) -> None:
         matrix_text = """
@@ -479,122 +394,117 @@ test:
     - turbo-picard SortSam --help
 """
 
-        self.assertEqual(
+        assert (
             verify_bioconda_recipes.validate_main_meta_test_command_surface(
-                meta_yaml=meta_yaml,
-                matrix_text=matrix_text,
-            ),
-            [],
+                meta_yaml=meta_yaml, matrix_text=matrix_text
+            )
+            == []
         )
-        self.assertEqual(
-            verify_bioconda_recipes.validate_main_meta_test_command_surface(
-                meta_yaml=meta_yaml.replace("    - turbo-picard SortSam --help\n", ""),
-                matrix_text=matrix_text,
-            ),
-            ["turbo-picard meta.yaml missing command smoke: SortSam"],
-        )
+        assert verify_bioconda_recipes.validate_main_meta_test_command_surface(
+            meta_yaml=meta_yaml.replace("    - turbo-picard SortSam --help\n", ""), matrix_text=matrix_text
+        ) == ["turbo-picard meta.yaml missing command smoke: SortSam"]
 
     def test_release_ready_mode_rejects_local_source_path(self) -> None:
-        recipe = recipe_meta(source="""
+        recipe = recipe_meta(
+            source="""
 source:
   path: ../../..
-""")
+"""
+        )
         errors = verify_bioconda_recipes.validate_recipe(
             name="turbo-picard",
             meta_yaml=recipe,
-            build_sh="export OPENSSL_NO_VENDOR=1\nexport CARGO_NET_GIT_FETCH_WITH_CLI=true\ncargo-bundle-licenses --format yaml --output THIRDPARTY.yml\ncargo install --locked --no-track --root \"${PREFIX}\" --path crates/turbo-picard-cli --bin turbo-picard",
+            build_sh='export OPENSSL_NO_VENDOR=1\nexport CARGO_NET_GIT_FETCH_WITH_CLI=true\ncargo-bundle-licenses --format yaml --output THIRDPARTY.yml\ncargo install --locked --no-track --root "${PREFIX}" --path crates/turbo-picard-cli --bin turbo-picard',
             run_test_sh="turbo-picard --version",
             expected_bin="turbo-picard",
             is_shim=False,
             release_ready=True,
         )
 
-        self.assertIn("turbo-picard meta.yaml still uses local source.path", errors)
-        self.assertIn("turbo-picard meta.yaml missing release source url", errors)
-        self.assertIn("turbo-picard meta.yaml missing release source sha256", errors)
+        assert "turbo-picard meta.yaml still uses local source.path" in errors
+        assert "turbo-picard meta.yaml missing release source url" in errors
+        assert "turbo-picard meta.yaml missing release source sha256" in errors
 
     def test_release_ready_mode_accepts_url_and_sha256(self) -> None:
-        recipe = recipe_meta(source="""
+        recipe = recipe_meta(
+            source="""
 source:
   url: https://github.com/dnncha/turbo-picard/archive/refs/tags/v0.1.0.tar.gz
   sha256: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
-""")
+"""
+        )
         errors = verify_bioconda_recipes.validate_recipe(
             name="turbo-picard",
             meta_yaml=recipe,
-            build_sh="export OPENSSL_NO_VENDOR=1\nexport CARGO_NET_GIT_FETCH_WITH_CLI=true\ncargo-bundle-licenses --format yaml --output THIRDPARTY.yml\ncargo install --locked --no-track --root \"${PREFIX}\" --path crates/turbo-picard-cli --bin turbo-picard",
+            build_sh='export OPENSSL_NO_VENDOR=1\nexport CARGO_NET_GIT_FETCH_WITH_CLI=true\ncargo-bundle-licenses --format yaml --output THIRDPARTY.yml\ncargo install --locked --no-track --root "${PREFIX}" --path crates/turbo-picard-cli --bin turbo-picard',
             run_test_sh="turbo-picard --version\nturbo-picard MarkDuplicates --help\nturbo-picard SortSam --help\nturbo-picard CleanSam --help\nturbo-picard ViewSam --help",
             expected_bin="turbo-picard",
             is_shim=False,
             release_ready=True,
         )
 
-        self.assertEqual(errors, [])
+        assert errors == []
 
     def test_release_ready_mode_rejects_url_not_matching_recipe_version(self) -> None:
-        recipe = recipe_meta(source="""
+        recipe = recipe_meta(
+            source="""
 source:
   url: https://github.com/dnncha/turbo-picard/archive/refs/tags/v0.2.0.tar.gz
   sha256: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
-""")
+"""
+        )
         errors = verify_bioconda_recipes.validate_recipe(
             name="turbo-picard",
             meta_yaml=recipe,
-            build_sh="export OPENSSL_NO_VENDOR=1\nexport CARGO_NET_GIT_FETCH_WITH_CLI=true\ncargo-bundle-licenses --format yaml --output THIRDPARTY.yml\ncargo install --locked --no-track --root \"${PREFIX}\" --path crates/turbo-picard-cli --bin turbo-picard",
+            build_sh='export OPENSSL_NO_VENDOR=1\nexport CARGO_NET_GIT_FETCH_WITH_CLI=true\ncargo-bundle-licenses --format yaml --output THIRDPARTY.yml\ncargo install --locked --no-track --root "${PREFIX}" --path crates/turbo-picard-cli --bin turbo-picard',
             run_test_sh="turbo-picard --version\nturbo-picard MarkDuplicates --help\nturbo-picard SortSam --help\nturbo-picard CleanSam --help\nturbo-picard ViewSam --help",
             expected_bin="turbo-picard",
             is_shim=False,
             release_ready=True,
         )
 
-        self.assertIn(
-            "turbo-picard meta.yaml release source url must be https://github.com/dnncha/turbo-picard/archive/refs/tags/v0.1.0.tar.gz",
-            errors,
+        assert (
+            "turbo-picard meta.yaml release source url must be https://github.com/dnncha/turbo-picard/archive/refs/tags/v0.1.0.tar.gz"
+            in errors
         )
 
     def test_recipe_set_versions_must_match(self) -> None:
-        self.assertEqual(
+        assert (
             verify_bioconda_recipes.validate_recipe_set_consistency(
                 [("turbo-picard", "0.1.0"), ("turbo-picard-picard-shim", "0.1.0")]
-            ),
-            [],
+            )
+            == []
         )
 
-        self.assertEqual(
-            verify_bioconda_recipes.validate_recipe_set_consistency(
-                [("turbo-picard", "0.1.0"), ("turbo-picard-picard-shim", "0.2.0")]
-            ),
-            [
-                "Bioconda recipe versions differ: turbo-picard=0.1.0, turbo-picard-picard-shim=0.2.0"
-            ],
-        )
+        assert verify_bioconda_recipes.validate_recipe_set_consistency(
+            [("turbo-picard", "0.1.0"), ("turbo-picard-picard-shim", "0.2.0")]
+        ) == ["Bioconda recipe versions differ: turbo-picard=0.1.0, turbo-picard-picard-shim=0.2.0"]
 
-        self.assertEqual(
-            verify_bioconda_recipes.validate_recipe_set_consistency(
-                [("turbo-picard", None), ("turbo-picard-picard-shim", "0.1.0")]
-            ),
-            ["turbo-picard meta.yaml missing version"],
-        )
+        assert verify_bioconda_recipes.validate_recipe_set_consistency(
+            [("turbo-picard", None), ("turbo-picard-picard-shim", "0.1.0")]
+        ) == ["turbo-picard meta.yaml missing version"]
 
     def test_release_ready_mode_rejects_source_url_from_wrong_repository(self) -> None:
-        recipe = recipe_meta(source="""
+        recipe = recipe_meta(
+            source="""
 source:
   url: https://github.com/example/turbo-picard/archive/refs/tags/v0.1.0.tar.gz
   sha256: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
-""")
+"""
+        )
         errors = verify_bioconda_recipes.validate_recipe(
             name="turbo-picard",
             meta_yaml=recipe,
-            build_sh="export OPENSSL_NO_VENDOR=1\nexport CARGO_NET_GIT_FETCH_WITH_CLI=true\ncargo-bundle-licenses --format yaml --output THIRDPARTY.yml\ncargo install --locked --no-track --root \"${PREFIX}\" --path crates/turbo-picard-cli --bin turbo-picard",
+            build_sh='export OPENSSL_NO_VENDOR=1\nexport CARGO_NET_GIT_FETCH_WITH_CLI=true\ncargo-bundle-licenses --format yaml --output THIRDPARTY.yml\ncargo install --locked --no-track --root "${PREFIX}" --path crates/turbo-picard-cli --bin turbo-picard',
             run_test_sh="turbo-picard --version\nturbo-picard MarkDuplicates --help\nturbo-picard SortSam --help\nturbo-picard CleanSam --help\nturbo-picard ViewSam --help",
             expected_bin="turbo-picard",
             is_shim=False,
             release_ready=True,
         )
 
-        self.assertIn(
-            "turbo-picard meta.yaml release source url must be https://github.com/dnncha/turbo-picard/archive/refs/tags/v0.1.0.tar.gz",
-            errors,
+        assert (
+            "turbo-picard meta.yaml release source url must be https://github.com/dnncha/turbo-picard/archive/refs/tags/v0.1.0.tar.gz"
+            in errors
         )
 
     def test_source_extractors_read_recipe_and_pr_fields(self) -> None:
@@ -610,21 +520,21 @@ source:
   `0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef`
 """
 
-        self.assertEqual(
-            verify_bioconda_recipes.recipe_source_url(meta_yaml),
-            "https://github.com/dnncha/turbo-picard/archive/refs/tags/v0.1.0.tar.gz",
+        assert (
+            verify_bioconda_recipes.recipe_source_url(meta_yaml)
+            == "https://github.com/dnncha/turbo-picard/archive/refs/tags/v0.1.0.tar.gz"
         )
-        self.assertEqual(
-            verify_bioconda_recipes.recipe_source_sha256(meta_yaml),
-            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        assert (
+            verify_bioconda_recipes.recipe_source_sha256(meta_yaml)
+            == "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
         )
-        self.assertEqual(
-            verify_bioconda_recipes.pr_source_url(pr_text),
-            "https://github.com/dnncha/turbo-picard/archive/refs/tags/v0.1.0.tar.gz",
+        assert (
+            verify_bioconda_recipes.pr_source_url(pr_text)
+            == "https://github.com/dnncha/turbo-picard/archive/refs/tags/v0.1.0.tar.gz"
         )
-        self.assertEqual(
-            verify_bioconda_recipes.pr_source_sha256(pr_text),
-            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        assert (
+            verify_bioconda_recipes.pr_source_sha256(pr_text)
+            == "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
         )
 
     def test_release_evidence_requires_manifest_verifier_and_docs(self) -> None:
@@ -636,9 +546,7 @@ source:
             (root / "docs" / "site" / "assets").mkdir(parents=True)
             (root / "packaging" / "bioconda").mkdir(parents=True)
             (root / "packaging" / "bioconda" / "turbo-picard").mkdir(parents=True)
-            (root / "packaging" / "bioconda" / "turbo-picard-picard-shim").mkdir(
-                parents=True
-            )
+            (root / "packaging" / "bioconda" / "turbo-picard-picard-shim").mkdir(parents=True)
             bioconda_submission_commands = (
                 "cp -R packaging/bioconda/turbo-picard recipes/turbo-picard\n"
                 "cp -R packaging/bioconda/turbo-picard-picard-shim recipes/turbo-picard-picard-shim\n"
@@ -676,9 +584,7 @@ source:
                 '{"datasets": [{"release_tier": "release_candidate"}]}',
                 encoding="utf-8",
             )
-            (root / "tools" / "verify_real_data_evidence.py").write_text(
-                "# verifier\n", encoding="utf-8"
-            )
+            (root / "tools" / "verify_real_data_evidence.py").write_text("# verifier\n", encoding="utf-8")
             for path in (
                 root / "README.md",
                 root / "docs" / "site" / "index.html",
@@ -694,11 +600,7 @@ source:
             for path in (
                 root / "docs" / "packaging.rst",
                 root / "packaging" / "bioconda" / "turbo-picard" / "README.md",
-                root
-                / "packaging"
-                / "bioconda"
-                / "turbo-picard-picard-shim"
-                / "README.md",
+                root / "packaging" / "bioconda" / "turbo-picard-picard-shim" / "README.md",
             ):
                 with path.open("a", encoding="utf-8") as handle:
                     handle.write(bioconda_submission_commands)
@@ -860,7 +762,7 @@ source:
                 encoding="utf-8",
             )
 
-            self.assertEqual(verify_bioconda_recipes.validate_release_evidence(root), [])
+            assert verify_bioconda_recipes.validate_release_evidence(root) == []
 
             (root / "packaging" / "bioconda" / "BIOCONDA_PR.md").write_text(
                 "python3 tools/verify_real_data_evidence.py\n"
@@ -893,13 +795,13 @@ source:
                 "Picard public SNVQ metrics test BAM.\n",
                 encoding="utf-8",
             )
-            self.assertIn(
-                "packaging/bioconda/BIOCONDA_PR.md missing Bioconda PR evidence text: python3 tools/verify_release_versions.py",
-                verify_bioconda_recipes.validate_release_evidence(root),
+            assert (
+                "packaging/bioconda/BIOCONDA_PR.md missing Bioconda PR evidence text: python3 tools/verify_release_versions.py"
+                in verify_bioconda_recipes.validate_release_evidence(root)
             )
-            self.assertIn(
-                "packaging/bioconda/BIOCONDA_PR.md missing Bioconda PR evidence text: python3 tools/verify_benchmark_thresholds.py",
-                verify_bioconda_recipes.validate_release_evidence(root),
+            assert (
+                "packaging/bioconda/BIOCONDA_PR.md missing Bioconda PR evidence text: python3 tools/verify_benchmark_thresholds.py"
+                in verify_bioconda_recipes.validate_release_evidence(root)
             )
 
             (root / "packaging" / "bioconda" / "BIOCONDA_PR.md").write_text(
@@ -935,14 +837,8 @@ source:
                 encoding="utf-8",
             )
             errors = verify_bioconda_recipes.validate_release_evidence(root)
-            self.assertIn(
-                "packaging/bioconda/BIOCONDA_PR.md missing tagged source archive URL",
-                errors,
-            )
-            self.assertIn(
-                "packaging/bioconda/BIOCONDA_PR.md missing concrete source archive SHA-256",
-                errors,
-            )
+            assert "packaging/bioconda/BIOCONDA_PR.md missing tagged source archive URL" in errors
+            assert "packaging/bioconda/BIOCONDA_PR.md missing concrete source archive SHA-256" in errors
 
             (root / "packaging" / "bioconda" / "BIOCONDA_PR.md").write_text(
                 "python3 tools/verify_real_data_evidence.py\n"
@@ -979,9 +875,9 @@ source:
                 "Picard public SNVQ metrics test BAM.\n",
                 encoding="utf-8",
             )
-            self.assertIn(
-                "packaging/bioconda/BIOCONDA_PR.md source SHA-256 does not match turbo-picard recipe",
-                verify_bioconda_recipes.validate_release_evidence(root),
+            assert (
+                "packaging/bioconda/BIOCONDA_PR.md source SHA-256 does not match turbo-picard recipe"
+                in verify_bioconda_recipes.validate_release_evidence(root)
             )
 
             (root / "packaging" / "bioconda" / "turbo-picard-picard-shim" / "meta.yaml").write_text(
@@ -1027,9 +923,9 @@ source:
                 "Picard public SNVQ metrics test BAM.\n",
                 encoding="utf-8",
             )
-            self.assertIn(
-                "packaging/bioconda/BIOCONDA_PR.md source URL does not match turbo-picard-picard-shim recipe",
-                verify_bioconda_recipes.validate_release_evidence(root),
+            assert (
+                "packaging/bioconda/BIOCONDA_PR.md source URL does not match turbo-picard-picard-shim recipe"
+                in verify_bioconda_recipes.validate_release_evidence(root)
             )
 
             (root / "packaging" / "bioconda" / "turbo-picard-picard-shim" / "meta.yaml").write_text(
@@ -1071,9 +967,9 @@ source:
                 "Picard public SNVQ metrics test BAM.\n",
                 encoding="utf-8",
             )
-            self.assertIn(
-                "packaging/bioconda/BIOCONDA_PR.md still contains source archive SHA placeholder",
-                verify_bioconda_recipes.validate_release_evidence(root),
+            assert (
+                "packaging/bioconda/BIOCONDA_PR.md still contains source archive SHA placeholder"
+                in verify_bioconda_recipes.validate_release_evidence(root)
             )
 
             (root / "packaging" / "bioconda" / "BIOCONDA_PR.md").write_text(
@@ -1096,9 +992,9 @@ source:
                 "GATK public NA12878 mitochondrial test BAM.\n",
                 encoding="utf-8",
             )
-            self.assertIn(
-                "packaging/bioconda/BIOCONDA_PR.md missing Bioconda PR evidence text: benchmarks/real-data/picard-snvq/evidence/real-data-comparison.md",
-                verify_bioconda_recipes.validate_release_evidence(root),
+            assert (
+                "packaging/bioconda/BIOCONDA_PR.md missing Bioconda PR evidence text: benchmarks/real-data/picard-snvq/evidence/real-data-comparison.md"
+                in verify_bioconda_recipes.validate_release_evidence(root)
             )
 
             (root / "packaging" / "bioconda" / "BIOCONDA_PR.md").write_text(
@@ -1129,9 +1025,9 @@ source:
                 encoding="utf-8",
             )
             (root / "README.md").write_text("missing command\n", encoding="utf-8")
-            self.assertIn(
-                "README.md missing real-data evidence verifier command",
-                verify_bioconda_recipes.validate_release_evidence(root),
+            assert (
+                "README.md missing real-data evidence verifier command"
+                in verify_bioconda_recipes.validate_release_evidence(root)
             )
 
             (root / "README.md").write_text(
@@ -1166,9 +1062,9 @@ source:
                 "Picard public SNVQ metrics test BAM.\n",
                 encoding="utf-8",
             )
-            self.assertIn(
-                "packaging/bioconda/BIOCONDA_PR.md missing Bioconda PR evidence text: bioconda-utils lint recipes config.yml --packages turbo-picard turbo-picard-picard-shim",
-                verify_bioconda_recipes.validate_release_evidence(root),
+            assert (
+                "packaging/bioconda/BIOCONDA_PR.md missing Bioconda PR evidence text: bioconda-utils lint recipes config.yml --packages turbo-picard turbo-picard-picard-shim"
+                in verify_bioconda_recipes.validate_release_evidence(root)
             )
 
             (root / "packaging" / "bioconda" / "BIOCONDA_PR.md").write_text(
@@ -1196,9 +1092,9 @@ source:
                 "Picard public SNVQ metrics test BAM.\n",
                 encoding="utf-8",
             )
-            self.assertIn(
-                "packaging/bioconda/BIOCONDA_PR.md missing Bioconda PR evidence text: python3 -m unittest discover tools",
-                verify_bioconda_recipes.validate_release_evidence(root),
+            assert (
+                "packaging/bioconda/BIOCONDA_PR.md missing Bioconda PR evidence text: python3 -m unittest discover tools"
+                in verify_bioconda_recipes.validate_release_evidence(root)
             )
 
             (root / "README.md").write_text(
@@ -1211,9 +1107,9 @@ source:
                 '{"datasets": [{"release_tier": "public_smoke"}]}',
                 encoding="utf-8",
             )
-            self.assertIn(
-                "release evidence manifest has no release_candidate dataset",
-                verify_bioconda_recipes.validate_release_evidence(root),
+            assert (
+                "release evidence manifest has no release_candidate dataset"
+                in verify_bioconda_recipes.validate_release_evidence(root)
             )
 
     def test_release_evidence_rejects_malformed_manifest_shape_without_crashing(self) -> None:
@@ -1224,9 +1120,7 @@ source:
             (root / "docs" / "site").mkdir(parents=True)
             (root / "packaging" / "bioconda" / "turbo-picard").mkdir(parents=True)
             (root / "packaging" / "bioconda").mkdir(parents=True, exist_ok=True)
-            (root / "tools" / "verify_real_data_evidence.py").write_text(
-                "# verifier\n", encoding="utf-8"
-            )
+            (root / "tools" / "verify_real_data_evidence.py").write_text("# verifier\n", encoding="utf-8")
             for path in (
                 root / "README.md",
                 root / "docs" / "site" / "index.html",
@@ -1243,13 +1137,13 @@ source:
             manifest = root / "benchmarks" / "real-data" / "manifest.json"
             manifest.write_text('["not", "an", "object"]', encoding="utf-8")
             errors = verify_bioconda_recipes.validate_release_evidence(root)
-            self.assertIn("release evidence manifest must be a JSON object", errors)
-            self.assertIn("release evidence manifest has no release_candidate dataset", errors)
+            assert "release evidence manifest must be a JSON object" in errors
+            assert "release evidence manifest has no release_candidate dataset" in errors
 
             manifest.write_text('{"datasets": "not-a-list"}', encoding="utf-8")
             errors = verify_bioconda_recipes.validate_release_evidence(root)
-            self.assertIn("release evidence manifest datasets must be a list", errors)
-            self.assertIn("release evidence manifest has no release_candidate dataset", errors)
+            assert "release evidence manifest datasets must be a list" in errors
+            assert "release evidence manifest has no release_candidate dataset" in errors
 
     def test_bioconda_pr_requires_benchmark_receipts(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1302,7 +1196,7 @@ source:
             "CollectMultipleMetrics",
             "CollectGcBiasMetrics",
         ):
-            self.assertIn(needle, required)
+            assert needle in required
 
     def test_bioconda_pr_benchmark_requirements_report_malformed_data(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1311,61 +1205,47 @@ source:
             asset_dir.mkdir(parents=True)
 
             required, errors = verify_bioconda_recipes.benchmark_pr_text_requirements(root)
-            self.assertEqual(required, ["docs/site/assets/benchmark-data.json"])
-            self.assertEqual(errors, ["docs/site/assets/benchmark-data.json is missing"])
+            assert required == ["docs/site/assets/benchmark-data.json"]
+            assert errors == ["docs/site/assets/benchmark-data.json is missing"]
 
             (asset_dir / "benchmark-data.json").write_text("not json", encoding="utf-8")
             required, errors = verify_bioconda_recipes.benchmark_pr_text_requirements(root)
-            self.assertEqual(required, ["docs/site/assets/benchmark-data.json"])
-            self.assertTrue(
-                errors[0].startswith(
-                    "docs/site/assets/benchmark-data.json is not valid JSON:"
-                )
-            )
+            assert required == ["docs/site/assets/benchmark-data.json"]
+            assert errors[0].startswith("docs/site/assets/benchmark-data.json is not valid JSON:")
 
             (asset_dir / "benchmark-data.json").write_text(
                 '{"summary": [], "benchmarks": "not-a-list"}',
                 encoding="utf-8",
             )
             required, errors = verify_bioconda_recipes.benchmark_pr_text_requirements(root)
-            self.assertIn("docs/site/assets/benchmark-data.json", required)
-            self.assertIn(
-                "docs/site/assets/benchmark-data.json missing summary object",
-                errors,
-            )
-            self.assertIn(
-                "docs/site/assets/benchmark-data.json missing benchmarks list",
-                errors,
-            )
+            assert "docs/site/assets/benchmark-data.json" in required
+            assert "docs/site/assets/benchmark-data.json missing summary object" in errors
+            assert "docs/site/assets/benchmark-data.json missing benchmarks list" in errors
 
     def test_main_reports_unknown_arguments(self) -> None:
         with redirect_stderr(io.StringIO()):
-            self.assertEqual(verify_bioconda_recipes.main(["--unknown"]), 2)
+            assert verify_bioconda_recipes.main(["--unknown"]) == 2
 
     def test_main_does_not_skip_later_recipes_after_earlier_errors(self) -> None:
-        original_recipes = verify_bioconda_recipes.RECIPES
-        try:
-            verify_bioconda_recipes.RECIPES = [
-                {
-                    "name": "missing-first",
-                    "path": Path("/definitely/missing/first"),
-                    "expected_bin": "first",
-                    "is_shim": False,
-                },
-                {
-                    "name": "missing-second",
-                    "path": Path("/definitely/missing/second"),
-                    "expected_bin": "second",
-                    "is_shim": False,
-                },
-            ]
-            stderr = io.StringIO()
-            with redirect_stderr(stderr):
-                self.assertEqual(verify_bioconda_recipes.main([]), 1)
-            self.assertIn("missing-first missing meta.yaml", stderr.getvalue())
-            self.assertIn("missing-second missing meta.yaml", stderr.getvalue())
-        finally:
-            verify_bioconda_recipes.RECIPES = original_recipes
+        recipes = [
+            {
+                "name": "missing-first",
+                "path": Path("/definitely/missing/first"),
+                "expected_bin": "first",
+                "is_shim": False,
+            },
+            {
+                "name": "missing-second",
+                "path": Path("/definitely/missing/second"),
+                "expected_bin": "second",
+                "is_shim": False,
+            },
+        ]
+        stderr = io.StringIO()
+        with patch.object(verify_bioconda_recipes, "RECIPES", recipes), redirect_stderr(stderr):
+            assert verify_bioconda_recipes.main([]) == 1
+        assert "missing-first missing meta.yaml" in stderr.getvalue()
+        assert "missing-second missing meta.yaml" in stderr.getvalue()
 
 
 if __name__ == "__main__":

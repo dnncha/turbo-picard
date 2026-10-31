@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-"""Tests for marketing site disclosure checks."""
 
 from __future__ import annotations
 
@@ -7,7 +6,6 @@ import importlib.util
 import sys
 import unittest
 from pathlib import Path
-
 
 MODULE_PATH = Path(__file__).with_name("verify_site_disclosures.py")
 SPEC = importlib.util.spec_from_file_location("verify_site_disclosures", MODULE_PATH)
@@ -35,7 +33,7 @@ class SiteDisclosureTests(unittest.TestCase):
 </section>
 """
 
-        self.assertEqual(verify_site_disclosures.validate_site_disclosures(html, version="0.1.2"), [])
+        assert verify_site_disclosures.validate_site_disclosures(html, version="0.1.2") == []
 
     def test_site_disclosure_reports_missing_boundaries(self) -> None:
         errors = verify_site_disclosures.validate_site_disclosures(
@@ -43,15 +41,15 @@ class SiteDisclosureTests(unittest.TestCase):
             version="0.1.2",
         )
 
-        self.assertIn("site missing current-boundaries section", errors)
-        self.assertIn("site missing not-full-Picard-suite disclosure", errors)
-        self.assertIn("site metadata missing selected-command caveat", errors)
-        self.assertIn("site metadata missing fallback/unsupported-command caveat", errors)
-        self.assertIn("site missing lightweight chart PDF disclosure", errors)
-        self.assertIn("site missing evidence-supported switch disclosure", errors)
-        self.assertIn("site missing benchmark threshold release-gate disclosure", errors)
-        self.assertIn("site missing software-vs-input citation disclosure", errors)
-        self.assertIn("site missing Bioconda release/lint disclosure", errors)
+        assert "site missing current-boundaries section" in errors
+        assert "site missing not-full-Picard-suite disclosure" in errors
+        assert "site metadata missing selected-command caveat" in errors
+        assert "site metadata missing fallback/unsupported-command caveat" in errors
+        assert "site missing lightweight chart PDF disclosure" in errors
+        assert "site missing evidence-supported switch disclosure" in errors
+        assert "site missing benchmark threshold release-gate disclosure" in errors
+        assert "site missing software-vs-input citation disclosure" in errors
+        assert "site missing Bioconda release/lint disclosure" in errors
 
     def test_site_disclosure_reports_metadata_overclaim(self) -> None:
         html = """
@@ -69,9 +67,9 @@ class SiteDisclosureTests(unittest.TestCase):
 </section>
 """
 
-        self.assertIn(
-            "site metadata contains unsupported production-genomics overclaim",
-            verify_site_disclosures.validate_site_disclosures(html, version="0.1.2"),
+        assert (
+            "site metadata contains unsupported production-genomics overclaim"
+            in verify_site_disclosures.validate_site_disclosures(html, version="0.1.2")
         )
 
     def test_site_disclosure_requires_bioconda_release_and_lint(self) -> None:
@@ -90,9 +88,8 @@ class SiteDisclosureTests(unittest.TestCase):
 </section>
 """
 
-        self.assertIn(
-            "site missing Bioconda release/lint disclosure",
-            verify_site_disclosures.validate_site_disclosures(html, version="0.1.2"),
+        assert "site missing Bioconda release/lint disclosure" in verify_site_disclosures.validate_site_disclosures(
+            html, version="0.1.2"
         )
 
     def test_site_disclosure_rejects_stale_bioconda_submission_claim(self) -> None:
@@ -112,9 +109,8 @@ class SiteDisclosureTests(unittest.TestCase):
 </section>
 """
 
-        self.assertIn(
-            "site contains stale Bioconda submission status",
-            verify_site_disclosures.validate_site_disclosures(html, version="0.1.2"),
+        assert "site contains stale Bioconda submission status" in verify_site_disclosures.validate_site_disclosures(
+            html, version="0.1.2"
         )
 
     def test_site_disclosure_requires_citation_boundary(self) -> None:
@@ -132,9 +128,9 @@ class SiteDisclosureTests(unittest.TestCase):
 </section>
 """
 
-        self.assertIn(
-            "site missing software-vs-input citation disclosure",
-            verify_site_disclosures.validate_site_disclosures(html, version="0.1.2"),
+        assert (
+            "site missing software-vs-input citation disclosure"
+            in verify_site_disclosures.validate_site_disclosures(html, version="0.1.2")
         )
 
 

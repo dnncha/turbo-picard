@@ -1,17 +1,23 @@
 from __future__ import annotations
 
 import importlib.util
-from pathlib import Path
 import sys
 import unittest
-
+from pathlib import Path
 
 MODULE_PATH = Path(__file__).with_name("verify_public_adoption_report.py")
 SPEC = importlib.util.spec_from_file_location("verify_public_adoption_report", MODULE_PATH)
-assert SPEC is not None and SPEC.loader is not None
+assert SPEC is not None
+assert SPEC.loader is not None
 verify_public_adoption_report = importlib.util.module_from_spec(SPEC)
 sys.modules["verify_public_adoption_report"] = verify_public_adoption_report
 SPEC.loader.exec_module(verify_public_adoption_report)
+
+
+def section(payload: dict[str, object], name: str) -> dict[str, object]:
+    value = payload[name]
+    assert isinstance(value, dict)
+    return value
 
 
 def valid_report() -> dict[str, object]:
@@ -132,38 +138,35 @@ def valid_report() -> dict[str, object]:
 
 class VerifyPublicAdoptionReportTests(unittest.TestCase):
     def test_accepts_valid_report(self) -> None:
-        self.assertEqual([], verify_public_adoption_report.collect_errors(valid_report()))
+        assert verify_public_adoption_report.collect_errors(valid_report()) == []
 
     def test_rejects_schema_downgrade(self) -> None:
         payload = valid_report()
         payload["schema_version"] = 1
-        self.assertIn(
-            "report schema_version must be 4",
-            verify_public_adoption_report.collect_errors(payload),
-        )
+        assert "report schema_version must be 4" in verify_public_adoption_report.collect_errors(payload)
 
     def test_rejects_claiming_production_readiness(self) -> None:
         payload = valid_report()
-        payload["interpretation"]["production_readiness_verified"] = True  # type: ignore[index]
-        self.assertIn(
-            "interpretation production_readiness_verified must remain false",
-            verify_public_adoption_report.collect_errors(payload),
+        section(payload, "interpretation")["production_readiness_verified"] = True
+        assert (
+            "interpretation production_readiness_verified must remain false"
+            in verify_public_adoption_report.collect_errors(payload)
         )
 
     def test_rejects_claiming_workflow_owner_trials(self) -> None:
         payload = valid_report()
-        payload["interpretation"]["workflow_owner_trial_reports_verified"] = True  # type: ignore[index]
-        self.assertIn(
-            "interpretation workflow_owner_trial_reports_verified must remain false",
-            verify_public_adoption_report.collect_errors(payload),
+        section(payload, "interpretation")["workflow_owner_trial_reports_verified"] = True
+        assert (
+            "interpretation workflow_owner_trial_reports_verified must remain false"
+            in verify_public_adoption_report.collect_errors(payload)
         )
 
     def test_rejects_malformed_release_commit(self) -> None:
         payload = valid_report()
-        payload["release_state"]["head_commit"] = "not-a-commit"  # type: ignore[index]
-        self.assertIn(
-            "release_state head_commit must be a full commit hash or null",
-            verify_public_adoption_report.collect_errors(payload),
+        section(payload, "release_state")["head_commit"] = "not-a-commit"
+        assert (
+            "release_state head_commit must be a full commit hash or null"
+            in verify_public_adoption_report.collect_errors(payload)
         )
 
 

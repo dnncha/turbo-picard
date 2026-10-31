@@ -3,7 +3,8 @@ use flate2::read::GzDecoder;
 use predicates::prelude::*;
 use std::fs;
 use std::io::{Read, Write};
-use std::os::unix::fs::PermissionsExt;
+
+use support::{fallback_script, read_gzip_to_string, record_names};
 
 #[test]
 fn collecthsmetrics_help_exposes_native_core_surface() {
@@ -7501,7 +7502,6 @@ fn createsequencedictionary_derives_output_and_reads_gzip() {
     {
         let file = fs::File::create(&reference).expect("gzip reference is created");
         let mut encoder = flate2::write::GzEncoder::new(file, flate2::Compression::default());
-        use std::io::Write;
         encoder
             .write_all(b">chr1 first chromosome\nACGTACGT\n>chr2\nNNNN\n")
             .expect("gzip reference is written");
@@ -9065,40 +9065,6 @@ fn picard_binary_supports_help_and_version_smoke_checks() {
         .stdout(predicate::str::contains(env!("CARGO_PKG_VERSION")));
 }
 
-fn fallback_script(dir: &std::path::Path, exit_code: i32) -> std::path::PathBuf {
-    let script = dir.join("fallback.sh");
-    fs::write(
-        &script,
-        format!(
-            "#!/usr/bin/env bash\nset -euo pipefail\nprintf '%s\\n' \"$@\" > \"$TURBO_PICARD_FALLBACK_LOG\"\nexit {exit_code}\n"
-        ),
-    )
-    .expect("fallback script is written");
-    let mut permissions = fs::metadata(&script)
-        .expect("fallback metadata exists")
-        .permissions();
-    permissions.set_mode(0o755);
-    fs::set_permissions(&script, permissions).expect("fallback script is executable");
-    script
-}
-
-fn read_gzip_to_string(path: std::path::PathBuf) -> String {
-    let file = fs::File::open(path).expect("gzip output exists");
-    let mut decoder = GzDecoder::new(file);
-    let mut text = String::new();
-    decoder
-        .read_to_string(&mut text)
-        .expect("gzip output is readable");
-    text
-}
-
-fn record_names(sam: &str) -> Vec<&str> {
-    sam.lines()
-        .filter(|line| !line.starts_with('@'))
-        .map(|line| line.split('\t').next().expect("record has qname"))
-        .collect()
-}
-
 #[test]
 fn native_required_blocks_explicit_fallback_for_all_delegation_paths() {
     let tempdir = tempfile::tempdir().expect("tempdir exists");
@@ -9115,7 +9081,6 @@ fn native_required_blocks_explicit_fallback_for_all_delegation_paths() {
             "TAGGING_POLICY=Invalid",
         ],
     ] {
-        // Presence is deliberately fail-closed, including empty and "0" values.
         for policy in ["1", "", "0"] {
             Command::cargo_bin("turbo-picard")
                 .expect("binary exists")
@@ -9237,5 +9202,47 @@ fn mergevcfs_preserves_distinct_non_id_metadata() {
                 "{text}"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod support {
+    use flate2::read::GzDecoder;
+    use std::fs;
+    use std::io::Read;
+    use std::os::unix::fs::PermissionsExt;
+
+    pub fn fallback_script(dir: &std::path::Path, exit_code: i32) -> std::path::PathBuf {
+        let script = dir.join("fallback.sh");
+        fs::write(
+            &script,
+            format!(
+                "#!/usr/bin/env bash\nset -euo pipefail\nprintf '%s\\n' \"$@\" > \"$TURBO_PICARD_FALLBACK_LOG\"\nexit {exit_code}\n"
+            ),
+        )
+        .expect("fallback script is written");
+        let mut permissions = fs::metadata(&script)
+            .expect("fallback metadata exists")
+            .permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&script, permissions).expect("fallback script is executable");
+        script
+    }
+
+    pub fn read_gzip_to_string(path: std::path::PathBuf) -> String {
+        let file = fs::File::open(path).expect("gzip output exists");
+        let mut decoder = GzDecoder::new(file);
+        let mut text = String::new();
+        decoder
+            .read_to_string(&mut text)
+            .expect("gzip output is readable");
+        text
+    }
+
+    pub fn record_names(sam: &str) -> Vec<&str> {
+        sam.lines()
+            .filter(|line| !line.starts_with('@'))
+            .map(|line| line.split('\t').next().expect("record has qname"))
+            .collect()
     }
 }

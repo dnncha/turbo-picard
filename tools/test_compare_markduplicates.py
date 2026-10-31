@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-"""Tests for the MarkDuplicates semantic comparison harness."""
 
 from __future__ import annotations
 
@@ -8,7 +7,6 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
-
 
 MODULE_PATH = Path(__file__).with_name("compare_markduplicates.py")
 SPEC = importlib.util.spec_from_file_location("compare_markduplicates", MODULE_PATH)
@@ -42,10 +40,7 @@ class MetricsParsingTests(unittest.TestCase):
 
             rows = compare_markduplicates.read_metrics(metrics)
 
-        self.assertEqual(
-            rows,
-            [["LIBRARY", "UNPAIRED_READS_EXAMINED"], ["lib1", "7"]],
-        )
+        assert rows == [["LIBRARY", "UNPAIRED_READS_EXAMINED"], ["lib1", "7"]]
 
     def test_missing_duplication_metrics_block_is_empty(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:
@@ -57,7 +52,7 @@ class MetricsParsingTests(unittest.TestCase):
 
             rows = compare_markduplicates.read_metrics(metrics)
 
-        self.assertEqual(rows, [])
+        assert rows == []
 
     def test_missing_metrics_block_is_a_difference(self) -> None:
         differences = compare_markduplicates.metric_differences(
@@ -67,13 +62,7 @@ class MetricsParsingTests(unittest.TestCase):
             Path("turbo-picard.metrics.txt"),
         )
 
-        self.assertEqual(
-            differences,
-            [
-                "Picard metrics file has no picard.sam.DuplicationMetrics block: "
-                "picard.metrics.txt"
-            ],
-        )
+        assert differences == ["Picard metrics file has no picard.sam.DuplicationMetrics block: picard.metrics.txt"]
 
 
 if __name__ == "__main__":

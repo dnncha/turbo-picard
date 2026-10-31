@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-"""Tests for benchmark suite coverage consistency checks."""
 
 from __future__ import annotations
 
@@ -7,7 +6,6 @@ import importlib.util
 import sys
 import unittest
 from pathlib import Path
-
 
 MODULE_PATH = Path(__file__).with_name("verify_benchmark_suite_coverage.py")
 SPEC = importlib.util.spec_from_file_location("verify_benchmark_suite_coverage", MODULE_PATH)
@@ -38,13 +36,12 @@ class BenchmarkSuiteCoverageTests(unittest.TestCase):
             manifest_commands=manifest_commands,
             benchmark_exemptions=benchmark_exemptions,
             benchmark_docs=(
-                "LiftoverVcf liftover benchmark needs a larger chain-backed fixture "
-                "before public speedup claims"
+                "LiftoverVcf liftover benchmark needs a larger chain-backed fixture before public speedup claims"
             ),
             minimum_benchmark_count=3,
         )
 
-        self.assertEqual(errors, [])
+        assert errors == []
 
     def test_suite_manifest_and_matrix_mismatches_are_reported(self) -> None:
         errors = verify_benchmark_suite_coverage.validate_benchmark_suite_coverage(
@@ -56,22 +53,13 @@ class BenchmarkSuiteCoverageTests(unittest.TestCase):
             minimum_benchmark_count=3,
         )
 
-        self.assertIn("benchmarked command missing from command matrix: UnknownCommand", errors)
-        self.assertIn(
-            "matrix native command missing benchmark or exemption: BuildBamIndex",
-            errors,
-        )
-        self.assertIn(
-            "benchmark exemption is not a matrix native command: MissingExemption",
-            errors,
-        )
-        self.assertIn("suite benchmark missing from manifest: SortSam", errors)
-        self.assertIn("manifest benchmark missing from suite: BuildBamIndex", errors)
-        self.assertIn("manifest benchmark missing from suite: UnknownCommand", errors)
-        self.assertIn(
-            "benchmark suite covers 2 commands, below required minimum 3",
-            errors,
-        )
+        assert "benchmarked command missing from command matrix: UnknownCommand" in errors
+        assert "matrix native command missing benchmark or exemption: BuildBamIndex" in errors
+        assert "benchmark exemption is not a matrix native command: MissingExemption" in errors
+        assert "suite benchmark missing from manifest: SortSam" in errors
+        assert "manifest benchmark missing from suite: BuildBamIndex" in errors
+        assert "manifest benchmark missing from suite: UnknownCommand" in errors
+        assert "benchmark suite covers 2 commands, below required minimum 3" in errors
 
     def test_manifest_benchmark_command_parser_reports_malformed_rows(self) -> None:
         commands, errors = verify_benchmark_suite_coverage.manifest_benchmark_commands_with_errors(
@@ -85,16 +73,16 @@ class BenchmarkSuiteCoverageTests(unittest.TestCase):
             }
         )
 
-        self.assertEqual(commands, {"SortSam"})
-        self.assertIn("benchmark-data has duplicate command row: SortSam", errors)
-        self.assertIn("benchmark-data row 2 missing command", errors)
-        self.assertIn("benchmark-data row 3 must be an object", errors)
+        assert commands == {"SortSam"}
+        assert "benchmark-data has duplicate command row: SortSam" in errors
+        assert "benchmark-data row 2 missing command" in errors
+        assert "benchmark-data row 3 must be an object" in errors
 
         commands, errors = verify_benchmark_suite_coverage.manifest_benchmark_commands_with_errors(
             {"benchmarks": "not-a-list"}
         )
-        self.assertEqual(commands, set())
-        self.assertEqual(errors, ["benchmark-data benchmarks must be a list"])
+        assert commands == set()
+        assert errors == ["benchmark-data benchmarks must be a list"]
 
     def test_exemption_requires_reason_and_docs(self) -> None:
         errors = verify_benchmark_suite_coverage.validate_benchmark_suite_coverage(
@@ -106,14 +94,8 @@ class BenchmarkSuiteCoverageTests(unittest.TestCase):
             minimum_benchmark_count=0,
         )
 
-        self.assertIn(
-            "benchmark exemption for LiftoverVcf has no useful reason",
-            errors,
-        )
-        self.assertIn(
-            "benchmark docs missing exemption reason for LiftoverVcf",
-            errors,
-        )
+        assert "benchmark exemption for LiftoverVcf has no useful reason" in errors
+        assert "benchmark docs missing exemption reason for LiftoverVcf" in errors
 
     def test_promoted_benchmark_cannot_remain_exempt(self) -> None:
         errors = verify_benchmark_suite_coverage.validate_benchmark_suite_coverage(
@@ -127,10 +109,7 @@ class BenchmarkSuiteCoverageTests(unittest.TestCase):
             minimum_benchmark_count=1,
         )
 
-        self.assertIn(
-            "benchmark exemption also appears in suite: IntervalListTools",
-            errors,
-        )
+        assert "benchmark exemption also appears in suite: IntervalListTools" in errors
 
     def test_default_minimum_tracks_matrix_minus_exemptions(self) -> None:
         errors = verify_benchmark_suite_coverage.validate_benchmark_suite_coverage(
@@ -143,14 +122,8 @@ class BenchmarkSuiteCoverageTests(unittest.TestCase):
             benchmark_docs="LiftoverVcf chain-backed benchmark is tracked separately",
         )
 
-        self.assertIn(
-            "matrix native command missing benchmark or exemption: BuildBamIndex",
-            errors,
-        )
-        self.assertIn(
-            "benchmark suite covers 1 commands, below required minimum 2",
-            errors,
-        )
+        assert "matrix native command missing benchmark or exemption: BuildBamIndex" in errors
+        assert "benchmark suite covers 1 commands, below required minimum 2" in errors
 
 
 if __name__ == "__main__":

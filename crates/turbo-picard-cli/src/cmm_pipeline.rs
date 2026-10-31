@@ -1,5 +1,3 @@
-#![allow(clippy::items_after_test_module)]
-
 use crossbeam_channel::{Receiver, Sender, bounded};
 use rust_htslib::bam::{self, Read};
 use std::any::Any;
@@ -7,15 +5,43 @@ use std::panic::{self, AssertUnwindSafe};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::thread::{self, JoinHandle};
+use thiserror::Error;
 
-/// Which per-record gate families the active collectors can observe.
-///
-/// Declared once when the pool is built instead of re-deriving every
-/// predicate for every record. This is the planner step from Flex Model: a
-/// feature declares the events and values it reads, and the engine compiles
-/// that into a plan. A collector that is not part of the run contributes no
-/// bits here, so its predicate is never evaluated.
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+pub enum CmmPipelineError {
+    #[error("{0}")]
+    Handler(String),
+    #[error("{0}")]
+    Bam(String),
+    #[error("{0}")]
+    Channel(String),
+    #[error("CMM batch handler panicked: {0}")]
+    HandlerPanicked(String),
+    #[error("CMM consumer panicked: {0}")]
+    ConsumerPanicked(String),
+    #[error("CMM worker failed")]
+    WorkerFailed,
+    #[error("CMM worker pool is shutting down")]
+    ShuttingDown,
+    #[error("CMM worker pool has no handlers")]
+    NoHandlers,
+    #[error("CMM reader thread panicked")]
+    ReaderPanicked,
+    #[error("BAM reader thread panicked")]
+    BamReaderPanicked,
+}
+
+impl From<CmmPipelineError> for String {
+    fn from(error: CmmPipelineError) -> Self {
+        error.to_string()
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "one flag per collector family is constructed field-by-field by the command runners"
+)]
 pub struct CmmPlan {
     pub alignment: bool,
     pub insert_size: bool,
@@ -28,7 +54,6 @@ pub struct CmmPlan {
 }
 
 impl CmmPlan {
-    /// Every collector family, used when the caller has no plan.
     #[cfg(test)]
     pub const ALL: Self = Self {
         alignment: true,
@@ -42,16 +67,16 @@ impl CmmPlan {
     };
 
     #[inline]
-    fn needs_quality_scan(&self) -> bool {
+    fn needs_quality_scan(self) -> bool {
         self.base_distribution || self.quality_distribution || self.mean_quality
     }
 }
 
-/// Per-collector fast reject gates for a single BAM record.
-///
-/// Mirrors riker's `field_needs` union at the dispatch layer: skip collectors
-/// that cannot observe this record before taking their mutex.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "one gate per collector family is read field-by-field by the batch handlers"
+)]
 pub struct CmmRecordGates {
     pub alignment: bool,
     pub insert_size: bool,
@@ -63,45 +88,63 @@ pub struct CmmRecordGates {
     pub wgs: bool,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct QualityReadFilter {
+    pub aligned_reads_only: bool,
+    pub pf_reads_only: bool,
+}
+
+impl QualityReadFilter {
+    pub const fn new(aligned_reads_only: bool, pf_reads_only: bool) -> Self {
+        Self {
+            aligned_reads_only,
+            pf_reads_only,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct QualityYieldScope {
+    pub include_secondary: bool,
+    pub include_supplemental: bool,
+}
+
+impl QualityYieldScope {
+    pub const fn new(include_secondary: bool, include_supplemental: bool) -> Self {
+        Self {
+            include_secondary,
+            include_supplemental,
+        }
+    }
+}
+
 impl CmmRecordGates {
     #[cfg(test)]
     #[inline]
     pub fn for_record(
         record: &bam::Record,
-        aligned_reads_only: bool,
-        pf_reads_only: bool,
-        include_secondary_yield: bool,
-        include_supplemental_yield: bool,
+        filter: QualityReadFilter,
+        yield_scope: QualityYieldScope,
     ) -> Self {
-        Self::for_plan(
-            record,
-            CmmPlan::ALL,
-            aligned_reads_only,
-            pf_reads_only,
-            include_secondary_yield,
-            include_supplemental_yield,
-        )
+        Self::for_plan(record, CmmPlan::ALL, filter, yield_scope)
     }
 
-    /// Compute only the gates the active plan can observe.
-    ///
-    /// A gate outside the plan stays false, so the record is not dispatched for
-    /// that collector and its predicate (including the quality skip scan and
-    /// mate checks) is never evaluated.
     #[inline]
     pub fn for_plan(
         record: &bam::Record,
         plan: CmmPlan,
-        aligned_reads_only: bool,
-        pf_reads_only: bool,
-        include_secondary_yield: bool,
-        include_supplemental_yield: bool,
+        filter: QualityReadFilter,
+        yield_scope: QualityYieldScope,
     ) -> Self {
         let secondary = record.is_secondary();
         let supplementary = record.is_supplementary();
         let unmapped = record.is_unmapped();
         let captures_quality = plan.needs_quality_scan()
-            && !super::skip_quality_metric_record(record, aligned_reads_only, pf_reads_only);
+            && !super::skip_quality_metric_record(
+                record,
+                filter.aligned_reads_only,
+                filter.pf_reads_only,
+            );
         Self {
             alignment: plan.alignment && !secondary && !supplementary,
             insert_size: plan.insert_size
@@ -116,15 +159,15 @@ impl CmmRecordGates {
             quality_distribution: plan.quality_distribution && captures_quality,
             mean_quality: plan.mean_quality && captures_quality,
             quality_yield: plan.quality_yield
-                && (!secondary || include_secondary_yield)
-                && (!supplementary || include_supplemental_yield),
+                && (!secondary || yield_scope.include_secondary)
+                && (!supplementary || yield_scope.include_supplemental),
             gc_bias: plan.gc_bias && !secondary && !supplementary && !unmapped,
             wgs: plan.wgs && !unmapped && !secondary && !supplementary,
         }
     }
 
     #[inline]
-    fn has_any(&self) -> bool {
+    fn has_any(self) -> bool {
         self.alignment
             || self.insert_size
             || self.base_distribution
@@ -165,20 +208,18 @@ pub struct CmmWorkerPool {
     completion_rx: Receiver<Vec<CmmBatchRecord>>,
     completion_job_tx: Option<Sender<CompletionJob>>,
     completion_handle: Option<JoinHandle<()>>,
-    error_tx: Sender<String>,
-    error_rx: Receiver<String>,
+    error_tx: Sender<CmmPipelineError>,
+    error_rx: Receiver<CmmPipelineError>,
     poison: Arc<AtomicBool>,
     plan: CmmPlan,
 }
 
 impl CmmWorkerPool {
-    /// Build a pool that evaluates every gate family.
     #[cfg(test)]
     pub fn new(handlers: Vec<CmmBatchHandler>) -> Self {
         Self::with_plan(handlers, CmmPlan::ALL)
     }
 
-    /// Build a pool whose planner evaluates only the declared gate families.
     pub fn with_plan(handlers: Vec<CmmBatchHandler>, plan: CmmPlan) -> Self {
         let worker_count = handlers.len();
         let (batch_return, batch_pool) = bounded(BATCH_POOL_DEPTH);
@@ -203,13 +244,12 @@ impl CmmWorkerPool {
                         Ok(Ok(())) => {}
                         Ok(Err(error)) => {
                             poison.store(true, Ordering::Release);
-                            let _ = error_tx.try_send(error);
+                            let _ = error_tx.try_send(CmmPipelineError::Handler(error));
                         }
                         Err(error) => {
                             poison.store(true, Ordering::Release);
-                            let _ = error_tx.try_send(format!(
-                                "CMM batch handler panicked: {}",
-                                panic_message(&*error)
+                            let _ = error_tx.try_send(CmmPipelineError::HandlerPanicked(
+                                panic_message(&*error),
                             ));
                         }
                     }
@@ -265,27 +305,27 @@ impl CmmWorkerPool {
             .unwrap_or_else(|_| Vec::with_capacity(super::CMM_BATCH_SIZE))
     }
 
-    fn wait_for_capacity(&self) -> Result<(), String> {
+    fn wait_for_capacity(&self) -> Result<(), CmmPipelineError> {
         while self.inflight.load(Ordering::Acquire) >= BATCH_POOL_DEPTH {
             self.drain_one_completion()?;
         }
         Ok(())
     }
 
-    fn drain_one_completion(&self) -> Result<(), String> {
+    fn drain_one_completion(&self) -> Result<(), CmmPipelineError> {
         let mut records = self
             .completion_rx
             .recv()
-            .map_err(|error| error.to_string())?;
+            .map_err(|error| CmmPipelineError::Channel(error.to_string()))?;
         records.clear();
         let _ = self.batch_return.try_send(records);
         self.inflight.fetch_sub(1, Ordering::Release);
         Ok(())
     }
 
-    fn dispatch_batch_async(&self, records: Vec<CmmBatchRecord>) -> Result<(), String> {
+    fn dispatch_batch_async(&self, records: Vec<CmmBatchRecord>) -> Result<(), CmmPipelineError> {
         if self.poison.load(Ordering::Acquire) {
-            return Err("CMM worker failed".to_string());
+            return Err(CmmPipelineError::WorkerFailed);
         }
         if records.is_empty() {
             return Ok(());
@@ -302,14 +342,14 @@ impl CmmWorkerPool {
                 })
                 .map_err(|error| {
                     self.poison.store(true, Ordering::Release);
-                    error.to_string()
+                    CmmPipelineError::Channel(error.to_string())
                 })?;
         }
         drop(ack_tx);
         let completion_job_tx = self
             .completion_job_tx
             .as_ref()
-            .ok_or_else(|| "CMM worker pool is shutting down".to_string())?;
+            .ok_or(CmmPipelineError::ShuttingDown)?;
         completion_job_tx
             .send(CompletionJob {
                 batch: shared,
@@ -317,7 +357,7 @@ impl CmmWorkerPool {
             })
             .map_err(|error| {
                 self.poison.store(true, Ordering::Release);
-                error.to_string()
+                CmmPipelineError::Channel(error.to_string())
             })?;
 
         self.inflight.fetch_add(1, Ordering::Release);
@@ -325,13 +365,17 @@ impl CmmWorkerPool {
         Ok(())
     }
 
-    fn drain_all_completions(&self) -> Result<(), String> {
+    fn drain_all_completions(&self) -> Result<(), CmmPipelineError> {
         while self.inflight.load(Ordering::Acquire) > 0 {
             self.drain_one_completion()?;
         }
         Ok(())
     }
 
+    #[expect(
+        clippy::fn_params_excessive_bools,
+        reason = "the positional signature is shared with the command runners that call it"
+    )]
     pub fn run_parallel_bam_pass(
         self,
         mut reader: bam::Reader,
@@ -340,22 +384,27 @@ impl CmmWorkerPool {
         pf_reads_only: bool,
         include_secondary_quality_yield: bool,
         include_supplemental_quality_yield: bool,
-    ) -> Result<(), String> {
+    ) -> Result<(), CmmPipelineError> {
         if self.worker_count == 0 {
-            return Err("CMM worker pool has no handlers".to_string());
+            return Err(CmmPipelineError::NoHandlers);
         }
 
         let pool = Arc::new(self);
         let worker_pool = Arc::clone(&pool);
         let worker_error_rx = pool.error_rx.clone();
-        let (error_tx, error_rx) = bounded::<String>(1);
+        let (error_tx, error_rx) = bounded::<CmmPipelineError>(1);
         let poison = Arc::clone(&pool.poison);
+        let filter = QualityReadFilter::new(aligned_reads_only, pf_reads_only);
+        let yield_scope = QualityYieldScope::new(
+            include_secondary_quality_yield,
+            include_supplemental_quality_yield,
+        );
 
         let reader_handle = thread::spawn({
             let poison = Arc::clone(&poison);
             let worker_error_tx = pool.error_tx.clone();
             move || {
-                let result = (|| -> Result<(), String> {
+                let result = (|| -> Result<(), CmmPipelineError> {
                     let mut batch = worker_pool.take_batch_vec();
                     let mut seen = 0usize;
                     for record in reader.records() {
@@ -368,14 +417,13 @@ impl CmmWorkerPool {
                             }
                             seen += 1;
                         }
-                        let record = record.map_err(|error| error.to_string())?;
+                        let record =
+                            record.map_err(|error| CmmPipelineError::Bam(error.to_string()))?;
                         let gates = CmmRecordGates::for_plan(
                             &record,
                             worker_pool.plan,
-                            aligned_reads_only,
-                            pf_reads_only,
-                            include_secondary_quality_yield,
-                            include_supplemental_quality_yield,
+                            filter,
+                            yield_scope,
                         );
                         if gates.has_any() {
                             batch.push(CmmBatchRecord { record, gates });
@@ -401,7 +449,7 @@ impl CmmWorkerPool {
 
         reader_handle
             .join()
-            .map_err(|_| "CMM reader thread panicked".to_string())?;
+            .map_err(|_| CmmPipelineError::ReaderPanicked)?;
         if let Ok(error) = error_rx.try_recv() {
             return Err(error);
         }
@@ -437,9 +485,93 @@ impl Drop for CmmWorkerPool {
     }
 }
 
+pub fn pipeline_bam_records<F>(
+    mut reader: bam::Reader,
+    stop_after: u32,
+    channel_depth: usize,
+    mut consumer: F,
+) -> Result<(), CmmPipelineError>
+where
+    F: FnMut(bam::Record) -> Result<(), String>,
+{
+    let (record_tx, record_rx) = bounded::<Result<bam::Record, CmmPipelineError>>(channel_depth);
+    let (error_tx, error_rx) = bounded::<CmmPipelineError>(1);
+    let (stop_tx, stop_rx) = bounded::<()>(1);
+
+    let mut consumer_error: Option<CmmPipelineError> = None;
+
+    let reader_handle = thread::spawn(move || {
+        let result = (|| -> Result<(), CmmPipelineError> {
+            let mut seen = 0usize;
+            for record in reader.records() {
+                if stop_after > 0 {
+                    if seen >= stop_after as usize {
+                        break;
+                    }
+                    seen += 1;
+                }
+                let record = record.map_err(|error| CmmPipelineError::Bam(error.to_string()))?;
+                crossbeam_channel::select! {
+                    recv(stop_rx) -> _ => return Ok(()),
+                    send(record_tx, Ok(record)) -> result => {
+                        result.map_err(|error| CmmPipelineError::Channel(error.to_string()))?;
+                    }
+                }
+            }
+            Ok(())
+        })();
+        if let Err(error) = result {
+            let _ = error_tx.send(error);
+        }
+    });
+
+    while let Ok(record) = record_rx.recv() {
+        let record = match record {
+            Ok(record) => record,
+            Err(error) => {
+                consumer_error = Some(error);
+                break;
+            }
+        };
+
+        let consumer_result = panic::catch_unwind(AssertUnwindSafe(|| consumer(record)));
+        match consumer_result {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => {
+                consumer_error = Some(CmmPipelineError::Handler(error));
+                break;
+            }
+            Err(panic) => {
+                consumer_error = Some(CmmPipelineError::ConsumerPanicked(panic_message(&*panic)));
+                break;
+            }
+        }
+        if let Ok(error) = error_rx.try_recv() {
+            if consumer_error.is_none() {
+                consumer_error = Some(error);
+            }
+            break;
+        }
+    }
+
+    let _ = stop_tx.send(());
+
+    reader_handle
+        .join()
+        .map_err(|_| CmmPipelineError::BamReaderPanicked)?;
+    if let Some(error) = consumer_error {
+        return Err(error);
+    }
+    if let Ok(error) = error_rx.try_recv() {
+        return Err(error);
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fmt::Write as _;
     use std::fs;
     use tempfile::tempdir;
 
@@ -462,8 +594,17 @@ mod tests {
         ] {
             let record = record_with_flags(flags);
             assert_eq!(
-                CmmRecordGates::for_plan(&record, CmmPlan::ALL, true, true, false, false),
-                CmmRecordGates::for_record(&record, true, true, false, false),
+                CmmRecordGates::for_plan(
+                    &record,
+                    CmmPlan::ALL,
+                    QualityReadFilter::new(true, true),
+                    QualityYieldScope::new(false, false)
+                ),
+                CmmRecordGates::for_record(
+                    &record,
+                    QualityReadFilter::new(true, true),
+                    QualityYieldScope::new(false, false)
+                ),
                 "flags={flags:#x}"
             );
         }
@@ -478,10 +619,8 @@ mod tests {
                 alignment: true,
                 ..CmmPlan::default()
             },
-            true,
-            true,
-            false,
-            false,
+            QualityReadFilter::new(true, true),
+            QualityYieldScope::new(false, false),
         );
         assert!(alignment_only.alignment);
         assert!(!alignment_only.insert_size);
@@ -492,22 +631,34 @@ mod tests {
         assert!(!alignment_only.gc_bias);
         assert!(!alignment_only.wgs);
 
-        let unplanned =
-            CmmRecordGates::for_plan(&paired, CmmPlan::default(), true, true, false, false);
+        let unplanned = CmmRecordGates::for_plan(
+            &paired,
+            CmmPlan::default(),
+            QualityReadFilter::new(true, true),
+            QualityYieldScope::new(false, false),
+        );
         assert!(!unplanned.has_any());
     }
 
     #[test]
     fn cmm_record_gates_filter_quality_metrics_with_read_filters() {
         let aligned_pf_accepted = record_with_flags(0);
-        let gates = CmmRecordGates::for_record(&aligned_pf_accepted, true, true, false, false);
+        let gates = CmmRecordGates::for_record(
+            &aligned_pf_accepted,
+            QualityReadFilter::new(true, true),
+            QualityYieldScope::new(false, false),
+        );
         assert!(gates.base_distribution);
         assert!(gates.quality_distribution);
         assert!(gates.mean_quality);
         assert!(gates.quality_yield);
 
         let unmapped = record_with_flags(4);
-        let unmapped_gates = CmmRecordGates::for_record(&unmapped, true, true, false, false);
+        let unmapped_gates = CmmRecordGates::for_record(
+            &unmapped,
+            QualityReadFilter::new(true, true),
+            QualityYieldScope::new(false, false),
+        );
         assert!(!unmapped_gates.base_distribution);
         assert!(!unmapped_gates.quality_distribution);
         assert!(!unmapped_gates.mean_quality);
@@ -515,34 +666,54 @@ mod tests {
         assert!(!unmapped_gates.wgs);
 
         let qc_failed = record_with_flags(0x200);
-        let qc_failed_pf_gates = CmmRecordGates::for_record(&qc_failed, true, true, false, false);
+        let qc_failed_pf_gates = CmmRecordGates::for_record(
+            &qc_failed,
+            QualityReadFilter::new(true, true),
+            QualityYieldScope::new(false, false),
+        );
         assert!(!qc_failed_pf_gates.base_distribution);
         assert!(!qc_failed_pf_gates.quality_distribution);
         assert!(!qc_failed_pf_gates.mean_quality);
 
         let secondary = record_with_flags(0x100);
-        let secondary_gates = CmmRecordGates::for_record(&secondary, false, false, false, false);
+        let secondary_gates = CmmRecordGates::for_record(
+            &secondary,
+            QualityReadFilter::new(false, false),
+            QualityYieldScope::new(false, false),
+        );
         assert!(!secondary_gates.quality_yield);
         assert!(!secondary_gates.alignment);
 
-        let secondary_included_yield =
-            CmmRecordGates::for_record(&secondary, false, false, true, false);
+        let secondary_included_yield = CmmRecordGates::for_record(
+            &secondary,
+            QualityReadFilter::new(false, false),
+            QualityYieldScope::new(true, false),
+        );
         assert!(secondary_included_yield.quality_yield);
 
-        let secondary_excluded_yield =
-            CmmRecordGates::for_record(&secondary, false, false, false, false);
+        let secondary_excluded_yield = CmmRecordGates::for_record(
+            &secondary,
+            QualityReadFilter::new(false, false),
+            QualityYieldScope::new(false, false),
+        );
         assert!(!secondary_excluded_yield.quality_yield);
     }
 
     #[test]
     fn cmm_record_gates_filter_supplementary_reads_for_quality_yield() {
         let supplemental = record_with_flags(0x800);
-        let supplemental_gates =
-            CmmRecordGates::for_record(&supplemental, false, false, false, true);
+        let supplemental_gates = CmmRecordGates::for_record(
+            &supplemental,
+            QualityReadFilter::new(false, false),
+            QualityYieldScope::new(false, true),
+        );
         assert!(supplemental_gates.quality_yield);
 
-        let supplemental_without_flag =
-            CmmRecordGates::for_record(&supplemental, false, false, false, false);
+        let supplemental_without_flag = CmmRecordGates::for_record(
+            &supplemental,
+            QualityReadFilter::new(false, false),
+            QualityYieldScope::new(false, false),
+        );
         assert!(!supplemental_without_flag.quality_yield);
     }
 
@@ -576,7 +747,7 @@ mod tests {
         let err = pool
             .run_parallel_bam_pass(reader, 0, false, false, false, false)
             .unwrap_err();
-        assert_eq!(err, "handler failure");
+        assert_eq!(err.to_string(), "handler failure");
     }
 
     #[test]
@@ -594,7 +765,7 @@ mod tests {
             .run_parallel_bam_pass(reader, 0, false, false, false, false)
             .unwrap_err();
         assert!(
-            err.contains("CMM batch handler panicked"),
+            err.to_string().contains("CMM batch handler panicked"),
             "unexpected error: {err}"
         );
     }
@@ -650,7 +821,7 @@ mod tests {
         });
 
         let error = result.expect_err("expected consumer error");
-        assert_eq!(error, "consumer failed");
+        assert_eq!(error.to_string(), "consumer failed");
         assert_eq!(calls.load(Ordering::Relaxed), 1);
     }
 
@@ -663,9 +834,11 @@ mod tests {
         let input = tempdir.path().join("input.sam");
         let mut lines = String::new();
         for index in 0..500 {
-            lines.push_str(&format!(
-                "mapped_{index}\t0\tchr1\t1\t60\t4M\t*\t0\t0\tACGT\tFFFF\n"
-            ));
+            writeln!(
+                lines,
+                "mapped_{index}\t0\tchr1\t1\t60\t4M\t*\t0\t0\tACGT\tFFFF"
+            )
+            .unwrap();
         }
         write_basic_sam(&input, &lines);
 
@@ -682,7 +855,7 @@ mod tests {
         });
 
         let error = result.expect_err("expected consumer error");
-        assert_eq!(error, "consumer failed");
+        assert_eq!(error.to_string(), "consumer failed");
         assert_eq!(calls.load(Ordering::Relaxed), 1);
     }
 
@@ -701,7 +874,7 @@ mod tests {
         });
 
         let error = result.expect_err("expected consumer panic error");
-        assert!(error.contains("CMM consumer panicked"));
+        assert!(error.to_string().contains("CMM consumer panicked"));
     }
 
     #[test]
@@ -714,10 +887,12 @@ mod tests {
         let input = tempdir.path().join("input.sam");
         let mut lines = String::new();
         for index in 0..10 {
-            lines.push_str(&format!(
-                "mapped_{index}\t0\tchr1\t{}\t60\t4M\t*\t0\t0\tACGT\tFFFF\n",
+            writeln!(
+                lines,
+                "mapped_{index}\t0\tchr1\t{}\t60\t4M\t*\t0\t0\tACGT\tFFFF",
                 index + 1
-            ));
+            )
+            .unwrap();
         }
         write_basic_sam(&input, &lines);
         let reader = bam::Reader::from_path(Path::new(&input)).expect("sam input opens");
@@ -739,7 +914,7 @@ mod tests {
         let pool = CmmWorkerPool::new(vec![]);
         let tempdir = tempdir().expect("tempdir exists");
         let input = tempdir.path().join("empty.sam");
-        std::fs::write(
+        fs::write(
             &input,
             "@HD\tVN:1.6\tSO:coordinate\n@SQ\tSN:chr1\tLN:1000\n",
         )
@@ -749,7 +924,7 @@ mod tests {
         let err = pool
             .run_parallel_bam_pass(reader, 0, false, false, false, false)
             .expect_err("expected no-handler error");
-        assert_eq!(err, "CMM worker pool has no handlers");
+        assert_eq!(err, CmmPipelineError::NoHandlers);
     }
 
     #[test]
@@ -765,88 +940,4 @@ mod tests {
         let result = pipeline_bam_records(reader, 0, 2, |_record| Ok(()));
         assert!(result.is_err());
     }
-}
-
-/// Overlap BGZF decode (reader thread) with record processing (consumer thread).
-pub fn pipeline_bam_records<F>(
-    mut reader: bam::Reader,
-    stop_after: u32,
-    channel_depth: usize,
-    mut consumer: F,
-) -> Result<(), String>
-where
-    F: FnMut(bam::Record) -> Result<(), String>,
-{
-    let (record_tx, record_rx) = bounded::<Result<bam::Record, String>>(channel_depth);
-    let (error_tx, error_rx) = bounded::<String>(1);
-    let (stop_tx, stop_rx) = bounded::<()>(1);
-
-    let mut consumer_error: Option<String> = None;
-
-    let reader_handle = thread::spawn(move || {
-        let result = (|| -> Result<(), String> {
-            let mut seen = 0usize;
-            for record in reader.records() {
-                if stop_after > 0 {
-                    if seen >= stop_after as usize {
-                        break;
-                    }
-                    seen += 1;
-                }
-                let record = record.map_err(|error| error.to_string())?;
-                crossbeam_channel::select! {
-                    recv(stop_rx) -> _ => return Ok(()),
-                    send(record_tx, Ok(record)) -> result => {
-                        result.map_err(|error| error.to_string())?;
-                    }
-                }
-            }
-            Ok(())
-        })();
-        if let Err(error) = result {
-            let _ = error_tx.send(error);
-        }
-    });
-
-    while let Ok(record) = record_rx.recv() {
-        let record = match record {
-            Ok(record) => record,
-            Err(error) => {
-                consumer_error = Some(error);
-                break;
-            }
-        };
-
-        let consumer_result = panic::catch_unwind(AssertUnwindSafe(|| consumer(record)));
-        match consumer_result {
-            Ok(Ok(())) => {}
-            Ok(Err(error)) => {
-                consumer_error = Some(error);
-                break;
-            }
-            Err(panic) => {
-                consumer_error = Some(format!("CMM consumer panicked: {}", panic_message(&*panic)));
-                break;
-            }
-        }
-        if let Ok(error) = error_rx.try_recv() {
-            if consumer_error.is_none() {
-                consumer_error = Some(error);
-            }
-            break;
-        }
-    }
-
-    let _ = stop_tx.send(());
-
-    reader_handle
-        .join()
-        .map_err(|_| "BAM reader thread panicked".to_string())?;
-    if let Some(error) = consumer_error {
-        return Err(error);
-    }
-    if let Ok(error) = error_rx.try_recv() {
-        return Err(error);
-    }
-    Ok(())
 }

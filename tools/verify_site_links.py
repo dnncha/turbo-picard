@@ -1,14 +1,12 @@
 #!/usr/bin/env python3
-"""Verify local links and images in the checked-in marketing site."""
 
 from __future__ import annotations
 
-from html.parser import HTMLParser
-from pathlib import Path
 import re
 import sys
+from html.parser import HTMLParser
+from pathlib import Path
 from urllib.parse import unquote, urlparse
-
 
 ROOT = Path(__file__).resolve().parents[1]
 SITE_ROOT = ROOT / "docs" / "site"

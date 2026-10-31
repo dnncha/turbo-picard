@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+
+from __future__ import annotations
+
 import argparse
 import os
 import pathlib
@@ -7,18 +10,17 @@ import subprocess
 import sys
 import tempfile
 import time
-
+from collections.abc import Sequence
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 
 
-def run(command, *, cwd=ROOT):
+def run(command: Sequence[str], *, cwd: pathlib.Path = ROOT) -> float:
     start = time.perf_counter()
     completed = subprocess.run(
         command,
         cwd=cwd,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        capture_output=True,
         text=True,
         check=False,
     )
@@ -30,7 +32,7 @@ def run(command, *, cwd=ROOT):
     return elapsed
 
 
-def conda_runner():
+def conda_runner() -> str:
     for name in ("mamba", "micromamba"):
         path = shutil.which(name)
         if path:
@@ -38,7 +40,7 @@ def conda_runner():
     raise SystemExit("mamba or micromamba is required to benchmark against Picard")
 
 
-def write_sam(path, reads):
+def write_sam(path: pathlib.Path, reads: int) -> None:
     sequence = "ACGT" * 25
     qualities = "F" * len(sequence)
     with open(path, "w", encoding="utf-8") as handle:
@@ -47,19 +49,16 @@ def write_sam(path, reads):
         handle.write("@RG\tID:rg1\tSM:sample\tPL:ILLUMINA\n")
         for index in range(1, reads + 1):
             handle.write(
-                f"read{index:09d}\t0\tchr1\t{index}\t60\t100M\t*\t0\t0\t"
-                f"{sequence}\t{qualities}\tRG:Z:rg1\tNM:i:0\n"
+                f"read{index:09d}\t0\tchr1\t{index}\t60\t100M\t*\t0\t0\t{sequence}\t{qualities}\tRG:Z:rg1\tNM:i:0\n"
             )
 
 
-def read_text(path):
+def read_text(path: pathlib.Path) -> str:
     return pathlib.Path(path).read_text(encoding="utf-8")
 
 
-def main():
-    parser = argparse.ArgumentParser(
-        description="Benchmark turbo-picard ValidateSamFile against Picard."
-    )
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Benchmark turbo-picard ValidateSamFile against Picard.")
     parser.add_argument("--reads", type=int, default=100_000, help="reads to synthesize")
     parser.add_argument(
         "--conda-prefix",
@@ -92,9 +91,7 @@ def main():
             "QUIET=true",
         ]
         turbo_time = run([str(turbo), *common, f"O={turbo_out}"])
-        picard_time = run(
-            [runner, "run", "-p", args.conda_prefix, "picard", *common, f"O={picard_out}"]
-        )
+        picard_time = run([runner, "run", "-p", args.conda_prefix, "picard", *common, f"O={picard_out}"])
 
         parity = read_text(turbo_out) == read_text(picard_out)
         speedup = picard_time / turbo_time if turbo_time > 0 else float("inf")

@@ -1,11 +1,4 @@
 #!/usr/bin/env python3
-"""Build a production evidence manifest from a competitor-runner report.
-
-The competitor runner owns raw measurements and parity comparison. This small
-adapter turns that report into the repository's reviewed-manifest shape without
-inventing missing provenance or promoting an incomplete run to release-ready
-status.
-"""
 
 from __future__ import annotations
 
@@ -15,7 +8,6 @@ import json
 import re
 from pathlib import Path
 from typing import Any
-
 
 HEX40 = re.compile(r"^[0-9a-fA-F]{40}$")
 SAM_TAG = re.compile(r"^[A-Za-z0-9]{2}$")
@@ -32,8 +24,18 @@ PROFILE_CHOICES = {
 }
 
 
+_DESCRIPTION = (
+    "Build a production evidence manifest from a competitor-runner report.\n"
+    "\n"
+    "The competitor runner owns raw measurements and parity comparison. This small\n"
+    "adapter turns that report into the repository's reviewed-manifest shape without\n"
+    "inventing missing provenance or promoting an incomplete run to release-ready\n"
+    "status.\n"
+)
+
+
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(description=_DESCRIPTION)
     parser.add_argument("--report", required=True, type=Path)
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--dataset-id", required=True)
@@ -67,7 +69,7 @@ def load_report(path: Path) -> dict[str, Any]:
     return payload
 
 
-def require_mapping(value: Any, label: str) -> dict[str, Any]:
+def require_mapping(value: object, label: str) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise SystemExit(f"{label} must be an object")
     return value
@@ -80,7 +82,7 @@ def require_text(mapping: dict[str, Any], key: str, label: str) -> str:
     return value.strip()
 
 
-def require_non_negative_int(value: Any, label: str) -> int:
+def require_non_negative_int(value: object, label: str) -> int:
     if not isinstance(value, int) or isinstance(value, bool) or value < 0:
         raise SystemExit(f"{label} must be a non-negative integer")
     return value
@@ -92,11 +94,7 @@ def version_text(tool: dict[str, Any], label: str) -> str:
     if not isinstance(text, str) or not text.strip():
         raise SystemExit(f"tools.{label}.version.text must be non-empty")
     exit_code = version.get("exit_code")
-    picard_version_probe = (
-        label == "picard"
-        and exit_code == 1
-        and re.match(r"^Version:\S+", text.strip()) is not None
-    )
+    picard_version_probe = label == "picard" and exit_code == 1 and re.match(r"^Version:\S+", text.strip()) is not None
     if exit_code != 0 and not picard_version_probe:
         raise SystemExit(f"tools.{label}.version probe did not exit successfully")
     return text.strip().splitlines()[0]
@@ -147,9 +145,7 @@ def build_manifest(args: argparse.Namespace, report: dict[str, Any]) -> dict[str
     if args.tier == "production_scale" and args.read_count < 1:
         raise SystemExit("production_scale manifests require --read-count greater than zero")
     input_format = str(
-        input_data.get("format")
-        or Path(str(input_data.get("path", "input.bam"))).suffix.lstrip(".")
-        or "BAM"
+        input_data.get("format") or Path(str(input_data.get("path", "input.bam"))).suffix.lstrip(".") or "BAM"
     ).upper()
     if input_format not in {"BAM", "CRAM"}:
         raise SystemExit("input.format must be BAM or CRAM")
@@ -271,21 +267,15 @@ def build_manifest(args: argparse.Namespace, report: dict[str, Any]) -> dict[str
         }
         missing = sorted(key for key, value in required_independent.items() if not value)
         if missing:
-            raise SystemExit(
-                "independent reproduction status requires: " + ", ".join(missing)
-            )
+            raise SystemExit("independent reproduction status requires: " + ", ".join(missing))
         if not str(independent_host_profile).strip() or not str(args.reviewer).strip():
             raise SystemExit("independent reviewer and host profile must be non-empty")
         if not str(args.evidence_url).startswith(("https://", "s3://", "gs://")):
             raise SystemExit("--evidence-url must be an immutable HTTPS, S3, or GCS URL")
         if not HEX40.fullmatch(str(independent_turbo_commit)):
-            raise SystemExit(
-                "--independent-turbo-picard-commit must be a full 40-character commit SHA"
-            )
+            raise SystemExit("--independent-turbo-picard-commit must be a full 40-character commit SHA")
         if str(independent_turbo_commit).lower() != turbo_commit.lower():
-            raise SystemExit(
-                "--independent-turbo-picard-commit must match --turbo-picard-commit"
-            )
+            raise SystemExit("--independent-turbo-picard-commit must match --turbo-picard-commit")
         if not re.fullmatch(r"[0-9a-fA-F]{64}", str(independent_input_sha256)):
             raise SystemExit("--independent-input-sha256 must be a 64-character SHA-256")
         if str(independent_input_sha256).lower() != input_sha256.lower():
@@ -293,9 +283,7 @@ def build_manifest(args: argparse.Namespace, report: dict[str, Any]) -> dict[str
         if not re.fullmatch(r"[0-9a-fA-F]{64}", str(independent_arguments_sha256)):
             raise SystemExit("--independent-arguments-sha256 must be a 64-character SHA-256")
         if str(independent_arguments_sha256).lower() != command["arguments_sha256"].lower():
-            raise SystemExit(
-                "--independent-arguments-sha256 must match the generated command protocol hash"
-            )
+            raise SystemExit("--independent-arguments-sha256 must match the generated command protocol hash")
     reproduction = {
         "status": independent_status,
         "reviewer": args.reviewer,

@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-"""Tests for shared parity comparison helpers."""
 
 from __future__ import annotations
 
@@ -10,8 +9,10 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 from unittest.mock import patch
 
+import pytest
 
 MODULE_PATH = Path(__file__).with_name("parity_compare.py")
 SPEC = importlib.util.spec_from_file_location("parity_compare", MODULE_PATH)
@@ -23,15 +24,26 @@ SPEC.loader.exec_module(parity_compare)
 
 
 class ParityCompareTests(unittest.TestCase):
-    def test_validation_exit_contract_protects_every_picard_category(self):
+    def test_validation_exit_contract_protects_every_picard_category(self) -> None:
         helper = Path(__file__).with_name("cram_compat.sh")
         for reference in range(4):
             for native in range(4):
                 with self.subTest(reference=reference, native=native):
-                    result = subprocess.run(["bash", "-c", 'source "$1"; parity_validate_samfile_exit_matches "$2" "$3"', "bash", str(helper), str(reference), str(native)])
-                    self.assertEqual(result.returncode == 0, reference == native)
+                    result = subprocess.run(
+                        [
+                            "bash",
+                            "-c",
+                            'source "$1"; parity_validate_samfile_exit_matches "$2" "$3"',
+                            "bash",
+                            str(helper),
+                            str(reference),
+                            str(native),
+                        ],
+                        check=False,
+                    )
+                    assert (result.returncode == 0) == (reference == native)
 
-    def test_binary_comparison_streams_equal_files_and_checks_both_eofs(self):
+    def test_binary_comparison_streams_equal_files_and_checks_both_eofs(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             left, right = Path(directory) / "left", Path(directory) / "right"
             block = b"ACGT" * (1024 * 256)
@@ -44,10 +56,10 @@ class ParityCompareTests(unittest.TestCase):
                 for extra in (b"x", b"\x00"):
                     right.write_bytes(data + extra)
                     for first, second in ((left, right), (right, left)):
-                        with self.assertRaisesRegex(SystemExit, "fixture binary output differs from Picard"):
+                        with pytest.raises(SystemExit, match="fixture binary output differs from Picard"):
                             parity_compare.compare_binary_files(first, second, "fixture")
 
-    def test_binary_comparison_detects_changes_across_chunk_boundaries(self):
+    def test_binary_comparison_detects_changes_across_chunk_boundaries(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             left, right = Path(directory) / "left", Path(directory) / "right"
             data = bytearray(b"A" * (2 * 1024 * 1024 + 7))
@@ -56,48 +68,52 @@ class ParityCompareTests(unittest.TestCase):
                 changed = data.copy()
                 changed[offset] = ord("T")
                 right.write_bytes(changed)
-                with self.assertRaisesRegex(SystemExit, "binary output differs"):
+                with pytest.raises(SystemExit, match="binary output differs"):
                     parity_compare.compare_binary_files(left, right, "fixture")
 
-    def test_nonfinite_metrics_do_not_bypass_tolerances(self):
+    def test_nonfinite_metrics_do_not_bypass_tolerances(self) -> None:
         for first, second in (("NaN", "7"), ("7", "NaN"), ("NaN", "Infinity"), ("Infinity", "-Infinity")):
             with self.subTest(first=first, second=second), tempfile.TemporaryDirectory() as tmp:
                 left, right = Path(tmp) / "a", Path(tmp) / "b"
                 left.write_text(f"FIELD\n{first}\n")
                 right.write_text(f"FIELD\n{second}\n")
-                with self.assertRaises(SystemExit):
+                with pytest.raises(SystemExit):
                     parity_compare.compare_metrics(left, right, "nonfinite")
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "same"
             path.write_text("FIELD\nNaN\n")
             parity_compare.compare_metrics(path, path, "same empty metric")
 
-    def test_nonfinite_wgs_metrics_do_not_bypass_tolerances(self):
-        from unittest import mock
-        # Intercept the loader to isolate numeric policy from file parsing.
+    def test_nonfinite_wgs_metrics_do_not_bypass_tolerances(self) -> None:
         with mock.patch.object(parity_compare, "load_wgs_metrics") as load:
-            exact = {name: "0" for name in ("MEDIAN_COVERAGE", "MAD_COVERAGE", "PCT_EXC_ADAPTER", "PCT_EXC_UNPAIRED",
-                                           "FOLD_80_BASE_PENALTY", "FOLD_90_BASE_PENALTY", "FOLD_95_BASE_PENALTY", "HET_SNP_Q")}
+            exact = dict.fromkeys(
+                (
+                    "MEDIAN_COVERAGE",
+                    "MAD_COVERAGE",
+                    "PCT_EXC_ADAPTER",
+                    "PCT_EXC_UNPAIRED",
+                    "FOLD_80_BASE_PENALTY",
+                    "FOLD_90_BASE_PENALTY",
+                    "FOLD_95_BASE_PENALTY",
+                    "HET_SNP_Q",
+                ),
+                "0",
+            )
             load.side_effect = [dict(exact, GENOME_TERRITORY="NaN"), dict(exact, GENOME_TERRITORY="7")]
-            with self.assertRaisesRegex(SystemExit, "GENOME_TERRITORY"):
+            with pytest.raises(SystemExit, match="GENOME_TERRITORY"):
                 parity_compare.compare_wgs_metrics(Path("a"), Path("b"), "nonfinite")
 
     def test_load_metrics_ignores_comment_header(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:
             path = Path(tempdir) / "metrics.txt"
             path.write_text(
-                "# metrics\n"
-                "LIBRARY\tUNPAIRED_READS_EXAMINED\tREAD_PAIRS_EXAMINED\n"
-                "Unknown Library\t0\t1\n",
+                "# metrics\nLIBRARY\tUNPAIRED_READS_EXAMINED\tREAD_PAIRS_EXAMINED\nUnknown Library\t0\t1\n",
                 encoding="utf-8",
             )
-            self.assertEqual(
-                parity_compare.load_metrics(path),
-                [
-                    ["LIBRARY", "UNPAIRED_READS_EXAMINED", "READ_PAIRS_EXAMINED"],
-                    ["Unknown Library", "0", "1"],
-                ],
-            )
+            assert parity_compare.load_metrics(path) == [
+                ["LIBRARY", "UNPAIRED_READS_EXAMINED", "READ_PAIRS_EXAMINED"],
+                ["Unknown Library", "0", "1"],
+            ]
 
     def test_compare_metrics_detects_difference(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:
@@ -105,7 +121,7 @@ class ParityCompareTests(unittest.TestCase):
             turbo = Path(tempdir) / "turbo.txt"
             picard.write_text("LIBRARY\tX\nlib\t1\n", encoding="utf-8")
             turbo.write_text("LIBRARY\tX\nlib\t2\n", encoding="utf-8")
-            with self.assertRaises(SystemExit):
+            with pytest.raises(SystemExit):
                 parity_compare.compare_metrics(picard, turbo, "test")
 
     def test_compare_metrics_detects_repeated_first_column_difference(self) -> None:
@@ -113,18 +129,14 @@ class ParityCompareTests(unittest.TestCase):
             picard = Path(tempdir) / "picard.txt"
             turbo = Path(tempdir) / "turbo.txt"
             picard.write_text(
-                "ACCUMULATION_LEVEL\tREADS_USED\tGC\tREAD_STARTS\n"
-                "All Reads\tALL\t28\t44\n"
-                "All Reads\tALL\t29\t92\n",
+                "ACCUMULATION_LEVEL\tREADS_USED\tGC\tREAD_STARTS\nAll Reads\tALL\t28\t44\nAll Reads\tALL\t29\t92\n",
                 encoding="utf-8",
             )
             turbo.write_text(
-                "ACCUMULATION_LEVEL\tREADS_USED\tGC\tREAD_STARTS\n"
-                "All Reads\tALL\t28\t40\n"
-                "All Reads\tALL\t29\t92\n",
+                "ACCUMULATION_LEVEL\tREADS_USED\tGC\tREAD_STARTS\nAll Reads\tALL\t28\t40\nAll Reads\tALL\t29\t92\n",
                 encoding="utf-8",
             )
-            with self.assertRaises(SystemExit):
+            with pytest.raises(SystemExit):
                 parity_compare.compare_metrics(picard, turbo, "CollectGcBiasMetrics detail")
 
     def test_compare_metrics_allows_last_decimal_float_drift(self) -> None:
@@ -182,7 +194,7 @@ class ParityCompareTests(unittest.TestCase):
             turbo = Path(tempdir) / "turbo.txt"
             picard.write_text(header + row, encoding="utf-8")
             turbo.write_text(header + drifted, encoding="utf-8")
-            with self.assertRaisesRegex(SystemExit, "PCT_EXC_OVERLAP"):
+            with pytest.raises(SystemExit, match="PCT_EXC_OVERLAP"):
                 parity_compare.compare_wgs_metrics(picard, turbo, "CollectWgsMetrics")
 
     def test_compare_clean_sam_fields(self) -> None:
@@ -199,15 +211,10 @@ class ParityCompareTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tempdir:
             sam = Path(tempdir) / "input.sam"
             sam.write_text(
-                "@HD\tVN:1.6\n"
-                "@SQ\tSN:chr1\tLN:1000\n"
-                "read1\t0\tchr1\t1\t0\t4M\t*\t0\t0\tACGT\tFFFF\n",
+                "@HD\tVN:1.6\n@SQ\tSN:chr1\tLN:1000\nread1\t0\tchr1\t1\t0\t4M\t*\t0\t0\tACGT\tFFFF\n",
                 encoding="utf-8",
             )
-            self.assertEqual(
-                parity_compare.sam_records(sam, ""),
-                ["read1\t0\tchr1\t1\t0\t4M\t*\t0\t0\tACGT\tFFFF"],
-            )
+            assert parity_compare.sam_records(sam, "") == ["read1\t0\tchr1\t1\t0\t4M\t*\t0\t0\tACGT\tFFFF"]
 
     def test_compare_stable_sam_lines(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:
@@ -232,13 +239,11 @@ class ParityCompareTests(unittest.TestCase):
             picard = Path(tempdir) / "picard.sam"
             turbo = Path(tempdir) / "turbo.sam"
             picard.write_text(
-                "@HD\tVN:1.6\n"
-                "read1\t0\tchr1\t1\t0\t4M\t*\t0\t0\tACGT\tFFFF\tAS:i:4\tOQ:Z:FFFF\n",
+                "@HD\tVN:1.6\nread1\t0\tchr1\t1\t0\t4M\t*\t0\t0\tACGT\tFFFF\tAS:i:4\tOQ:Z:FFFF\n",
                 encoding="utf-8",
             )
             turbo.write_text(
-                "@HD\tVN:1.6\n"
-                "read1\t0\tchr1\t1\t0\t4M\t*\t0\t0\tACGT\tFFFF\tNM:i:0\tAS:i:4\tMD:Z:4\tOQ:Z:FFFF\n",
+                "@HD\tVN:1.6\nread1\t0\tchr1\t1\t0\t4M\t*\t0\t0\tACGT\tFFFF\tNM:i:0\tAS:i:4\tMD:Z:4\tOQ:Z:FFFF\n",
                 encoding="utf-8",
             )
             parity_compare.compare_stable_sam_lines_ignoring_md_nm(
@@ -254,16 +259,14 @@ class ParityCompareTests(unittest.TestCase):
             picard = Path(tempdir) / "picard.sam"
             turbo = Path(tempdir) / "turbo.sam"
             picard.write_text(
-                "@HD\tVN:1.6\n"
-                "read1\t0\tchr1\t1\t0\t4M\t*\t0\t0\tACGT\tFFFF\tAS:i:4\n",
+                "@HD\tVN:1.6\nread1\t0\tchr1\t1\t0\t4M\t*\t0\t0\tACGT\tFFFF\tAS:i:4\n",
                 encoding="utf-8",
             )
             turbo.write_text(
-                "@HD\tVN:1.6\n"
-                "read1\t0\tchr1\t1\t0\t4M\t*\t0\t0\tACGT\tFFFF\tAS:i:5\tNM:i:0\tMD:Z:4\n",
+                "@HD\tVN:1.6\nread1\t0\tchr1\t1\t0\t4M\t*\t0\t0\tACGT\tFFFF\tAS:i:5\tNM:i:0\tMD:Z:4\n",
                 encoding="utf-8",
             )
-            with self.assertRaisesRegex(SystemExit, "stable SAM output differs"):
+            with pytest.raises(SystemExit, match="stable SAM output differs"):
                 parity_compare.compare_stable_sam_lines_ignoring_md_nm(
                     picard,
                     turbo,
@@ -301,14 +304,10 @@ class ParityCompareTests(unittest.TestCase):
             picard = Path(tempdir) / "picard.txt"
             turbo = Path(tempdir) / "turbo.txt"
             picard.write_text("ERROR:MATE_NOT_FOUND\t2\n", encoding="utf-8")
-            turbo.write_text(
-                "ERROR:MATE_NOT_FOUND\t2\nWARNING:MISSING_TAG_NM\t5\n", encoding="utf-8"
-            )
-            with self.assertRaises(SystemExit):
+            turbo.write_text("ERROR:MATE_NOT_FOUND\t2\nWARNING:MISSING_TAG_NM\t5\n", encoding="utf-8")
+            with pytest.raises(SystemExit):
                 parity_compare.compare_validate_summary(picard, turbo, "ValidateSamFile")
-            parity_compare.compare_validate_summary(
-                picard, turbo, "ValidateSamFile", ("WARNING:MISSING_TAG_NM",)
-            )
+            parity_compare.compare_validate_summary(picard, turbo, "ValidateSamFile", ("WARNING:MISSING_TAG_NM",))
 
     def test_compare_merge_multiset_reports_record_difference(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:
@@ -326,7 +325,7 @@ class ParityCompareTests(unittest.TestCase):
                 "read1\t0\tchr1\t1\t0\t4M\t*\t0\t0\tACGT\tFFFF\tNM:i:1\n",
                 encoding="utf-8",
             )
-            with self.assertRaisesRegex(SystemExit, "coordinate-sorted SAM multiset differs"):
+            with pytest.raises(SystemExit, match="coordinate-sorted SAM multiset differs"):
                 parity_compare.compare_merge_multiset(picard, turbo, "test")
 
     def test_compare_merge_multiset(self) -> None:
@@ -352,10 +351,10 @@ class ParityCompareTests(unittest.TestCase):
                 paths[0],
                 paths[1],
                 paths[2],
-                paths[3],
-                paths[4],
-                paths[5],
-                "SamToFastq",
+                turbo_r1=paths[3],
+                turbo_r2=paths[4],
+                turbo_unpaired=paths[5],
+                label="SamToFastq",
             )
 
 

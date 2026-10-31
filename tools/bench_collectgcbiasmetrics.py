@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+from __future__ import annotations
+
 import argparse
 import os
 import pathlib
@@ -7,7 +9,6 @@ import subprocess
 import sys
 import tempfile
 import time
-
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 
@@ -23,14 +24,13 @@ SUMMARY_HEADER = (
 )
 
 
-def run(command, *, cwd=ROOT, env=None):
+def run(command: list[str], *, cwd: pathlib.Path = ROOT, env: dict[str, str] | None = None) -> float:
     start = time.perf_counter()
     completed = subprocess.run(
         command,
         cwd=cwd,
         env=env,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        capture_output=True,
         text=True,
         check=False,
     )
@@ -42,7 +42,7 @@ def run(command, *, cwd=ROOT, env=None):
     return elapsed
 
 
-def conda_runner():
+def conda_runner() -> str:
     for name in ("mamba", "micromamba"):
         path = shutil.which(name)
         if path:
@@ -50,12 +50,12 @@ def conda_runner():
     raise SystemExit("mamba or micromamba is required to benchmark against Picard")
 
 
-def write_rscript_stub(path):
+def write_rscript_stub(path: pathlib.Path) -> None:
     path.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
     path.chmod(0o755)
 
 
-def write_reference(path, length):
+def write_reference(path: pathlib.Path, length: int) -> None:
     with open(path, "w", encoding="utf-8") as handle:
         handle.write(">low\n")
         handle.write("A" * length + "\n")
@@ -63,7 +63,7 @@ def write_reference(path, length):
         handle.write("C" * length + "\n")
 
 
-def write_sam(path, reads, reference_length):
+def write_sam(path: pathlib.Path, reads: int, reference_length: int) -> None:
     low_sequence = "A" * 20
     high_sequence = "C" * 20
     qualities = "F" * 20
@@ -75,18 +75,15 @@ def write_sam(path, reads, reference_length):
         high_reads = reads - low_reads
         for index in range(1, low_reads + 1):
             flag = 1024 if index % 17 == 0 else 0
-            handle.write(
-                f"low{index:09d}\t{flag}\tlow\t{index}\t60\t20M\t*\t0\t0\t{low_sequence}\t{qualities}\n"
-            )
+            handle.write(f"low{index:09d}\t{flag}\tlow\t{index}\t60\t20M\t*\t0\t0\t{low_sequence}\t{qualities}\n")
         for index in range(1, high_reads + 1):
             flag = 1024 if (low_reads + index) % 17 == 0 else 0
-            handle.write(
-                f"high{index:09d}\t{flag}\thigh\t{index}\t60\t20M\t*\t0\t0\t{high_sequence}\t{qualities}\n"
-            )
+            handle.write(f"high{index:09d}\t{flag}\thigh\t{index}\t60\t20M\t*\t0\t0\t{high_sequence}\t{qualities}\n")
 
 
-def stable_table(path, header):
-    lines = [line.rstrip("\n") for line in open(path, encoding="utf-8")]
+def stable_table(path: pathlib.Path, header: str) -> list[str]:
+    with open(path, encoding="utf-8") as handle:
+        lines = [line.rstrip("\n") for line in handle]
     for index, line in enumerate(lines):
         if line == header:
             rows = []
@@ -98,10 +95,8 @@ def stable_table(path, header):
     raise SystemExit(f"missing table {header!r} in {path}")
 
 
-def main():
-    parser = argparse.ArgumentParser(
-        description="Benchmark turbo-picard CollectGcBiasMetrics against Picard."
-    )
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Benchmark turbo-picard CollectGcBiasMetrics against Picard.")
     parser.add_argument("--reads", type=int, default=100_000, help="reads to synthesize")
     parser.add_argument(
         "--conda-prefix",
@@ -175,11 +170,9 @@ def main():
             env=env,
         )
 
-        parity = (
-            stable_table(turbo_detail, DETAIL_HEADER) == stable_table(picard_detail, DETAIL_HEADER)
-            and stable_table(turbo_summary, SUMMARY_HEADER)
-            == stable_table(picard_summary, SUMMARY_HEADER)
-        )
+        parity = stable_table(turbo_detail, DETAIL_HEADER) == stable_table(
+            picard_detail, DETAIL_HEADER
+        ) and stable_table(turbo_summary, SUMMARY_HEADER) == stable_table(picard_summary, SUMMARY_HEADER)
         speedup = picard_time / turbo_time if turbo_time > 0 else float("inf")
         print("command=CollectGcBiasMetrics")
         print(f"reads={args.reads}")

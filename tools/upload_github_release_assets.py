@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-"""Upload verified distributions and provenance to an existing GitHub release."""
 
 from __future__ import annotations
 
@@ -7,18 +6,35 @@ import argparse
 import hashlib
 import json
 import os
-from pathlib import Path
 import re
 import sys
-from typing import Any
+from pathlib import Path
+from types import TracebackType
+from typing import Any, Callable, Protocol
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote
 from urllib.request import Request, urlopen
 
-
 ROOT = Path(__file__).resolve().parents[1]
 API_ROOT = "https://api.github.com"
 UPLOAD_ROOT = "https://uploads.github.com"
+
+
+class Response(Protocol):
+    def read(self) -> bytes: ...
+
+    def __enter__(self) -> Response: ...
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        traceback: TracebackType | None,
+        /,
+    ) -> object: ...
+
+
+Opener = Callable[..., Response]
 
 
 def workspace_version(root: Path = ROOT) -> str:
@@ -98,7 +114,7 @@ def request_json(
     method: str = "GET",
     data: bytes | None = None,
     content_type: str = "application/json",
-    opener=urlopen,
+    opener: Opener = urlopen,
 ) -> dict[str, Any]:
     headers = {
         "Accept": "application/vnd.github+json",
@@ -107,12 +123,13 @@ def request_json(
     }
     if data is not None:
         headers["Content-Type"] = content_type
-    request = Request(url, data=data, headers=headers, method=method)
+    if not url.startswith("https://"):
+        raise ValueError("GitHub release asset URL must use https")
+    request = Request(url, data=data, headers=headers, method=method)  # noqa: S310
     try:
         with opener(request, timeout=60) as response:
             payload = response.read()
     except HTTPError as error:
-        # Never include request headers in this error; they contain the token.
         details = error.read().decode("utf-8", errors="replace")[:500]
         raise RuntimeError(f"GitHub release asset request failed ({error.code}): {details}") from error
     except URLError as error:
@@ -133,7 +150,7 @@ def upload_release_assets(
     tag: str,
     token: str,
     root: Path = ROOT,
-    opener=urlopen,
+    opener: Opener = urlopen,
 ) -> list[str]:
     version = workspace_version(root)
     expected_tag = f"v{version}"
@@ -158,8 +175,6 @@ def upload_release_assets(
         raise RuntimeError("GitHub release asset list is malformed")
     by_name = {asset.get("name"): asset for asset in existing if isinstance(asset, dict)}
 
-    # Reject conflicting names before uploading anything. Identical assets make
-    # reruns safe without replacing or deleting already-published files.
     pending: list[Path] = []
     for path in files:
         current = by_name.get(path.name)
@@ -193,8 +208,11 @@ def upload_release_assets(
     return uploaded
 
 
+_DESCRIPTION = "Upload verified distributions and provenance to an existing GitHub release."
+
+
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(description=_DESCRIPTION)
     parser.add_argument("--directory", type=Path, required=True)
     args = parser.parse_args(argv)
     repository = os.environ.get("GITHUB_REPOSITORY", "")

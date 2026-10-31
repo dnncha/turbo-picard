@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-"""Validate production-scale benchmark evidence manifests."""
 
 from __future__ import annotations
 
@@ -7,7 +6,9 @@ import argparse
 import json
 import re
 import sys
+from collections.abc import Collection, Container
 from pathlib import Path
+from typing import Any
 
 HEX64 = re.compile(r"^[0-9a-fA-F]{64}$")
 HEX40 = re.compile(r"^[0-9a-fA-F]{40}$")
@@ -28,25 +29,25 @@ class ManifestError(ValueError):
     pass
 
 
-def require(mapping, keys, label):
+def require(mapping: Container[str], keys: Collection[str], label: str) -> None:
     missing = sorted(key for key in keys if key not in mapping)
     if missing:
         raise ManifestError(f"{label} missing required field(s): {', '.join(missing)}")
 
 
-def non_negative_int(value, label):
+def non_negative_int(value: object, label: str) -> None:
     if not isinstance(value, int) or isinstance(value, bool) or value < 0:
         raise ManifestError(f"{label} must be a non-negative integer")
 
 
-def require_evidence_url(value, label):
+def require_evidence_url(value: object, label: str) -> None:
     if not isinstance(value, str) or not value.strip():
         raise ManifestError(f"{label} must be a non-empty string")
     if not value.startswith(("https://", "s3://", "gs://")):
         raise ManifestError(f"{label} must be an immutable HTTPS, S3, or GCS URL")
 
 
-def validate(path: Path, release_ready: bool = False) -> dict:
+def validate(path: Path, release_ready: bool = False) -> dict[str, Any]:
     try:
         payload = json.loads(path.read_text())
     except (OSError, json.JSONDecodeError) as exc:
@@ -65,7 +66,7 @@ def validate(path: Path, release_ready: bool = False) -> dict:
     input_data = payload.get("input")
     software = payload.get("software")
     host = payload.get("host")
-    if not all(isinstance(value, dict) for value in (input_data, software, host)):
+    if not (isinstance(input_data, dict) and isinstance(software, dict) and isinstance(host, dict)):
         raise ManifestError("input, software, and host must be objects")
     require(input_data, {"format", "source_url", "source_revision", "sha256", "bytes", "read_count"}, "input")
     require(software, {"picard_version", "turbo_picard_version", "turbo_picard_commit"}, "software")
@@ -81,7 +82,9 @@ def validate(path: Path, release_ready: bool = False) -> dict:
         raise ManifestError("input.reference_fasta_sha256 must be a 64-character hexadecimal SHA-256")
     if input_format == "CRAM" and reference_hash is None:
         raise ManifestError("CRAM evidence requires input.reference_fasta_sha256")
-    if not isinstance(input_data["source_url"], str) or not input_data["source_url"].startswith(("https://", "s3://", "gs://")):
+    if not isinstance(input_data["source_url"], str) or not input_data["source_url"].startswith(
+        ("https://", "s3://", "gs://")
+    ):
         raise ManifestError("input.source_url must be an immutable HTTPS, S3, or GCS URL")
     non_negative_int(input_data["bytes"], "input.bytes")
     non_negative_int(input_data["read_count"], "input.read_count")
@@ -175,41 +178,25 @@ def validate(path: Path, release_ready: bool = False) -> dict:
                 raise ManifestError(f"independent_reproduction.{key} must be a non-empty string")
         require_evidence_url(reproduction["evidence_url"], "independent_reproduction.evidence_url")
         if not HEX40.fullmatch(str(reproduction["turbo_picard_commit"])):
-            raise ManifestError(
-                "independent_reproduction.turbo_picard_commit must be a 40-character hexadecimal SHA"
-            )
+            raise ManifestError("independent_reproduction.turbo_picard_commit must be a 40-character hexadecimal SHA")
         if reproduction["turbo_picard_commit"].lower() != software["turbo_picard_commit"].lower():
-            raise ManifestError(
-                "independent_reproduction.turbo_picard_commit must match software.turbo_picard_commit"
-            )
+            raise ManifestError("independent_reproduction.turbo_picard_commit must match software.turbo_picard_commit")
         if not HEX64.fullmatch(str(reproduction["input_sha256"])):
-            raise ManifestError(
-                "independent_reproduction.input_sha256 must be a 64-character hexadecimal SHA-256"
-            )
+            raise ManifestError("independent_reproduction.input_sha256 must be a 64-character hexadecimal SHA-256")
         if reproduction["input_sha256"].lower() != input_data["sha256"].lower():
-            raise ManifestError(
-                "independent_reproduction.input_sha256 must match input.sha256"
-            )
+            raise ManifestError("independent_reproduction.input_sha256 must match input.sha256")
         if not HEX64.fullmatch(str(reproduction["arguments_sha256"])):
-            raise ManifestError(
-                "independent_reproduction.arguments_sha256 must be a 64-character hexadecimal SHA-256"
-            )
+            raise ManifestError("independent_reproduction.arguments_sha256 must be a 64-character hexadecimal SHA-256")
         if len(commands) != 1:
-            raise ManifestError(
-                "independent_reproduction.arguments_sha256 currently requires exactly one command"
-            )
-        if reproduction["arguments_sha256"].lower() != str(
-            commands[0].get("arguments_sha256", "")
-        ).lower():
-            raise ManifestError(
-                "independent_reproduction.arguments_sha256 must match commands[0].arguments_sha256"
-            )
+            raise ManifestError("independent_reproduction.arguments_sha256 currently requires exactly one command")
+        if reproduction["arguments_sha256"].lower() != str(commands[0].get("arguments_sha256", "")).lower():
+            raise ManifestError("independent_reproduction.arguments_sha256 must match commands[0].arguments_sha256")
     if release_ready and reproduction_status != "pass":
         raise ManifestError("release-ready evidence requires independent_reproduction.status=pass")
     return payload
 
 
-def main(argv=None) -> int:
+def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("manifest", type=Path)
     parser.add_argument("--release-ready", action="store_true")

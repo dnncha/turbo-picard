@@ -1,22 +1,23 @@
 #!/usr/bin/env python3
-"""Verify checked-in real-data comparison evidence and citations."""
 
 from __future__ import annotations
 
-import hashlib
-import json
 import decimal
+import hashlib
+import importlib
+import json
 import re
 import sys
+from collections.abc import Iterable
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Iterable
+from typing import Any
 from urllib.parse import urlparse
 
-if __package__:
-    from .sam_contract import COMPARISON as MARKDUP_V2_COMPARISON, header_digest, metrics_digest
-else:
-    from sam_contract import COMPARISON as MARKDUP_V2_COMPARISON, header_digest, metrics_digest
+_sam_contract = importlib.import_module(".sam_contract" if __package__ else "sam_contract", __package__ or None)
+MARKDUP_V2_COMPARISON = _sam_contract.COMPARISON
+header_digest = _sam_contract.header_digest
+metrics_digest = _sam_contract.metrics_digest
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -58,9 +59,7 @@ RELEASE_CANDIDATE_PORTFOLIO_REQUIRED_COMMANDS = {
     "ValidateSamFile",
     "ViewSam",
 }
-RELEASE_CANDIDATE_PORTFOLIO_COMMAND_TEXT = ", ".join(
-    sorted(RELEASE_CANDIDATE_PORTFOLIO_REQUIRED_COMMANDS)
-)
+RELEASE_CANDIDATE_PORTFOLIO_COMMAND_TEXT = ", ".join(sorted(RELEASE_CANDIDATE_PORTFOLIO_REQUIRED_COMMANDS))
 EXPECTED_PICARD_VERSION = "Version:3.4.0"
 KNOWN_COMPARISONS = {
     MARKDUP_V2_COMPARISON,
@@ -279,8 +278,8 @@ def digest_replace_sam_header(path: Path) -> str:
     header_lines: list[bytes] = []
     record_names: list[bytes] = []
     with path.open("rb") as handle:
-        for raw in handle:
-            raw = raw.rstrip(b"\n")
+        for raw_line in handle:
+            raw = raw_line.rstrip(b"\n")
             if raw.startswith(b"@"):
                 header_lines.append(raw)
             elif raw:
@@ -369,12 +368,9 @@ def recomputable_artifact_digest(
         if view_sam.exists() and metrics.exists():
             return f"{digest_markduplicates_semantics(view_sam)};metrics={digest_stable_text(metrics)}"
     if comparison == MARKDUP_V2_COMPARISON:
-        # Legacy evidence above deliberately keeps its frozen v1 projection.
-        # Newly generated v2 evidence uses the shared scientific record contract.
-        if __package__:
-            from .compare_real_data import digest_markduplicates_semantics as digest_v2
-        else:
-            from compare_real_data import digest_markduplicates_semantics as digest_v2
+        digest_v2 = importlib.import_module(
+            ".compare_real_data" if __package__ else "compare_real_data", __package__ or None
+        ).digest_markduplicates_semantics
         view_sam, metrics = markduplicates_sidecars(path)
         if view_sam.exists() and metrics.exists():
             return f"{digest_v2(view_sam)};headers={header_digest(view_sam)};metrics={metrics_digest(metrics)}"
@@ -404,7 +400,7 @@ def digest_validate_sam_summary(path: Path, exit_code: int) -> str:
                 digest.update(stripped)
                 digest.update(b"\n")
     else:
-        digest.update(f"missing:{path.name}\n".encode("utf-8"))
+        digest.update(f"missing:{path.name}\n".encode())
     return digest.hexdigest()
 
 
@@ -417,8 +413,9 @@ def required_markdown_comparison_notes(comparisons: set[str]) -> list[tuple[str,
     return notes
 
 
-def load_manifest(path: Path = MANIFEST) -> dict:
-    return json.loads(path.read_text(encoding="utf-8"))
+def load_manifest(path: Path = MANIFEST) -> dict[str, Any]:
+    manifest: dict[str, Any] = json.loads(path.read_text(encoding="utf-8"))
+    return manifest
 
 
 def validate_source_citation(dataset_id: str, source_url: str, source_commit: str) -> list[str]:
@@ -432,23 +429,15 @@ def validate_source_citation(dataset_id: str, source_url: str, source_commit: st
         errors.append(f"{dataset_id} source_commit is too short to identify a source")
 
     if parsed.netloc == "raw.githubusercontent.com":
-        errors.append(
-            f"{dataset_id} source_url must not use raw.githubusercontent.com moving branch URLs"
-        )
+        errors.append(f"{dataset_id} source_url must not use raw.githubusercontent.com moving branch URLs")
     if parsed.netloc == "github.com":
         if not re.fullmatch(r"[0-9a-f]{40}", source_commit):
-            errors.append(
-                f"{dataset_id} GitHub source_commit must be a full 40-character SHA"
-            )
+            errors.append(f"{dataset_id} GitHub source_commit must be a full 40-character SHA")
         marker = f"/blob/{source_commit}/"
         if marker not in parsed.path:
-            errors.append(
-                f"{dataset_id} GitHub source_url must include /blob/{source_commit}/"
-            )
+            errors.append(f"{dataset_id} GitHub source_url must include /blob/{source_commit}/")
     elif source_commit and source_commit not in source_url:
-        errors.append(
-            f"{dataset_id} non-GitHub source_url must include source_commit/accession identifier"
-        )
+        errors.append(f"{dataset_id} non-GitHub source_url must include source_commit/accession identifier")
     return errors
 
 
@@ -464,20 +453,14 @@ def validate_manifest_path(dataset_id: str, key: str, value: object) -> list[str
         path.relative_to("benchmarks/real-data")
     except ValueError:
         return [f"{dataset_id} {key} must stay under benchmarks/real-data: {value}"]
-    if key == "evidence_json":
-        if path.parent.name != "evidence" or path.name != "real-data-comparison.json":
-            return [
-                f"{dataset_id} evidence_json must use evidence/real-data-comparison.json: {value}"
-            ]
-    if key == "evidence_markdown":
-        if path.parent.name != "evidence" or path.name != "real-data-comparison.md":
-            return [
-                f"{dataset_id} evidence_markdown must use evidence/real-data-comparison.md: {value}"
-            ]
+    if key == "evidence_json" and (path.parent.name != "evidence" or path.name != "real-data-comparison.json"):
+        return [f"{dataset_id} evidence_json must use evidence/real-data-comparison.json: {value}"]
+    if key == "evidence_markdown" and (path.parent.name != "evidence" or path.name != "real-data-comparison.md"):
+        return [f"{dataset_id} evidence_markdown must use evidence/real-data-comparison.md: {value}"]
     return []
 
 
-def validate_manifest(manifest: dict) -> list[str]:
+def validate_manifest(manifest: dict[str, Any]) -> list[str]:
     errors = []
     datasets = manifest.get("datasets")
     if not isinstance(datasets, list) or not datasets:
@@ -519,54 +502,39 @@ def validate_manifest(manifest: dict) -> list[str]:
         if not isinstance(expected_commands, dict) or not expected_commands:
             errors.append(f"{dataset_id} has no expected commands")
         elif any(
-            not isinstance(command, str)
-            or not command
-            or not isinstance(comparison, str)
-            or not comparison
+            not isinstance(command, str) or not command or not isinstance(comparison, str) or not comparison
             for command, comparison in expected_commands.items()
         ):
             errors.append(
                 f"{dataset_id} expected_commands must map non-empty command names to non-empty comparison labels"
             )
         elif unknown_comparisons := sorted(
-            {
-                comparison
-                for comparison in expected_commands.values()
-                if comparison not in KNOWN_COMPARISONS
-            }
+            {comparison for comparison in expected_commands.values() if comparison not in KNOWN_COMPARISONS}
         ):
             errors.append(
-                f"{dataset_id} expected_commands use unknown comparison labels: "
-                + ", ".join(unknown_comparisons)
+                f"{dataset_id} expected_commands use unknown comparison labels: " + ", ".join(unknown_comparisons)
             )
         if dataset.get("release_tier") not in {"public_smoke", "release_candidate"}:
             errors.append(f"{dataset_id} has invalid release_tier")
     return errors
 
 
-def validate_release_candidate_dataset(dataset: dict, input_summary: dict) -> list[str]:
+def validate_release_candidate_dataset(dataset: dict[str, Any], input_summary: dict[str, Any]) -> list[str]:
     errors: list[str] = []
     if dataset.get("release_tier") != "release_candidate":
         return errors
     dataset_id = dataset["id"]
     source_url = str(dataset.get("source_url", ""))
     source_commit = str(dataset.get("source_commit", ""))
-    if urlparse(source_url).netloc == "github.com" and not re.fullmatch(
-        r"[0-9a-f]{40}", source_commit
-    ):
-        errors.append(
-            f"{dataset_id} release_candidate GitHub source_commit must be a full 40-character SHA"
-        )
+    if urlparse(source_url).netloc == "github.com" and not re.fullmatch(r"[0-9a-f]{40}", source_commit):
+        errors.append(f"{dataset_id} release_candidate GitHub source_commit must be a full 40-character SHA")
     expected_commands = set(dataset.get("expected_commands", {}))
     required_commands = RELEASE_CANDIDATE_REQUIRED_COMMANDS
     if str(dataset.get("input_path", "")).endswith(".cram"):
         required_commands = CRAM_RELEASE_CANDIDATE_REQUIRED_COMMANDS
     missing_commands = sorted(required_commands - expected_commands)
     if missing_commands:
-        errors.append(
-            f"{dataset_id} release_candidate missing required commands: "
-            + ", ".join(missing_commands)
-        )
+        errors.append(f"{dataset_id} release_candidate missing required commands: " + ", ".join(missing_commands))
     if "minimum_input_bytes" not in dataset:
         errors.append(f"{dataset_id} release_candidate missing minimum_input_bytes")
     default_min_bytes = (
@@ -580,13 +548,11 @@ def validate_release_candidate_dataset(dataset: dict, input_summary: dict) -> li
         min_bytes = default_min_bytes
     size_bytes = int(input_summary.get("size_bytes", 0))
     if size_bytes < min_bytes:
-        errors.append(
-            f"{dataset_id} release_candidate input too small: {size_bytes} bytes < {min_bytes}"
-        )
+        errors.append(f"{dataset_id} release_candidate input too small: {size_bytes} bytes < {min_bytes}")
     return errors
 
 
-def validate_manifest_entry_artifact(dataset: dict) -> list[str]:
+def validate_manifest_entry_artifact(dataset: dict[str, Any]) -> list[str]:
     errors: list[str] = []
     dataset_id = dataset["id"]
     entry_path = ROOT / dataset["evidence_json"]
@@ -605,7 +571,7 @@ def validate_manifest_entry_artifact(dataset: dict) -> list[str]:
 
 
 def validate_dataset(
-    dataset: dict,
+    dataset: dict[str, Any],
     readme: str,
     site: str,
     benchmark_docs: str = "",
@@ -643,8 +609,7 @@ def validate_dataset(
             f"{dataset_id} evidence Picard version changed",
         ),
         (
-            isinstance(data.get("turbo_picard_version"), str)
-            and data.get("turbo_picard_version", "").strip(),
+            isinstance(data.get("turbo_picard_version"), str) and data.get("turbo_picard_version", "").strip(),
             f"{dataset_id} evidence missing turbo-picard version",
         ),
         (
@@ -680,7 +645,7 @@ def validate_dataset(
     errors.extend(validate_release_candidate_dataset(dataset, input_summary))
     errors.extend(validate_manifest_entry_artifact(dataset))
 
-    rows: dict[str, dict] = {}
+    rows: dict[str, dict[str, Any]] = {}
     command_rows = data.get("commands", [])
     if not isinstance(command_rows, list):
         errors.append(f"{dataset_id} evidence commands must be a list")
@@ -744,17 +709,13 @@ def validate_dataset(
                 errors.append(f"{dataset_id} {command} missing {label}")
                 continue
             if Path(artifact).is_absolute():
-                errors.append(
-                    f"{dataset_id} {command} {label} must be repository-relative: {artifact}"
-                )
+                errors.append(f"{dataset_id} {command} {label} must be repository-relative: {artifact}")
                 continue
             artifact_path = ROOT / artifact
             try:
                 artifact_path.resolve().relative_to(evidence_json_path.parent.resolve())
             except ValueError:
-                errors.append(
-                    f"{dataset_id} {command} {label} must stay under evidence directory: {artifact}"
-                )
+                errors.append(f"{dataset_id} {command} {label} must stay under evidence directory: {artifact}")
             if not artifact_path.exists():
                 if "/evidence/work/" in artifact.replace("\\", "/"):
                     continue
@@ -768,22 +729,15 @@ def validate_dataset(
                 ]:
                     if not sidecar_path.exists():
                         errors.append(
-                            f"{dataset_id} {command} missing {label} {sidecar_label}: "
-                            f"{sidecar_path.relative_to(ROOT)}"
+                            f"{dataset_id} {command} missing {label} {sidecar_label}: {sidecar_path.relative_to(ROOT)}"
                         )
                 if not view_sam.exists() or not metrics.exists():
                     continue
-            expected_digest = (
-                turbo_digest if artifact_key == "turbo_artifact" else picard_digest
-            )
+            expected_digest = turbo_digest if artifact_key == "turbo_artifact" else picard_digest
             if isinstance(expected_digest, str) and expected_digest:
                 exit_code = None
                 if comparison == "summary validation histogram plus exit code":
-                    exit_code_key = (
-                        "turbo_exit_code"
-                        if artifact_key == "turbo_artifact"
-                        else "picard_exit_code"
-                    )
+                    exit_code_key = "turbo_exit_code" if artifact_key == "turbo_artifact" else "picard_exit_code"
                     exit_code = row.get(exit_code_key)
                     if not isinstance(exit_code, int):
                         exit_code = None
@@ -793,9 +747,7 @@ def validate_dataset(
                     exit_code,
                 )
                 if artifact_digest is not None and artifact_digest != expected_digest:
-                    errors.append(
-                        f"{dataset_id} {command} {label} digest does not match artifact"
-                    )
+                    errors.append(f"{dataset_id} {command} {label} digest does not match artifact")
 
         turbo_seconds = row.get("turbo_seconds")
         picard_seconds = row.get("picard_seconds")
@@ -958,9 +910,7 @@ def validate_workflow_docs(
             if phrase in lower_text:
                 errors.append(f"{target} contains unsupported overclaim: {phrase}")
     if RELEASE_CANDIDATE_PORTFOLIO_COMMAND_TEXT not in prose_text(readme):
-        errors.append(
-            "benchmarks README missing release command set"
-        )
+        errors.append("benchmarks README missing release command set")
     if benchmark_docs:
         benchmark_prose = prose_text(benchmark_docs)
         for needle, description in [
@@ -1007,7 +957,7 @@ def validate_workflow_docs(
     return errors
 
 
-def validate_project_readme_real_data_summary(manifest: dict, project_readme: str) -> list[str]:
+def validate_project_readme_real_data_summary(manifest: dict[str, Any], project_readme: str) -> list[str]:
     errors: list[str] = []
     lower_readme = project_readme.lower()
     for phrase in OVERCLAIM_PHRASES:
@@ -1039,34 +989,25 @@ def validate_project_readme_real_data_summary(manifest: dict, project_readme: st
 
 
 def validate_real_data_evidence(
-    manifest: dict,
+    manifest: dict[str, Any],
     readme: str,
     site: str,
     benchmark_docs: str = "",
     project_readme: str = "",
-    adoption_docs: str = "",
     *,
+    adoption_docs: str = "",
     release_ready: bool = False,
 ) -> list[str]:
     errors = validate_manifest(manifest)
     if errors:
         return errors
     errors.extend(validate_workflow_docs(readme, site, benchmark_docs, adoption_docs))
-    has_release_candidate = any(
-        dataset.get("release_tier") == "release_candidate"
-        for dataset in manifest["datasets"]
-    )
-    stale_release_ready_text = (
-        "fails until the manifest contains at least one pinned release-candidate dataset"
-    )
+    has_release_candidate = any(dataset.get("release_tier") == "release_candidate" for dataset in manifest["datasets"])
+    stale_release_ready_text = "fails until the manifest contains at least one pinned release-candidate dataset"
     if has_release_candidate and stale_release_ready_text in readme:
-        errors.append(
-            "benchmarks README still says release-ready verification fails before release candidates"
-        )
+        errors.append("benchmarks README still says release-ready verification fails before release candidates")
     if release_ready and not has_release_candidate:
-        errors.append(
-            "real-data manifest has no release_candidate dataset for scientist-facing release"
-        )
+        errors.append("real-data manifest has no release_candidate dataset for scientist-facing release")
     if release_ready and has_release_candidate:
         release_candidate_commands = {
             command
@@ -1086,9 +1027,7 @@ def validate_real_data_evidence(
             except ValueError:
                 continue
             input_summary = evidence.get("input", {})
-            if isinstance(input_summary, dict) and isinstance(
-                input_summary.get("size_bytes"), int
-            ):
+            if isinstance(input_summary, dict) and isinstance(input_summary.get("size_bytes"), int):
                 release_candidate_bytes += input_summary["size_bytes"]
         if release_candidate_bytes < RELEASE_CANDIDATE_PORTFOLIO_MIN_BYTES:
             errors.append(
@@ -1096,17 +1035,14 @@ def validate_real_data_evidence(
                 f"{release_candidate_bytes} bytes < "
                 f"{RELEASE_CANDIDATE_PORTFOLIO_MIN_BYTES}"
             )
-        missing_portfolio_commands = sorted(
-            RELEASE_CANDIDATE_PORTFOLIO_REQUIRED_COMMANDS - release_candidate_commands
-        )
+        missing_portfolio_commands = sorted(RELEASE_CANDIDATE_PORTFOLIO_REQUIRED_COMMANDS - release_candidate_commands)
         if missing_portfolio_commands:
             errors.append(
                 "real-data release_candidate portfolio missing required command evidence: "
                 + ", ".join(missing_portfolio_commands)
             )
         has_cram_release_candidate = any(
-            dataset.get("release_tier") == "release_candidate"
-            and str(dataset.get("input_path", "")).endswith(".cram")
+            dataset.get("release_tier") == "release_candidate" and str(dataset.get("input_path", "")).endswith(".cram")
             for dataset in manifest["datasets"]
         )
         if not has_cram_release_candidate:
@@ -1135,7 +1071,6 @@ def main(argv: list[str] | None = None) -> int:
     manifest = load_manifest()
     readme = README.read_text(encoding="utf-8")
     project_readme = PROJECT_README.read_text(encoding="utf-8")
-    # Provenance belongs on the linked evidence page, not in the marketing hero.
     site = SITE.read_text(encoding="utf-8") + (SITE.parent / "evidence/index.html").read_text(encoding="utf-8")
     benchmark_docs = BENCHMARK_DOCS.read_text(encoding="utf-8")
     adoption_docs = ADOPTION_DOCS.read_text(encoding="utf-8")
@@ -1145,7 +1080,7 @@ def main(argv: list[str] | None = None) -> int:
         site,
         benchmark_docs,
         project_readme,
-        adoption_docs,
+        adoption_docs=adoption_docs,
         release_ready=release_ready,
     )
     if errors:

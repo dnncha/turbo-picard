@@ -1,14 +1,27 @@
-//! SAM/BAM/CRAM path helpers shared by native commands.
-
 use crate::bgzf_threads::{HtsThreadRole, bgzf_threads_for};
 use rust_htslib::{
     bam::{self, Format, Read},
     htslib,
 };
 use std::path::Path;
+use thiserror::Error;
 
-/// Measured base qualities, excluding BAM's all-0xff missing-value encoding.
-/// Keep sequence length separate: a read can have bases without measurements.
+#[derive(Debug, Error)]
+pub enum HtsIoError {
+    #[error("unsupported {command} output format for {output}; expected .sam, .bam, or .cram")]
+    UnsupportedOutputFormat { command: String, output: String },
+    #[error("CRAM path {path} requires REFERENCE_SEQUENCE (R=) or TURBO_PICARD_REFERENCE")]
+    CramReferenceRequired { path: String },
+    #[error(transparent)]
+    Htslib(#[from] rust_htslib::errors::Error),
+}
+
+impl From<HtsIoError> for String {
+    fn from(error: HtsIoError) -> Self {
+        error.to_string()
+    }
+}
+
 pub fn base_qualities(record: &bam::Record) -> &[u8] {
     let qualities = record.qual();
     if qualities.first() == Some(&255) {
@@ -35,26 +48,24 @@ pub fn path_format(path: &str) -> Option<Format> {
 }
 
 pub fn is_hts_container_input(path: &str) -> bool {
-    matches!(
-        path_extension_lower(path).as_deref(),
-        Some("bam") | Some("cram")
-    )
+    matches!(path_extension_lower(path).as_deref(), Some("bam" | "cram"))
 }
 
 pub fn is_sam_text_input(path: &str) -> bool {
     path_extension_lower(path).as_deref() == Some("sam")
 }
 
-pub fn output_format_for_path(output: &str, command: &str) -> Result<Format, String> {
-    path_format(output).ok_or_else(|| {
-        format!("unsupported {command} output format for {output}; expected .sam, .bam, or .cram")
+pub fn output_format_for_path(output: &str, command: &str) -> Result<Format, HtsIoError> {
+    path_format(output).ok_or_else(|| HtsIoError::UnsupportedOutputFormat {
+        command: command.to_string(),
+        output: output.to_string(),
     })
 }
 
 pub fn resolve_reference_sequence(
     path: &str,
     explicit: Option<&str>,
-) -> Result<Option<String>, String> {
+) -> Result<Option<String>, HtsIoError> {
     let explicit = explicit
         .map(str::trim)
         .filter(|value| !value.is_empty())
@@ -67,10 +78,8 @@ pub fn resolve_reference_sequence(
 
     if path_format(path) == Some(Format::Cram) {
         explicit
-            .ok_or_else(|| {
-                format!(
-                    "CRAM path {path} requires REFERENCE_SEQUENCE (R=) or TURBO_PICARD_REFERENCE"
-                )
+            .ok_or_else(|| HtsIoError::CramReferenceRequired {
+                path: path.to_string(),
             })
             .map(Some)
     } else {
@@ -78,7 +87,10 @@ pub fn resolve_reference_sequence(
     }
 }
 
-pub fn open_reader(path: impl AsRef<Path>, reference: Option<&str>) -> Result<bam::Reader, String> {
+pub fn open_reader(
+    path: impl AsRef<Path>,
+    reference: Option<&str>,
+) -> Result<bam::Reader, HtsIoError> {
     open_reader_with_cram_decode_md(path, reference, false)
 }
 
@@ -86,43 +98,33 @@ pub fn open_reader_with_cram_decode_md(
     path: impl AsRef<Path>,
     reference: Option<&str>,
     decode_md: bool,
-) -> Result<bam::Reader, String> {
+) -> Result<bam::Reader, HtsIoError> {
     let path = path.as_ref();
     let path_text = path.to_string_lossy();
     let reference = resolve_reference_sequence(&path_text, reference)?;
-    let mut reader = bam::Reader::from_path(path).map_err(|error| error.to_string())?;
+    let mut reader = bam::Reader::from_path(path)?;
     if let Some(reference) = reference.as_deref() {
-        reader
-            .set_reference(reference)
-            .map_err(|error| error.to_string())?;
+        reader.set_reference(reference)?;
     }
     configure_cram_decode(&mut reader, &path_text, decode_md)?;
     configure_reader_threads(&mut reader)?;
     Ok(reader)
 }
 
-/// Open a reader for pipelined decode (dedicated reader thread overlaps I/O).
-///
-/// BGZF worker threads are pinned to 1 so decode does not fight the
-/// application reader thread for the same block pool.
 pub fn open_reader_pipelined(
     path: impl AsRef<Path>,
     reference: Option<&str>,
-) -> Result<bam::Reader, String> {
+) -> Result<bam::Reader, HtsIoError> {
     let path = path.as_ref();
     let path_text = path.to_string_lossy();
     let reference = resolve_reference_sequence(&path_text, reference)?;
-    let mut reader = bam::Reader::from_path(path).map_err(|error| error.to_string())?;
+    let mut reader = bam::Reader::from_path(path)?;
     if let Some(reference) = reference.as_deref() {
-        reader
-            .set_reference(reference)
-            .map_err(|error| error.to_string())?;
+        reader.set_reference(reference)?;
     }
     configure_cram_decode(&mut reader, &path_text, false)?;
     if let Some(threads) = bgzf_threads_for(HtsThreadRole::PipelineReader) {
-        reader
-            .set_threads(threads)
-            .map_err(|error| error.to_string())?;
+        reader.set_threads(threads)?;
     }
     Ok(reader)
 }
@@ -133,22 +135,17 @@ pub fn open_writer(
     format: Format,
     reference: Option<&str>,
     compression_level: Option<u32>,
-) -> Result<bam::Writer, String> {
+) -> Result<bam::Writer, HtsIoError> {
     let reference = resolve_reference_sequence(output, reference)?;
-    let mut writer =
-        bam::Writer::from_path(output, header, format).map_err(|error| error.to_string())?;
+    let mut writer = bam::Writer::from_path(output, header, format)?;
     if let Some(reference) = reference.as_deref() {
-        writer
-            .set_reference(reference)
-            .map_err(|error| error.to_string())?;
+        writer.set_reference(reference)?;
     }
     if matches!(format, Format::Bam | Format::Cram) {
         configure_writer_threads(&mut writer)?;
     }
     if let Some(level) = compression_level {
-        writer
-            .set_compression_level(bam::CompressionLevel::Level(level))
-            .map_err(|error| error.to_string())?;
+        writer.set_compression_level(bam::CompressionLevel::Level(level))?;
     }
     Ok(writer)
 }
@@ -157,35 +154,29 @@ fn configure_cram_decode(
     reader: &mut bam::Reader,
     path: &str,
     decode_md: bool,
-) -> Result<(), String> {
+) -> Result<(), HtsIoError> {
     if path_format(path) == Some(Format::Cram) {
-        let decode_md = if decode_md { 1 } else { 0 };
-        reader
-            .set_cram_options(htslib::hts_fmt_option_CRAM_OPT_DECODE_MD, decode_md)
-            .map_err(|error| error.to_string())?;
+        let decode_md = u32::from(decode_md);
+        reader.set_cram_options(htslib::hts_fmt_option_CRAM_OPT_DECODE_MD, decode_md)?;
     }
     Ok(())
 }
 
-pub fn configure_reader_threads(reader: &mut bam::Reader) -> Result<(), String> {
+pub fn configure_reader_threads(reader: &mut bam::Reader) -> Result<(), HtsIoError> {
     if let Some(threads) = bgzf_threads_for(HtsThreadRole::Reader) {
-        reader
-            .set_threads(threads)
-            .map_err(|error| error.to_string())?;
+        reader.set_threads(threads)?;
     }
     Ok(())
 }
 
-pub fn configure_writer_threads(writer: &mut bam::Writer) -> Result<(), String> {
+pub fn configure_writer_threads(writer: &mut bam::Writer) -> Result<(), HtsIoError> {
     if let Some(threads) = bgzf_threads_for(HtsThreadRole::Writer) {
-        writer
-            .set_threads(threads)
-            .map_err(|error| error.to_string())?;
+        writer.set_threads(threads)?;
     }
     Ok(())
 }
 
-pub fn writer_format_for_output(output: &str) -> Result<Format, String> {
+pub fn writer_format_for_output(output: &str) -> Result<Format, HtsIoError> {
     output_format_for_path(output, "output")
 }
 
@@ -214,7 +205,7 @@ mod tests {
     #[test]
     fn cram_requires_reference() {
         let error = resolve_reference_sequence("shard.cram", None).unwrap_err();
-        assert!(error.contains("REFERENCE_SEQUENCE"));
+        assert!(error.to_string().contains("REFERENCE_SEQUENCE"));
     }
 
     #[test]
