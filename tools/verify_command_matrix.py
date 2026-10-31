@@ -14,7 +14,7 @@ MATRIX = ROOT / "docs" / "command-matrix.yml"
 PICARD_COMMANDS = ROOT / "docs" / "picard-3.4.0-commands.txt"
 COMMAND_DOCS = ROOT / "docs" / "commands.rst"
 CLI = ROOT / "crates" / "turbo-picard-cli" / "src" / "lib.rs"
-CI = ROOT / ".github" / "workflows" / "ci.yml"
+PARITY_GATE = ROOT / "tools" / "parity_gate.sh"
 REAL_DATA_MANIFEST = ROOT / "benchmarks" / "real-data" / "manifest.json"
 CRAM_PARITY_SCRIPT = ROOT / "tools" / "verify_basic_cram_parity.sh"
 EXPECTED_PICARD_REFERENCE = "3.4.0"
@@ -332,11 +332,15 @@ def validate_parity_script_files(scripts: Sequence[str], root: pathlib.Path = RO
     return errors
 
 
-def validate_parity_script_ci_coverage(scripts: Sequence[str], ci_text: str) -> list[str]:
-    scripts_missing_from_ci = [script for script in scripts if script not in ci_text]
-    if scripts_missing_from_ci:
-        return ["matrix parity scripts missing from CI: " + ", ".join(scripts_missing_from_ci)]
-    return []
+def validate_parity_gate_coverage(scripts: Sequence[str], gate_text: str) -> list[str]:
+    errors: list[str] = []
+    if not enables_errexit(gate_text):
+        errors.append("tools/parity_gate.sh does not fail closed")
+    run_lines = {line.strip().split()[-1] for line in gate_text.splitlines() if line.strip()}
+    missing = [script for script in scripts if f"./{script}" not in run_lines]
+    if missing:
+        errors.append("matrix parity scripts missing from tools/parity_gate.sh: " + ", ".join(missing))
+    return errors
 
 
 def main() -> int:
@@ -430,10 +434,9 @@ def main() -> int:
         for error in command_docs_errors:
             print(error, file=sys.stderr)
         return 1
-    ci_text = CI.read_text(encoding="utf-8")
-    script_ci_errors = validate_parity_script_ci_coverage(parity_scripts, ci_text)
-    if script_ci_errors:
-        for error in script_ci_errors:
+    gate_errors = validate_parity_gate_coverage(parity_scripts, PARITY_GATE.read_text(encoding="utf-8"))
+    if gate_errors:
+        for error in gate_errors:
             print(error, file=sys.stderr)
         return 1
     return 0

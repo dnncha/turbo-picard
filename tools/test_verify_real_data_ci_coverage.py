@@ -359,7 +359,7 @@ commands:
             "tools/verify_basic_viewsam_parity.sh",
         ]
 
-    def test_reports_command_matrix_parity_scripts_missing_from_ci(self) -> None:
+    def test_reports_command_matrix_parity_scripts_missing_from_parity_gate(self) -> None:
         matrix_text = """
 commands:
   - name: MarkDuplicates
@@ -370,9 +370,9 @@ commands:
     parity_script: tools/verify_basic_viewsam_parity.sh
 """
 
-        assert verify_real_data_ci_coverage.validate_parity_script_ci_coverage(
-            'TURBO_PICARD_CONDA_PREFIX="env" ./tools/verify_basic_picard_parity.sh\n', matrix_text
-        ) == ["CI missing command-matrix parity script: ./tools/verify_basic_viewsam_parity.sh"]
+        assert verify_real_data_ci_coverage.validate_parity_gate_coverage(
+            "./tools/verify_basic_picard_parity.sh\n", matrix_text
+        ) == ["tools/parity_gate.sh missing command-matrix parity script: ./tools/verify_basic_viewsam_parity.sh"]
 
 
 if __name__ == "__main__":

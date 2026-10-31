@@ -8,6 +8,7 @@ import sys
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 CI = ROOT / ".github" / "workflows" / "ci.yml"
 PACKAGE_INSTALL = ROOT / "tools" / "verify_package_install.sh"
+PARITY_GATE = ROOT / "tools" / "parity_gate.sh"
 
 REQUIRED_SNIPPETS = [
     "python3 -m unittest tools/test_compare_real_data.py",
@@ -157,11 +158,11 @@ def command_matrix_parity_scripts(matrix_text: str) -> list[str]:
     return scripts
 
 
-def validate_parity_script_ci_coverage(ci_text: str, matrix_text: str) -> list[str]:
+def validate_parity_gate_coverage(gate_text: str, matrix_text: str) -> list[str]:
     errors: list[str] = []
     for script in command_matrix_parity_scripts(matrix_text):
-        if f"./{script}" not in ci_text:
-            errors.append(f"CI missing command-matrix parity script: ./{script}")
+        if f"./{script}" not in gate_text:
+            errors.append(f"tools/parity_gate.sh missing command-matrix parity script: ./{script}")
     return errors
 
 
@@ -170,7 +171,10 @@ def main() -> int:
     errors = validate_ci_coverage(ci_text)
     errors.extend(validate_python_tool_compile_coverage(ci_text))
     errors.extend(
-        validate_parity_script_ci_coverage(ci_text, (ROOT / "docs" / "command-matrix.yml").read_text(encoding="utf-8"))
+        validate_parity_gate_coverage(
+            PARITY_GATE.read_text(encoding="utf-8"),
+            (ROOT / "docs" / "command-matrix.yml").read_text(encoding="utf-8"),
+        )
     )
     errors.extend(validate_package_install_coverage(PACKAGE_INSTALL.read_text(encoding="utf-8")))
     if errors:
