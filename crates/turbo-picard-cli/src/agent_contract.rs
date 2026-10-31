@@ -140,7 +140,7 @@ mod tests {
         );
         assert_eq!(
             inspect("ReplaceSamHeader", &["H=header.sam"]),
-            [] as [std::string::String; 0]
+            [] as [String; 0]
         );
     }
 
