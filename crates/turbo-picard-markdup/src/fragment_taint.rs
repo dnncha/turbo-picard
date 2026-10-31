@@ -70,8 +70,8 @@ mod tests {
     #[test]
     fn taint_filter_allocates_nothing_before_the_first_insert() {
         let taint = FragmentTaint::new();
-        assert!(taint.words.is_empty());
+        assert_eq!(taint.words, [] as [u64; 0]);
         assert!(!taint.contains(b"any-key"));
-        assert!(taint.words.is_empty());
+        assert_eq!(taint.words, [] as [u64; 0]);
     }
 }

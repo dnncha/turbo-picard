@@ -138,7 +138,10 @@ mod tests {
             inspect("LiftoverVcf", &["REJECT=reject.vcf"]),
             ["REJECT=reject.vcf"]
         );
-        assert!(inspect("ReplaceSamHeader", &["H=header.sam"]).is_empty());
+        assert_eq!(
+            inspect("ReplaceSamHeader", &["H=header.sam"]),
+            [] as [String; 0]
+        );
     }
 
     #[test]

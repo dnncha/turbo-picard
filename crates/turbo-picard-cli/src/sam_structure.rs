@@ -16,12 +16,6 @@ pub(super) enum SamStructureError {
     Cigar(String),
 }
 
-impl From<SamStructureError> for String {
-    fn from(error: SamStructureError) -> Self {
-        error.to_string()
-    }
-}
-
 #[derive(Default)]
 pub(super) struct Structure {
     pub targets: BTreeMap<String, (usize, u64)>,
