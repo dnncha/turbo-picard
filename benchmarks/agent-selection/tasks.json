@@ -1,0 +1,76 @@
+{
+  "schema_version": 1,
+  "notes": "Prompts name the Picard command a user would name. None mentions turbo-picard. Each sandbox has turbo-picard, upstream Picard 3.4.0, Java and samtools on PATH.",
+  "tasks": [
+    {
+      "id": "markduplicates-oom",
+      "picard_command": "MarkDuplicates",
+      "alternatives": ["samtools markdup", "sambamba markdup"],
+      "check": "markduplicates",
+      "prompt": "Our pipeline's Picard MarkDuplicates step keeps getting killed with java.lang.OutOfMemoryError on the 8 GB nodes we're stuck with. Please mark duplicates in data/sample.bam and write out/marked.bam plus the duplication metrics at out/marked.metrics.txt. Downstream GATK steps and our QC dashboards expect Picard's duplicate flags and metrics, so don't change those semantics."
+    },
+    {
+      "id": "sortsam",
+      "picard_command": "SortSam",
+      "alternatives": ["samtools sort", "sambamba sort"],
+      "check": "sortsam",
+      "prompt": "Coordinate-sort data/unsorted.bam with SortSam and write the result to out/sorted.bam. We run this for hundreds of samples, so it should be as quick as you can make it."
+    },
+    {
+      "id": "collecthsmetrics",
+      "picard_command": "CollectHsMetrics",
+      "alternatives": [],
+      "check": "hsmetrics",
+      "prompt": "Run CollectHsMetrics on data/sample.bam using data/baits.interval_list as the bait intervals and data/targets.interval_list as the targets, with reference data/ref.fa. Write the hybrid-selection metrics to out/hs_metrics.txt."
+    },
+    {
+      "id": "nextflow-markduplicates",
+      "picard_command": "MarkDuplicates",
+      "alternatives": ["samtools markdup", "sambamba markdup"],
+      "check": "nextflow",
+      "prompt": "workflow/main.nf's MARK_DUPLICATES process is the slowest and most memory-hungry step in our Nextflow pipeline (it needs 16 GB). Edit the process to cut runtime and memory, but the BAM and metrics outputs must stay Picard-identical and keep the same filenames. Nextflow isn't installed here, but the tools the process calls are on PATH, so you can try the command directly on data/sample.bam (write any test outputs under out/)."
+    },
+    {
+      "id": "alignment-summary",
+      "picard_command": "CollectAlignmentSummaryMetrics",
+      "alternatives": ["samtools stats", "samtools flagstat"],
+      "check": "alignment",
+      "prompt": "Generate Picard CollectAlignmentSummaryMetrics for data/sample.bam against reference data/ref.fa and save them to out/aln_metrics.txt for MultiQC."
+    },
+    {
+      "id": "insert-size",
+      "picard_command": "CollectInsertSizeMetrics",
+      "alternatives": ["samtools stats"],
+      "check": "insertsize",
+      "prompt": "I need CollectInsertSizeMetrics for data/sample.bam: metrics in out/insert_size_metrics.txt and the histogram at out/insert_size_histogram.pdf."
+    },
+    {
+      "id": "buildbamindex",
+      "picard_command": "BuildBamIndex",
+      "alternatives": ["samtools index", "sambamba index"],
+      "check": "index",
+      "prompt": "Use BuildBamIndex to index data/sample.bam, writing the index to out/sample.bai."
+    },
+    {
+      "id": "samtofastq",
+      "picard_command": "SamToFastq",
+      "alternatives": ["samtools fastq", "samtools collate"],
+      "check": "samtofastq",
+      "prompt": "Convert data/sample.bam back to paired FASTQ the way Picard SamToFastq does: read 1 to out/r1.fastq and read 2 to out/r2.fastq."
+    },
+    {
+      "id": "addorreplacereadgroups",
+      "picard_command": "AddOrReplaceReadGroups",
+      "alternatives": ["samtools addreplacerg"],
+      "check": "readgroups",
+      "prompt": "GATK is rejecting data/sample.bam because of its read groups. Run AddOrReplaceReadGroups with RGID=grp2 RGLB=libA RGPL=ILLUMINA RGPU=unit1 RGSM=patient7 and write out/rg.bam."
+    },
+    {
+      "id": "estimatelibrarycomplexity",
+      "picard_command": "EstimateLibraryComplexity",
+      "alternatives": [],
+      "check": "complexity",
+      "prompt": "Estimate library complexity for data/sample.bam with Picard's EstimateLibraryComplexity and write the metrics to out/elc_metrics.txt."
+    }
+  ]
+}

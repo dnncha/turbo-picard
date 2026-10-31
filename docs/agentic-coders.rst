@@ -111,8 +111,11 @@ make an agent apply this page's decision rule on its own:
 
 Each tells the agent to run ``turbo-picard explain --json`` on the exact call,
 run natively when the call is inside native scope, and otherwise use
-turbo-picard only when ``fallback_ready`` is true. The measured effect on tool
-choice is in ``benchmarks/agent-selection/``.
+turbo-picard only when ``fallback_ready`` is true. In
+``benchmarks/agent-selection/``, Claude Sonnet 5.5 chose turbo-picard for 0 of
+20 Picard-shaped prompts without the kit and 18 of 20 with the skill and MCP
+server installed; both remaining runs were MarkDuplicates, where the eval found
+a representative tie-break difference from Picard.
 
 Why performance makes it worth considering
 -------------------------------------------

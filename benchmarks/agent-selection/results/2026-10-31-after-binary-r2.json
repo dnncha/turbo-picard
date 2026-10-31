@@ -1,0 +1,216 @@
+{
+  "schema_version": 1,
+  "label": "after-binary-r2",
+  "recorded_at": "2026-10-31T00:37:11+00:00",
+  "harness_commit": "c5095db3fb166e624a9c3c704ae4b8060f9a604e",
+  "turbo_picard_source_commit": "5c89e58d",
+  "model_alias": "sonnet",
+  "agent": "claude -p (Claude Code, project setting source only)",
+  "turbo_picard_version": "turbo-picard 0.1.17",
+  "turbo_picard_binary_sha256": "56c288bc049776fcdd8bf2cc0bb21ef30cc599f92bcc595ff1bd55f9b37bbdf9",
+  "picard_env": "/opt/homebrew/Caskroom/miniforge/base/envs/.conda-turbo-picard",
+  "skill": null,
+  "skill_sha256": null,
+  "agents_md": null,
+  "mcp": false,
+  "tasks_sha256": "611551e036e705be03a69bad77ca7ba6badfc114c1b2c3d86122c1c43512ebb9",
+  "summary": {
+    "tasks": 10,
+    "chose_turbo_picard": 0,
+    "chose_picard": 10,
+    "chose_other": 0,
+    "correct": 10,
+    "correct_with_turbo_picard": 0,
+    "consulted_turbo_picard": 0
+  },
+  "results": [
+    {
+      "task_id": "markduplicates-oom",
+      "picard_command": "MarkDuplicates",
+      "final_tool": "picard",
+      "tools_used": [
+        "picard"
+      ],
+      "consulted_turbo_picard": false,
+      "correct": true,
+      "check_detail": "",
+      "exit_code": 0,
+      "num_turns": 4,
+      "duration_s": 16.9,
+      "permission_denials": 0,
+      "invocations": [
+        "picard -Xmx6g MarkDuplicates I=data/sample.bam O=out/marked.bam M=out/marked.metrics.txt MAX_RECORDS_IN_RAM=500000 VALIDATION_STRINGENCY=LENIENT 2>&1"
+      ]
+    },
+    {
+      "task_id": "sortsam",
+      "picard_command": "SortSam",
+      "final_tool": "picard",
+      "tools_used": [
+        "picard"
+      ],
+      "consulted_turbo_picard": false,
+      "correct": true,
+      "check_detail": "",
+      "exit_code": 0,
+      "num_turns": 5,
+      "duration_s": 16.5,
+      "permission_denials": 1,
+      "invocations": [
+        "time picard SortSam -I data/unsorted.bam -O out/sorted.bam -SO coordinate --MAX_RECORDS_IN_RAM 5000000 --COMPRESSION_LEVEL 1 2>&1"
+      ]
+    },
+    {
+      "task_id": "collecthsmetrics",
+      "picard_command": "CollectHsMetrics",
+      "final_tool": "picard",
+      "tools_used": [
+        "picard"
+      ],
+      "consulted_turbo_picard": false,
+      "correct": true,
+      "check_detail": "",
+      "exit_code": 0,
+      "num_turns": 4,
+      "duration_s": 12.2,
+      "permission_denials": 0,
+      "invocations": [
+        "picard CollectHsMetrics I=data/sample.bam BI=data/baits.interval_list TI=data/targets.interval_list R=data/ref.fa O=out/hs_metrics.txt 2>&1"
+      ]
+    },
+    {
+      "task_id": "nextflow-markduplicates",
+      "picard_command": "MarkDuplicates",
+      "final_tool": "picard",
+      "tools_used": [
+        "picard"
+      ],
+      "consulted_turbo_picard": false,
+      "correct": true,
+      "check_detail": "",
+      "exit_code": 0,
+      "num_turns": 13,
+      "duration_s": 45.3,
+      "permission_denials": 3,
+      "invocations": [
+        "( time picard -Xmx14g MarkDuplicates I=data/sample.bam O=out/base/s.markdup.bam M=out/base/s.markdup.metrics.txt VALIDATION_STRINGENCY=LENIENT ) 2>&1",
+        "( time picard -Xmx2g -XX:+UseParallelGC -XX:ParallelGCThreads=4 MarkDuplicates I=data/sample.bam O=out/new/s.markdup.bam M=out/new/s.markdup.metrics.txt VALIDATION_STRINGENCY=LENIENT TMP_DIR=out/new ) 2>&1",
+        "time picard -Xmx14g MarkDuplicates I=data/sample.bam O=out/base/s.markdup.bam M=out/base/s.markdup.metrics.txt VALIDATION_STRINGENCY=LENIENT 2>&1",
+        "time picard -Xmx2g -XX:+UseParallelGC -XX:ParallelGCThreads=4 MarkDuplicates I=data/sample.bam O=out/new/s.markdup.bam M=out/new/s.markdup.metrics.txt VALIDATION_STRINGENCY=LENIENT TMP_DIR=out/new 2>&1",
+        "time picard -Xmx14g MarkDuplicates I=data/sample.bam O=out/base/s.markdup.bam M=out/base/s.markdup.metrics.txt VALIDATION_STRINGENCY=LENIENT 2>&1",
+        "time picard -Xmx2g -XX:+UseParallelGC -XX:ParallelGCThreads=4 MarkDuplicates I=data/sample.bam O=out/new/s.markdup.bam M=out/new/s.markdup.metrics.txt VALIDATION_STRINGENCY=LENIENT TMP_DIR=out/new 2>&1"
+      ]
+    },
+    {
+      "task_id": "alignment-summary",
+      "picard_command": "CollectAlignmentSummaryMetrics",
+      "final_tool": "picard",
+      "tools_used": [
+        "picard"
+      ],
+      "consulted_turbo_picard": false,
+      "correct": true,
+      "check_detail": "",
+      "exit_code": 0,
+      "num_turns": 3,
+      "duration_s": 10.4,
+      "permission_denials": 0,
+      "invocations": [
+        "picard CollectAlignmentSummaryMetrics I=data/sample.bam R=data/ref.fa O=out/aln_metrics.txt 2>&1"
+      ]
+    },
+    {
+      "task_id": "insert-size",
+      "picard_command": "CollectInsertSizeMetrics",
+      "final_tool": "picard",
+      "tools_used": [
+        "picard"
+      ],
+      "consulted_turbo_picard": false,
+      "correct": true,
+      "check_detail": "",
+      "exit_code": 0,
+      "num_turns": 4,
+      "duration_s": 14.4,
+      "permission_denials": 0,
+      "invocations": [
+        "picard CollectInsertSizeMetrics I=data/sample.bam O=out/insert_size_metrics.txt H=out/insert_size_histogram.pdf 2>&1"
+      ]
+    },
+    {
+      "task_id": "buildbamindex",
+      "picard_command": "BuildBamIndex",
+      "final_tool": "picard",
+      "tools_used": [
+        "picard"
+      ],
+      "consulted_turbo_picard": false,
+      "correct": true,
+      "check_detail": "",
+      "exit_code": 0,
+      "num_turns": 3,
+      "duration_s": 8.6,
+      "permission_denials": 0,
+      "invocations": [
+        "which picard BuildBamIndex",
+        "picard BuildBamIndex I=data/sample.bam O=out/sample.bai 2>&1"
+      ]
+    },
+    {
+      "task_id": "samtofastq",
+      "picard_command": "SamToFastq",
+      "final_tool": "picard",
+      "tools_used": [
+        "picard"
+      ],
+      "consulted_turbo_picard": false,
+      "correct": true,
+      "check_detail": "",
+      "exit_code": 0,
+      "num_turns": 3,
+      "duration_s": 9.2,
+      "permission_denials": 0,
+      "invocations": [
+        "picard SamToFastq I=data/sample.bam F=out/r1.fastq F2=out/r2.fastq 2>&1"
+      ]
+    },
+    {
+      "task_id": "addorreplacereadgroups",
+      "picard_command": "AddOrReplaceReadGroups",
+      "final_tool": "picard",
+      "tools_used": [
+        "picard"
+      ],
+      "consulted_turbo_picard": false,
+      "correct": true,
+      "check_detail": "",
+      "exit_code": 0,
+      "num_turns": 3,
+      "duration_s": 9.3,
+      "permission_denials": 0,
+      "invocations": [
+        "picard AddOrReplaceReadGroups I=data/sample.bam O=out/rg.bam RGID=grp2 RGLB=libA RGPL=ILLUMINA RGPU=unit1 RGSM=patient7 2>&1"
+      ]
+    },
+    {
+      "task_id": "estimatelibrarycomplexity",
+      "picard_command": "EstimateLibraryComplexity",
+      "final_tool": "picard",
+      "tools_used": [
+        "picard"
+      ],
+      "consulted_turbo_picard": false,
+      "correct": true,
+      "check_detail": "",
+      "exit_code": 0,
+      "num_turns": 3,
+      "duration_s": 8.4,
+      "permission_denials": 0,
+      "invocations": [
+        "picard EstimateLibraryComplexity I=data/sample.bam O=out/elc_metrics.txt 2>&1"
+      ]
+    }
+  ],
+  "notes": "Harness was uncommitted when this ran; the committed run_eval.py differs only by lint-driven refactors with no behaviour change.",
+  "tasks_sha256_matches_committed": true
+}

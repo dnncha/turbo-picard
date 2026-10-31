@@ -7,6 +7,10 @@ which is also ignored.
 [Competitive process coverage](competitive-processes.md) tracks native rivals,
 the current optimization work and comparison gaps for each workload boundary.
 
+[Agent selection](agent-selection/README.md) measures which tool a coding agent
+picks for Picard-shaped prompts, and whether its output matches Picard, with and
+without the agent kit. It is a tool-choice measurement, not a speed benchmark.
+
 The current saved public benchmark story is straightforward: every one of the
 32 benchmarked, parity-checked commands is faster than Picard 3.4.0, with a
 `22.88x` floor speedup, an `84.52x` geometric mean speedup, and a `272.12x` top
