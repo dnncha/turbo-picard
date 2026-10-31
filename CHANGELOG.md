@@ -31,6 +31,14 @@
   representative tie-break difference from Picard 3.4.0 (8 of 6,900 reads,
   metrics identical) that predates this work.
 
+### Scientific correctness
+
+- MarkDuplicates now breaks equal-score ties on the tile, x and y parsed from
+  the read name before file order, as Picard 3.4.0's `ReadEndsMDComparator`
+  does, in the in-memory pair and fragment paths and the external plan. This
+  fixes the representative divergence above; the `pair-score-tie-reverse-r1`
+  fixture pins Picard 3.4.0 output.
+
 ### Engineering
 
 - Add a per-run collector plan to the single-pass metrics pipeline. The plan
