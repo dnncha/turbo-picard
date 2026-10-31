@@ -322,15 +322,15 @@ fn run_tool(arguments: &Map<String, Value>) -> Result<(Value, bool), String> {
     let overwrite = bool_field(arguments, "overwrite")?;
     let require_native = bool_field(arguments, "require_native")?;
     let declared = guard_outputs(&command, &args, &cwd, overwrite)?;
-    let mut argv = vec![command.clone()];
-    argv.extend(args);
-    let captured = run_self(&argv, Some(&cwd), require_native)?;
+    let mut invocation = vec![command.clone()];
+    invocation.extend(args);
+    let captured = run_self(&invocation, Some(&cwd), require_native)?;
     let readiness = super::fallback_readiness();
     let status = super::command_matrix_entry(&command)
         .map_or_else(|| "fallback-only".to_string(), |entry| entry.status);
     let report = json!({
         "command": command,
-        "argv": std::iter::once("turbo-picard".to_string()).chain(argv.iter().skip(1).cloned()).collect::<Vec<_>>(),
+        "argv": std::iter::once("turbo-picard".to_string()).chain(invocation.iter().skip(1).cloned()).collect::<Vec<_>>(),
         "cwd": cwd.display().to_string(),
         "status": status,
         "require_native": require_native,
