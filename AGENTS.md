@@ -41,12 +41,12 @@ installed version before using source-only discovery features.
 
 ## Complete the checks
 
-Run `cargo fmt --all -- --check` and `cargo test --workspace --locked`.
-Install the existing Python test dependency and run:
+Run `tools/static_gate.sh` (rustfmt, clippy pedantic with `-D warnings`, cargo-deny, ruff, mypy --strict) and `cargo test --workspace --locked`. Build on Omarchy when the Mac is busy.
+Install the Python test dependencies and run:
 
 ```sh
-python3 -m pip install PyYAML==6.0.3
-python3 -m unittest discover -s tools
+python3 -m pip install PyYAML==6.0.3 pytest
+python3 -m pytest -q tools
 python3 tools/verify_command_matrix.py
 python3 tools/verify_ci_coverage.py
 python3 tools/verify_benchmark_log_evidence.py

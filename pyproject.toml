@@ -45,6 +45,9 @@ bindings = "bin"
 strip = true
 include = [{ path = "LICENSE", format = "sdist" }]
 
+[dependency-groups]
+dev = ["pytest>=8", "PyYAML==6.0.3", "types-PyYAML"]
+
 [tool.mypy]
 python_version = "3.10"
 strict = true
