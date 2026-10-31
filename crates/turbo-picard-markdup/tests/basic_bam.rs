@@ -319,6 +319,54 @@ fn chooses_duplicate_representative_per_pair_not_per_mate() {
 }
 
 #[test]
+fn tied_pair_scores_break_on_tile_x_y_like_picard() {
+    let tempdir = tempfile::tempdir().expect("tempdir exists");
+    let output = tempdir.path().join("output.bam");
+    let metrics = tempdir.path().join("metrics.txt");
+    let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../fixtures/markduplicates/pair-score-tie-reverse-r1");
+    let input = fixture.join("input.bam");
+    let config = MarkDuplicatesConfig {
+        input: input.display().to_string(),
+        inputs: vec![input.display().to_string()],
+        output: output.display().to_string(),
+        metrics_file: metrics.display().to_string(),
+        remove_duplicates: false,
+        remove_sequencing_duplicates: false,
+        assume_sorted: true,
+        assume_sort_order: None,
+        validation_stringency: Some("SILENT".to_string()),
+        quiet: true,
+        create_index: false,
+        create_md5_file: false,
+        add_pg_tag_to_reads: true,
+        tag_duplicate_set_members: false,
+        duplicate_scoring_strategy: None,
+        read_name_regex: None,
+        tagging_policy: None,
+        barcode_tag: None,
+        read_one_barcode_tag: None,
+        read_two_barcode_tag: None,
+        clear_dt: true,
+        optical_duplicate_pixel_distance: None,
+        compression_level: None,
+        reference_sequence: None,
+        tmp_dir: None,
+    };
+
+    turbo_picard_markdup::run(&config).expect("BAM duplicate marking succeeds");
+
+    assert_eq!(read_flags(&output), read_flags(&fixture.join("picard.bam")));
+    assert_eq!(
+        read_flags(&output),
+        vec![
+            1187, 163, 1187, 163, 83, 1107, 83, 1107, 1123, 99, 147, 1171, 1187, 163, 83, 1107,
+            1187, 163, 1107, 83, 1024, 0
+        ]
+    );
+}
+
+#[test]
 fn duplicate_scoring_ignores_bases_below_q15() {
     let tempdir = tempfile::tempdir().expect("tempdir exists");
     let input = tempdir.path().join("input.bam");

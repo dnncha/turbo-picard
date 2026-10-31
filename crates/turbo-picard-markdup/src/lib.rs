@@ -32,6 +32,7 @@ use turbo_picard_core::sort_error::SortError;
 const DUPLICATE_FLAG: u16 = 0x400;
 const UNMAPPED_FLAG: u16 = 0x4;
 const UNCOMPUTED_QUALITY_SCORE: u64 = u64::MAX;
+const UNPARSED_READ_LOCATION: (i64, i64, i64) = (-1, -1, -1);
 const COMPACT_MARKDUP_MAX_RECORDS: usize = 100_000;
 type LibraryId = u32;
 type BarcodeId = NonZeroU32;
@@ -1227,6 +1228,7 @@ fn process_external_duplicate_group(
             decisions,
             summary,
             library_registry,
+            processing_config.read_name_parser,
         );
     }
     let set_size = u64::try_from(names.len()).unwrap_or(u64::MAX);
@@ -1243,7 +1245,9 @@ fn process_external_duplicate_group(
         return Ok(());
     }
 
-    let Some(representative_name) = representative_external_name(&names) else {
+    let Some(representative_name) =
+        representative_external_name(group, &names, processing_config.read_name_parser)
+    else {
         return Ok(());
     };
     let optical_names = if matches!(
@@ -1350,6 +1354,7 @@ fn process_external_fragment_group(
     decisions: &mut ExternalSorter,
     summary: &mut MarkDuplicatesSummary,
     library_registry: &mut LibraryRegistry,
+    read_name_parser: &ReadNameLocationParser,
 ) -> Result<(), ExternalPlanError> {
     if group
         .iter()
@@ -1363,7 +1368,8 @@ fn process_external_fragment_group(
         return Ok(());
     }
 
-    let Some(representative_name) = representative_external_name(names) else {
+    let Some(representative_name) = representative_external_name(group, names, read_name_parser)
+    else {
         return Ok(());
     };
     for member in group {
@@ -1374,16 +1380,42 @@ fn process_external_fragment_group(
     Ok(())
 }
 
-fn representative_external_name<'a>(names: &HashMap<&'a [u8], (u64, u64)>) -> Option<&'a [u8]> {
+fn representative_external_name<'a>(
+    group: &[ExternalPlanRecord],
+    names: &HashMap<&'a [u8], (u64, u64)>,
+    read_name_parser: &ReadNameLocationParser,
+) -> Option<&'a [u8]> {
+    let locations = group
+        .iter()
+        .map(|member| {
+            (
+                member.template_key.as_slice(),
+                read_location_tie_break(read_name_parser, member.qname.as_slice()),
+            )
+        })
+        .collect::<HashMap<_, _>>();
+    let location = |name: &[u8]| {
+        locations
+            .get(name)
+            .copied()
+            .unwrap_or(UNPARSED_READ_LOCATION)
+    };
     names
         .iter()
         .max_by(|left, right| {
             left.1
                 .0
                 .cmp(&right.1.0)
+                .then_with(|| location(right.0).cmp(&location(left.0)))
                 .then_with(|| right.1.1.cmp(&left.1.1))
         })
         .map(|(name, _)| *name)
+}
+
+fn read_location_tie_break(read_name_parser: &ReadNameLocationParser, name: &[u8]) -> (i64, i64, i64) {
+    read_name_parser
+        .coordinates(name)
+        .unwrap_or(UNPARSED_READ_LOCATION)
 }
 
 fn mark_external_duplicate(
@@ -1738,7 +1770,7 @@ fn mark_duplicate_plan(
         }
 
         let Some(representative_index) =
-            best_duplicate_representative_index(group, records, read_ends)
+            best_duplicate_representative_index(group, records, read_ends, &read_name_parser)
         else {
             continue;
         };
@@ -1800,6 +1832,7 @@ fn mark_duplicate_plan(
         eligible_indices,
         summary,
         library_registry,
+        &read_name_parser,
     );
     Ok(optical_duplicate_records)
 }
@@ -2918,6 +2951,7 @@ fn mark_fragment_duplicate_groups(
     eligible_indices: &[usize],
     summary: &mut MarkDuplicatesSummary,
     library_registry: &mut LibraryRegistry,
+    read_name_parser: &ReadNameLocationParser,
 ) {
     let mut fragment_groups = HashMap::<ReadEndDuplicateKey, Vec<usize>>::default();
     for index in eligible_indices.iter().copied() {
@@ -2950,7 +2984,7 @@ fn mark_fragment_duplicate_groups(
         }
 
         let Some(representative_index) =
-            best_duplicate_representative_index(group, records, read_ends)
+            best_duplicate_representative_index(group, records, read_ends, read_name_parser)
         else {
             continue;
         };
@@ -3256,8 +3290,9 @@ fn best_duplicate_representative_index(
     group: &[usize],
     records: &[bam::Record],
     read_ends: &mut [ReadEndMetadata],
+    read_name_parser: &ReadNameLocationParser,
 ) -> Option<usize> {
-    let mut scores_by_name = HashMap::<&[u8], (usize, u64)>::default();
+    let mut scores_by_name = HashMap::<&[u8], (usize, u64, (i64, i64, i64))>::default();
 
     for index in group.iter().copied() {
         let score = if read_ends[index].quality_score == UNCOMPUTED_QUALITY_SCORE {
@@ -3268,14 +3303,21 @@ fn best_duplicate_representative_index(
             read_ends[index].quality_score
         };
         let name = records[index].qname();
-        let entry = scores_by_name.entry(name).or_insert((index, 0));
+        let entry = scores_by_name
+            .entry(name)
+            .or_insert_with(|| (index, 0, read_location_tie_break(read_name_parser, name)));
         entry.1 += score;
     }
 
     scores_by_name
         .into_values()
-        .max_by(|left, right| left.1.cmp(&right.1).then_with(|| right.0.cmp(&left.0)))
-        .map(|(index, _)| index)
+        .max_by(|left, right| {
+            left.1
+                .cmp(&right.1)
+                .then_with(|| right.2.cmp(&left.2))
+                .then_with(|| right.0.cmp(&left.0))
+        })
+        .map(|(index, _, _)| index)
 }
 
 fn add_duplicate_set(
@@ -3847,7 +3889,7 @@ mod tests {
 
         let mut read_ends = read_ends_for_records(&records);
         let representative_index =
-            best_duplicate_representative_index(&[0, 1, 2, 3], &records, &mut read_ends);
+            best_duplicate_representative_index(&[0, 1, 2, 3], &records, &mut read_ends, &ReadNameLocationParser::Default);
         assert_eq!(representative_index, Some(0));
     }
 
@@ -3861,8 +3903,38 @@ mod tests {
 
         let mut read_ends = read_ends_for_records(&records);
         let representative_index =
-            best_duplicate_representative_index(&[0, 1, 2], &records, &mut read_ends);
+            best_duplicate_representative_index(&[0, 1, 2], &records, &mut read_ends, &ReadNameLocationParser::Default);
         assert_eq!(representative_index, Some(0));
+    }
+
+    #[test]
+    fn best_duplicate_representative_index_tie_prefers_lower_tile_then_x_then_y() {
+        let records = [
+            record_with_name_and_qualities(b"SIM:1:FC1:1:1103:22014:10026", &[10], 0),
+            record_with_name_and_qualities(b"SIM:1:FC1:1:1101:2344:3496", &[10], 0),
+            record_with_name_and_qualities(b"SIM:1:FC1:1:1101:2344:3000", &[10], 0),
+            record_with_name_and_qualities(b"SIM:1:FC1:1:1101:9000:1", &[10], 0),
+        ];
+
+        let mut read_ends = read_ends_for_records(&records);
+        assert_eq!(
+            best_duplicate_representative_index(
+                &[0, 1, 2, 3],
+                &records,
+                &mut read_ends,
+                &ReadNameLocationParser::Default
+            ),
+            Some(2)
+        );
+        assert_eq!(
+            best_duplicate_representative_index(
+                &[0, 1],
+                &records,
+                &mut read_ends,
+                &ReadNameLocationParser::Disabled
+            ),
+            Some(0)
+        );
     }
 
     #[test]
@@ -4373,7 +4445,7 @@ mod tests {
         read_ends[1].quality_score = 100;
 
         assert_eq!(
-            best_duplicate_representative_index(&[0, 1], &records, &mut read_ends),
+            best_duplicate_representative_index(&[0, 1], &records, &mut read_ends, &ReadNameLocationParser::Default),
             Some(1)
         );
     }
