@@ -170,6 +170,102 @@ fn doctor_reports_runtime_and_fallback_state() {
 }
 
 #[test]
+fn doctor_and_explain_report_fallback_ready_when_upstream_picard_runs() {
+    let tempdir = tempfile::tempdir().expect("tempdir exists");
+    let fallback = fallback_script(tempdir.path(), 0);
+
+    let mut doctor = Command::cargo_bin("turbo-picard").expect("binary exists");
+    doctor
+        .arg("doctor")
+        .env_remove("TURBO_PICARD_REQUIRE_NATIVE")
+        .env(
+            "TURBO_PICARD_FALLBACK_COMMAND",
+            fallback.display().to_string(),
+        )
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("fallback_ready=true\n"))
+        .stdout(predicate::str::contains(
+            "fallback_status=upstream-picard-found",
+        ))
+        .stdout(predicate::str::contains("fallback_hint=").not());
+
+    let mut explain = Command::cargo_bin("turbo-picard").expect("binary exists");
+    explain
+        .args([
+            "explain",
+            "--json",
+            "EstimateLibraryComplexity",
+            "O=metrics.txt",
+        ])
+        .env_remove("TURBO_PICARD_REQUIRE_NATIVE")
+        .env(
+            "TURBO_PICARD_FALLBACK_COMMAND",
+            fallback.display().to_string(),
+        )
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"fallback_ready\": true,"))
+        .stdout(predicate::str::contains(
+            "\"fallback_status\": \"upstream-picard-found\",",
+        ))
+        .stdout(predicate::str::contains("\"fallback_install_hint\": null,"));
+}
+
+#[test]
+fn doctor_and_explain_report_missing_fallback_with_install_hint() {
+    let tempdir = tempfile::tempdir().expect("tempdir exists");
+
+    let mut doctor = Command::cargo_bin("turbo-picard").expect("binary exists");
+    doctor
+        .arg("doctor")
+        .env_remove("TURBO_PICARD_REQUIRE_NATIVE")
+        .env_remove("TURBO_PICARD_FALLBACK_COMMAND")
+        .env_remove("PICARD_JAR")
+        .env_remove("CONDA_PREFIX")
+        .env("PATH", tempdir.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("fallback_ready=false\n"))
+        .stdout(predicate::str::contains(
+            "fallback_status=upstream-picard-not-found",
+        ))
+        .stdout(predicate::str::contains(
+            "fallback_hint=install upstream Picard",
+        ))
+        .stdout(predicate::str::contains("picard=3.4.0 openjdk"));
+
+    let mut missing_program = Command::cargo_bin("turbo-picard").expect("binary exists");
+    missing_program
+        .args(["explain", "--json", "MarkDuplicates"])
+        .env_remove("TURBO_PICARD_REQUIRE_NATIVE")
+        .env(
+            "TURBO_PICARD_FALLBACK_COMMAND",
+            "definitely-not-a-picard-binary -jar x.jar",
+        )
+        .env("PATH", tempdir.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"fallback_ready\": false,"))
+        .stdout(predicate::str::contains(
+            "\"fallback_status\": \"fallback-program-not-executable\",",
+        ))
+        .stdout(predicate::str::contains(
+            "\"fallback_install_hint\": \"install upstream Picard",
+        ));
+
+    let mut native_only = Command::cargo_bin("turbo-picard").expect("binary exists");
+    native_only
+        .arg("doctor")
+        .env("TURBO_PICARD_REQUIRE_NATIVE", "1")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "fallback_status=disabled-by-require-native",
+        ));
+}
+
+#[test]
 fn capabilities_json_exposes_agent_selection_contract() {
     let mut cmd = Command::cargo_bin("turbo-picard").expect("binary exists");
     cmd.args(["capabilities", "--json"])

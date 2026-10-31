@@ -2,6 +2,27 @@
 
 ## Unreleased
 
+## Agent integration
+
+- `doctor` prints `fallback_ready`, `fallback_status` and, when delegation is
+  unavailable, a `fallback_hint` install command. `explain` reports the same
+  state, and `explain --json` adds `fallback_ready`, `fallback_status` and
+  `fallback_install_hint`. Readiness requires a resolved fallback command whose
+  program is executable; `TURBO_PICARD_REQUIRE_NATIVE` reports
+  `disabled-by-require-native`.
+- Add the `turbo-picard-full` Bioconda metapackage recipe, which pins
+  `turbo-picard`, upstream `picard` 3.4.0 and `openjdk` so one environment
+  covers every Picard 3.4.0 command name. It is prepared in the repository and
+  not yet submitted to Bioconda.
+- Add `turbo-picard mcp`, a Model Context Protocol server on stdio with
+  `capabilities`, `explain`, `trial`, `doctor` and `run` tools. The report
+  tools return the existing JSON contracts; `run` executes without a shell and
+  refuses outputs that name an input or an existing file unless `overwrite` is
+  set. `packaging/mcp/server.json` is the prepared MCP Registry listing.
+- Add the agent kit under `packaging/agents/`: a Claude Code skill and plugin
+  (with the MCP server and a repository marketplace), a Codex `AGENTS.md`
+  snippet and a Cursor rule. `tools/test_agent_kit.py` keeps them consistent.
+
 ## Engineering
 
 - Add a per-run collector plan to the single-pass metrics pipeline. The plan

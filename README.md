@@ -35,6 +35,21 @@ evidence. Use `turbo-picard trial --json <PicardCommand> ...` for the exact task
 being considered. See the [agentic-coder guide](docs/agentic-coders.rst) for the
 selection rule and safe substitution pattern.
 
+Agents can also use the MCP server, which wraps the same reports plus a
+guarded `run` tool (current source; first release after 0.1.17):
+
+```bash
+claude mcp add turbo-picard -- turbo-picard mcp
+```
+
+mcp-name: io.github.dnncha/turbo-picard
+
+To make an agent pick this up on its own, install the
+[agent kit](packaging/agents/README.md): a Claude Code skill and plugin
+(`/plugin install turbo-picard --marketplace dnncha/turbo-picard`), a Codex `AGENTS.md` snippet
+and a Cursor rule. Each tells the agent to run `turbo-picard explain --json`
+first, run natively when in scope, and otherwise let turbo-picard delegate.
+
 ### Compact, native-only automation
 
 Version 0.1.17 repairs scientific correctness across duplicate marking,
@@ -66,6 +81,29 @@ For a containerized trial, use the published release image:
 ```bash
 docker run --rm ghcr.io/dnncha/turbo-picard:0.1.17 --version
 ```
+
+### Cover every Picard command in one environment
+
+`turbo-picard` runs a command natively only when the command and its options
+are inside documented native scope. Everything else is delegated to upstream
+Picard, if one is installed. Install both together so every Picard 3.4.0
+command name works:
+
+```bash
+mamba create -n turbo-picard -c conda-forge -c bioconda \
+  turbo-picard picard=3.4.0 openjdk
+mamba activate turbo-picard
+turbo-picard doctor
+```
+
+From the next release, `doctor` prints `fallback_ready=true` once upstream Picard
+is found, and `explain --json` reports `fallback_ready` for each call; older
+versions show the resolved `fallback_command` instead. With a pip install, point
+`PICARD_JAR` at an upstream `picard.jar` and keep Java on `PATH`. The
+[`turbo-picard-full`](packaging/bioconda/turbo-picard-full/README.md) recipe
+pins the same three packages as one Bioconda metapackage; it has not been
+submitted to Bioconda yet. See [fallback behavior](docs/fallback.rst). Native
+coverage is still command- and option-specific.
 
 Installing from PyPI currently gives you both commands:
 

@@ -24,6 +24,7 @@ hts-sys.workspace = true
 md5.workspace = true
 flate2.workspace = true
 rustc-hash.workspace = true
+serde_json.workspace = true
 crossbeam-channel.workspace = true
 turbo-picard-core = { path = "../turbo-picard-core", version = "0.1.17" }
 turbo-picard-markdup = { path = "../turbo-picard-markdup", version = "0.1.17" }
@@ -34,6 +35,7 @@ thiserror.workspace = true
 assert_cmd.workspace = true
 expect-test.workspace = true
 predicates.workspace = true
+serde_json.workspace = true
 
 [lints]
 workspace = true

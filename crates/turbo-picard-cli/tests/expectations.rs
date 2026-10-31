@@ -63,6 +63,8 @@ fn explain_text_contract_is_visible() {
         fallback_scope=Non-ALL_READS accumulation levels and unsupported advanced options should use upstream Picard.
         execution_path=native-when-inside-documented-scope-otherwise-fallback
         fallback_command=not-found
+        fallback_ready=false
+        fallback_status=disabled-by-require-native
         declared_outputs=none
     "]].assert_eq(&String::from_utf8_lossy(&output.stdout));
 }

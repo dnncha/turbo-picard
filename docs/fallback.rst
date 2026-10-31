@@ -5,6 +5,36 @@ Fallback behavior
 without a native fast path, plus unsupported options on accelerated commands,
 are delegated to upstream Picard.
 
+Install full coverage
+---------------------
+
+Install upstream Picard beside ``turbo-picard`` so every Picard 3.4.0 command
+has an execution path:
+
+.. code-block:: bash
+
+   mamba create -n turbo-picard -c conda-forge -c bioconda \
+     turbo-picard picard=3.4.0 openjdk
+
+The ``packaging/bioconda/turbo-picard-full`` recipe pins the same three
+packages as a ``noarch: generic`` metapackage. It is prepared in the repository
+and has not been submitted to Bioconda yet.
+
+Check readiness before relying on delegation:
+
+.. code-block:: bash
+
+   turbo-picard doctor
+   turbo-picard explain --json EstimateLibraryComplexity
+
+``doctor`` prints ``fallback_ready=true`` and ``fallback_status=upstream-picard-found``
+when delegation will work. When it is false, ``fallback_status`` names the
+reason (``upstream-picard-not-found``, ``fallback-program-not-executable`` or
+``disabled-by-require-native``) and ``fallback_hint`` gives an install command.
+``explain --json`` reports the same ``fallback_ready``, ``fallback_status`` and
+``fallback_install_hint`` fields. These fields require a build from the current
+source or the next release.
+
 Auto-discovery
 --------------
 

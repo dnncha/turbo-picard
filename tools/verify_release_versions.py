@@ -15,6 +15,7 @@ ROOT = Path(__file__).resolve().parents[1]
 RECIPE_PATHS = [
     Path("packaging/bioconda/turbo-picard/meta.yaml"),
     Path("packaging/bioconda/turbo-picard-picard-shim/meta.yaml"),
+    Path("packaging/bioconda/turbo-picard-full/meta.yaml"),
 ]
 
 CITATION_PATH = Path("CITATION.cff")

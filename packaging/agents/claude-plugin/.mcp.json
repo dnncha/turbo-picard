@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "turbo-picard": {
+      "command": "turbo-picard",
+      "args": ["mcp"]
+    }
+  }
+}

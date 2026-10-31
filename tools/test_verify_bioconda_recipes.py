@@ -1247,6 +1247,42 @@ source:
         assert "missing-first missing meta.yaml" in stderr.getvalue()
         assert "missing-second missing meta.yaml" in stderr.getvalue()
 
+    def test_full_metapackage_in_repository_is_valid(self) -> None:
+        meta_yaml = (
+            verify_bioconda_recipes.FULL_METAPACKAGE / "meta.yaml"
+        ).read_text(encoding="utf-8")
+        self.assertEqual(
+            verify_bioconda_recipes.validate_full_metapackage(meta_yaml, "3.4.0"), []
+        )
+
+    def test_full_metapackage_requires_pinned_picard_java_and_readiness_tests(self) -> None:
+        meta_yaml = """{% set name = "turbo-picard-full" %}
+{% set version = "0.1.17" %}
+{% set picard_reference = "3.3.0" %}
+package:
+  name: {{ name|lower }}
+source:
+  path: ../../..
+requirements:
+  run:
+    - turbo-picard
+    - turbo-picard-picard-shim
+    - picard
+"""
+        errors = verify_bioconda_recipes.validate_full_metapackage(meta_yaml, "3.4.0")
+        joined = "\n".join(errors)
+        for needle in (
+            "noarch: generic",
+            "must not declare a source",
+            "pin turbo-picard",
+            "pin picard",
+            "must match docs/command-matrix.yml",
+            "openjdk",
+            "picard shim",
+            "fallback_ready",
+        ):
+            self.assertIn(needle, joined)
+
 
 if __name__ == "__main__":
     unittest.main()
