@@ -1,16 +1,18 @@
 from __future__ import annotations
 
 import importlib.util
-from pathlib import Path
 import sys
 import tempfile
 import textwrap
 import unittest
+from pathlib import Path
 
+import pytest
 
 MODULE_PATH = Path(__file__).with_name("audit_public_adoption.py")
 SPEC = importlib.util.spec_from_file_location("audit_public_adoption", MODULE_PATH)
-assert SPEC is not None and SPEC.loader is not None
+assert SPEC is not None
+assert SPEC.loader is not None
 audit_public_adoption = importlib.util.module_from_spec(SPEC)
 sys.modules["audit_public_adoption"] = audit_public_adoption
 SPEC.loader.exec_module(audit_public_adoption)
@@ -35,20 +37,17 @@ class AuditPublicAdoptionTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             (root / "Cargo.toml").write_text(
-                "[workspace.package]\nversion = \"0.1.12\"\n",
+                '[workspace.package]\nversion = "0.1.12"\n',
                 encoding="utf-8",
             )
             state = audit_public_adoption.collect_release_state(root, git_runner=fake_git)
 
-        self.assertFalse(state["worktree_clean"])
-        self.assertFalse(state["tag_matches_head"])
-        self.assertFalse(state["origin_tag_matches_local"])
-        self.assertFalse(state["release_source_ready"])
-        self.assertIn("worktree has uncommitted changes", state["blockers"])
-        self.assertIn(
-            "local release tag v0.1.12 does not point at current HEAD",
-            state["blockers"],
-        )
+        assert not state["worktree_clean"]
+        assert not state["tag_matches_head"]
+        assert not state["origin_tag_matches_local"]
+        assert not state["release_source_ready"]
+        assert "worktree has uncommitted changes" in state["blockers"]
+        assert "local release tag v0.1.12 does not point at current HEAD" in state["blockers"]
 
     def test_collect_release_state_accepts_clean_annotated_remote_tag(self) -> None:
         commit = "a" * 40
@@ -69,17 +68,17 @@ class AuditPublicAdoptionTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             (root / "Cargo.toml").write_text(
-                "[workspace.package]\nversion = \"0.1.12\"\n",
+                '[workspace.package]\nversion = "0.1.12"\n',
                 encoding="utf-8",
             )
             state = audit_public_adoption.collect_release_state(root, git_runner=fake_git)
 
-        self.assertTrue(state["worktree_clean"])
-        self.assertTrue(state["tag_matches_head"])
-        self.assertTrue(state["origin_tag_matches_local"])
-        self.assertTrue(state["git_queries_succeeded"])
-        self.assertTrue(state["release_source_ready"])
-        self.assertEqual(state["blockers"], [])
+        assert state["worktree_clean"]
+        assert state["tag_matches_head"]
+        assert state["origin_tag_matches_local"]
+        assert state["git_queries_succeeded"]
+        assert state["release_source_ready"]
+        assert state["blockers"] == []
 
     def test_parse_downloads_ignores_mirror_category_and_summarizes_windows(self) -> None:
         payload = {
@@ -92,14 +91,14 @@ class AuditPublicAdoptionTests(unittest.TestCase):
             ],
         }
         result = audit_public_adoption.parse_downloads(payload)
-        self.assertEqual(result["downloads_total"], 10)
-        self.assertEqual(result["latest_day_downloads"], 5)
-        self.assertEqual(result["downloads_last_7_days"], 5)
-        self.assertEqual(result["period_start"], "2026-08-01")
-        self.assertEqual(result["period_end"], "2026-08-13")
+        assert result["downloads_total"] == 10
+        assert result["latest_day_downloads"] == 5
+        assert result["downloads_last_7_days"] == 5
+        assert result["period_start"] == "2026-08-01"
+        assert result["period_end"] == "2026-08-13"
 
     def test_parse_downloads_rejects_missing_without_mirrors_rows(self) -> None:
-        with self.assertRaisesRegex(ValueError, "without_mirrors"):
+        with pytest.raises(ValueError, match="without_mirrors"):
             audit_public_adoption.parse_downloads(
                 {"data": [{"category": "with_mirrors", "date": "2026-08-01", "downloads": 1}]}
             )
@@ -119,9 +118,9 @@ class AuditPublicAdoptionTests(unittest.TestCase):
             expected_version="0.1.12",
             readme="new README\n",
         )
-        self.assertFalse(result["version_matches_workspace"])
-        self.assertFalse(result["long_description_matches_workspace"])
-        self.assertEqual(result["latest_file_upload_time"], "2026-07-25T21:00:00Z")
+        assert not result["version_matches_workspace"]
+        assert not result["long_description_matches_workspace"]
+        assert result["latest_file_upload_time"] == "2026-07-25T21:00:00Z"
 
     def test_parse_distribution_channels_records_release_container_and_missing_conda(self) -> None:
         releases = audit_public_adoption.parse_github_releases(
@@ -146,12 +145,12 @@ class AuditPublicAdoptionTests(unittest.TestCase):
             package_url=audit_public_adoption.ANACONDA_TURBO_PICARD_URL,
             expected_version="0.1.12",
         )
-        self.assertFalse(releases["workspace_release_published"])
-        self.assertEqual(releases["latest_published_version"], "0.1.11")
-        self.assertFalse(container["workspace_version_tag_present"])
-        self.assertEqual(container["latest_version"], "0.1.11")
-        self.assertEqual(package["status"], "not_found")
-        self.assertFalse(package["workspace_version_available"])
+        assert not releases["workspace_release_published"]
+        assert releases["latest_published_version"] == "0.1.11"
+        assert not container["workspace_version_tag_present"]
+        assert container["latest_version"] == "0.1.11"
+        assert package["status"] == "not_found"
+        assert not package["workspace_version_available"]
 
     def test_parse_open_issues_excludes_pull_requests(self) -> None:
         result = audit_public_adoption.parse_open_issues(
@@ -170,13 +169,13 @@ class AuditPublicAdoptionTests(unittest.TestCase):
                 },
             ]
         )
-        self.assertEqual(result["open_issue_count_excluding_pull_requests"], 1)
-        self.assertEqual(result["open_issue_numbers"], [4])
-        self.assertEqual(result["pull_requests_excluded"], 1)
-        self.assertEqual(result["trial_report_thread"]["comment_count"], 2)
-        self.assertEqual(result["maintainer_authored_issue_numbers"], [4])
-        self.assertEqual(result["external_authored_issue_count"], 0)
-        self.assertEqual(result["trial_report_thread"]["author_provenance"], "maintainer")
+        assert result["open_issue_count_excluding_pull_requests"] == 1
+        assert result["open_issue_numbers"] == [4]
+        assert result["pull_requests_excluded"] == 1
+        assert result["trial_report_thread"]["comment_count"] == 2
+        assert result["maintainer_authored_issue_numbers"] == [4]
+        assert result["external_authored_issue_count"] == 0
+        assert result["trial_report_thread"]["author_provenance"] == "maintainer"
 
     def test_parse_trial_comments_separates_maintainer_and_external_authors(self) -> None:
         result = audit_public_adoption.parse_trial_comments(
@@ -186,17 +185,17 @@ class AuditPublicAdoptionTests(unittest.TestCase):
                 {"user": None},
             ]
         )
-        self.assertEqual(result["maintainer_comment_count"], 1)
-        self.assertEqual(result["external_comment_count"], 1)
-        self.assertEqual(result["unknown_comment_count"], 1)
-        self.assertFalse(result["comments_possibly_truncated"])
+        assert result["maintainer_comment_count"] == 1
+        assert result["external_comment_count"] == 1
+        assert result["unknown_comment_count"] == 1
+        assert not result["comments_possibly_truncated"]
 
     def test_parse_open_issues_records_missing_trial_thread_without_claiming_activity(self) -> None:
         result = audit_public_adoption.parse_open_issues(
             [{"number": 5, "html_url": "https://github.com/dnncha/turbo-picard/issues/5"}]
         )
-        self.assertEqual(result["trial_report_thread"]["state"], "not_in_open_response")
-        self.assertIsNone(result["trial_report_thread"]["comment_count"])
+        assert result["trial_report_thread"]["state"] == "not_in_open_response"
+        assert result["trial_report_thread"]["comment_count"] is None
 
     def test_collect_report_combines_signals_without_network(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -224,9 +223,7 @@ class AuditPublicAdoptionTests(unittest.TestCase):
                 },
                 audit_public_adoption.PYPISTATS_OVERALL_URL: {
                     "package": "turbo-picard",
-                    "data": [
-                        {"category": "without_mirrors", "date": "2026-08-13", "downloads": 3}
-                    ],
+                    "data": [{"category": "without_mirrors", "date": "2026-08-13", "downloads": 3}],
                 },
                 audit_public_adoption.GITHUB_REPOSITORY_URL: {
                     "full_name": "dnncha/turbo-picard",
@@ -256,10 +253,8 @@ class AuditPublicAdoptionTests(unittest.TestCase):
                         "user": {"login": "dnncha"},
                     }
                 ],
-                audit_public_adoption.GITHUB_TRIAL_COMMENTS_URL: [
-                    {"user": {"login": "dnncha"}}
-                ],
-                audit_public_adoption.GHCR_TOKEN_URL: {"token": "test-token"},
+                audit_public_adoption.GITHUB_TRIAL_COMMENTS_URL: [{"user": {"login": "dnncha"}}],
+                audit_public_adoption.GHCR_PULL_AUTH_URL: {"token": "test-token"},
                 audit_public_adoption.GHCR_TAGS_URL: {
                     "name": "dnncha/turbo-picard",
                     "tags": ["0.1.11", "latest"],
@@ -283,32 +278,23 @@ class AuditPublicAdoptionTests(unittest.TestCase):
                 fetcher=fake_fetch,
                 observed_at_utc="2026-08-14T12:00:00Z",
             )
-            self.assertEqual(report["package"]["live_version"], "0.1.12")
-            self.assertTrue(report["package"]["long_description_matches_workspace"])
-            self.assertEqual(report["downloads"]["downloads_total"], 3)
-            self.assertEqual(report["community"]["open_issue_numbers"], [4])
-            self.assertEqual(report["community"]["trial_report_thread"]["comment_count"], 1)
-            self.assertEqual(report["schema_version"], 4)
-            self.assertIn("release_state", report)
-            self.assertFalse(report["interpretation"]["release_source_ready_verified"])
-            self.assertFalse(report["interpretation"]["sustained_external_usage_verified"])
-            self.assertFalse(report["interpretation"]["workflow_owner_trial_reports_verified"])
-            self.assertTrue(report["interpretation"]["community_provenance_is_recorded"])
-            self.assertEqual(report["community"]["external_authored_issue_count"], 0)
-            self.assertEqual(
-                report["community"]["trial_report_thread"]["external_comment_count"],
-                0,
-            )
-            self.assertEqual(
-                report["distribution"]["github_release"]["latest_published_version"],
-                "0.1.11",
-            )
-            self.assertFalse(report["distribution"]["container"]["workspace_version_tag_present"])
-            self.assertEqual(
-                report["distribution"]["bioconda"]["pull_request"]["version_in_title"],
-                "0.1.10",
-            )
-            self.assertFalse(report["interpretation"]["distribution_channels_match_workspace_verified"])
+            assert report["package"]["live_version"] == "0.1.12"
+            assert report["package"]["long_description_matches_workspace"]
+            assert report["downloads"]["downloads_total"] == 3
+            assert report["community"]["open_issue_numbers"] == [4]
+            assert report["community"]["trial_report_thread"]["comment_count"] == 1
+            assert report["schema_version"] == 4
+            assert "release_state" in report
+            assert not report["interpretation"]["release_source_ready_verified"]
+            assert not report["interpretation"]["sustained_external_usage_verified"]
+            assert not report["interpretation"]["workflow_owner_trial_reports_verified"]
+            assert report["interpretation"]["community_provenance_is_recorded"]
+            assert report["community"]["external_authored_issue_count"] == 0
+            assert report["community"]["trial_report_thread"]["external_comment_count"] == 0
+            assert report["distribution"]["github_release"]["latest_published_version"] == "0.1.11"
+            assert not report["distribution"]["container"]["workspace_version_tag_present"]
+            assert report["distribution"]["bioconda"]["pull_request"]["version_in_title"] == "0.1.10"
+            assert not report["interpretation"]["distribution_channels_match_workspace_verified"]
 
 
 if __name__ == "__main__":

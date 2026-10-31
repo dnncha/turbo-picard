@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-"""Verify benchmark-data.json meets explicit performance dominance thresholds."""
 
 from __future__ import annotations
 
@@ -7,7 +6,6 @@ import json
 import math
 import sys
 from pathlib import Path
-
 
 ROOT = Path(__file__).resolve().parents[1]
 BENCHMARK_DATA = ROOT / "docs" / "site" / "assets" / "benchmark-data.json"
@@ -21,8 +19,14 @@ def format_speedup(value: float) -> str:
     return f"{value:.2f}x"
 
 
-def validate_benchmark_thresholds(data: dict) -> list[str]:
-    errors = []
+def to_float(value: object) -> float:
+    if isinstance(value, (bool, int, float, str)):
+        return float(value)
+    raise TypeError(f"not a number: {value!r}")
+
+
+def validate_benchmark_thresholds(data: dict[str, object]) -> list[str]:
+    errors: list[str] = []
     summary = data.get("summary")
     if not isinstance(summary, dict):
         return ["benchmark-data.json missing summary object"]
@@ -40,7 +44,7 @@ def validate_benchmark_thresholds(data: dict) -> list[str]:
     ):
         value = summary.get(key)
         try:
-            numeric_summary[key] = float(value)
+            numeric_summary[key] = to_float(value)
         except (TypeError, ValueError):
             errors.append(f"benchmark summary missing numeric {key}")
     if errors:
@@ -55,7 +59,7 @@ def validate_benchmark_thresholds(data: dict) -> list[str]:
     row_speedups: list[float] = []
     row_pass_count = 0
     row_commands: set[str] = set()
-    for index, row in enumerate(benchmarks):
+    for row in benchmarks:
         if not isinstance(row, dict):
             continue
         command = row.get("command")
@@ -67,25 +71,19 @@ def validate_benchmark_thresholds(data: dict) -> list[str]:
         if parity == "PASS":
             row_pass_count += 1
         try:
-            speedup = float(row.get("speedup"))
+            speedup = to_float(row.get("speedup"))
         except (TypeError, ValueError):
             continue
         row_speedups.append(speedup)
 
     if command_count != len(benchmarks):
-        errors.append(
-            f"summary command_count {command_count} does not match benchmark row count {len(benchmarks)}"
-        )
+        errors.append(f"summary command_count {command_count} does not match benchmark row count {len(benchmarks)}")
     if parity_pass_count != row_pass_count:
-        errors.append(
-            f"summary parity_pass_count {parity_pass_count} does not match PASS rows {row_pass_count}"
-        )
+        errors.append(f"summary parity_pass_count {parity_pass_count} does not match PASS rows {row_pass_count}")
     top_level_parity = data.get("parity")
     expected_parity = f"{row_pass_count}/{len(benchmarks)} PASS"
     if top_level_parity != expected_parity:
-        errors.append(
-            f"top-level parity {top_level_parity!r} does not match benchmark rows {expected_parity!r}"
-        )
+        errors.append(f"top-level parity {top_level_parity!r} does not match benchmark rows {expected_parity!r}")
     if row_speedups:
         calculated_floor = min(row_speedups)
         calculated_top = max(row_speedups)
@@ -104,9 +102,7 @@ def validate_benchmark_thresholds(data: dict) -> list[str]:
             )
 
     if parity_pass_count != command_count:
-        errors.append(
-            f"parity pass count {parity_pass_count} does not match command count {command_count}"
-        )
+        errors.append(f"parity pass count {parity_pass_count} does not match command count {command_count}")
     if floor_speedup < MIN_FLOOR_SPEEDUP:
         errors.append(
             f"floor speedup {format_speedup(floor_speedup)} is below required {format_speedup(MIN_FLOOR_SPEEDUP)}"
@@ -116,9 +112,7 @@ def validate_benchmark_thresholds(data: dict) -> list[str]:
             f"geometric mean speedup {format_speedup(geomean_speedup)} is below required {format_speedup(MIN_GEOMEAN_SPEEDUP)}"
         )
     if top_speedup < MIN_TOP_SPEEDUP:
-        errors.append(
-            f"top speedup {format_speedup(top_speedup)} is below required {format_speedup(MIN_TOP_SPEEDUP)}"
-        )
+        errors.append(f"top speedup {format_speedup(top_speedup)} is below required {format_speedup(MIN_TOP_SPEEDUP)}")
 
     for index, row in enumerate(benchmarks):
         if not isinstance(row, dict):
@@ -129,7 +123,7 @@ def validate_benchmark_thresholds(data: dict) -> list[str]:
         if parity != "PASS":
             errors.append(f"benchmark {command} parity is {parity}")
         try:
-            speedup = float(row.get("speedup"))
+            speedup = to_float(row.get("speedup"))
         except (TypeError, ValueError):
             errors.append(f"benchmark {command} missing numeric speedup")
             continue

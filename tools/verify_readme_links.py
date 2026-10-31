@@ -1,13 +1,11 @@
 #!/usr/bin/env python3
-"""Verify local README links and images resolve inside the repository."""
 
 from __future__ import annotations
 
-from pathlib import Path
 import re
 import sys
+from pathlib import Path
 from urllib.parse import unquote, urlparse
-
 
 ROOT = Path(__file__).resolve().parents[1]
 README = ROOT / "README.md"

@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+
+from __future__ import annotations
+
 import argparse
 import os
 import pathlib
@@ -7,18 +10,17 @@ import subprocess
 import sys
 import tempfile
 import time
-
+from collections.abc import Sequence
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 
 
-def run(command, *, cwd=ROOT):
+def run(command: Sequence[str], *, cwd: pathlib.Path = ROOT) -> float:
     start = time.perf_counter()
     completed = subprocess.run(
         command,
         cwd=cwd,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        capture_output=True,
         text=True,
         check=False,
     )
@@ -30,7 +32,7 @@ def run(command, *, cwd=ROOT):
     return elapsed
 
 
-def conda_runner():
+def conda_runner() -> str:
     for name in ("mamba", "micromamba"):
         path = shutil.which(name)
         if path:
@@ -38,26 +40,21 @@ def conda_runner():
     raise SystemExit("mamba or micromamba is required to benchmark against Picard")
 
 
-def write_interval_list(path, *, start_index, intervals):
+def write_interval_list(path: pathlib.Path, *, start_index: int, intervals: int) -> None:
     with open(path, "w", encoding="utf-8") as handle:
         handle.write("@HD\tVN:1.6\tSO:coordinate\n")
         handle.write("@SQ\tSN:chr1\tLN:100000000\n")
         for index in range(intervals):
-            # Overlap adjacent shards so UNIQUE=true has real merging work to do.
             start = max(1, start_index + index * 7)
             end = start + 12
             handle.write(f"chr1\t{start}\t{end}\t+\tinterval_{start_index}_{index:09d}\n")
 
 
-def stable_output(path):
-    return [
-        line.rstrip("\n")
-        for line in path.read_text(encoding="utf-8").splitlines()
-        if not line.startswith("@PG")
-    ]
+def stable_output(path: pathlib.Path) -> list[str]:
+    return [line.rstrip("\n") for line in path.read_text(encoding="utf-8").splitlines() if not line.startswith("@PG")]
 
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser(description="Benchmark turbo-picard IntervalListTools against Picard.")
     parser.add_argument("--reads", type=int, default=100_000, help="intervals to synthesize")
     parser.add_argument(

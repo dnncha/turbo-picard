@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+from __future__ import annotations
+
 import argparse
 import os
 import pathlib
@@ -8,17 +10,15 @@ import sys
 import tempfile
 import time
 
-
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 
 
-def run(command, *, cwd=ROOT):
+def run(command: list[str], *, cwd: pathlib.Path = ROOT) -> float:
     start = time.perf_counter()
     completed = subprocess.run(
         command,
         cwd=cwd,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        capture_output=True,
         text=True,
         check=False,
     )
@@ -30,7 +30,7 @@ def run(command, *, cwd=ROOT):
     return elapsed
 
 
-def conda_runner():
+def conda_runner() -> str:
     for name in ("mamba", "micromamba"):
         path = shutil.which(name)
         if path:
@@ -38,7 +38,7 @@ def conda_runner():
     raise SystemExit("mamba or micromamba is required to benchmark against Picard")
 
 
-def write_vcf(path, start, count):
+def write_vcf(path: pathlib.Path, start: int, count: int) -> None:
     with open(path, "w", encoding="utf-8") as handle:
         handle.write("##fileformat=VCFv4.2\n")
         handle.write("##contig=<ID=chr1,length=100000000>\n")
@@ -48,12 +48,12 @@ def write_vcf(path, start, count):
             handle.write(f"chr1\t{pos}\t.\tA\tC\t.\tPASS\t.\n")
 
 
-def records(path):
+def records(path: pathlib.Path) -> list[str]:
     with open(path, encoding="utf-8") as handle:
         return [line.rstrip("\n") for line in handle if not line.startswith("#")]
 
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser(description="Benchmark turbo-picard GatherVcfs against Picard.")
     parser.add_argument("--reads", type=int, default=100_000, help="VCF records to synthesize")
     parser.add_argument(

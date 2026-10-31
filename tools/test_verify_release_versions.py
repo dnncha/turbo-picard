@@ -8,7 +8,6 @@ import tempfile
 import unittest
 from pathlib import Path
 
-
 MODULE_PATH = Path(__file__).with_name("verify_release_versions.py")
 SPEC = importlib.util.spec_from_file_location("verify_release_versions", MODULE_PATH)
 assert SPEC is not None
@@ -177,7 +176,7 @@ bindings = "bin"
 
     def test_accepts_consistent_tree(self) -> None:
         root = self.make_tree()
-        self.assertEqual([], verify_release_versions.collect_errors(root))
+        assert verify_release_versions.collect_errors(root) == []
 
     def test_rejects_missing_citation_type(self) -> None:
         root = self.make_tree()
@@ -206,10 +205,7 @@ keywords:
 """,
         )
 
-        self.assertIn(
-            "CITATION.cff type must be software",
-            verify_release_versions.collect_errors(root),
-        )
+        assert "CITATION.cff type must be software" in verify_release_versions.collect_errors(root)
 
     def test_rejects_stale_zenodo_citation_identifier(self) -> None:
         root = self.make_tree()
@@ -222,10 +218,9 @@ keywords:
             encoding="utf-8",
         )
 
-        self.assertIn(
-            "CITATION.cff must include a Zenodo DOI identifier for "
-            "Zenodo archive for v0.1.0",
-            verify_release_versions.collect_errors(root),
+        assert (
+            "CITATION.cff must include a Zenodo DOI identifier for Zenodo archive for v0.1.0"
+            in verify_release_versions.collect_errors(root)
         )
 
     def test_allows_release_without_zenodo_identifier(self) -> None:
@@ -236,13 +231,13 @@ keywords:
                 "identifiers:\n"
                 "  - type: doi\n"
                 "    value: 10.5281/zenodo.12345678\n"
-                "    description: \"Zenodo archive for v0.1.0\"\n",
+                '    description: "Zenodo archive for v0.1.0"\n',
                 "",
             ),
             encoding="utf-8",
         )
 
-        self.assertEqual([], verify_release_versions.collect_errors(root))
+        assert verify_release_versions.collect_errors(root) == []
 
     def test_rejects_stale_biotools_record_version(self) -> None:
         root = self.make_tree()
@@ -252,9 +247,9 @@ keywords:
             encoding="utf-8",
         )
 
-        self.assertIn(
-            "bio.tools registration record version must match workspace 0.1.0",
-            verify_release_versions.collect_errors(root),
+        assert (
+            "bio.tools registration record version must match workspace 0.1.0"
+            in verify_release_versions.collect_errors(root)
         )
 
     def test_rejects_stale_container_image_version(self) -> None:
@@ -265,9 +260,9 @@ keywords:
             "CITATION.cff input SHA-256; ghcr.io/dnncha/turbo-picard:0.0.9\n",
         )
 
-        self.assertIn(
-            "README.md container image version 0.0.9 must match workspace 0.1.0 unless explicitly marked published",
-            verify_release_versions.collect_errors(root),
+        assert (
+            "README.md container image version 0.0.9 must match workspace 0.1.0 unless explicitly marked published"
+            in verify_release_versions.collect_errors(root)
         )
 
     def test_allows_older_container_image_when_explicitly_published(self) -> None:
@@ -275,15 +270,11 @@ keywords:
         write(
             root,
             "README.md",
-            "CITATION.cff input SHA-256; published release image "
-            "ghcr.io/dnncha/turbo-picard:0.0.9\n",
+            "CITATION.cff input SHA-256; published release image ghcr.io/dnncha/turbo-picard:0.0.9\n",
         )
 
         errors = verify_release_versions.collect_errors(root)
-        self.assertNotIn(
-            "README.md container image version 0.0.9",
-            errors,
-        )
+        assert "README.md container image version 0.0.9" not in errors
 
     def test_rejects_stale_internal_dependency_version(self) -> None:
         root = self.make_tree()
@@ -300,20 +291,16 @@ turbo-picard-core = { path = "../turbo-picard-core", version = "0.2.0" }
 """,
         )
         errors = verify_release_versions.collect_errors(root)
-        self.assertIn(
-            "crates/turbo-picard-cli/Cargo.toml dependency turbo-picard-core "
-            "version 0.2.0 must match workspace 0.1.0",
-            errors,
+        assert (
+            "crates/turbo-picard-cli/Cargo.toml dependency turbo-picard-core version 0.2.0 must match workspace 0.1.0"
+            in errors
         )
 
     def test_rejects_missing_lockfile(self) -> None:
         root = self.make_tree()
         (root / "Cargo.lock").unlink()
         errors = verify_release_versions.collect_errors(root)
-        self.assertIn(
-            "Cargo.lock is required for reproducible release builds",
-            errors,
-        )
+        assert "Cargo.lock is required for reproducible release builds" in errors
 
     def test_rejects_stale_lockfile_crate_version(self) -> None:
         root = self.make_tree()
@@ -337,10 +324,7 @@ version = "0.1.0"
 """,
         )
         errors = verify_release_versions.collect_errors(root)
-        self.assertIn(
-            "Cargo.lock turbo-picard-core version 0.2.0 must match workspace 0.1.0",
-            errors,
-        )
+        assert "Cargo.lock turbo-picard-core version 0.2.0 must match workspace 0.1.0" in errors
 
     def test_rejects_missing_lockfile_crate(self) -> None:
         root = self.make_tree()
@@ -360,10 +344,7 @@ version = "0.1.0"
 """,
         )
         errors = verify_release_versions.collect_errors(root)
-        self.assertIn(
-            "Cargo.lock missing turbo-picard-markdup package",
-            errors,
-        )
+        assert "Cargo.lock missing turbo-picard-markdup package" in errors
 
     def test_rejects_crate_that_does_not_inherit_workspace_version(self) -> None:
         root = self.make_tree()
@@ -377,10 +358,7 @@ version = "0.1.0"
 """,
         )
         errors = verify_release_versions.collect_errors(root)
-        self.assertIn(
-            "crates/turbo-picard-core/Cargo.toml package version must inherit workspace version",
-            errors,
-        )
+        assert "crates/turbo-picard-core/Cargo.toml package version must inherit workspace version" in errors
 
     def test_rejects_crate_missing_package_section(self) -> None:
         root = self.make_tree()
@@ -392,10 +370,7 @@ version = "0.1.0"
 """,
         )
         errors = verify_release_versions.collect_errors(root)
-        self.assertIn(
-            "crates/turbo-picard-core/Cargo.toml missing [package] section",
-            errors,
-        )
+        assert "crates/turbo-picard-core/Cargo.toml missing [package] section" in errors
 
     def test_rejects_stale_recipe_version_and_docs(self) -> None:
         root = self.make_tree()
@@ -415,22 +390,15 @@ https://github.com/dnncha/turbo-picard/archive/refs/tags/v0.2.0.tar.gz
 """,
         )
         errors = verify_release_versions.collect_errors(root)
-        self.assertIn(
-            "packaging/bioconda/turbo-picard/meta.yaml version 0.2.0 "
-            "must match workspace 0.1.0",
-            errors,
-        )
-        self.assertIn("README.md archive URL must use v0.1.0", errors)
-        self.assertIn("README.md archive sha256 placeholder must use v0.1.0", errors)
+        assert "packaging/bioconda/turbo-picard/meta.yaml version 0.2.0 must match workspace 0.1.0" in errors
+        assert "README.md archive URL must use v0.1.0" in errors
+        assert "README.md archive sha256 placeholder must use v0.1.0" in errors
 
     def test_rejects_missing_citation_file(self) -> None:
         root = self.make_tree()
         (root / "CITATION.cff").unlink()
         errors = verify_release_versions.collect_errors(root)
-        self.assertIn(
-            "CITATION.cff is required for release citation metadata",
-            errors,
-        )
+        assert "CITATION.cff is required for release citation metadata" in errors
 
     def test_rejects_stale_citation_version_and_repository(self) -> None:
         root = self.make_tree()
@@ -458,16 +426,10 @@ keywords:
 """,
         )
         errors = verify_release_versions.collect_errors(root)
-        self.assertIn(
-            "CITATION.cff version 0.2.0 must match workspace 0.1.0",
-            errors,
-        )
-        self.assertIn(
-            "CITATION.cff repository-code must be https://github.com/dnncha/turbo-picard",
-            errors,
-        )
-        self.assertIn("CITATION.cff url must be https://turbo-picard.readthedocs.io/", errors)
-        self.assertIn("CITATION.cff license must match workspace MIT", errors)
+        assert "CITATION.cff version 0.2.0 must match workspace 0.1.0" in errors
+        assert "CITATION.cff repository-code must be https://github.com/dnncha/turbo-picard" in errors
+        assert "CITATION.cff url must be https://turbo-picard.readthedocs.io/" in errors
+        assert "CITATION.cff license must match workspace MIT" in errors
 
     def test_rejects_incomplete_citation_metadata(self) -> None:
         root = self.make_tree()
@@ -494,16 +456,10 @@ keywords:
 """,
         )
         errors = verify_release_versions.collect_errors(root)
-        self.assertIn("CITATION.cff cff-version must be 1.2.0", errors)
-        self.assertIn("CITATION.cff title must be turbo-picard", errors)
-        self.assertIn(
-            "CITATION.cff must include a named creator",
-            errors,
-        )
-        self.assertIn(
-            "CITATION.cff message must ask users to cite the archived release",
-            errors,
-        )
+        assert "CITATION.cff cff-version must be 1.2.0" in errors
+        assert "CITATION.cff title must be turbo-picard" in errors
+        assert "CITATION.cff must include a named creator" in errors
+        assert "CITATION.cff message must ask users to cite the archived release" in errors
 
     def test_rejects_unparseable_citation_yaml(self) -> None:
         root = self.make_tree()
@@ -523,11 +479,8 @@ license: "MIT"
 """,
         )
         errors = verify_release_versions.collect_errors(root)
-        self.assertTrue(
-            any(error.startswith("CITATION.cff is not valid YAML:") for error in errors),
-            errors,
-        )
-        self.assertIn("CITATION.cff must parse as a YAML mapping", errors)
+        assert any(error.startswith("CITATION.cff is not valid YAML:") for error in errors), errors
+        assert "CITATION.cff must parse as a YAML mapping" in errors
 
     def test_rejects_citation_without_structured_author_or_keywords(self) -> None:
         root = self.make_tree()
@@ -550,11 +503,8 @@ keywords:
 """,
         )
         errors = verify_release_versions.collect_errors(root)
-        self.assertIn("CITATION.cff authors must be a non-empty list", errors)
-        self.assertIn(
-            "CITATION.cff keywords must cover bioinformatics, Picard, SAM/BAM/VCF, and Rust",
-            errors,
-        )
+        assert "CITATION.cff authors must be a non-empty list" in errors
+        assert "CITATION.cff keywords must cover bioinformatics, Picard, SAM/BAM/VCF, and Rust" in errors
 
     def test_rejects_input_data_details_in_citation_cff(self) -> None:
         root = self.make_tree()
@@ -584,11 +534,10 @@ keywords:
 """,
         )
         errors = verify_release_versions.collect_errors(root)
-        self.assertIn(
+        assert (
             "CITATION.cff must cite only the software release; "
             "move input-data citation details to evidence manifests/docs: "
-            "source URL, SHA-256",
-            errors,
+            "source URL, SHA-256" in errors
         )
 
     def test_rejects_docs_without_citation_or_input_distinction(self) -> None:
@@ -601,11 +550,8 @@ Software citation only.
 """,
         )
         errors = verify_release_versions.collect_errors(root)
-        self.assertIn("docs/citation.rst must mention CITATION.cff", errors)
-        self.assertIn(
-            "docs/citation.rst must distinguish software citation from pinned input data",
-            errors,
-        )
+        assert "docs/citation.rst must mention CITATION.cff" in errors
+        assert "docs/citation.rst must distinguish software citation from pinned input data" in errors
 
     def test_rejects_citation_docs_without_methods_details(self) -> None:
         root = self.make_tree()
@@ -617,14 +563,14 @@ CITATION.cff software citation is separate from pinned input data with SHA-256.
 """,
         )
         errors = verify_release_versions.collect_errors(root)
-        self.assertIn("docs/citation.rst must mention archived-release citation rule", errors)
-        self.assertIn("docs/citation.rst must mention parity evidence rule", errors)
-        self.assertIn("docs/citation.rst must mention Picard evidence version", errors)
-        self.assertIn("docs/citation.rst must mention methods command replacement rule", errors)
-        self.assertIn("docs/citation.rst must mention methods fallback disclosure rule", errors)
-        self.assertIn("docs/citation.rst must mention methods evidence-report rule", errors)
-        self.assertIn("docs/citation.rst must mention full Git commit citation rule", errors)
-        self.assertIn("docs/citation.rst must mention CITATION.cff input-data boundary", errors)
+        assert "docs/citation.rst must mention archived-release citation rule" in errors
+        assert "docs/citation.rst must mention parity evidence rule" in errors
+        assert "docs/citation.rst must mention Picard evidence version" in errors
+        assert "docs/citation.rst must mention methods command replacement rule" in errors
+        assert "docs/citation.rst must mention methods fallback disclosure rule" in errors
+        assert "docs/citation.rst must mention methods evidence-report rule" in errors
+        assert "docs/citation.rst must mention full Git commit citation rule" in errors
+        assert "docs/citation.rst must mention CITATION.cff input-data boundary" in errors
 
     def test_rejects_stale_site_archive_command(self) -> None:
         root = self.make_tree()
@@ -637,7 +583,7 @@ filename turbo-picard-0.1.0.tar.gz v0.1.0.tar.gz
 """,
         )
         errors = verify_release_versions.collect_errors(root)
-        self.assertIn("docs/site/index.html archive command must use 0.1.0", errors)
+        assert "docs/site/index.html archive command must use 0.1.0" in errors
 
     def test_rejects_stale_release_helper_filename_note(self) -> None:
         root = self.make_tree()
@@ -653,10 +599,7 @@ rejects unsafe paths, duplicate entries, unsupported tar member types, and empty
 """,
         )
         errors = verify_release_versions.collect_errors(root)
-        self.assertIn(
-            "docs/packaging.rst archive command must use 0.1.0",
-            errors,
-        )
+        assert "docs/packaging.rst archive command must use 0.1.0" in errors
 
     def test_rejects_stale_release_helper_archive_layout_note(self) -> None:
         root = self.make_tree()
@@ -672,9 +615,9 @@ rejects unsafe paths, duplicate entries, unsupported tar member types, and empty
 """,
         )
         errors = verify_release_versions.collect_errors(root)
-        self.assertIn(
-            "packaging/bioconda/BIOCONDA_PR.md release-helper archive layout note must mention turbo-picard-0.1.0/",
-            errors,
+        assert (
+            "packaging/bioconda/BIOCONDA_PR.md release-helper archive layout note must mention turbo-picard-0.1.0/"
+            in errors
         )
 
     def test_rejects_release_helper_pr_body_note_without_pr_template_path(self) -> None:
@@ -692,10 +635,7 @@ updates the PR body
 """,
         )
         errors = verify_release_versions.collect_errors(root)
-        self.assertIn(
-            "docs/site/index.html release-helper PR body note must mention BIOCONDA_PR.md",
-            errors,
-        )
+        assert "docs/site/index.html release-helper PR body note must mention BIOCONDA_PR.md" in errors
 
     def test_rejects_sha256_fallback_without_archive_preference(self) -> None:
         root = self.make_tree()
@@ -714,20 +654,12 @@ updates BIOCONDA_PR.md PR body
 """,
         )
         errors = verify_release_versions.collect_errors(root)
-        self.assertIn(
-            "docs/packaging.rst release-helper sha256 fallback must prefer --archive",
-            errors,
+        assert "docs/packaging.rst release-helper sha256 fallback must prefer --archive" in errors
+        assert (
+            "docs/packaging.rst release-helper sha256 fallback must tie digest to the downloaded GitHub source archive"
+            in errors
         )
-        self.assertIn(
-            "docs/packaging.rst release-helper sha256 fallback must tie digest to "
-            "the downloaded GitHub source archive",
-            errors,
-        )
-        self.assertIn(
-            "docs/packaging.rst release-helper sha256 fallback must disclose skipped "
-            "archive validation",
-            errors,
-        )
+        assert "docs/packaging.rst release-helper sha256 fallback must disclose skipped archive validation" in errors
 
     def test_accepts_sha256_fallback_wording_wrapped_across_lines(self) -> None:
         root = self.make_tree()
@@ -750,7 +682,7 @@ recipe version, source block
 updates BIOCONDA_PR.md PR body
 """,
         )
-        self.assertEqual([], verify_release_versions.collect_errors(root))
+        assert verify_release_versions.collect_errors(root) == []
 
     def test_rejects_release_helper_archive_policy_note_missing_strict_checks(self) -> None:
         root = self.make_tree()
@@ -766,10 +698,9 @@ updates BIOCONDA_PR.md PR body
 """,
         )
         errors = verify_release_versions.collect_errors(root)
-        self.assertIn(
+        assert (
             "docs/packaging.rst release-helper archive policy note must mention "
-            "unsafe paths, duplicate, unsupported tar member types, empty required source files",
-            errors,
+            "unsafe paths, duplicate, unsupported tar member types, empty required source files" in errors
         )
 
     def test_rejects_release_helper_archive_metadata_note_missing_internal_checks(self) -> None:
@@ -787,11 +718,10 @@ updates BIOCONDA_PR.md PR body
 """,
         )
         errors = verify_release_versions.collect_errors(root)
-        self.assertIn(
+        assert (
             "docs/packaging.rst release-helper archive metadata note must mention "
             "workspace version, archived-release, picard_reference, Picard 3.4.0, "
-            "datasets, recipe version, source block",
-            errors,
+            "datasets, recipe version, source block" in errors
         )
 
     def test_rejects_release_helper_archive_layout_note_missing_evidence_files(self) -> None:
@@ -810,11 +740,10 @@ updates BIOCONDA_PR.md PR body
 """,
         )
         errors = verify_release_versions.collect_errors(root)
-        self.assertIn(
+        assert (
             "docs/packaging.rst release-helper archive layout note must mention "
             "docs/command-matrix.yml, docs/parity.rst, benchmarks/real-data/manifest.json, "
-            "docs/site/assets/benchmark-data.json",
-            errors,
+            "docs/site/assets/benchmark-data.json" in errors
         )
 
 

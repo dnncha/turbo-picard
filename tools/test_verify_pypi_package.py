@@ -1,12 +1,11 @@
 from __future__ import annotations
 
 import importlib.util
-from pathlib import Path
 import sys
 import tempfile
 import textwrap
 import unittest
-
+from pathlib import Path
 
 MODULE_PATH = Path(__file__).with_name("verify_pypi_package.py")
 SPEC = importlib.util.spec_from_file_location("verify_pypi_package", MODULE_PATH)
@@ -76,8 +75,7 @@ class VerifyPyPiPackageTests(unittest.TestCase):
             encoding="utf-8",
         )
         (root / "README.md").write_text(
-            "python3 -m pip install turbo-picard\n"
-            "Installing from PyPI currently gives you both commands.\n",
+            "python3 -m pip install turbo-picard\nInstalling from PyPI currently gives you both commands.\n",
             encoding="utf-8",
         )
         (root / "docs" / "packaging.rst").write_text(
@@ -89,8 +87,7 @@ class VerifyPyPiPackageTests(unittest.TestCase):
             encoding="utf-8",
         )
         (root / "docs" / "quickstart.rst").write_text(
-            "python3 -m pip install turbo-picard\n"
-            "Start with ``turbo-picard`` while testing.\n",
+            "python3 -m pip install turbo-picard\nStart with ``turbo-picard`` while testing.\n",
             encoding="utf-8",
         )
         (root / ".github" / "workflows").mkdir(parents=True)
@@ -124,10 +121,10 @@ class VerifyPyPiPackageTests(unittest.TestCase):
             "python3 -m venv\n"
             "dist/turbo_picard-*-manylinux_2_17_x86_64*.whl\n"
             "-m pip install --no-deps\n"
-            "turbo-picard\" --version\n"
-            "turbo-picard\" doctor\n"
-            "turbo-picard\" trial MarkDuplicates I=input.bam O=marked.bam M=metrics.txt\n"
-            "picard\" --version\n"
+            'turbo-picard" --version\n'
+            'turbo-picard" doctor\n'
+            'turbo-picard" trial MarkDuplicates I=input.bam O=marked.bam M=metrics.txt\n'
+            'picard" --version\n'
             "bash tools/verify_install_smoke.sh\n"
             "needs: [linux, linux-aarch64, macos, macos-x86_64, sdist, validate]\n"
             "Verify live PyPI metadata\n"
@@ -140,7 +137,7 @@ class VerifyPyPiPackageTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             self.write_minimal_repo(root)
-            self.assertEqual(verify_pypi_package.collect_errors(root), [])
+            assert verify_pypi_package.collect_errors(root) == []
 
     def test_version_mismatch_is_reported(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -152,20 +149,14 @@ class VerifyPyPiPackageTests(unittest.TestCase):
                 .replace('version = "0.1.1"', 'version = "0.2.0"', 1),
                 encoding="utf-8",
             )
-            self.assertIn(
-                "pyproject.toml project.version must be 0.1.1",
-                verify_pypi_package.collect_errors(root),
-            )
+            assert "pyproject.toml project.version must be 0.1.1" in verify_pypi_package.collect_errors(root)
 
     def test_missing_docs_are_reported(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             self.write_minimal_repo(root)
             (root / "docs" / "packaging.rst").write_text("PyPI\n", encoding="utf-8")
-            self.assertIn(
-                "packaging docs missing maturin build command",
-                verify_pypi_package.collect_errors(root),
-            )
+            assert "packaging docs missing maturin build command" in verify_pypi_package.collect_errors(root)
 
     def test_live_metadata_matches_release_source(self) -> None:
         readme = "# turbo-picard\n\nInstall it.\n"
@@ -177,9 +168,7 @@ class VerifyPyPiPackageTests(unittest.TestCase):
                 "description": readme,
             }
         }
-        self.assertEqual(
-            verify_pypi_package.validate_live_metadata(payload, "0.1.1", readme), []
-        )
+        assert verify_pypi_package.validate_live_metadata(payload, "0.1.1", readme) == []
 
     def test_live_metadata_reports_stale_description_and_version(self) -> None:
         payload = {
@@ -190,13 +179,9 @@ class VerifyPyPiPackageTests(unittest.TestCase):
                 "description": "old README\n",
             }
         }
-        errors = verify_pypi_package.validate_live_metadata(
-            payload, "0.1.1", "new README\n"
-        )
-        self.assertIn("live PyPI version 0.1.0 must be 0.1.1", errors)
-        self.assertIn(
-            "live PyPI long description must match the checked-out README.md", errors
-        )
+        errors = verify_pypi_package.validate_live_metadata(payload, "0.1.1", "new README\n")
+        assert "live PyPI version 0.1.0 must be 0.1.1" in errors
+        assert "live PyPI long description must match the checked-out README.md" in errors
 
 
 if __name__ == "__main__":

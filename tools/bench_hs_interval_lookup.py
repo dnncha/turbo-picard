@@ -1,8 +1,4 @@
 #!/usr/bin/env python3
-"""Compile the unchanged production interval-index section in a synthetic harness.
-
-This measures interval lookup only, not CollectHsMetrics or WES throughput.
-"""
 from __future__ import annotations
 
 import argparse
@@ -13,10 +9,15 @@ import subprocess
 import tempfile
 from pathlib import Path
 
+MODULE_DESCRIPTION = (
+    "Compile the unchanged production interval-index section in a synthetic harness.\n"
+    "\n"
+    "This measures interval lookup only, not CollectHsMetrics or WES throughput.\n"
+)
 
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = "crates/turbo-picard-cli/src/hs_metrics.rs"
-HARNESS = r'''
+HARNESS = r"""
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::collections::BTreeMap;
 use std::hint::black_box;
@@ -54,11 +55,11 @@ fn main() {
     let allocations = ALLOCATIONS.load(Ordering::Relaxed);
     println!("{seconds},{allocations},{checksum}");
 }
-'''
+"""
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(description=MODULE_DESCRIPTION)
     parser.add_argument("--baseline-ref", required=True)
     parser.add_argument("--rustc", default="rustc")
     parser.add_argument("--output", type=Path, required=True)
@@ -77,25 +78,41 @@ def main() -> None:
         binaries = {}
         for variant, source in sources.items():
             section = source.decode().split("#[derive(Debug, Clone)]\nstruct Span {", 1)[1]
-            section = "#[derive(Debug, Clone)]\nstruct Span {" + section.split("#[derive(Debug)]\nstruct TargetCoverage", 1)[0]
+            section = (
+                "#[derive(Debug, Clone)]\nstruct Span {"
+                + section.split("#[derive(Debug)]\nstruct TargetCoverage", 1)[0]
+            )
             harness = Path(directory) / f"{variant}.rs"
             harness.write_text(HARNESS + section)
             binaries[variant] = Path(directory) / variant
-            subprocess.run([args.rustc, "--edition=2024", "-O", "-A", "dead_code", str(harness), "-o", str(binaries[variant])], check=True)
+            subprocess.run(
+                [args.rustc, "--edition=2024", "-O", "-A", "dead_code", str(harness), "-o", str(binaries[variant])],
+                check=True,
+            )
         expected_checksum = None
         for repetition in range(args.repetitions):
-            for variant in list(sources)[::1 if repetition % 2 == 0 else -1]:
-                seconds, allocations, checksum = subprocess.check_output([str(binaries[variant]), str(args.queries)], text=True).strip().split(",")
+            for variant in list(sources)[:: 1 if repetition % 2 == 0 else -1]:
+                seconds, allocations, checksum = (
+                    subprocess.check_output([str(binaries[variant]), str(args.queries)], text=True).strip().split(",")
+                )
                 if expected_checksum is None:
                     expected_checksum = checksum
                 assert checksum == expected_checksum, "lookup results changed"
-                rows.append({
-                    "variant": variant, "repetition": repetition + 1, "queries": args.queries,
-                    "wall_seconds": seconds, "allocations": allocations, "checksum": checksum,
-                    "source_sha256": hashlib.sha256(sources[variant]).hexdigest(),
-                    "harness_sha256": hashlib.sha256(HARNESS.encode()).hexdigest(),
-                    "rustc": rustc_version, "platform": platform.platform(), "optimization": "-O",
-                })
+                rows.append(
+                    {
+                        "variant": variant,
+                        "repetition": repetition + 1,
+                        "queries": args.queries,
+                        "wall_seconds": seconds,
+                        "allocations": allocations,
+                        "checksum": checksum,
+                        "source_sha256": hashlib.sha256(sources[variant]).hexdigest(),
+                        "harness_sha256": hashlib.sha256(HARNESS.encode()).hexdigest(),
+                        "rustc": rustc_version,
+                        "platform": platform.platform(),
+                        "optimization": "-O",
+                    }
+                )
     args.output.parent.mkdir(parents=True, exist_ok=True)
     with args.output.open("w", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=list(rows[0]))

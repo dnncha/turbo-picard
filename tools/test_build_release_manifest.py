@@ -2,15 +2,17 @@ from __future__ import annotations
 
 import importlib.util
 import json
-from pathlib import Path
 import sys
 import tempfile
 import unittest
+from pathlib import Path
 
+import pytest
 
 MODULE_PATH = Path(__file__).with_name("build_release_manifest.py")
 SPEC = importlib.util.spec_from_file_location("build_release_manifest", MODULE_PATH)
-assert SPEC is not None and SPEC.loader is not None
+assert SPEC is not None
+assert SPEC.loader is not None
 build_release_manifest = importlib.util.module_from_spec(SPEC)
 sys.modules["build_release_manifest"] = build_release_manifest
 SPEC.loader.exec_module(build_release_manifest)
@@ -32,11 +34,11 @@ class BuildReleaseManifestTests(unittest.TestCase):
                 encoding="utf-8",
             )
             summary = build_release_manifest.summarize_benchmark(path)
-        self.assertEqual(summary["command_count"], 2)
-        self.assertEqual(summary["markduplicates_speedup"], 4.0)
-        self.assertEqual(summary["minimum_speedup"], 4.0)
-        self.assertEqual(summary["maximum_speedup"], 9.0)
-        self.assertAlmostEqual(summary["geometric_mean_speedup"], 6.0)
+        assert summary["command_count"] == 2
+        assert summary["markduplicates_speedup"] == 4.0
+        assert summary["minimum_speedup"] == 4.0
+        assert summary["maximum_speedup"] == 9.0
+        assert summary["geometric_mean_speedup"] == pytest.approx(6.0)
 
     def test_rejects_benchmark_mismatch(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -45,7 +47,7 @@ class BuildReleaseManifestTests(unittest.TestCase):
                 '{"benchmarks": [{"command": "MarkDuplicates", "median_speedup": 0, "parity": "PASS"}]}',
                 encoding="utf-8",
             )
-            with self.assertRaisesRegex(ValueError, "median_speedup must be positive"):
+            with pytest.raises(ValueError, match="median_speedup must be positive"):
                 build_release_manifest.summarize_benchmark(path)
 
     def test_collects_hashes_and_source_state_without_paths(self) -> None:
@@ -80,11 +82,11 @@ class BuildReleaseManifestTests(unittest.TestCase):
                 git_runner=fake_git,
                 artifact_validator=lambda _dist, _root: [],
             )
-        self.assertEqual(manifest["workspace_version"], "0.1.12")
-        self.assertTrue(manifest["source"]["release_source_ready"])
-        self.assertEqual(manifest["artifacts"][0]["filename"], "turbo_picard-0.1.12.tar.gz")
-        self.assertEqual(manifest["source"]["ignored_generated_path_count"], 0)
-        self.assertNotIn("/private", json.dumps(manifest))
+        assert manifest["workspace_version"] == "0.1.12"
+        assert manifest["source"]["release_source_ready"]
+        assert manifest["artifacts"][0]["filename"] == "turbo_picard-0.1.12.tar.gz"
+        assert manifest["source"]["ignored_generated_path_count"] == 0
+        assert "/private" not in json.dumps(manifest)
 
     def test_ignores_generated_distributions_but_not_source_changes(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -121,13 +123,10 @@ class BuildReleaseManifestTests(unittest.TestCase):
                 artifact_validator=lambda _dist, _root: [],
             )
 
-        self.assertFalse(manifest["source"]["worktree_clean"])
-        self.assertEqual(manifest["source"]["changed_path_count"], 1)
-        self.assertEqual(manifest["source"]["ignored_generated_path_count"], 1)
-        self.assertEqual(
-            manifest["source"]["blockers"],
-            ["worktree has uncommitted changes"],
-        )
+        assert not manifest["source"]["worktree_clean"]
+        assert manifest["source"]["changed_path_count"] == 1
+        assert manifest["source"]["ignored_generated_path_count"] == 1
+        assert manifest["source"]["blockers"] == ["worktree has uncommitted changes"]
 
     def test_generated_distributions_do_not_dirty_source_state(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -162,11 +161,11 @@ class BuildReleaseManifestTests(unittest.TestCase):
                 ignored_generated_paths=(dist,),
             )
 
-        self.assertTrue(source["worktree_clean"])
-        self.assertTrue(source["release_source_ready"])
-        self.assertEqual(source["changed_path_count"], 0)
-        self.assertEqual(source["ignored_generated_path_count"], 1)
-        self.assertEqual(source["blockers"], [])
+        assert source["worktree_clean"]
+        assert source["release_source_ready"]
+        assert source["changed_path_count"] == 0
+        assert source["ignored_generated_path_count"] == 1
+        assert source["blockers"] == []
 
 
 if __name__ == "__main__":

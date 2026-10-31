@@ -1,19 +1,19 @@
 #!/usr/bin/env python3
-"""Build a privacy-conscious, source-backed release handoff manifest."""
 
 from __future__ import annotations
 
 import argparse
-from datetime import datetime, timezone
 import hashlib
 import json
 import math
-from pathlib import Path
 import re
 import subprocess
 import sys
+from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Callable
 
+MODULE_DESCRIPTION = "Build a privacy-conscious, source-backed release handoff manifest."
 
 ROOT = Path(__file__).resolve().parents[1]
 HEX40 = re.compile(r"^[0-9a-f]{40}$")
@@ -44,15 +44,11 @@ def run_git(args: list[str], root: Path = ROOT) -> tuple[int, list[str]]:
         ["git", *args],
         cwd=root,
         text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        capture_output=True,
         check=False,
     )
     lines = [
-        line.strip()
-        for stream in (completed.stdout, completed.stderr)
-        for line in stream.splitlines()
-        if line.strip()
+        line.strip() for stream in (completed.stdout, completed.stderr) for line in stream.splitlines() if line.strip()
     ]
     return completed.returncode, lines
 
@@ -94,20 +90,15 @@ def collect_source_state(
         payload = line[3:] if len(line) > 3 else line
         paths = payload.split(" -> ")
         return bool(paths) and all(
-            any(path == prefix or path.startswith(f"{prefix}/") for prefix in ignored_prefixes)
-            for path in paths
+            any(path == prefix or path.startswith(f"{prefix}/") for prefix in ignored_prefixes) for path in paths
         )
 
     ignored_status_lines = [line for line in raw_status_lines if is_generated_status(line)]
     status_lines = [line for line in raw_status_lines if not is_generated_status(line)]
     head_status, head_lines = git_runner(["rev-parse", "HEAD"], root)
-    branch_status, branch_lines = git_runner(
-        ["rev-parse", "--abbrev-ref", "HEAD"], root
-    )
+    branch_status, branch_lines = git_runner(["rev-parse", "--abbrev-ref", "HEAD"], root)
     local_tag_status, local_tag_lines = git_runner(["rev-list", "-n", "1", tag], root)
-    remote_status, remote_lines = git_runner(
-        ["ls-remote", "--tags", "origin", f"{tag}*"], root
-    )
+    remote_status, remote_lines = git_runner(["ls-remote", "--tags", "origin", f"{tag}*"], root)
 
     head = _first_line(head_status, head_lines)
     local_tag_commit = _first_line(local_tag_status, local_tag_lines)
@@ -115,9 +106,7 @@ def collect_source_state(
     worktree_clean = status == 0 and not status_lines
     tag_matches_head = head is not None and local_tag_commit == head
     origin_tag_matches_local = (
-        local_tag_commit is not None
-        and origin_tag_commit is not None
-        and local_tag_commit == origin_tag_commit
+        local_tag_commit is not None and origin_tag_commit is not None and local_tag_commit == origin_tag_commit
     )
     blockers: list[str] = []
     if status != 0:
@@ -177,9 +166,7 @@ def artifact_records(dist: Path, version: str) -> list[dict[str, Any]]:
             raise ValueError(f"artifact filename has no version: {path.name}")
         artifact_version = match.group(1)
         if artifact_version != version:
-            raise ValueError(
-                f"artifact {path.name} version {artifact_version} must be {version}"
-            )
+            raise ValueError(f"artifact {path.name} version {artifact_version} must be {version}")
         records.append(
             {
                 "filename": path.name,
@@ -196,8 +183,7 @@ def validate_artifacts(dist: Path, root: Path = ROOT) -> list[str]:
         [sys.executable, str(root / "tools" / "verify_release_artifacts.py"), "--dist", str(dist)],
         cwd=root,
         text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        capture_output=True,
         check=False,
     )
     if completed.returncode == 0:
@@ -281,7 +267,7 @@ def build_manifest(
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(description=MODULE_DESCRIPTION)
     parser.add_argument("--dist", required=True, type=Path)
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--benchmark-profile", type=Path)

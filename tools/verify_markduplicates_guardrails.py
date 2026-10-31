@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-"""Verify the checked-in MarkDuplicates guardrails and their disclosures."""
 
 from __future__ import annotations
 
@@ -9,7 +8,6 @@ import re
 import sys
 from pathlib import Path
 from typing import Any
-
 
 ROOT = Path(__file__).resolve().parents[1]
 README = ROOT / "benchmarks" / "markduplicates-competitors" / "README.md"
@@ -21,7 +19,7 @@ HEX64 = re.compile(r"^[0-9a-f]{64}$")
 HEX40 = re.compile(r"^[0-9a-f]{40}$")
 
 
-def _number(value: Any, label: str, errors: list[str]) -> float | None:
+def _number(value: object, label: str, errors: list[str]) -> float | None:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         errors.append(f"{label} must be numeric")
         return None
@@ -103,10 +101,7 @@ def validate_payload(payload: dict[str, Any], label: str, readme: str) -> list[s
         "picard_to_turbo_wall_ratio",
         "picard_to_turbo_peak_rss_ratio",
     )
-    values = {
-        key: _number(median.get(key), f"{label}: median.{key}", errors)
-        for key in numeric_keys
-    }
+    values = {key: _number(median.get(key), f"{label}: median.{key}", errors) for key in numeric_keys}
     for key, value in values.items():
         if value is not None and value < 0:
             errors.append(f"{label}: median.{key} must not be negative")
@@ -137,9 +132,7 @@ def validate_payload(payload: dict[str, Any], label: str, readme: str) -> list[s
         or "independent" not in interpretation.lower()
         or "production" not in interpretation.lower()
     ):
-        errors.append(
-            f"{label}: interpretation must retain evidence, production, and independent-reproduction caveats"
-        )
+        errors.append(f"{label}: interpretation must retain evidence, production, and independent-reproduction caveats")
 
     marker_map = {
         "synthetic": (
@@ -159,7 +152,7 @@ def validate_payload(payload: dict[str, Any], label: str, readme: str) -> list[s
 
 
 def collect_errors(root: Path = ROOT) -> list[str]:
-    del root  # Keep the function signature convenient for verifier tests.
+    del root
     readme = README.read_text(encoding="utf-8")
     errors: list[str] = []
     payloads: list[tuple[str, dict[str, Any]]] = []

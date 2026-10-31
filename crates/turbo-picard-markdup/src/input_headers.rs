@@ -1,10 +1,15 @@
-//! Input identities must be consistent before any duplicate planner runs.
-use super::*;
+use crate::{
+    MarkDuplicatesConfig, MarkDuplicatesError, external_plan_tempdir, open_markdup_reader,
+};
+use rust_htslib::bam::record::Aux;
+use rust_htslib::bam::{self, Read};
+use std::collections::{BTreeMap, BTreeSet};
+use tempfile::TempDir;
+use turbo_picard_core::hts_io;
 
 pub(super) struct PreparedInputs {
     pub paths: Vec<String>,
-    // Keep normalized inputs alive through planning and replay.
-    _temporary: Option<TempDir>,
+    temporary: Option<TempDir>,
 }
 
 type Attributes = BTreeMap<String, String>;
@@ -14,7 +19,7 @@ pub(super) fn prepare(
 ) -> Result<PreparedInputs, MarkDuplicatesError> {
     let mut prepared = PreparedInputs {
         paths: config.inputs.clone(),
-        _temporary: None,
+        temporary: None,
     };
     if config.inputs.len() == 1 {
         return Ok(prepared);
@@ -29,16 +34,16 @@ pub(super) fn prepare(
             .header()
             .target_names()
             .iter()
-            .enumerate()
-            .map(|(index, name)| (name.to_vec(), reader.header().target_len(index as u32)))
+            .zip(0_u32..)
+            .map(|(name, tid)| (name.to_vec(), reader.header().target_len(tid)))
             .collect();
         if dictionary
             .as_ref()
             .is_some_and(|expected| expected != &current)
         {
-            return Err(MarkDuplicatesError::Operation(format!(
-                "MarkDuplicates input sequence dictionaries differ: {input}"
-            )));
+            return Err(MarkDuplicatesError::SequenceDictionariesDiffer {
+                input: input.clone(),
+            });
         }
         dictionary = Some(current);
         let header = String::from_utf8_lossy(reader.header().as_bytes()).into_owned();
@@ -54,9 +59,10 @@ pub(super) fn prepare(
                     .get(*name)
                     .is_some_and(|expected| expected != &checksum)
                 {
-                    return Err(MarkDuplicatesError::Operation(format!(
-                        "MarkDuplicates input sequence dictionaries have conflicting M5 for {name}: {input}"
-                    )));
+                    return Err(MarkDuplicatesError::ConflictingSequenceChecksum {
+                        name: (*name).to_string(),
+                        input: input.clone(),
+                    });
                 }
                 checksums.insert(name.to_string(), checksum);
             }
@@ -67,8 +73,6 @@ pub(super) fn prepare(
         headers.push(header);
     }
 
-    // Equal definitions share an identity even if they appear in several files.
-    // Reserve original IDs first so a generated suffix cannot steal a later ID.
     let mut definitions = BTreeMap::<Attributes, String>::new();
     let mut assigned = BTreeSet::new();
     let mut plans = Vec::new();
@@ -101,15 +105,11 @@ pub(super) fn prepare(
     }
 
     for (index, renames) in plans.iter().enumerate().filter(|(_, p)| !p.is_empty()) {
-        if prepared._temporary.is_none() {
-            prepared._temporary = Some(external_plan_tempdir(config)?);
-        }
-        let path = prepared
-            ._temporary
-            .as_ref()
-            .unwrap()
-            .path()
-            .join(format!("input-{index}.bam"));
+        let temporary = match &prepared.temporary {
+            Some(temporary) => temporary,
+            None => prepared.temporary.insert(external_plan_tempdir(config)?),
+        };
+        let path = temporary.path().join(format!("input-{index}.bam"));
         let mut text = String::new();
         for line in headers[index].lines() {
             for (field_index, field) in line.split('\t').enumerate() {
@@ -131,15 +131,13 @@ pub(super) fn prepare(
         let header = bam::Header::from_template(&bam::HeaderView::from_bytes(text.as_bytes()));
         let mut reader = open_markdup_reader(config, &config.inputs[index])?;
         let mut writer = hts_io::open_writer(
-            path.to_str().ok_or_else(|| {
-                MarkDuplicatesError::Operation("non-UTF8 temporary input path".into())
-            })?,
+            path.to_str()
+                .ok_or(MarkDuplicatesError::NonUtf8TemporaryPath)?,
             &header,
             bam::Format::Bam,
             None,
             Some(0),
-        )
-        .map_err(MarkDuplicatesError::Operation)?;
+        )?;
         for record in reader.records() {
             let mut record = record?;
             if let Ok(Aux::String(old)) = record.aux(b"RG")
@@ -167,14 +165,10 @@ fn read_groups(header: &str) -> Result<Vec<Attributes>, MarkDuplicatesError> {
             .collect();
         let id = fields
             .get("ID")
-            .ok_or_else(|| {
-                MarkDuplicatesError::Operation("MarkDuplicates read group is missing ID".into())
-            })?
+            .ok_or(MarkDuplicatesError::ReadGroupMissingId)?
             .clone();
         if groups.insert(id.clone(), fields).is_some() {
-            return Err(MarkDuplicatesError::Operation(format!(
-                "MarkDuplicates duplicate read group ID: {id}"
-            )));
+            return Err(MarkDuplicatesError::DuplicateReadGroupId { id });
         }
     }
     Ok(groups.into_values().collect())

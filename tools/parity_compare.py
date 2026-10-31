@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-"""Shared Picard-vs-turbo-picard output comparison helpers for parity scripts."""
 
 from __future__ import annotations
 
@@ -10,10 +9,14 @@ import math
 import subprocess
 import sys
 from collections import Counter
+from collections.abc import Sequence
 from pathlib import Path
+from types import ModuleType
+
+MODULE_DESCRIPTION = "Shared Picard-vs-turbo-picard output comparison helpers for parity scripts."
 
 
-def _compare_real_data_module():
+def _compare_real_data_module() -> ModuleType:
     module_path = Path(__file__).with_name("compare_real_data.py")
     spec = importlib.util.spec_from_file_location("compare_real_data", module_path)
     if spec is None or spec.loader is None:
@@ -64,19 +67,18 @@ def compare_metrics(picard_path: Path, turbo_path: Path, label: str) -> None:
                 picard_value = float(picard_cell)
                 turbo_value = float(turbo_cell)
             except ValueError:
-                raise SystemExit(f"{label} metrics differ between Picard and turbo-picard")
-            if (not math.isfinite(picard_value) or not math.isfinite(turbo_value)
-                    or abs(picard_value - turbo_value) > 1e-5):
+                raise SystemExit(f"{label} metrics differ between Picard and turbo-picard") from None
+            if (
+                not math.isfinite(picard_value)
+                or not math.isfinite(turbo_value)
+                or abs(picard_value - turbo_value) > 1e-5
+            ):
                 raise SystemExit(f"{label} metrics differ between Picard and turbo-picard")
 
 
 def load_wgs_metrics(path: Path) -> dict[str, str]:
     with path.open(encoding="utf-8") as handle:
-        rows = [
-            line.rstrip("\n").split("\t")
-            for line in handle
-            if line.strip() and not line.startswith("#")
-        ]
+        rows = [line.rstrip("\n").split("\t") for line in handle if line.strip() and not line.startswith("#")]
     for index, row in enumerate(rows):
         if row and row[0] == "GENOME_TERRITORY":
             if index + 1 >= len(rows):
@@ -119,8 +121,7 @@ def compare_wgs_metrics(picard_path: Path, turbo_path: Path, label: str) -> None
     for field in exact_fields:
         if picard[field] != turbo[field]:
             raise SystemExit(
-                f"{label} WGS metric {field} differs from Picard: "
-                f"Picard={picard[field]} turbo={turbo[field]}"
+                f"{label} WGS metric {field} differs from Picard: Picard={picard[field]} turbo={turbo[field]}"
             )
     for field, tolerance in tolerances.items():
         if picard[field] == turbo[field]:
@@ -131,12 +132,14 @@ def compare_wgs_metrics(picard_path: Path, turbo_path: Path, label: str) -> None
         except ValueError:
             if picard[field] != turbo[field]:
                 raise SystemExit(
-                    f"{label} WGS metric {field} differs from Picard: "
-                    f"Picard={picard[field]} turbo={turbo[field]}"
-                )
+                    f"{label} WGS metric {field} differs from Picard: Picard={picard[field]} turbo={turbo[field]}"
+                ) from None
             continue
-        if (not math.isfinite(picard_value) or not math.isfinite(turbo_value)
-                or abs(picard_value - turbo_value) > tolerance):
+        if (
+            not math.isfinite(picard_value)
+            or not math.isfinite(turbo_value)
+            or abs(picard_value - turbo_value) > tolerance
+        ):
             raise SystemExit(
                 f"{label} WGS metric {field} differs from Picard beyond "
                 f"tolerance {tolerance}: Picard={picard[field]} turbo={turbo[field]}"
@@ -165,11 +168,7 @@ def compare_sam_records_ignoring_md_nm(
         stripped = []
         for record in records:
             fields = record.split("\t")
-            tags = [
-                field
-                for field in fields[11:]
-                if not (field.startswith("MD:Z:") or field.startswith("NM:i:"))
-            ]
+            tags = [field for field in fields[11:] if not (field.startswith("MD:Z:") or field.startswith("NM:i:"))]
             stripped.append("\t".join([*fields[:11], *tags]))
         return stripped
 
@@ -198,7 +197,7 @@ def compare_stable_sam_lines(picard_path: Path, turbo_path: Path, label: str) ->
     compare_real_data = _compare_real_data_module()
 
     def stable_lines(path: Path) -> list[bytes]:
-        lines = []
+        lines: list[bytes] = []
         with path.open("rb") as handle:
             for raw in handle:
                 line = raw.rstrip(b"\n")
@@ -222,11 +221,7 @@ def strip_md_nm_tags_from_record(record: bytes) -> bytes:
     fields = record.split(b"\t")
     if len(fields) <= 11:
         return record
-    tags = [
-        tag
-        for tag in fields[11:]
-        if not (tag.startswith(b"MD:Z:") or tag.startswith(b"NM:i:"))
-    ]
+    tags = [tag for tag in fields[11:] if not (tag.startswith(b"MD:Z:") or tag.startswith(b"NM:i:"))]
     return b"\t".join([*fields[:11], *tags])
 
 
@@ -238,7 +233,7 @@ def compare_stable_sam_lines_ignoring_md_nm(
     compare_real_data = _compare_real_data_module()
 
     def stable_lines(path: Path) -> list[bytes]:
-        lines = []
+        lines: list[bytes] = []
         with path.open("rb") as handle:
             for raw in handle:
                 line = raw.rstrip(b"\n")
@@ -247,9 +242,7 @@ def compare_stable_sam_lines_ignoring_md_nm(
                 if line.startswith(b"@"):
                     line = compare_real_data.normalize_stable_sam_header(line)
                 else:
-                    line = strip_md_nm_tags_from_record(
-                        compare_real_data.normalize_sam_record(line)
-                    )
+                    line = strip_md_nm_tags_from_record(compare_real_data.normalize_sam_record(line))
                 lines.append(line)
         return lines
 
@@ -265,7 +258,7 @@ def compare_stable_sam_lines_with_sorted_tags(
     compare_real_data = _compare_real_data_module()
 
     def stable_lines(path: Path) -> list[bytes]:
-        lines = []
+        lines: list[bytes] = []
         with path.open("rb") as handle:
             for raw in handle:
                 line = raw.rstrip(b"\n")
@@ -286,8 +279,8 @@ def compare_stable_sam_lines_with_sorted_tags(
 
 def report_first_line_difference(
     label: str,
-    picard_lines: list[bytes] | list[str],
-    turbo_lines: list[bytes] | list[str],
+    picard_lines: Sequence[bytes | str],
+    turbo_lines: Sequence[bytes | str],
     noun: str,
 ) -> None:
     def render(line: bytes | str) -> str:
@@ -305,8 +298,7 @@ def report_first_line_difference(
 
     if len(picard_lines) != len(turbo_lines):
         print(
-            f"{label} stable SAM line counts differ: "
-            f"Picard={len(picard_lines)} turbo-picard={len(turbo_lines)}",
+            f"{label} stable SAM line counts differ: Picard={len(picard_lines)} turbo-picard={len(turbo_lines)}",
             file=sys.stderr,
         )
 
@@ -325,6 +317,7 @@ def compare_fastq_trio(
     picard_r1: Path,
     picard_r2: Path,
     picard_unpaired: Path,
+    *,
     turbo_r1: Path,
     turbo_r2: Path,
     turbo_unpaired: Path,
@@ -353,11 +346,11 @@ def compare_merge_multiset(picard_path: Path, turbo_path: Path, label: str) -> N
         raise SystemExit(f"{label} coordinate-sorted SAM multiset differs from Picard")
 
 
-def normalized_sam_records(path: Path, compare_real_data) -> list[bytes]:
+def normalized_sam_records(path: Path, compare_real_data: ModuleType) -> list[bytes]:
     records: list[bytes] = []
     with path.open("rb") as handle:
-        for raw in handle:
-            raw = raw.rstrip(b"\n")
+        for raw_line in handle:
+            raw = raw_line.rstrip(b"\n")
             if raw.startswith(b"@"):
                 continue
             records.append(compare_real_data.normalize_sam_record(raw))
@@ -393,6 +386,7 @@ def compare_markduplicates(
     turbo_alignment: Path,
     picard_metrics: Path,
     turbo_metrics: Path,
+    *,
     label: str,
 ) -> None:
     completed = subprocess.run(
@@ -419,7 +413,7 @@ def compare_markduplicates(
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(description=MODULE_DESCRIPTION)
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     metrics = subparsers.add_parser("metrics")
@@ -525,9 +519,7 @@ def main() -> int:
     elif args.command == "cleansam":
         compare_clean_sam_fields(args.picard, args.turbo, args.label)
     elif args.command == "validate-summary":
-        compare_validate_summary(
-            args.picard, args.turbo, args.label, tuple(args.ignore_type)
-        )
+        compare_validate_summary(args.picard, args.turbo, args.label, tuple(args.ignore_type))
     elif args.command == "stable-sam":
         compare_stable_sam_lines(args.picard, args.turbo, args.label)
     elif args.command == "stable-sam-ignore-md-nm":
@@ -543,7 +535,7 @@ def main() -> int:
             args.turbo_alignment,
             args.picard_metrics,
             args.turbo_metrics,
-            args.label,
+            label=args.label,
         )
     elif args.command == "merge-multiset":
         compare_merge_multiset(args.picard, args.turbo, args.label)
@@ -552,10 +544,10 @@ def main() -> int:
             args.picard_r1,
             args.picard_r2,
             args.picard_unpaired,
-            args.turbo_r1,
-            args.turbo_r2,
-            args.turbo_unpaired,
-            args.label,
+            turbo_r1=args.turbo_r1,
+            turbo_r2=args.turbo_r2,
+            turbo_unpaired=args.turbo_unpaired,
+            label=args.label,
         )
     print(f"{args.label} parity check passed")
     return 0

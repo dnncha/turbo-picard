@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
+from __future__ import annotations
+
 import subprocess
 import tempfile
 import unittest
 from pathlib import Path
-
 
 ROOT = Path(__file__).resolve().parents[1]
 AUDIT = ROOT / "tools" / "audit_real_data.py"
@@ -18,9 +19,9 @@ class AuditRealDataTests(unittest.TestCase):
             capture_output=True,
             text=True,
         )
-        self.assertEqual(completed.returncode, 0)
-        self.assertIn("production audit", completed.stdout.lower())
-        self.assertIn("markduplicates-arg", completed.stdout)
+        assert completed.returncode == 0
+        assert "production audit" in completed.stdout.lower()
+        assert "markduplicates-arg" in completed.stdout
 
     def test_missing_compare_input_fails(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:
@@ -48,7 +49,7 @@ class AuditRealDataTests(unittest.TestCase):
                 capture_output=True,
                 text=True,
             )
-            self.assertNotEqual(completed.returncode, 0)
+            assert completed.returncode != 0
 
 
 if __name__ == "__main__":

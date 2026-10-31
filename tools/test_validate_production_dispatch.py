@@ -1,20 +1,24 @@
+from __future__ import annotations
+
 import argparse
 import importlib.util
 import sys
 import unittest
 from pathlib import Path
 
+import pytest
 
 MODULE_PATH = Path(__file__).with_name("validate_production_dispatch.py")
 SPEC = importlib.util.spec_from_file_location("validate_production_dispatch", MODULE_PATH)
+assert SPEC is not None
 module = importlib.util.module_from_spec(SPEC)
 assert SPEC.loader is not None
 sys.modules[SPEC.name] = module
 SPEC.loader.exec_module(module)
 
 
-def valid_args(**overrides):
-    values = {
+def valid_args(**overrides: object) -> argparse.Namespace:
+    values: dict[str, object] = {
         "dataset_id": "HG002-wgs-30x",
         "input_url": "https://example.org/HG002.bam",
         "input_format": "BAM",
@@ -41,19 +45,21 @@ def valid_args(**overrides):
 
 
 class ProductionDispatchTests(unittest.TestCase):
-    def test_accepts_wgs_dispatch(self):
+    def test_accepts_wgs_dispatch(self) -> None:
         module.validate_inputs(valid_args())
 
-    def test_requires_picard_comparison_pair(self):
-        with self.assertRaisesRegex(ValueError, "comparison pair"):
+    def test_requires_picard_comparison_pair(self) -> None:
+        with pytest.raises(ValueError, match="comparison pair"):
             module.validate_inputs(valid_args(tools="turbo-picard", require_tools="turbo-picard"))
 
-    def test_requires_required_tools_to_be_selected(self):
-        with self.assertRaisesRegex(ValueError, "subset of TOOLS"):
-            module.validate_inputs(valid_args(tools="turbo-picard,picard", require_tools="turbo-picard,picard,samtools"))
+    def test_requires_required_tools_to_be_selected(self) -> None:
+        with pytest.raises(ValueError, match="subset of TOOLS"):
+            module.validate_inputs(
+                valid_args(tools="turbo-picard,picard", require_tools="turbo-picard,picard,samtools")
+            )
 
-    def test_requires_cram_reference_pair(self):
-        with self.assertRaisesRegex(ValueError, "CRAM evidence"):
+    def test_requires_cram_reference_pair(self) -> None:
+        with pytest.raises(ValueError, match="CRAM evidence"):
             module.validate_inputs(valid_args(input_format="CRAM", profile="cram_reference"))
         module.validate_inputs(
             valid_args(
@@ -64,27 +70,25 @@ class ProductionDispatchTests(unittest.TestCase):
             )
         )
 
-    def test_requires_umi_barcode(self):
-        with self.assertRaisesRegex(ValueError, "umi_panel"):
+    def test_requires_umi_barcode(self) -> None:
+        with pytest.raises(ValueError, match="umi_panel"):
             module.validate_inputs(valid_args(profile="umi_panel"))
         module.validate_inputs(valid_args(profile="umi_panel", barcode_tag="RX"))
 
-    def test_rejects_early_invalid_measurement_controls(self):
+    def test_rejects_early_invalid_measurement_controls(self) -> None:
         for field, value, message in (
             ("input_sha256", "bad", "INPUT_SHA256"),
             ("input_url", "http://example.org/input.bam", "INPUT_URL"),
             ("read_name_regex", "", "READ_NAME_REGEX"),
             ("tag_duplicate_set_members", "yes", "TAG_DUPLICATE_SET_MEMBERS"),
         ):
-            with self.subTest(field=field):
-                with self.assertRaisesRegex(ValueError, message):
-                    module.validate_inputs(valid_args(**{field: value}))
+            with self.subTest(field=field), pytest.raises(ValueError, match=message):
+                module.validate_inputs(valid_args(**{field: value}))
 
-    def test_requires_five_repeats_and_positive_resources(self):
+    def test_requires_five_repeats_and_positive_resources(self) -> None:
         for field, value in (("repeats", 4), ("warmups", -1), ("threads", 0)):
-            with self.subTest(field=field):
-                with self.assertRaisesRegex(ValueError, "REPEATS|WARMUPS|THREADS"):
-                    module.validate_inputs(valid_args(**{field: value}))
+            with self.subTest(field=field), pytest.raises(ValueError, match=r"REPEATS|WARMUPS|THREADS"):
+                module.validate_inputs(valid_args(**{field: value}))
 
 
 if __name__ == "__main__":

@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+
+from __future__ import annotations
+
 import argparse
 import os
 import pathlib
@@ -7,18 +10,17 @@ import subprocess
 import sys
 import tempfile
 import time
-
+from collections.abc import Sequence
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 
 
-def run(command, *, cwd=ROOT):
+def run(command: Sequence[str], *, cwd: pathlib.Path = ROOT) -> float:
     start = time.perf_counter()
     completed = subprocess.run(
         command,
         cwd=cwd,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        capture_output=True,
         text=True,
         check=False,
     )
@@ -30,7 +32,7 @@ def run(command, *, cwd=ROOT):
     return elapsed
 
 
-def conda_runner():
+def conda_runner() -> str:
     for name in ("mamba", "micromamba"):
         path = shutil.which(name)
         if path:
@@ -38,7 +40,7 @@ def conda_runner():
     raise SystemExit("mamba or micromamba is required to benchmark against Picard")
 
 
-def write_sam(path, reads, duplicate_family_size, paired=False):
+def write_sam(path: pathlib.Path, reads: int, duplicate_family_size: int, paired: bool = False) -> None:
     sequence = "ACGT" * 25
     qualities = "F" * len(sequence)
     with open(path, "w", encoding="utf-8") as handle:
@@ -55,15 +57,13 @@ def write_sam(path, reads, duplicate_family_size, paired=False):
                     member = index - group_start
                     name = f"INST:RUN:FLOW:1:{group + 1}:{member % 101}:{member // 101}"
                     handle.write(
-                        f"{name}\t99\tchr1\t{pos}\t60\t100M\t=\t{mate_pos}\t100\t"
-                        f"{sequence}\t{qualities}\tRG:Z:rg1\n"
+                        f"{name}\t99\tchr1\t{pos}\t60\t100M\t=\t{mate_pos}\t100\t{sequence}\t{qualities}\tRG:Z:rg1\n"
                     )
                 for index in range(group_start, family_end):
                     member = index - group_start
                     name = f"INST:RUN:FLOW:1:{group + 1}:{member % 101}:{member // 101}"
                     handle.write(
-                        f"{name}\t147\tchr1\t{mate_pos}\t60\t100M\t=\t{pos}\t-100\t"
-                        f"{sequence}\t{qualities}\tRG:Z:rg1\n"
+                        f"{name}\t147\tchr1\t{mate_pos}\t60\t100M\t=\t{pos}\t-100\t{sequence}\t{qualities}\tRG:Z:rg1\n"
                     )
             return
         for index in range(reads):
@@ -71,12 +71,10 @@ def write_sam(path, reads, duplicate_family_size, paired=False):
             pos = 1 + group * 2
             member = index % duplicate_family_size
             name = f"INST:RUN:FLOW:1:{group + 1}:{member % 101}:{member // 101}"
-            handle.write(
-                f"{name}\t0\tchr1\t{pos}\t60\t100M\t*\t0\t0\t{sequence}\t{qualities}\n"
-            )
+            handle.write(f"{name}\t0\tchr1\t{pos}\t60\t100M\t*\t0\t0\t{sequence}\t{qualities}\n")
 
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser(
         description="Benchmark turbo-picard MarkDuplicates against Picard on synthetic SAM/BAM."
     )
@@ -137,10 +135,6 @@ def main():
         benchmark_input = input_sam
         if args.input_format == "bam":
             if args.paired:
-                # Picard's coordinate comparator has stricter tie ordering
-                # than the native sorter.  Use it only to prepare this
-                # paired synthetic input; MarkDuplicates timings still cover
-                # the native and Picard implementations on the same BAM.
                 run(
                     [
                         runner,
@@ -203,8 +197,7 @@ def main():
                 str(turbo_metrics),
             ],
             cwd=ROOT,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+            capture_output=True,
             text=True,
             check=False,
         )

@@ -1,13 +1,11 @@
 #!/usr/bin/env python3
-"""Keep release-facing benchmark claim surfaces synchronized with benchmark data."""
 
 from __future__ import annotations
 
 import json
 import sys
+from collections.abc import Mapping
 from pathlib import Path
-from typing import Mapping
-
 
 ROOT = Path(__file__).resolve().parents[1]
 BENCHMARK_DATA = ROOT / "docs" / "site" / "assets" / "benchmark-data.json"
@@ -32,9 +30,7 @@ CLAIM_SURFACES = (
     "packaging/outreach/seqera-community-show-and-tell.md",
     "packaging/outreach/social-posts.md",
 )
-OUTREACH_SURFACES = frozenset(
-    path for path in CLAIM_SURFACES if path.startswith("packaging/outreach/")
-)
+OUTREACH_SURFACES = frozenset(path for path in CLAIM_SURFACES if path.startswith("packaging/outreach/"))
 
 
 def format_speedup(value: float) -> str:
@@ -63,9 +59,7 @@ def required_claims(path: str, data: Mapping[str, object]) -> list[str]:
     return [geometric_mean, floor, top]
 
 
-def validate_claim_surfaces(
-    surfaces: Mapping[str, str], data: Mapping[str, object]
-) -> list[str]:
+def validate_claim_surfaces(surfaces: Mapping[str, str], data: Mapping[str, object]) -> list[str]:
     errors: list[str] = []
     for path in CLAIM_SURFACES:
         text = surfaces.get(path)
@@ -80,9 +74,7 @@ def validate_claim_surfaces(
 
 def main() -> int:
     data = json.loads(BENCHMARK_DATA.read_text(encoding="utf-8"))
-    surfaces = {
-        path: (ROOT / path).read_text(encoding="utf-8") for path in CLAIM_SURFACES
-    }
+    surfaces = {path: (ROOT / path).read_text(encoding="utf-8") for path in CLAIM_SURFACES}
     errors = validate_claim_surfaces(surfaces, data)
     if errors:
         for error in errors:

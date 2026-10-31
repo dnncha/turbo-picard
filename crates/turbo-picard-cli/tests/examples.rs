@@ -1,8 +1,3 @@
-//! Example-shaped checks for the documented agent workflow.
-//!
-//! The README tells agents to inspect capabilities and print a trial contract
-//! before changing a workflow. These tests execute that documented sequence.
-
 use assert_cmd::Command;
 use predicates::prelude::*;
 

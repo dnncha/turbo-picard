@@ -1,19 +1,21 @@
 #!/usr/bin/env python3
-"""Verify marketing-site benchmark claims against rendered benchmark-data.json."""
 
 from __future__ import annotations
 
 import json
 import sys
 from pathlib import Path
-
+from typing import TYPE_CHECKING, Any
 
 ROOT = Path(__file__).resolve().parents[1]
 TOOL_DIR = Path(__file__).resolve().parent
 if str(TOOL_DIR) not in sys.path:
     sys.path.insert(0, str(TOOL_DIR))
 
-from verify_benchmark_suite_coverage import BENCHMARK_EXEMPTIONS  # noqa: E402
+if TYPE_CHECKING:
+    from tools.verify_benchmark_suite_coverage import BENCHMARK_EXEMPTIONS
+else:
+    from verify_benchmark_suite_coverage import BENCHMARK_EXEMPTIONS
 
 SITE = ROOT / "docs" / "site" / "index.html"
 BENCHMARK_DATA = ROOT / "docs" / "site" / "assets" / "benchmark-data.json"
@@ -23,8 +25,8 @@ def format_speedup(value: float) -> str:
     return f"{value:.2f}x"
 
 
-def validate_site_benchmark_evidence(site: str, data: dict) -> list[str]:
-    errors = []
+def validate_site_benchmark_evidence(site: str, data: dict[str, Any]) -> list[str]:
+    errors: list[str] = []
     summary = data["summary"]
     parity_count = data["parity"].split()[0]
     command_count = summary["command_count"]

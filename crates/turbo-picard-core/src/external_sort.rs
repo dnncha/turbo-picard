@@ -1,10 +1,5 @@
-//! Bounded-memory stable external sorting over precomputed binary keys.
-//!
-//! The final merge calls the supplied sink directly. In particular, this is
-//! deliberately not an iterator backed by a `Vec`: callers can sort files
-//! much larger than available memory without rebuilding the result in RAM.
-
 use crate::merge_tree::MergeTree;
+use crate::sort_error::SortError;
 use crate::temp_runs::OwnedRuns;
 use std::cmp::Ordering;
 use std::fs::{self, File, OpenOptions};
@@ -23,7 +18,6 @@ const DEFAULT_MERGE_FAN_IN: usize = 32;
 pub struct ExternalSortConfig {
     pub tmp_dir: PathBuf,
     pub max_records_in_ram: usize,
-    /// Approximate run budget including reserved vector, key and payload buffers.
     pub max_bytes_in_ram: usize,
     pub merge_fan_in: usize,
     pub prefix: String,
@@ -69,14 +63,12 @@ impl SortItem {
     }
 
     fn estimated_bytes(&self) -> usize {
-        std::mem::size_of::<Self>()
+        size_of::<Self>()
             .saturating_add(self.key.capacity())
             .saturating_add(self.payload.capacity())
     }
 }
 
-/// A stable file-backed sorter. `finish_into` is the only completion API so
-/// a caller cannot accidentally turn a disk-backed sort into a full-RAM one.
 pub struct ExternalSorter {
     config: ExternalSortConfig,
     items: Vec<SortItem>,
@@ -90,8 +82,8 @@ pub struct ExternalSorter {
 }
 
 impl ExternalSorter {
-    pub fn new(config: ExternalSortConfig) -> Result<Self, String> {
-        fs::create_dir_all(&config.tmp_dir).map_err(|error| error.to_string())?;
+    pub fn new(config: ExternalSortConfig) -> Result<Self, SortError> {
+        fs::create_dir_all(&config.tmp_dir)?;
         Ok(Self {
             config,
             items: Vec::new(),
@@ -105,9 +97,9 @@ impl ExternalSorter {
         })
     }
 
-    pub fn push(&mut self, key: Vec<u8>, payload: Vec<u8>) -> Result<(), String> {
+    pub fn push(&mut self, key: Vec<u8>, payload: Vec<u8>) -> Result<(), SortError> {
         let item = SortItem::new(key, self.next_ordinal, payload);
-        let item_bytes = item.estimated_bytes() - std::mem::size_of::<SortItem>();
+        let item_bytes = item.estimated_bytes() - size_of::<SortItem>();
         let incoming_bytes = self
             .resident_bytes
             .saturating_add(item_bytes)
@@ -115,7 +107,7 @@ impl ExternalSorter {
                 self.items
                     .capacity()
                     .max(self.items.len().saturating_add(1))
-                    .saturating_mul(std::mem::size_of::<SortItem>()),
+                    .saturating_mul(size_of::<SortItem>()),
             );
         if !self.items.is_empty() && incoming_bytes > self.config.max_bytes_in_ram.max(1) {
             self.spill_current_run()?;
@@ -129,11 +121,9 @@ impl ExternalSorter {
         self.next_ordinal = self.next_ordinal.wrapping_add(1);
         self.resident_bytes = self.resident_bytes.saturating_add(item_bytes);
         self.items.push(item);
-        let estimated_bytes = self.resident_bytes.saturating_add(
-            self.items
-                .capacity()
-                .saturating_mul(std::mem::size_of::<SortItem>()),
-        );
+        let estimated_bytes = self
+            .resident_bytes
+            .saturating_add(self.items.capacity().saturating_mul(size_of::<SortItem>()));
         self.metrics.max_resident_records = self.metrics.max_resident_records.max(self.items.len());
         self.metrics.max_estimated_bytes = self.metrics.max_estimated_bytes.max(estimated_bytes);
         if self.items.len() >= self.config.max_records_in_ram.max(1)
@@ -144,14 +134,10 @@ impl ExternalSorter {
         Ok(())
     }
 
-    /// Complete the sort and deliver each item in order to `emit`.
-    ///
-    /// No output collection is allocated by this method. Temporary files are
-    /// deleted on success, failure, and drop.
     pub fn finish_into(
         mut self,
-        mut emit: impl FnMut(SortItem) -> Result<(), String>,
-    ) -> Result<ExternalSortMetrics, String> {
+        mut emit: impl FnMut(SortItem) -> Result<(), SortError>,
+    ) -> Result<ExternalSortMetrics, SortError> {
         if self.runs.is_empty() {
             sort_items(&mut self.items);
             self.metrics.run_count = usize::from(!self.items.is_empty());
@@ -162,12 +148,10 @@ impl ExternalSorter {
         }
 
         self.spill_current_run()?;
-        // clear() retains the run-sized allocation. No more input will arrive,
-        // so release it before allocating merge readers and their head records.
         self.items = Vec::new();
         let mut runs = std::mem::take(&mut self.runs);
         while runs.len() > self.config.merge_fan_in.max(2) {
-            runs = self.merge_pass(runs)?;
+            runs = self.merge_pass(&runs)?;
         }
         let merge_result = merge_runs(&runs, emit);
         for run in runs {
@@ -181,7 +165,7 @@ impl ExternalSorter {
         self.metrics
     }
 
-    fn spill_current_run(&mut self) -> Result<(), String> {
+    fn spill_current_run(&mut self) -> Result<(), SortError> {
         if self.items.is_empty() {
             return Ok(());
         }
@@ -197,12 +181,10 @@ impl ExternalSorter {
         Ok(())
     }
 
-    fn merge_pass(&mut self, runs: Vec<PathBuf>) -> Result<Vec<PathBuf>, String> {
+    fn merge_pass(&mut self, runs: &[PathBuf]) -> Result<Vec<PathBuf>, SortError> {
         let fan_in = self.config.merge_fan_in.max(2);
         let mut merged = Vec::new();
         for chunk in runs.chunks(fan_in) {
-            // Carry a singleton forward without reading and rewriting it. It
-            // remains registered with owned_runs, including on later failure.
             if chunk.len() == 1 {
                 merged.push(chunk[0].clone());
                 continue;
@@ -219,7 +201,7 @@ impl ExternalSorter {
         Ok(merged)
     }
 
-    fn create_run_path(&mut self) -> Result<PathBuf, String> {
+    fn create_run_path(&mut self) -> Result<PathBuf, SortError> {
         loop {
             let path = self.config.tmp_dir.join(format!(
                 "{}-{}-{}-{}.run",
@@ -234,22 +216,20 @@ impl ExternalSorter {
                     self.owned_runs.register(&path);
                     return Ok(path);
                 }
-                Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
-                Err(error) => return Err(error.to_string()),
+                Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
+                Err(error) => return Err(error.into()),
             }
         }
     }
 }
 
-/// Keep amortized vector growth within the remaining run budget. Only a single
-/// oversized item may exceed it; release retained metadata for that singleton.
 pub(crate) fn reserve_run_slot<T>(
     items: &mut Vec<T>,
     buffer_bytes: usize,
     max_bytes: usize,
     max_records: usize,
-) -> Result<(), String> {
-    let item_size = std::mem::size_of::<T>().max(1);
+) -> Result<(), SortError> {
+    let item_size = size_of::<T>().max(1);
     let budget = max_bytes.max(1);
     if items.is_empty()
         && buffer_bytes.saturating_add(items.capacity().saturating_mul(item_size)) > budget
@@ -265,16 +245,12 @@ pub(crate) fn reserve_run_slot<T>(
             .min(max_records.max(1))
             .min(budget.saturating_sub(buffer_bytes) / item_size)
             .max(required);
-        items
-            .try_reserve_exact(capacity - items.len())
-            .map_err(|error| error.to_string())?;
+        items.try_reserve_exact(capacity - items.len())?;
     }
     Ok(())
 }
 
 fn sort_items(items: &mut [SortItem]) {
-    // The ordinal is part of the comparison, so equal user keys still retain
-    // insertion order without the auxiliary allocation of a stable sort.
     items.sort_unstable_by(compare_items);
 }
 
@@ -284,16 +260,13 @@ fn compare_items(left: &SortItem, right: &SortItem) -> Ordering {
         .then_with(|| left.ordinal.cmp(&right.ordinal))
 }
 
-fn write_run(path: &Path, items: &[SortItem]) -> Result<u64, String> {
-    let mut writer = BufWriter::with_capacity(
-        SORT_IO_BUFFER_BYTES,
-        File::create(path).map_err(|error| error.to_string())?,
-    );
+fn write_run(path: &Path, items: &[SortItem]) -> Result<u64, SortError> {
+    let mut writer = BufWriter::with_capacity(SORT_IO_BUFFER_BYTES, File::create(path)?);
     let mut bytes = 0_u64;
     for item in items {
-        bytes += write_item(&mut writer, item).map_err(|error| error.to_string())?;
+        bytes += write_item(&mut writer, item)?;
     }
-    writer.flush().map_err(|error| error.to_string())?;
+    writer.flush()?;
     Ok(bytes)
 }
 
@@ -310,37 +283,25 @@ fn write_item(writer: &mut impl Write, item: &SortItem) -> io::Result<u64> {
     Ok(20 + u64::from(key_len) + payload_len)
 }
 
-fn read_item(reader: &mut impl Read) -> Result<Option<SortItem>, String> {
+fn read_item(reader: &mut impl Read) -> Result<Option<SortItem>, SortError> {
     let mut key_len_bytes = [0_u8; 4];
-    // Only EOF before the first byte is a clean end of run. A partial
-    // length prefix must not silently discard the final item.
     match reader.read_exact(&mut key_len_bytes[..1]) {
         Ok(()) => {}
         Err(error) if error.kind() == io::ErrorKind::UnexpectedEof => return Ok(None),
-        Err(error) => return Err(error.to_string()),
+        Err(error) => return Err(error.into()),
     }
-    reader
-        .read_exact(&mut key_len_bytes[1..])
-        .map_err(|error| error.to_string())?;
+    reader.read_exact(&mut key_len_bytes[1..])?;
     let mut payload_len_bytes = [0_u8; 8];
     let mut ordinal_bytes = [0_u8; 8];
-    reader
-        .read_exact(&mut payload_len_bytes)
-        .map_err(|error| error.to_string())?;
-    reader
-        .read_exact(&mut ordinal_bytes)
-        .map_err(|error| error.to_string())?;
+    reader.read_exact(&mut payload_len_bytes)?;
+    reader.read_exact(&mut ordinal_bytes)?;
     let key_len = u32::from_le_bytes(key_len_bytes) as usize;
     let payload_len = usize::try_from(u64::from_le_bytes(payload_len_bytes))
-        .map_err(|_| "sort payload too large for this platform".to_string())?;
+        .map_err(|_| SortError::PayloadTooLarge)?;
     let mut key = vec![0_u8; key_len];
     let mut payload = vec![0_u8; payload_len];
-    reader
-        .read_exact(&mut key)
-        .map_err(|error| error.to_string())?;
-    reader
-        .read_exact(&mut payload)
-        .map_err(|error| error.to_string())?;
+    reader.read_exact(&mut key)?;
+    reader.read_exact(&mut payload)?;
     Ok(Some(SortItem::new(
         key,
         u64::from_le_bytes(ordinal_bytes),
@@ -348,38 +309,33 @@ fn read_item(reader: &mut impl Read) -> Result<Option<SortItem>, String> {
     )))
 }
 
-fn merge_runs_to_file(runs: &[PathBuf], output: &Path) -> Result<u64, String> {
-    let mut writer = BufWriter::with_capacity(
-        SORT_IO_BUFFER_BYTES,
-        File::create(output).map_err(|error| error.to_string())?,
-    );
+fn merge_runs_to_file(runs: &[PathBuf], output: &Path) -> Result<u64, SortError> {
+    let mut writer = BufWriter::with_capacity(SORT_IO_BUFFER_BYTES, File::create(output)?);
     let mut bytes = 0_u64;
     merge_runs(runs, |item| {
-        bytes += write_item(&mut writer, &item).map_err(|error| error.to_string())?;
+        bytes += write_item(&mut writer, &item)?;
         Ok(())
     })?;
-    writer.flush().map_err(|error| error.to_string())?;
+    writer.flush()?;
     Ok(bytes)
 }
 
 fn merge_runs(
     runs: &[PathBuf],
-    mut emit: impl FnMut(SortItem) -> Result<(), String>,
-) -> Result<(), String> {
+    mut emit: impl FnMut(SortItem) -> Result<(), SortError>,
+) -> Result<(), SortError> {
     let mut readers = Vec::with_capacity(runs.len());
     let mut heads = Vec::with_capacity(runs.len());
     for path in runs {
-        let mut reader = BufReader::with_capacity(
-            SORT_IO_BUFFER_BYTES,
-            File::open(path).map_err(|error| error.to_string())?,
-        );
+        let mut reader = BufReader::with_capacity(SORT_IO_BUFFER_BYTES, File::open(path)?);
         heads.push(read_item(&mut reader)?);
         readers.push(reader);
     }
     let mut tree = MergeTree::new(&heads, compare_items);
     while let Some(reader_index) = tree.winner() {
-        let item = heads[reader_index].take().expect("winning merge head");
-        emit(item)?;
+        if let Some(item) = heads[reader_index].take() {
+            emit(item)?;
+        }
         heads[reader_index] = read_item(&mut readers[reader_index])?;
         tree.update(reader_index, &heads, compare_items);
     }
@@ -397,7 +353,7 @@ mod tests {
     #[test]
     fn run_budget_counts_vector_capacity_at_growth_boundaries() {
         let dir = test_dir("sort-vector-budget");
-        let budget = 5 * (std::mem::size_of::<SortItem>() + 2);
+        let budget = 5 * (size_of::<SortItem>() + 2);
         let mut config = ExternalSortConfig::new(&dir);
         config.max_bytes_in_ram = budget;
         let mut sorter = ExternalSorter::new(config).unwrap();
@@ -408,7 +364,7 @@ mod tests {
                 .iter()
                 .map(|item| item.key.capacity() + item.payload.capacity())
                 .sum::<usize>()
-                + sorter.items.capacity() * std::mem::size_of::<SortItem>();
+                + sorter.items.capacity() * size_of::<SortItem>();
             assert!(
                 allocated <= budget,
                 "allocated {allocated} with budget {budget}"
@@ -440,7 +396,7 @@ mod tests {
         assert_eq!(sorter.metrics().max_resident_records, 4);
         assert_eq!(
             sorter.metrics().max_estimated_bytes,
-            4097 + std::mem::size_of::<SortItem>()
+            4097 + size_of::<SortItem>()
         );
         assert_eq!(sorter.metrics().spills, 2);
         assert!(sorter.items.is_empty());
@@ -510,8 +466,6 @@ mod tests {
         for i in 0..5_u8 {
             sorter.push(vec![i], vec![i]).unwrap();
         }
-        // Truncate a spill before a multi-pass merge. The input queue and the
-        // partial merge output must remain owned across the early return.
         fs::write(&sorter.runs[0], b"\0\0").unwrap();
         assert!(sorter.finish_into(|_| Ok(())).is_err());
         assert!(fs::read_dir(&dir).unwrap().next().is_none());
@@ -521,10 +475,7 @@ mod tests {
     #[test]
     fn memory_estimate_counts_reserved_buffers_and_metadata() {
         let item = SortItem::new(Vec::with_capacity(1024), 0, Vec::with_capacity(2048));
-        assert_eq!(
-            item.estimated_bytes(),
-            std::mem::size_of::<SortItem>() + 3072
-        );
+        assert_eq!(item.estimated_bytes(), size_of::<SortItem>() + 3072);
     }
 
     #[test]
@@ -547,7 +498,6 @@ mod tests {
         assert_eq!(observed, [0, 1, 2, 3, 4]);
         assert_eq!(metrics.spills, 5);
         assert_eq!(metrics.run_count, 8);
-        // Five initial records, four in each intermediate pass; each is 22 B.
         assert_eq!(metrics.bytes_written, 13 * 22);
         assert!(fs::read_dir(&dir).unwrap().next().is_none());
         fs::remove_dir(&dir).unwrap();
@@ -587,10 +537,10 @@ mod tests {
         for value in 0..5_u8 {
             sorter.push(vec![value], vec![value]).unwrap();
         }
-        assert_eq!(
-            sorter.finish_into(|_| Err("sink failed".to_string())),
-            Err("sink failed".to_string())
-        );
+        let error = sorter
+            .finish_into(|_| Err(SortError::Sink("sink failed".to_string())))
+            .unwrap_err();
+        assert_eq!(error.to_string(), "sink failed");
         assert!(fs::read_dir(&dir).unwrap().next().is_none());
         fs::remove_dir(&dir).unwrap();
     }

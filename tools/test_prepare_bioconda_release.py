@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Tests for Bioconda release source preparation."""
 
 from __future__ import annotations
 
-import importlib.util
 import contextlib
+import hashlib
+import importlib.util
 import io
 import json
 import sys
@@ -14,6 +14,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+import pytest
 
 MODULE_PATH = Path(__file__).with_name("prepare_bioconda_release.py")
 SPEC = importlib.util.spec_from_file_location("prepare_bioconda_release", MODULE_PATH)
@@ -39,14 +40,9 @@ def cargo_lock_bytes(version: str = "0.1.0") -> bytes:
     return (
         b"version = 4\n\n"
         b"[[package]]\n"
-        b'name = "turbo-picard-cli"\n'
-        + f'version = "{version}"\n\n'.encode("utf-8")
-        + b"[[package]]\n"
-        b'name = "turbo-picard-core"\n'
-        + f'version = "{version}"\n\n'.encode("utf-8")
-        + b"[[package]]\n"
-        b'name = "turbo-picard-markdup"\n'
-        + f'version = "{version}"\n'.encode("utf-8")
+        b'name = "turbo-picard-cli"\n' + f'version = "{version}"\n\n'.encode() + b"[[package]]\n"
+        b'name = "turbo-picard-core"\n' + f'version = "{version}"\n\n'.encode() + b"[[package]]\n"
+        b'name = "turbo-picard-markdup"\n' + f'version = "{version}"\n'.encode()
     )
 
 
@@ -97,14 +93,11 @@ PARITY_DOCS_BYTES = (
 
 class PrepareBiocondaReleaseTests(unittest.TestCase):
     def test_release_archive_evidence_policy_matches_real_data_verifier(self) -> None:
-        self.assertEqual(
-            prepare_bioconda_release.RELEASE_CANDIDATE_PORTFOLIO_REQUIRED_COMMANDS,
-            verify_real_data_evidence.RELEASE_CANDIDATE_PORTFOLIO_REQUIRED_COMMANDS,
+        assert (
+            prepare_bioconda_release.RELEASE_CANDIDATE_PORTFOLIO_REQUIRED_COMMANDS
+            == verify_real_data_evidence.RELEASE_CANDIDATE_PORTFOLIO_REQUIRED_COMMANDS
         )
-        self.assertEqual(
-            prepare_bioconda_release.KNOWN_COMPARISONS,
-            verify_real_data_evidence.KNOWN_COMPARISONS,
-        )
+        assert prepare_bioconda_release.KNOWN_COMPARISONS == verify_real_data_evidence.KNOWN_COMPARISONS
 
     def write_recipe_tree(
         self,
@@ -122,7 +115,7 @@ class PrepareBiocondaReleaseTests(unittest.TestCase):
             recipe_dir.mkdir(parents=True)
             source_separator = "\n\n" if blank_after_source else "\n"
             (recipe_dir / "meta.yaml").write_text(
-                f"{{% set version = \"{version}\" %}}\n"
+                f'{{% set version = "{version}" %}}\n'
                 "package:\n"
                 "  name: test\n"
                 "  version: {{ version }}\n\n"
@@ -151,12 +144,9 @@ build:
 
         updated = prepare_bioconda_release.update_meta_yaml(meta_yaml, digest)
 
-        self.assertIn(
-            "url: https://github.com/dnncha/turbo-picard/archive/refs/tags/v0.1.0.tar.gz",
-            updated,
-        )
-        self.assertIn(f"sha256: {digest}", updated)
-        self.assertNotIn("path: ../../..", updated)
+        assert "url: https://github.com/dnncha/turbo-picard/archive/refs/tags/v0.1.0.tar.gz" in updated
+        assert f"sha256: {digest}" in updated
+        assert "path: ../../.." not in updated
 
     def test_updates_bioconda_pr_release_source(self) -> None:
         digest = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
@@ -173,22 +163,19 @@ build:
             digest,
         )
 
-        self.assertIn(
-            "https://github.com/dnncha/turbo-picard/archive/refs/tags/v0.1.0.tar.gz",
-            updated,
-        )
-        self.assertIn(f"`{digest}`", updated)
-        self.assertNotIn("github-v0.1.0-source-archive-sha256", updated)
+        assert "https://github.com/dnncha/turbo-picard/archive/refs/tags/v0.1.0.tar.gz" in updated
+        assert f"`{digest}`" in updated
+        assert "github-v0.1.0-source-archive-sha256" not in updated
 
     def test_bioconda_pr_update_requires_release_source_fields(self) -> None:
         digest = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
-        with self.assertRaisesRegex(ValueError, "tagged archive URL"):
+        with pytest.raises(ValueError, match="tagged archive URL"):
             prepare_bioconda_release.update_bioconda_pr(
                 "Archive SHA-256:\n  `<github-v0.1.0-source-archive-sha256>`\n",
                 "0.1.0",
                 digest,
             )
-        with self.assertRaisesRegex(ValueError, "archive SHA-256 field"):
+        with pytest.raises(ValueError, match="archive SHA-256 field"):
             prepare_bioconda_release.update_bioconda_pr(
                 "https://github.com/dnncha/turbo-picard/archive/refs/tags/v0.1.0.tar.gz\n",
                 "0.1.0",
@@ -196,33 +183,24 @@ build:
             )
 
     def test_requires_version_declaration(self) -> None:
-        with self.assertRaisesRegex(ValueError, "version"):
+        with pytest.raises(ValueError, match="version"):
             prepare_bioconda_release.update_meta_yaml(
                 "source:\n  path: ../../..\nbuild:\n  number: 0\n",
                 "0" * 64,
             )
 
     def test_can_compute_sha256_from_archive(self) -> None:
-        import hashlib
-        import tempfile
-
         with tempfile.TemporaryDirectory() as tmp:
             archive = Path(tmp) / "v0.1.0.tar.gz"
             archive.write_bytes(b"release archive")
 
-            self.assertEqual(
-                prepare_bioconda_release.sha256_file(archive),
-                hashlib.sha256(b"release archive").hexdigest(),
-            )
+            assert prepare_bioconda_release.sha256_file(archive) == hashlib.sha256(b"release archive").hexdigest()
 
     def write_release_archive(self, archive: Path, version: str = "0.1.0") -> None:
         prefix = f"turbo-picard-{version}"
-        release_candidate_commands = {
-            command: "SAM record digest"
-            for command in sorted(
-                prepare_bioconda_release.RELEASE_CANDIDATE_PORTFOLIO_REQUIRED_COMMANDS
-            )
-        }
+        release_candidate_commands = dict.fromkeys(
+            sorted(prepare_bioconda_release.RELEASE_CANDIDATE_PORTFOLIO_REQUIRED_COMMANDS), "SAM record digest"
+        )
         manifest = {
             "datasets": [
                 {
@@ -252,26 +230,17 @@ build:
         }
         content_by_name = {
             f"{prefix}/Cargo.lock": cargo_lock_bytes(version),
-            f"{prefix}/Cargo.toml": (
-                b"[workspace.package]\n"
-                + f'version = "{version}"\n'.encode("utf-8")
-            ),
+            f"{prefix}/Cargo.toml": (b"[workspace.package]\n" + f'version = "{version}"\n'.encode()),
             f"{prefix}/CITATION.cff": citation_bytes(version),
-            f"{prefix}/benchmarks/real-data/manifest.json": (
-                json.dumps(manifest).encode("utf-8") + b"\n"
-            ),
-            f"{prefix}/docs/command-matrix.yml": (
-                b'picard_reference: "3.4.0"\ncommands: []\n'
-            ),
+            f"{prefix}/benchmarks/real-data/manifest.json": (json.dumps(manifest).encode("utf-8") + b"\n"),
+            f"{prefix}/docs/command-matrix.yml": (b'picard_reference: "3.4.0"\ncommands: []\n'),
             f"{prefix}/docs/parity.rst": PARITY_DOCS_BYTES,
-            f"{prefix}/docs/site/assets/benchmark-data.json": (
-                json.dumps(benchmark_data).encode("utf-8") + b"\n"
-            ),
+            f"{prefix}/docs/site/assets/benchmark-data.json": (json.dumps(benchmark_data).encode("utf-8") + b"\n"),
             f"{prefix}/packaging/bioconda/turbo-picard/meta.yaml": (
-                f'{{% set version = "{version}" %}}\nsource:\n  path: ../../..\n'.encode("utf-8")
+                f'{{% set version = "{version}" %}}\nsource:\n  path: ../../..\n'.encode()
             ),
             f"{prefix}/packaging/bioconda/turbo-picard-picard-shim/meta.yaml": (
-                f'{{% set version = "{version}" %}}\nsource:\n  path: ../../..\n'.encode("utf-8")
+                f'{{% set version = "{version}" %}}\nsource:\n  path: ../../..\n'.encode()
             ),
         }
         with tarfile.open(archive, "w:gz") as handle:
@@ -285,31 +254,14 @@ build:
 
     def test_archive_argument_requires_existing_file(self) -> None:
         with contextlib.redirect_stderr(io.StringIO()):
-            self.assertEqual(
-                prepare_bioconda_release.main(["--archive", "/does/not/exist"]),
-                2,
-            )
+            assert prepare_bioconda_release.main(["--archive", "/does/not/exist"]) == 2
 
     def test_archive_name_must_match_recipe_version(self) -> None:
-        self.assertIsNone(
-            prepare_bioconda_release.validate_archive_name(
-                Path("turbo-picard-0.1.0.tar.gz"),
-                {"0.1.0"},
-            )
-        )
-        self.assertIsNone(
-            prepare_bioconda_release.validate_archive_name(
-                Path("v0.1.0.tar.gz"),
-                {"0.1.0"},
-            )
-        )
-        self.assertEqual(
-            prepare_bioconda_release.validate_archive_name(
-                Path("turbo-picard-0.2.0.tar.gz"),
-                {"0.1.0"},
-            ),
-            "--archive filename must match the recipe version: "
-            "turbo-picard-0.1.0.tar.gz or v0.1.0.tar.gz",
+        assert prepare_bioconda_release.validate_archive_name(Path("turbo-picard-0.1.0.tar.gz"), {"0.1.0"}) is None
+        assert prepare_bioconda_release.validate_archive_name(Path("v0.1.0.tar.gz"), {"0.1.0"}) is None
+        assert (
+            prepare_bioconda_release.validate_archive_name(Path("turbo-picard-0.2.0.tar.gz"), {"0.1.0"})
+            == "--archive filename must match the recipe version: turbo-picard-0.1.0.tar.gz or v0.1.0.tar.gz"
         )
 
     def test_archive_argument_rejects_wrong_release_filename(self) -> None:
@@ -326,8 +278,8 @@ build:
             ):
                 status = prepare_bioconda_release.main(["--archive", str(archive)])
 
-        self.assertEqual(status, 2)
-        self.assertIn("filename must match the recipe version", stderr.getvalue())
+        assert status == 2
+        assert "filename must match the recipe version" in stderr.getvalue()
 
     def test_sha256_check_rejects_mismatched_recipe_versions(self) -> None:
         digest = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
@@ -342,10 +294,7 @@ build:
                 "  `<github-v0.1.0-source-archive-sha256>`\n",
                 encoding="utf-8",
             )
-            originals = [
-                (recipe_dir / "meta.yaml").read_text(encoding="utf-8")
-                for recipe_dir in recipe_dirs
-            ]
+            originals = [(recipe_dir / "meta.yaml").read_text(encoding="utf-8") for recipe_dir in recipe_dirs]
             with (
                 contextlib.redirect_stderr(io.StringIO()) as stderr,
                 mock.patch.object(prepare_bioconda_release, "ROOT", root),
@@ -353,32 +302,27 @@ build:
                 mock.patch.object(prepare_bioconda_release, "BIOCONDA_PR", bioconda_pr),
             ):
                 status = prepare_bioconda_release.main(["--sha256", digest, "--check"])
-            updated = [
-                (recipe_dir / "meta.yaml").read_text(encoding="utf-8")
-                for recipe_dir in recipe_dirs
-            ]
+            updated = [(recipe_dir / "meta.yaml").read_text(encoding="utf-8") for recipe_dir in recipe_dirs]
 
-        self.assertEqual(status, 2)
-        self.assertEqual(updated, originals)
-        self.assertIn("Bioconda recipes do not agree on one release version", stderr.getvalue())
+        assert status == 2
+        assert updated == originals
+        assert "Bioconda recipes do not agree on one release version" in stderr.getvalue()
 
     def test_archive_contents_must_match_release_source_shape(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             archive = Path(tmp) / "v0.1.0.tar.gz"
             self.write_release_archive(archive)
 
-            self.assertIsNone(
-                prepare_bioconda_release.validate_archive_contents(archive, "0.1.0")
-            )
+            assert prepare_bioconda_release.validate_archive_contents(archive, "0.1.0") is None
 
     def test_archive_contents_reject_wrong_top_level_directory(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             archive = Path(tmp) / "v0.1.0.tar.gz"
             self.write_release_archive(archive, version="0.2.0")
 
-            self.assertEqual(
-                prepare_bioconda_release.validate_archive_contents(archive, "0.1.0"),
-                "--archive does not contain expected top-level directory turbo-picard-0.1.0/",
+            assert (
+                prepare_bioconda_release.validate_archive_contents(archive, "0.1.0")
+                == "--archive does not contain expected top-level directory turbo-picard-0.1.0/"
             )
 
     def test_archive_contents_reject_unsafe_member_paths(self) -> None:
@@ -394,9 +338,9 @@ build:
                     info.size = len(data)
                     handle.addfile(info, io.BytesIO(data))
 
-            self.assertEqual(
-                prepare_bioconda_release.validate_archive_contents(archive, "0.1.0"),
-                "--archive contains unsafe member path: ../outside",
+            assert (
+                prepare_bioconda_release.validate_archive_contents(archive, "0.1.0")
+                == "--archive contains unsafe member path: ../outside"
             )
 
     def test_archive_contents_rejects_duplicate_member_paths(self) -> None:
@@ -421,9 +365,9 @@ build:
                     info.size = len(data)
                     handle.addfile(info, io.BytesIO(data))
 
-            self.assertEqual(
-                prepare_bioconda_release.validate_archive_contents(archive, "0.1.0"),
-                "--archive contains duplicate member path: turbo-picard-0.1.0/Cargo.toml",
+            assert (
+                prepare_bioconda_release.validate_archive_contents(archive, "0.1.0")
+                == "--archive contains duplicate member path: turbo-picard-0.1.0/Cargo.toml"
             )
 
     def test_archive_contents_rejects_symlinks(self) -> None:
@@ -450,10 +394,10 @@ build:
                 link.linkname = "../meta.yaml"
                 handle.addfile(link)
 
-            self.assertEqual(
-                prepare_bioconda_release.validate_archive_contents(archive, "0.1.0"),
-                "--archive contains unsupported member type: "
-                "turbo-picard-0.1.0/packaging/bioconda/turbo-picard/meta.yaml",
+            assert (
+                prepare_bioconda_release.validate_archive_contents(archive, "0.1.0")
+                == "--archive contains unsupported member type: "
+                "turbo-picard-0.1.0/packaging/bioconda/turbo-picard/meta.yaml"
             )
 
     def test_archive_contents_rejects_empty_required_files(self) -> None:
@@ -479,10 +423,9 @@ build:
                     info.size = len(data)
                     handle.addfile(info, io.BytesIO(data))
 
-            self.assertEqual(
-                prepare_bioconda_release.validate_archive_contents(archive, "0.1.0"),
-                "--archive expected non-empty release source file: "
-                "turbo-picard-0.1.0/Cargo.toml",
+            assert (
+                prepare_bioconda_release.validate_archive_contents(archive, "0.1.0")
+                == "--archive expected non-empty release source file: turbo-picard-0.1.0/Cargo.toml"
             )
 
     def test_archive_contents_reject_extra_top_level_entries(self) -> None:
@@ -507,9 +450,9 @@ build:
                     info.size = len(data)
                     handle.addfile(info, io.BytesIO(data))
 
-            self.assertEqual(
-                prepare_bioconda_release.validate_archive_contents(archive, "0.1.0"),
-                "--archive contains unexpected top-level entries outside turbo-picard-0.1.0/: extra-file/",
+            assert (
+                prepare_bioconda_release.validate_archive_contents(archive, "0.1.0")
+                == "--archive contains unexpected top-level entries outside turbo-picard-0.1.0/: extra-file/"
             )
 
     def test_archive_contents_requires_citation_metadata(self) -> None:
@@ -532,10 +475,9 @@ build:
                     info.size = len(data)
                     handle.addfile(info, io.BytesIO(data))
 
-            self.assertEqual(
-                prepare_bioconda_release.validate_archive_contents(archive, "0.1.0"),
-                "--archive is missing expected release source files: "
-                "turbo-picard-0.1.0/CITATION.cff",
+            assert (
+                prepare_bioconda_release.validate_archive_contents(archive, "0.1.0")
+                == "--archive is missing expected release source files: turbo-picard-0.1.0/CITATION.cff"
             )
 
     def test_archive_contents_requires_claim_evidence_files(self) -> None:
@@ -555,13 +497,13 @@ build:
                     info.size = len(data)
                     handle.addfile(info, io.BytesIO(data))
 
-            self.assertEqual(
-                prepare_bioconda_release.validate_archive_contents(archive, "0.1.0"),
-                "--archive is missing expected release source files: "
+            assert (
+                prepare_bioconda_release.validate_archive_contents(archive, "0.1.0")
+                == "--archive is missing expected release source files: "
                 "turbo-picard-0.1.0/benchmarks/real-data/manifest.json, "
                 "turbo-picard-0.1.0/docs/command-matrix.yml, "
                 "turbo-picard-0.1.0/docs/parity.rst, "
-                "turbo-picard-0.1.0/docs/site/assets/benchmark-data.json",
+                "turbo-picard-0.1.0/docs/site/assets/benchmark-data.json"
             )
 
     def test_archive_contents_rejects_stale_internal_release_metadata(self) -> None:
@@ -589,9 +531,9 @@ build:
                     info.size = len(data)
                     handle.addfile(info, io.BytesIO(data))
 
-            self.assertEqual(
-                prepare_bioconda_release.validate_archive_contents(archive, "0.1.0"),
-                "--archive Cargo.toml workspace version must be 0.1.0",
+            assert (
+                prepare_bioconda_release.validate_archive_contents(archive, "0.1.0")
+                == "--archive Cargo.toml workspace version must be 0.1.0"
             )
 
     def test_archive_contents_requires_lockfile(self) -> None:
@@ -614,10 +556,9 @@ build:
                     info.size = len(data)
                     handle.addfile(info, io.BytesIO(data))
 
-            self.assertEqual(
-                prepare_bioconda_release.validate_archive_contents(archive, "0.1.0"),
-                "--archive is missing expected release source files: "
-                "turbo-picard-0.1.0/Cargo.lock",
+            assert (
+                prepare_bioconda_release.validate_archive_contents(archive, "0.1.0")
+                == "--archive is missing expected release source files: turbo-picard-0.1.0/Cargo.lock"
             )
 
     def test_archive_contents_rejects_stale_lockfile_crate_version(self) -> None:
@@ -625,15 +566,9 @@ build:
             "turbo-picard-0.1.0/Cargo.lock": cargo_lock_text("0.2.0"),
             "turbo-picard-0.1.0/Cargo.toml": '[workspace.package]\nversion = "0.1.0"\n',
             "turbo-picard-0.1.0/CITATION.cff": citation_text(),
-            "turbo-picard-0.1.0/docs/command-matrix.yml": (
-                'picard_reference: "3.4.0"\ncommands: []\n'
-            ),
-            "turbo-picard-0.1.0/benchmarks/real-data/manifest.json": (
-                '{"datasets": []}'
-            ),
-            "turbo-picard-0.1.0/docs/site/assets/benchmark-data.json": (
-                '{"benchmarks": []}'
-            ),
+            "turbo-picard-0.1.0/docs/command-matrix.yml": ('picard_reference: "3.4.0"\ncommands: []\n'),
+            "turbo-picard-0.1.0/benchmarks/real-data/manifest.json": ('{"datasets": []}'),
+            "turbo-picard-0.1.0/docs/site/assets/benchmark-data.json": ('{"benchmarks": []}'),
             "turbo-picard-0.1.0/packaging/bioconda/turbo-picard/meta.yaml": (
                 '{% set version = "0.1.0" %}\nsource:\n  path: ../../..\n'
             ),
@@ -642,33 +577,23 @@ build:
             ),
         }
 
-        self.assertEqual(
-            prepare_bioconda_release.validate_archive_release_metadata(
-                contents,
-                "turbo-picard-0.1.0/",
-                "0.1.0",
-            ),
-            "--archive Cargo.lock turbo-picard-cli version must be 0.1.0",
+        assert (
+            prepare_bioconda_release.validate_archive_release_metadata(contents, "turbo-picard-0.1.0/", "0.1.0")
+            == "--archive Cargo.lock turbo-picard-cli version must be 0.1.0"
         )
 
     def test_archive_contents_rejects_missing_lockfile_crate(self) -> None:
         contents = {
             "turbo-picard-0.1.0/Cargo.lock": (
-                'version = 4\n\n'
+                "version = 4\n\n"
                 '[[package]]\nname = "turbo-picard-cli"\nversion = "0.1.0"\n\n'
                 '[[package]]\nname = "turbo-picard-core"\nversion = "0.1.0"\n'
             ),
             "turbo-picard-0.1.0/Cargo.toml": '[workspace.package]\nversion = "0.1.0"\n',
             "turbo-picard-0.1.0/CITATION.cff": citation_text(),
-            "turbo-picard-0.1.0/docs/command-matrix.yml": (
-                'picard_reference: "3.4.0"\ncommands: []\n'
-            ),
-            "turbo-picard-0.1.0/benchmarks/real-data/manifest.json": (
-                '{"datasets": []}'
-            ),
-            "turbo-picard-0.1.0/docs/site/assets/benchmark-data.json": (
-                '{"benchmarks": []}'
-            ),
+            "turbo-picard-0.1.0/docs/command-matrix.yml": ('picard_reference: "3.4.0"\ncommands: []\n'),
+            "turbo-picard-0.1.0/benchmarks/real-data/manifest.json": ('{"datasets": []}'),
+            "turbo-picard-0.1.0/docs/site/assets/benchmark-data.json": ('{"benchmarks": []}'),
             "turbo-picard-0.1.0/packaging/bioconda/turbo-picard/meta.yaml": (
                 '{% set version = "0.1.0" %}\nsource:\n  path: ../../..\n'
             ),
@@ -677,13 +602,9 @@ build:
             ),
         }
 
-        self.assertEqual(
-            prepare_bioconda_release.validate_archive_release_metadata(
-                contents,
-                "turbo-picard-0.1.0/",
-                "0.1.0",
-            ),
-            "--archive Cargo.lock missing turbo-picard-markdup",
+        assert (
+            prepare_bioconda_release.validate_archive_release_metadata(contents, "turbo-picard-0.1.0/", "0.1.0")
+            == "--archive Cargo.lock missing turbo-picard-markdup"
         )
 
     def test_archive_contents_requires_citation_software_type(self) -> None:
@@ -706,15 +627,9 @@ build:
                 "  - VCF\n"
                 "  - Rust\n"
             ),
-            "turbo-picard-0.1.0/docs/command-matrix.yml": (
-                'picard_reference: "3.4.0"\ncommands: []\n'
-            ),
-            "turbo-picard-0.1.0/benchmarks/real-data/manifest.json": (
-                '{"datasets": []}'
-            ),
-            "turbo-picard-0.1.0/docs/site/assets/benchmark-data.json": (
-                '{"benchmarks": []}'
-            ),
+            "turbo-picard-0.1.0/docs/command-matrix.yml": ('picard_reference: "3.4.0"\ncommands: []\n'),
+            "turbo-picard-0.1.0/benchmarks/real-data/manifest.json": ('{"datasets": []}'),
+            "turbo-picard-0.1.0/docs/site/assets/benchmark-data.json": ('{"benchmarks": []}'),
             "turbo-picard-0.1.0/packaging/bioconda/turbo-picard/meta.yaml": (
                 '{% set version = "0.1.0" %}\nsource:\n  path: ../../..\n'
             ),
@@ -723,13 +638,9 @@ build:
             ),
         }
 
-        self.assertEqual(
-            prepare_bioconda_release.validate_archive_release_metadata(
-                contents,
-                "turbo-picard-0.1.0/",
-                "0.1.0",
-            ),
-            "--archive CITATION.cff software type must match release metadata",
+        assert (
+            prepare_bioconda_release.validate_archive_release_metadata(contents, "turbo-picard-0.1.0/", "0.1.0")
+            == "--archive CITATION.cff software type must match release metadata"
         )
 
     def test_archive_contents_rejects_unparseable_citation_yaml(self) -> None:
@@ -744,15 +655,9 @@ build:
                 "authors: [\n"
                 'repository-code: "https://github.com/dnncha/turbo-picard"\n'
             ),
-            "turbo-picard-0.1.0/docs/command-matrix.yml": (
-                'picard_reference: "3.4.0"\ncommands: []\n'
-            ),
-            "turbo-picard-0.1.0/benchmarks/real-data/manifest.json": (
-                '{"datasets": []}'
-            ),
-            "turbo-picard-0.1.0/docs/site/assets/benchmark-data.json": (
-                '{"benchmarks": []}'
-            ),
+            "turbo-picard-0.1.0/docs/command-matrix.yml": ('picard_reference: "3.4.0"\ncommands: []\n'),
+            "turbo-picard-0.1.0/benchmarks/real-data/manifest.json": ('{"datasets": []}'),
+            "turbo-picard-0.1.0/docs/site/assets/benchmark-data.json": ('{"benchmarks": []}'),
             "turbo-picard-0.1.0/packaging/bioconda/turbo-picard/meta.yaml": (
                 '{% set version = "0.1.0" %}\nsource:\n  path: ../../..\n'
             ),
@@ -766,9 +671,9 @@ build:
             "turbo-picard-0.1.0/",
             "0.1.0",
         )
-        self.assertIsNotNone(error)
         assert error is not None
-        self.assertTrue(error.startswith("--archive CITATION.cff is not valid YAML:"))
+        assert error is not None
+        assert error.startswith("--archive CITATION.cff is not valid YAML:")
 
     def test_archive_contents_requires_structured_citation_metadata(self) -> None:
         contents = {
@@ -784,15 +689,9 @@ build:
                 "keywords:\n"
                 "  - genomics\n"
             ),
-            "turbo-picard-0.1.0/docs/command-matrix.yml": (
-                'picard_reference: "3.4.0"\ncommands: []\n'
-            ),
-            "turbo-picard-0.1.0/benchmarks/real-data/manifest.json": (
-                '{"datasets": []}'
-            ),
-            "turbo-picard-0.1.0/docs/site/assets/benchmark-data.json": (
-                '{"benchmarks": []}'
-            ),
+            "turbo-picard-0.1.0/docs/command-matrix.yml": ('picard_reference: "3.4.0"\ncommands: []\n'),
+            "turbo-picard-0.1.0/benchmarks/real-data/manifest.json": ('{"datasets": []}'),
+            "turbo-picard-0.1.0/docs/site/assets/benchmark-data.json": ('{"benchmarks": []}'),
             "turbo-picard-0.1.0/packaging/bioconda/turbo-picard/meta.yaml": (
                 '{% set version = "0.1.0" %}\nsource:\n  path: ../../..\n'
             ),
@@ -801,13 +700,9 @@ build:
             ),
         }
 
-        self.assertEqual(
-            prepare_bioconda_release.validate_archive_release_metadata(
-                contents,
-                "turbo-picard-0.1.0/",
-                "0.1.0",
-            ),
-            "--archive CITATION.cff authors must be a non-empty list",
+        assert (
+            prepare_bioconda_release.validate_archive_release_metadata(contents, "turbo-picard-0.1.0/", "0.1.0")
+            == "--archive CITATION.cff authors must be a non-empty list"
         )
 
     def test_archive_contents_rejects_invalid_evidence_json(self) -> None:
@@ -835,9 +730,9 @@ build:
                     info.size = len(data)
                     handle.addfile(info, io.BytesIO(data))
 
-            self.assertEqual(
-                prepare_bioconda_release.validate_archive_contents(archive, "0.1.0"),
-                "--archive real-data manifest must contain datasets list",
+            assert (
+                prepare_bioconda_release.validate_archive_contents(archive, "0.1.0")
+                == "--archive real-data manifest must contain datasets list"
             )
 
     def test_archive_contents_requires_release_candidate_portfolio(self) -> None:
@@ -845,9 +740,7 @@ build:
             "turbo-picard-0.1.0/Cargo.lock": cargo_lock_text(),
             "turbo-picard-0.1.0/Cargo.toml": '[workspace.package]\nversion = "0.1.0"\n',
             "turbo-picard-0.1.0/CITATION.cff": citation_text(),
-            "turbo-picard-0.1.0/docs/command-matrix.yml": (
-                'picard_reference: "3.4.0"\ncommands: []\n'
-            ),
+            "turbo-picard-0.1.0/docs/command-matrix.yml": ('picard_reference: "3.4.0"\ncommands: []\n'),
             "turbo-picard-0.1.0/benchmarks/real-data/manifest.json": (
                 '{"datasets": [{"release_tier": "release_candidate", '
                 '"expected_commands": {"ViewSam": "SAM record digest"}}]}'
@@ -865,17 +758,13 @@ build:
             ),
         }
 
-        self.assertEqual(
-            prepare_bioconda_release.validate_archive_release_metadata(
-                contents,
-                "turbo-picard-0.1.0/",
-                "0.1.0",
-            ),
-            "--archive real-data manifest release_candidate portfolio missing commands: "
+        assert (
+            prepare_bioconda_release.validate_archive_release_metadata(contents, "turbo-picard-0.1.0/", "0.1.0")
+            == "--archive real-data manifest release_candidate portfolio missing commands: "
             "AddOrReplaceReadGroups, BuildBamIndex, CleanSam, "
             "CollectAlignmentSummaryMetrics, CollectInsertSizeMetrics, "
             "CollectQualityYieldMetrics, MarkDuplicates, RevertSam, SamToFastq, "
-            "SortSam, ValidateSamFile",
+            "SortSam, ValidateSamFile"
         )
 
     def test_archive_contents_rejects_unknown_real_data_comparison_labels(self) -> None:
@@ -883,18 +772,16 @@ build:
             "turbo-picard-0.1.0/Cargo.lock": cargo_lock_text(),
             "turbo-picard-0.1.0/Cargo.toml": '[workspace.package]\nversion = "0.1.0"\n',
             "turbo-picard-0.1.0/CITATION.cff": citation_text(),
-            "turbo-picard-0.1.0/docs/command-matrix.yml": (
-                'picard_reference: "3.4.0"\ncommands: []\n'
-            ),
+            "turbo-picard-0.1.0/docs/command-matrix.yml": ('picard_reference: "3.4.0"\ncommands: []\n'),
             "turbo-picard-0.1.0/benchmarks/real-data/manifest.json": json.dumps(
                 {
                     "datasets": [
                         {
                             "release_tier": "release_candidate",
-                            "expected_commands": {
-                                command: "SAM record digest"
-                                for command in prepare_bioconda_release.RELEASE_CANDIDATE_PORTFOLIO_REQUIRED_COMMANDS
-                            }
+                            "expected_commands": dict.fromkeys(
+                                prepare_bioconda_release.RELEASE_CANDIDATE_PORTFOLIO_REQUIRED_COMMANDS,
+                                "SAM record digest",
+                            )
                             | {"ViewSam": "looks similar enough"},
                         }
                     ]
@@ -913,13 +800,9 @@ build:
             ),
         }
 
-        self.assertEqual(
-            prepare_bioconda_release.validate_archive_release_metadata(
-                contents,
-                "turbo-picard-0.1.0/",
-                "0.1.0",
-            ),
-            "--archive real-data manifest has unknown comparison labels: looks similar enough",
+        assert (
+            prepare_bioconda_release.validate_archive_release_metadata(contents, "turbo-picard-0.1.0/", "0.1.0")
+            == "--archive real-data manifest has unknown comparison labels: looks similar enough"
         )
 
     def test_archive_contents_requires_public_benchmark_summary(self) -> None:
@@ -927,18 +810,16 @@ build:
             "turbo-picard-0.1.0/Cargo.lock": cargo_lock_text(),
             "turbo-picard-0.1.0/Cargo.toml": '[workspace.package]\nversion = "0.1.0"\n',
             "turbo-picard-0.1.0/CITATION.cff": citation_text(),
-            "turbo-picard-0.1.0/docs/command-matrix.yml": (
-                'picard_reference: "3.4.0"\ncommands: []\n'
-            ),
+            "turbo-picard-0.1.0/docs/command-matrix.yml": ('picard_reference: "3.4.0"\ncommands: []\n'),
             "turbo-picard-0.1.0/benchmarks/real-data/manifest.json": json.dumps(
                 {
                     "datasets": [
                         {
                             "release_tier": "release_candidate",
-                            "expected_commands": {
-                                command: "SAM record digest"
-                                for command in prepare_bioconda_release.RELEASE_CANDIDATE_PORTFOLIO_REQUIRED_COMMANDS
-                            },
+                            "expected_commands": dict.fromkeys(
+                                prepare_bioconda_release.RELEASE_CANDIDATE_PORTFOLIO_REQUIRED_COMMANDS,
+                                "SAM record digest",
+                            ),
                         }
                     ]
                 }
@@ -954,13 +835,9 @@ build:
             ),
         }
 
-        self.assertEqual(
-            prepare_bioconda_release.validate_archive_release_metadata(
-                contents,
-                "turbo-picard-0.1.0/",
-                "0.1.0",
-            ),
-            "--archive benchmark-data.json must report 32/32 PASS parity",
+        assert (
+            prepare_bioconda_release.validate_archive_release_metadata(contents, "turbo-picard-0.1.0/", "0.1.0")
+            == "--archive benchmark-data.json must report 32/32 PASS parity"
         )
 
     def test_archive_contents_rejects_stale_public_benchmark_summary(self) -> None:
@@ -968,18 +845,16 @@ build:
             "turbo-picard-0.1.0/Cargo.lock": cargo_lock_text(),
             "turbo-picard-0.1.0/Cargo.toml": '[workspace.package]\nversion = "0.1.0"\n',
             "turbo-picard-0.1.0/CITATION.cff": citation_text(),
-            "turbo-picard-0.1.0/docs/command-matrix.yml": (
-                'picard_reference: "3.4.0"\ncommands: []\n'
-            ),
+            "turbo-picard-0.1.0/docs/command-matrix.yml": ('picard_reference: "3.4.0"\ncommands: []\n'),
             "turbo-picard-0.1.0/benchmarks/real-data/manifest.json": json.dumps(
                 {
                     "datasets": [
                         {
                             "release_tier": "release_candidate",
-                            "expected_commands": {
-                                command: "SAM record digest"
-                                for command in prepare_bioconda_release.RELEASE_CANDIDATE_PORTFOLIO_REQUIRED_COMMANDS
-                            },
+                            "expected_commands": dict.fromkeys(
+                                prepare_bioconda_release.RELEASE_CANDIDATE_PORTFOLIO_REQUIRED_COMMANDS,
+                                "SAM record digest",
+                            ),
                         }
                     ]
                 }
@@ -994,9 +869,7 @@ build:
                         "geometric_mean_speedup": 27.31,
                         "top_speedup": 112.07,
                     },
-                    "benchmarks": [
-                        {"command": "ViewSam", "parity": "PASS", "speedup": 15.2}
-                    ],
+                    "benchmarks": [{"command": "ViewSam", "parity": "PASS", "speedup": 15.2}],
                 }
             ),
             "turbo-picard-0.1.0/packaging/bioconda/turbo-picard/meta.yaml": (
@@ -1007,13 +880,9 @@ build:
             ),
         }
 
-        self.assertEqual(
-            prepare_bioconda_release.validate_archive_release_metadata(
-                contents,
-                "turbo-picard-0.1.0/",
-                "0.1.0",
-            ),
-            "--archive benchmark-data.json summary command_count does not match benchmark rows",
+        assert (
+            prepare_bioconda_release.validate_archive_release_metadata(contents, "turbo-picard-0.1.0/", "0.1.0")
+            == "--archive benchmark-data.json summary command_count does not match benchmark rows"
         )
 
     def test_archive_argument_rejects_wrong_release_contents(self) -> None:
@@ -1030,8 +899,8 @@ build:
             ):
                 status = prepare_bioconda_release.main(["--archive", str(archive)])
 
-        self.assertEqual(status, 2)
-        self.assertIn("not a readable gzip tar archive", stderr.getvalue())
+        assert status == 2
+        assert "not a readable gzip tar archive" in stderr.getvalue()
 
     def test_check_reports_changes_without_mutating_recipes(self) -> None:
         digest = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
@@ -1046,10 +915,7 @@ build:
                 "  `<github-v0.1.0-source-archive-sha256>`\n",
                 encoding="utf-8",
             )
-            originals = [
-                (recipe_dir / "meta.yaml").read_text(encoding="utf-8")
-                for recipe_dir in recipe_dirs
-            ]
+            originals = [(recipe_dir / "meta.yaml").read_text(encoding="utf-8") for recipe_dir in recipe_dirs]
             original_pr = bioconda_pr.read_text(encoding="utf-8")
             with (
                 contextlib.redirect_stderr(io.StringIO()) as stderr,
@@ -1059,27 +925,20 @@ build:
             ):
                 status = prepare_bioconda_release.main(["--sha256", digest, "--check"])
 
-            updated = [
-                (recipe_dir / "meta.yaml").read_text(encoding="utf-8")
-                for recipe_dir in recipe_dirs
-            ]
+            updated = [(recipe_dir / "meta.yaml").read_text(encoding="utf-8") for recipe_dir in recipe_dirs]
             updated_pr = bioconda_pr.read_text(encoding="utf-8")
 
-        self.assertEqual(status, 1)
-        self.assertEqual(updated, originals)
-        self.assertEqual(updated_pr, original_pr)
-        self.assertIn("would update packaging/bioconda/turbo-picard/meta.yaml", stderr.getvalue())
-        self.assertIn(
-            "would update packaging/bioconda/turbo-picard-picard-shim/meta.yaml",
-            stderr.getvalue(),
-        )
-        self.assertIn("would update packaging/bioconda/BIOCONDA_PR.md", stderr.getvalue())
+        assert status == 1
+        assert updated == originals
+        assert updated_pr == original_pr
+        assert "would update packaging/bioconda/turbo-picard/meta.yaml" in stderr.getvalue()
+        assert "would update packaging/bioconda/turbo-picard-picard-shim/meta.yaml" in stderr.getvalue()
+        assert "would update packaging/bioconda/BIOCONDA_PR.md" in stderr.getvalue()
 
     def test_check_passes_when_recipes_already_match_release_source(self) -> None:
         digest = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
         source_block = (
-            "  url: https://github.com/dnncha/turbo-picard/archive/refs/tags/v0.1.0.tar.gz\n"
-            f"  sha256: {digest}"
+            f"  url: https://github.com/dnncha/turbo-picard/archive/refs/tags/v0.1.0.tar.gz\n  sha256: {digest}"
         )
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -1105,9 +964,9 @@ build:
             ):
                 status = prepare_bioconda_release.main(["--sha256", digest, "--check"])
 
-        self.assertEqual(status, 0)
-        self.assertEqual(stdout.getvalue(), "")
-        self.assertEqual(stderr.getvalue(), "")
+        assert status == 0
+        assert stdout.getvalue() == ""
+        assert stderr.getvalue() == ""
 
     def test_updates_recipes_and_bioconda_pr(self) -> None:
         digest = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
@@ -1130,13 +989,13 @@ build:
             ):
                 status = prepare_bioconda_release.main(["--sha256", digest])
 
-            self.assertEqual(status, 0)
+            assert status == 0
             for recipe_dir in recipe_dirs:
                 text = (recipe_dir / "meta.yaml").read_text(encoding="utf-8")
-                self.assertIn(f"sha256: {digest}", text)
-                self.assertNotIn("path: ../../..", text)
-            self.assertIn(f"`{digest}`", bioconda_pr.read_text(encoding="utf-8"))
-            self.assertIn("updated packaging/bioconda/BIOCONDA_PR.md", stdout.getvalue())
+                assert f"sha256: {digest}" in text
+                assert "path: ../../.." not in text
+            assert f"`{digest}`" in bioconda_pr.read_text(encoding="utf-8")
+            assert "updated packaging/bioconda/BIOCONDA_PR.md" in stdout.getvalue()
 
 
 if __name__ == "__main__":

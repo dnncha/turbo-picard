@@ -1,5 +1,26 @@
-//! Shared structural validation for decoded records and the SAM text fast path.
-use super::*;
+use super::parse_cigar_text;
+use std::collections::BTreeMap;
+use thiserror::Error;
+
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+pub(super) enum SamStructureError {
+    #[error("ValidateSamFile sequence header is missing SN")]
+    MissingSequenceName,
+    #[error("ValidateSamFile sequence header is missing LN")]
+    MissingSequenceLength,
+    #[error("ValidateSamFile invalid sequence length")]
+    InvalidSequenceLength,
+    #[error("ValidateSamFile CIGAR length overflow")]
+    CigarLengthOverflow,
+    #[error("{0}")]
+    Cigar(String),
+}
+
+impl From<SamStructureError> for String {
+    fn from(error: SamStructureError) -> Self {
+        error.to_string()
+    }
+}
 
 #[derive(Default)]
 pub(super) struct Structure {
@@ -9,7 +30,7 @@ pub(super) struct Structure {
 }
 
 impl Structure {
-    pub fn header(&mut self, line: &str) -> Result<(), String> {
+    pub fn header(&mut self, line: &str) -> Result<(), SamStructureError> {
         let fields: BTreeMap<_, _> = line
             .trim_end()
             .split('\t')
@@ -21,14 +42,14 @@ impl Structure {
         } else if line.starts_with("@SQ\t") {
             let name = fields
                 .get("SN")
-                .ok_or_else(|| "ValidateSamFile sequence header is missing SN".to_string())?;
+                .ok_or(SamStructureError::MissingSequenceName)?;
             let length = fields
                 .get("LN")
-                .ok_or_else(|| "ValidateSamFile sequence header is missing LN".to_string())?
+                .ok_or(SamStructureError::MissingSequenceLength)?
                 .parse::<u64>()
-                .map_err(|_| "ValidateSamFile invalid sequence length".to_string())?;
+                .map_err(|_| SamStructureError::InvalidSequenceLength)?;
             self.targets
-                .insert(name.to_string(), (self.targets.len(), length));
+                .insert((*name).to_string(), (self.targets.len(), length));
         }
         Ok(())
     }
@@ -41,7 +62,7 @@ impl Structure {
         cigar: &str,
         sequence_length: usize,
         quality_length: Option<usize>,
-    ) -> Result<Vec<&'static str>, String> {
+    ) -> Result<Vec<&'static str>, SamStructureError> {
         let mut issues = Vec::new();
         if quality_length.is_some_and(|length| length != sequence_length) {
             issues.push("ERROR:MISMATCH_SEQ_QUAL_LENGTH");
@@ -59,19 +80,19 @@ impl Structure {
             if target.is_none() {
                 issues.push("ERROR:MISSING_SEQUENCE_DICTIONARY");
             }
-            let operations = parse_cigar_text(cigar)?;
+            let operations = parse_cigar_text(cigar).map_err(SamStructureError::Cigar)?;
             let mut read_length = 0_u64;
             let mut reference_length = 0_u64;
             for (length, operation) in operations {
                 if matches!(operation, 'M' | 'I' | 'S' | '=' | 'X') {
                     read_length = read_length
                         .checked_add(length)
-                        .ok_or_else(|| "ValidateSamFile CIGAR length overflow".to_string())?;
+                        .ok_or(SamStructureError::CigarLengthOverflow)?;
                 }
                 if matches!(operation, 'M' | 'D' | 'N' | '=' | 'X') {
                     reference_length = reference_length
                         .checked_add(length)
-                        .ok_or_else(|| "ValidateSamFile CIGAR length overflow".to_string())?;
+                        .ok_or(SamStructureError::CigarLengthOverflow)?;
                 }
             }
             if read_length != sequence_length as u64 {

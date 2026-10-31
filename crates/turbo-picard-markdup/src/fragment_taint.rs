@@ -1,25 +1,25 @@
-//! A bounded Bloom filter over the external fragment keys.
-//!
-//! The fragment stage only changes a duplicate decision when a pair record
-//! shares its fragment key with an unpaired candidate: such a group marks
-//! every one of its non-pair members, while a group that holds only pair
-//! records marks nothing. This filter answers "does an unpaired candidate
-//! use this fragment key?" with false positives only. A false positive adds
-//! a pair record to a group that holds only pair records, and that group
-//! marks no record either way, so the decision is unchanged. A false
-//! negative cannot happen, so every group that holds an unpaired candidate
-//! keeps all of its pair members.
-//!
-//! Three hash functions over 33 554 432 bits (1 << 19 words of 64 bits,
-//! 4 MiB) give a false positive rate of about (1 - e^(-3k/m))^3: roughly
-//! 1.7 percent at 10 000 distinct keys, 15 percent at 100 000, and 63
-//! percent at 1 000 000. The word array is allocated on the first insert,
-//! so an input without unpaired candidates allocates nothing.
-
 use std::hash::Hasher;
 
 const TAINT_WORDS: usize = 1 << 19;
 const TAINT_MASK: usize = TAINT_WORDS * 64 - 1;
+
+fn low_usize_bits(value: u64) -> usize {
+    let usize_bits = u64::try_from(usize::MAX).unwrap_or(u64::MAX);
+    usize::try_from(value & usize_bits).unwrap_or_default()
+}
+
+pub(super) fn bloom_positions(key: &[u8], mask: usize) -> [usize; 3] {
+    let mut hasher = rustc_hash::FxHasher::default();
+    hasher.write(key);
+    let hash = hasher.finish();
+    let step = low_usize_bits(hash.rotate_left(32) | 1);
+    let first = low_usize_bits(hash);
+    [
+        first & mask,
+        first.wrapping_add(step) & mask,
+        first.wrapping_add(step.wrapping_mul(2)) & mask,
+    ]
+}
 
 pub(super) struct FragmentTaint {
     words: Vec<u64>,
@@ -30,24 +30,11 @@ impl FragmentTaint {
         Self { words: Vec::new() }
     }
 
-    fn positions(key: &[u8]) -> [usize; 3] {
-        let mut hasher = rustc_hash::FxHasher::default();
-        hasher.write(key);
-        let hash = hasher.finish();
-        let step = (hash.rotate_left(32) | 1) as usize;
-        let first = hash as usize;
-        [
-            first & TAINT_MASK,
-            first.wrapping_add(step) & TAINT_MASK,
-            first.wrapping_add(step.wrapping_mul(2)) & TAINT_MASK,
-        ]
-    }
-
     pub(super) fn insert(&mut self, key: &[u8]) {
         if self.words.is_empty() {
             self.words.resize(TAINT_WORDS, 0);
         }
-        for bit in Self::positions(key) {
+        for bit in bloom_positions(key, TAINT_MASK) {
             self.words[bit / 64] |= 1_u64 << (bit % 64);
         }
     }
@@ -56,7 +43,7 @@ impl FragmentTaint {
         if self.words.is_empty() {
             return false;
         }
-        Self::positions(key)
+        bloom_positions(key, TAINT_MASK)
             .iter()
             .all(|bit| self.words[bit / 64] & (1_u64 << (bit % 64)) != 0)
     }

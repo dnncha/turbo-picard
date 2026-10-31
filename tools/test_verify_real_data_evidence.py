@@ -1,17 +1,16 @@
 #!/usr/bin/env python3
-"""Tests for real-data evidence validation."""
 
 from __future__ import annotations
 
 import hashlib
 import importlib.util
 import json
+import re
 import sys
 import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
-
 
 MODULE_PATH = Path(__file__).with_name("verify_real_data_evidence.py")
 SPEC = importlib.util.spec_from_file_location("verify_real_data_evidence", MODULE_PATH)
@@ -65,10 +64,7 @@ class RealDataEvidenceTests(unittest.TestCase):
             assert markduplicates_digest is not None
             sha256 = verify_real_data_evidence.digest_file(input_path)
             source_commit = "0123456789abcdef0123456789abcdef01234567"
-            source_url = (
-                "https://github.com/example/repo/blob/"
-                f"{source_commit}/test/input.bam"
-            )
+            source_url = f"https://github.com/example/repo/blob/{source_commit}/test/input.bam"
             command = "ViewSam"
             comparison = "SAM record digest"
 
@@ -130,9 +126,7 @@ class RealDataEvidenceTests(unittest.TestCase):
                     }
                 ]
             }
-            portfolio_text = (
-                verify_real_data_evidence.RELEASE_CANDIDATE_PORTFOLIO_COMMAND_TEXT
-            )
+            portfolio_text = verify_real_data_evidence.RELEASE_CANDIDATE_PORTFOLIO_COMMAND_TEXT
             readme = (
                 f"{source_url}\n{source_commit}\n{sha256}\nbenchmarks/real-data/fixture/evidence/real-data-comparison.md\nsmall public fixture\n"
                 f"| {command} | PASS | {comparison} |\n"
@@ -173,28 +167,22 @@ class RealDataEvidenceTests(unittest.TestCase):
             )
 
             with mock.patch.object(verify_real_data_evidence, "ROOT", root):
-                self.assertEqual(
-                    verify_real_data_evidence.validate_real_data_evidence(
-                        manifest, readme, site, benchmark_docs
-                    ),
-                    [],
+                assert (
+                    verify_real_data_evidence.validate_real_data_evidence(manifest, readme, site, benchmark_docs) == []
                 )
                 evidence = json.loads(evidence_json.read_text(encoding="utf-8"))
                 evidence["input"]["size_bytes"] = 999
                 evidence_json.write_text(json.dumps(evidence), encoding="utf-8")
-                self.assertIn(
-                    "fixture evidence input size changed",
-                    verify_real_data_evidence.validate_real_data_evidence(
-                        manifest, readme, site, benchmark_docs
-                    ),
+                assert "fixture evidence input size changed" in verify_real_data_evidence.validate_real_data_evidence(
+                    manifest, readme, site, benchmark_docs
                 )
                 evidence["input"]["size_bytes"] = len(b"bam")
                 evidence_json.write_text(json.dumps(evidence), encoding="utf-8")
-                self.assertIn(
-                    "real-data manifest has no release_candidate dataset for scientist-facing release",
-                    verify_real_data_evidence.validate_real_data_evidence(
+                assert (
+                    "real-data manifest has no release_candidate dataset for scientist-facing release"
+                    in verify_real_data_evidence.validate_real_data_evidence(
                         manifest, readme, site, benchmark_docs, release_ready=True
-                    ),
+                    )
                 )
 
                 manifest["datasets"][0]["release_tier"] = "release_candidate"
@@ -301,9 +289,7 @@ class RealDataEvidenceTests(unittest.TestCase):
                         }
                     )
                 evidence_json.write_text(json.dumps(evidence), encoding="utf-8")
-                for command_name, command_comparison in manifest["datasets"][0][
-                    "expected_commands"
-                ].items():
+                for command_name, command_comparison in manifest["datasets"][0]["expected_commands"].items():
                     row = f"| {command_name} | PASS | {command_comparison} |"
                     if row not in readme:
                         readme += row + "\n"
@@ -350,9 +336,8 @@ class RealDataEvidenceTests(unittest.TestCase):
                 cram_evidence_root = cram_root / "evidence"
                 cram_evidence_root.mkdir(parents=True, exist_ok=True)
                 cram_input.write_bytes(b"cram")
-                cram_expected_commands = {
-                    command: comparison
-                    for command, comparison in {
+                cram_expected_commands = dict(
+                    {
                         "CleanSam": "post-command SAM record digest",
                         "CollectQualityYieldMetrics": "stable metrics digest",
                         "CollectInsertSizeMetrics": "stable metrics digest with insert-size histogram",
@@ -360,7 +345,7 @@ class RealDataEvidenceTests(unittest.TestCase):
                         "SortSam": "coordinate-sorted SAM record multiset digest",
                         "AddOrReplaceReadGroups": "SAM record digest plus read-group header digest",
                     }.items()
-                }
+                )
                 cram_evidence = {
                     "parity": "PASS",
                     "picard_version": verify_real_data_evidence.EXPECTED_PICARD_VERSION,
@@ -382,12 +367,10 @@ class RealDataEvidenceTests(unittest.TestCase):
                             "picard_seconds": 0.001,
                             "speedup": 1.0,
                             "turbo_artifact": (
-                                "benchmarks/real-data/fixture-cram/evidence/work/"
-                                f"{command_name}/turbo.out"
+                                f"benchmarks/real-data/fixture-cram/evidence/work/{command_name}/turbo.out"
                             ),
                             "picard_artifact": (
-                                "benchmarks/real-data/fixture-cram/evidence/work/"
-                                f"{command_name}/picard.out"
+                                f"benchmarks/real-data/fixture-cram/evidence/work/{command_name}/picard.out"
                             ),
                             "turbo_digest": "abc123",
                             "picard_digest": "abc123",
@@ -467,8 +450,8 @@ class RealDataEvidenceTests(unittest.TestCase):
                     "fixture CRAM release candidate\n"
                     f"{len(b'cram')}\n"
                 )
-                for command_name in cram_expected_commands:
-                    readme += f"| {command_name} | PASS | {cram_expected_commands[command_name]} |\n"
+                for command_name, expected_command in cram_expected_commands.items():
+                    readme += f"| {command_name} | PASS | {expected_command} |\n"
                     site += command_name + "\n"
                     benchmark_docs += command_name + "\n"
                 with mock.patch.object(
@@ -476,21 +459,16 @@ class RealDataEvidenceTests(unittest.TestCase):
                     "RELEASE_CANDIDATE_PORTFOLIO_MIN_BYTES",
                     1,
                 ):
-                    self.assertEqual(
+                    assert (
                         verify_real_data_evidence.validate_real_data_evidence(
-                            manifest,
-                            readme,
-                            site,
-                            benchmark_docs,
-                            project_readme,
-                            release_ready=True,
-                        ),
-                        [],
+                            manifest, readme, site, benchmark_docs, project_readme, release_ready=True
+                        )
+                        == []
                     )
 
-                self.assertIn(
-                    "fixture benchmark docs missing input SHA-256",
-                    verify_real_data_evidence.validate_real_data_evidence(
+                assert (
+                    "fixture benchmark docs missing input SHA-256"
+                    in verify_real_data_evidence.validate_real_data_evidence(
                         manifest,
                         readme,
                         site,
@@ -500,11 +478,11 @@ class RealDataEvidenceTests(unittest.TestCase):
                         "release-candidate\n",
                         project_readme,
                         release_ready=True,
-                    ),
+                    )
                 )
-                self.assertIn(
-                    "fixture benchmark docs missing command: MarkDuplicates",
-                    verify_real_data_evidence.validate_real_data_evidence(
+                assert (
+                    "fixture benchmark docs missing command: MarkDuplicates"
+                    in verify_real_data_evidence.validate_real_data_evidence(
                         manifest,
                         readme,
                         site,
@@ -516,7 +494,7 @@ class RealDataEvidenceTests(unittest.TestCase):
                         "CollectAlignmentSummaryMetrics CollectInsertSizeMetrics\n",
                         project_readme,
                         release_ready=True,
-                    ),
+                    )
                 )
 
     def test_project_readme_requires_release_candidate_citations(self) -> None:
@@ -557,29 +535,15 @@ class RealDataEvidenceTests(unittest.TestCase):
             "python3 tools/verify_real_data_evidence.py --release-ready\n"
         )
 
-        self.assertEqual(
-            verify_real_data_evidence.validate_project_readme_real_data_summary(
-                manifest, complete_readme
-            ),
-            [],
-        )
+        assert verify_real_data_evidence.validate_project_readme_real_data_summary(manifest, complete_readme) == []
 
         errors = verify_real_data_evidence.validate_project_readme_real_data_summary(
             manifest,
             "release-dataset\nViewSam\n",
         )
-        self.assertIn(
-            "project README missing real-data evidence directory",
-            errors,
-        )
-        self.assertIn(
-            "project README missing release-ready real-data verifier command",
-            errors,
-        )
-        self.assertIn(
-            "project README missing input SHA-256 guidance",
-            errors,
-        )
+        assert "project README missing real-data evidence directory" in errors
+        assert "project README missing release-ready real-data verifier command" in errors
+        assert "project README missing input SHA-256 guidance" in errors
 
     def test_validation_rejects_unpinned_source(self) -> None:
         errors = verify_real_data_evidence.validate_manifest(
@@ -601,15 +565,9 @@ class RealDataEvidenceTests(unittest.TestCase):
             }
         )
 
-        self.assertIn("fixture source_commit is not pinned", errors)
-        self.assertIn(
-            "fixture source_url must not use raw.githubusercontent.com moving branch URLs",
-            errors,
-        )
-        self.assertIn(
-            "fixture sha256 must be a lowercase 64-character hex digest",
-            errors,
-        )
+        assert "fixture source_commit is not pinned" in errors
+        assert "fixture source_url must not use raw.githubusercontent.com moving branch URLs" in errors
+        assert "fixture sha256 must be a lowercase 64-character hex digest" in errors
 
     def test_validation_rejects_manifest_paths_outside_real_data_tree(self) -> None:
         errors = verify_real_data_evidence.validate_manifest(
@@ -631,18 +589,12 @@ class RealDataEvidenceTests(unittest.TestCase):
             }
         )
 
-        self.assertIn(
-            "bad-paths input_path must be repository-relative: /tmp/input.bam",
-            errors,
+        assert "bad-paths input_path must be repository-relative: /tmp/input.bam" in errors
+        assert (
+            "bad-paths evidence_json must not contain path traversal: benchmarks/real-data/bad/../other/evidence.json"
+            in errors
         )
-        self.assertIn(
-            "bad-paths evidence_json must not contain path traversal: benchmarks/real-data/bad/../other/evidence.json",
-            errors,
-        )
-        self.assertIn(
-            "bad-paths evidence_markdown must stay under benchmarks/real-data: evidence.md",
-            errors,
-        )
+        assert "bad-paths evidence_markdown must stay under benchmarks/real-data: evidence.md" in errors
 
     def test_validation_rejects_manifest_evidence_paths_outside_evidence_layout(self) -> None:
         errors = verify_real_data_evidence.validate_manifest(
@@ -664,15 +616,13 @@ class RealDataEvidenceTests(unittest.TestCase):
             }
         )
 
-        self.assertIn(
+        assert (
             "bad-layout evidence_json must use evidence/real-data-comparison.json: "
-            "benchmarks/real-data/bad-layout/real-data-comparison.json",
-            errors,
+            "benchmarks/real-data/bad-layout/real-data-comparison.json" in errors
         )
-        self.assertIn(
+        assert (
             "bad-layout evidence_markdown must use evidence/real-data-comparison.md: "
-            "benchmarks/real-data/bad-layout/evidence/report.md",
-            errors,
+            "benchmarks/real-data/bad-layout/evidence/report.md" in errors
         )
 
     def test_validation_rejects_malformed_expected_commands(self) -> None:
@@ -695,9 +645,8 @@ class RealDataEvidenceTests(unittest.TestCase):
             }
         )
 
-        self.assertIn(
-            "bad-commands expected_commands must map non-empty command names to non-empty comparison labels",
-            errors,
+        assert (
+            "bad-commands expected_commands must map non-empty command names to non-empty comparison labels" in errors
         )
 
     def test_validation_rejects_unknown_comparison_labels(self) -> None:
@@ -720,10 +669,7 @@ class RealDataEvidenceTests(unittest.TestCase):
             }
         )
 
-        self.assertIn(
-            "bad-comparison expected_commands use unknown comparison labels: roughly similar output",
-            errors,
-        )
+        assert "bad-comparison expected_commands use unknown comparison labels: roughly similar output" in errors
 
     def test_validation_accepts_https_accession_style_source(self) -> None:
         errors = verify_real_data_evidence.validate_manifest(
@@ -745,7 +691,7 @@ class RealDataEvidenceTests(unittest.TestCase):
             }
         )
 
-        self.assertEqual(errors, [])
+        assert errors == []
 
     def test_validation_rejects_accession_source_without_identifier_in_url(self) -> None:
         errors = verify_real_data_evidence.validate_manifest(
@@ -767,10 +713,7 @@ class RealDataEvidenceTests(unittest.TestCase):
             }
         )
 
-        self.assertIn(
-            "giab-shard non-GitHub source_url must include source_commit/accession identifier",
-            errors,
-        )
+        assert "giab-shard non-GitHub source_url must include source_commit/accession identifier" in errors
 
     def test_validation_rejects_github_url_without_matching_blob_commit(self) -> None:
         errors = verify_real_data_evidence.validate_manifest(
@@ -792,10 +735,7 @@ class RealDataEvidenceTests(unittest.TestCase):
             }
         )
 
-        self.assertIn(
-            "github-fixture GitHub source_url must include /blob/0123456789abcdef0123456789abcdef01234567/",
-            errors,
-        )
+        assert "github-fixture GitHub source_url must include /blob/0123456789abcdef0123456789abcdef01234567/" in errors
 
     def test_validation_rejects_short_github_commit_for_all_tiers(self) -> None:
         errors = verify_real_data_evidence.validate_manifest(
@@ -817,10 +757,7 @@ class RealDataEvidenceTests(unittest.TestCase):
             }
         )
 
-        self.assertIn(
-            "short-github-commit GitHub source_commit must be a full 40-character SHA",
-            errors,
-        )
+        assert "short-github-commit GitHub source_commit must be a full 40-character SHA" in errors
 
     def test_validation_requires_workflow_documentation(self) -> None:
         errors = verify_real_data_evidence.validate_workflow_docs(
@@ -829,30 +766,12 @@ class RealDataEvidenceTests(unittest.TestCase):
             "python3 tools/verify_real_data_evidence.py",
         )
 
-        self.assertIn(
-            "benchmarks README missing manifest update command",
-            errors,
-        )
-        self.assertIn(
-            "site missing release-ready real-data verifier command",
-            errors,
-        )
-        self.assertIn(
-            "benchmark docs missing release-ready real-data verifier command",
-            errors,
-        )
-        self.assertIn(
-            "benchmarks README missing broad-dataset scope caveat",
-            errors,
-        )
-        self.assertIn(
-            "site missing scientific release wording",
-            errors,
-        )
-        self.assertIn(
-            "benchmark docs missing broad-dataset scope caveat",
-            errors,
-        )
+        assert "benchmarks README missing manifest update command" in errors
+        assert "site missing release-ready real-data verifier command" in errors
+        assert "benchmark docs missing release-ready real-data verifier command" in errors
+        assert "benchmarks README missing broad-dataset scope caveat" in errors
+        assert "site missing scientific release wording" in errors
+        assert "benchmark docs missing broad-dataset scope caveat" in errors
 
         complete_workflow_doc = (
             "python3 tools/compare_real_data.py\n"
@@ -874,14 +793,8 @@ class RealDataEvidenceTests(unittest.TestCase):
             complete_workflow_doc,
             "Use it quickly.",
         )
-        self.assertIn(
-            "adoption docs missing one-command-at-a-time caveat",
-            adoption_errors,
-        )
-        self.assertIn(
-            "adoption docs missing side-by-side comparison caveat",
-            adoption_errors,
-        )
+        assert "adoption docs missing one-command-at-a-time caveat" in adoption_errors
+        assert "adoption docs missing side-by-side comparison caveat" in adoption_errors
 
     def test_workflow_documentation_rejects_unsupported_replacement_overclaims(self) -> None:
         baseline = (
@@ -906,32 +819,19 @@ class RealDataEvidenceTests(unittest.TestCase):
             baseline + "Safe for all production.\n",
         )
 
-        self.assertIn(
-            "benchmarks README contains unsupported overclaim: drop-in replacement",
-            errors,
-        )
-        self.assertIn(
-            "site contains unsupported overclaim: production genomics workflows",
-            errors,
-        )
-        self.assertIn(
-            "benchmark docs contains unsupported overclaim: complete cohort-scale validation",
-            errors,
-        )
-        self.assertIn(
-            "adoption docs contains unsupported overclaim: safe for all production",
-            errors,
-        )
+        assert "benchmarks README contains unsupported overclaim: drop-in replacement" in errors
+        assert "site contains unsupported overclaim: production genomics workflows" in errors
+        assert "benchmark docs contains unsupported overclaim: complete cohort-scale validation" in errors
+        assert "adoption docs contains unsupported overclaim: safe for all production" in errors
 
     def test_project_readme_rejects_unsupported_replacement_overclaims(self) -> None:
-        manifest = {"datasets": []}
+        manifest: dict[str, list[object]] = {"datasets": []}
 
-        self.assertIn(
-            "project README contains unsupported overclaim: production genomics workflows",
-            verify_real_data_evidence.validate_project_readme_real_data_summary(
-                manifest,
-                "Ready for production genomics workflows.",
-            ),
+        assert (
+            "project README contains unsupported overclaim: production genomics workflows"
+            in verify_real_data_evidence.validate_project_readme_real_data_summary(
+                manifest, "Ready for production genomics workflows."
+            )
         )
 
     def test_release_candidate_requires_broad_commands_and_size(self) -> None:
@@ -947,22 +847,13 @@ class RealDataEvidenceTests(unittest.TestCase):
             {"size_bytes": 10},
         )
 
-        self.assertIn(
-            "tiny-release release_candidate missing required commands: CleanSam, CollectAlignmentSummaryMetrics, CollectQualityYieldMetrics, MarkDuplicates",
-            errors,
+        assert (
+            "tiny-release release_candidate missing required commands: CleanSam, CollectAlignmentSummaryMetrics, CollectQualityYieldMetrics, MarkDuplicates"
+            in errors
         )
-        self.assertIn(
-            "tiny-release release_candidate missing minimum_input_bytes",
-            errors,
-        )
-        self.assertIn(
-            "tiny-release release_candidate input too small: 10 bytes < 1000000",
-            errors,
-        )
-        self.assertIn(
-            "tiny-release release_candidate GitHub source_commit must be a full 40-character SHA",
-            errors,
-        )
+        assert "tiny-release release_candidate missing minimum_input_bytes" in errors
+        assert "tiny-release release_candidate input too small: 10 bytes < 1000000" in errors
+        assert "tiny-release release_candidate GitHub source_commit must be a full 40-character SHA" in errors
 
     def test_release_candidate_minimum_size_can_be_manifest_explicit(self) -> None:
         dataset = {
@@ -980,13 +871,7 @@ class RealDataEvidenceTests(unittest.TestCase):
             },
         }
 
-        self.assertEqual(
-            verify_real_data_evidence.validate_release_candidate_dataset(
-                dataset,
-                {"size_bytes": 10},
-            ),
-            [],
-        )
+        assert verify_real_data_evidence.validate_release_candidate_dataset(dataset, {"size_bytes": 10}) == []
 
     def test_release_ready_requires_portfolio_insert_size_evidence(self) -> None:
         manifest = {
@@ -997,13 +882,10 @@ class RealDataEvidenceTests(unittest.TestCase):
                     "evidence_json": "benchmarks/real-data/fixture/evidence/real-data-comparison.json",
                     "evidence_markdown": "benchmarks/real-data/fixture/evidence/real-data-comparison.md",
                     "source_url": (
-                        "https://github.com/example/repo/blob/"
-                        "0123456789abcdef0123456789abcdef01234567/input.bam"
+                        "https://github.com/example/repo/blob/0123456789abcdef0123456789abcdef01234567/input.bam"
                     ),
                     "source_commit": "0123456789abcdef0123456789abcdef01234567",
-                    "sha256": (
-                        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
-                    ),
+                    "sha256": ("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"),
                     "scope_caveat": "reviewed fixture",
                     "release_tier": "release_candidate",
                     "minimum_input_bytes": 1,
@@ -1012,9 +894,7 @@ class RealDataEvidenceTests(unittest.TestCase):
                         "CleanSam": "post-command SAM record digest",
                         "CollectQualityYieldMetrics": "stable metrics digest",
                         "CollectAlignmentSummaryMetrics": "stable metrics digest",
-                        "MarkDuplicates": (
-                            "duplicate-marking semantic digest plus stable metrics digest"
-                        ),
+                        "MarkDuplicates": ("duplicate-marking semantic digest plus stable metrics digest"),
                     },
                 }
             ]
@@ -1054,11 +934,10 @@ class RealDataEvidenceTests(unittest.TestCase):
                 release_ready=True,
             )
 
-        self.assertIn(
+        assert (
             "real-data release_candidate portfolio missing required command evidence: "
             "AddOrReplaceReadGroups, BuildBamIndex, CollectInsertSizeMetrics, "
-            "RevertSam, SamToFastq, SortSam, ValidateSamFile",
-            errors,
+            "RevertSam, SamToFastq, SortSam, ValidateSamFile" in errors
         )
 
     def test_release_ready_requires_aggregate_candidate_input_size(self) -> None:
@@ -1078,13 +957,10 @@ class RealDataEvidenceTests(unittest.TestCase):
                         "evidence_json": "benchmarks/real-data/fixture/evidence/real-data-comparison.json",
                         "evidence_markdown": "benchmarks/real-data/fixture/evidence/real-data-comparison.md",
                         "source_url": (
-                            "https://github.com/example/repo/blob/"
-                            "0123456789abcdef0123456789abcdef01234567/input.bam"
+                            "https://github.com/example/repo/blob/0123456789abcdef0123456789abcdef01234567/input.bam"
                         ),
                         "source_commit": "0123456789abcdef0123456789abcdef01234567",
-                        "sha256": (
-                            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
-                        ),
+                        "sha256": ("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"),
                         "scope_caveat": "reviewed fixture",
                         "release_tier": "release_candidate",
                         "minimum_input_bytes": 1,
@@ -1093,12 +969,8 @@ class RealDataEvidenceTests(unittest.TestCase):
                             "CleanSam": "post-command SAM record digest",
                             "CollectQualityYieldMetrics": "stable metrics digest",
                             "CollectAlignmentSummaryMetrics": "stable metrics digest",
-                            "MarkDuplicates": (
-                                "duplicate-marking semantic digest plus stable metrics digest"
-                            ),
-                            "CollectInsertSizeMetrics": (
-                                "stable metrics digest with insert-size histogram"
-                            ),
+                            "MarkDuplicates": ("duplicate-marking semantic digest plus stable metrics digest"),
+                            "CollectInsertSizeMetrics": ("stable metrics digest with insert-size histogram"),
                         },
                     }
                 ]
@@ -1137,10 +1009,7 @@ class RealDataEvidenceTests(unittest.TestCase):
                     release_ready=True,
                 )
 
-        self.assertIn(
-            "real-data release_candidate portfolio input too small: 9 bytes < 10",
-            errors,
-        )
+        assert "real-data release_candidate portfolio input too small: 9 bytes < 10" in errors
 
     def test_release_candidate_docs_reject_stale_release_ready_failure_text(self) -> None:
         manifest = {
@@ -1151,13 +1020,10 @@ class RealDataEvidenceTests(unittest.TestCase):
                     "evidence_json": "benchmarks/real-data/fixture/evidence/real-data-comparison.json",
                     "evidence_markdown": "benchmarks/real-data/fixture/evidence/real-data-comparison.md",
                     "source_url": (
-                        "https://github.com/example/repo/blob/"
-                        "0123456789abcdef0123456789abcdef01234567/input.bam"
+                        "https://github.com/example/repo/blob/0123456789abcdef0123456789abcdef01234567/input.bam"
                     ),
                     "source_commit": "0123456789abcdef0123456789abcdef01234567",
-                    "sha256": (
-                        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
-                    ),
+                    "sha256": ("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"),
                     "scope_caveat": "reviewed fixture",
                     "release_tier": "release_candidate",
                     "minimum_input_bytes": 1,
@@ -1166,9 +1032,7 @@ class RealDataEvidenceTests(unittest.TestCase):
                         "CleanSam": "post-command SAM record digest",
                         "CollectQualityYieldMetrics": "stable metrics digest",
                         "CollectAlignmentSummaryMetrics": "stable metrics digest",
-                        "MarkDuplicates": (
-                            "duplicate-marking semantic digest plus stable metrics digest"
-                        ),
+                        "MarkDuplicates": ("duplicate-marking semantic digest plus stable metrics digest"),
                     },
                 }
             ]
@@ -1204,10 +1068,7 @@ class RealDataEvidenceTests(unittest.TestCase):
                 release_ready=True,
             )
 
-        self.assertIn(
-            "benchmarks README still says release-ready verification fails before release candidates",
-            errors,
-        )
+        assert "benchmarks README still says release-ready verification fails before release candidates" in errors
 
     def test_dataset_requires_timing_evidence_and_markdown_timing_row(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1256,8 +1117,7 @@ class RealDataEvidenceTests(unittest.TestCase):
                 encoding="utf-8",
             )
             evidence_md.write_text(
-                "Picard: `Version:3.4.0`\n"
-                f"| {command} | PASS | {comparison} |\n",
+                f"Picard: `Version:3.4.0`\n| {command} | PASS | {comparison} |\n",
                 encoding="utf-8",
             )
             readme = (
@@ -1276,13 +1136,10 @@ class RealDataEvidenceTests(unittest.TestCase):
                     site,
                 )
 
-            self.assertIn(
-                "fixture ViewSam missing positive turbo-picard timing",
-                errors,
-            )
-            self.assertIn("fixture ViewSam missing positive Picard timing", errors)
-            self.assertIn("fixture ViewSam missing positive speedup", errors)
-            self.assertIn("fixture Markdown missing timing row: ViewSam", errors)
+            assert "fixture ViewSam missing positive turbo-picard timing" in errors
+            assert "fixture ViewSam missing positive Picard timing" in errors
+            assert "fixture ViewSam missing positive speedup" in errors
+            assert "fixture Markdown missing timing row: ViewSam" in errors
 
     def test_dataset_rejects_speedup_that_does_not_match_timing_ratio(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1334,8 +1191,7 @@ class RealDataEvidenceTests(unittest.TestCase):
                 encoding="utf-8",
             )
             evidence_md.write_text(
-                "Picard: `Version:3.4.0`\n"
-                f"| {command} | PASS | {comparison} | 2.000s | 10.000s | 3.00x |\n",
+                f"Picard: `Version:3.4.0`\n| {command} | PASS | {comparison} | 2.000s | 10.000s | 3.00x |\n",
                 encoding="utf-8",
             )
             readme = (
@@ -1354,10 +1210,7 @@ class RealDataEvidenceTests(unittest.TestCase):
                     site,
                 )
 
-            self.assertIn(
-                "fixture ViewSam speedup does not match timing ratio: 3.0000 != 5.0000",
-                errors,
-            )
+            assert "fixture ViewSam speedup does not match timing ratio: 3.0000 != 5.0000" in errors
 
     def test_dataset_requires_command_artifacts_and_matching_digests(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1414,8 +1267,7 @@ class RealDataEvidenceTests(unittest.TestCase):
                 encoding="utf-8",
             )
             evidence_md.write_text(
-                "Picard: `Version:3.4.0`\n"
-                f"| {command} | PASS | {comparison} | 0.001s | 0.001s | 1.00x |\n",
+                f"Picard: `Version:3.4.0`\n| {command} | PASS | {comparison} | 0.001s | 0.001s | 1.00x |\n",
                 encoding="utf-8",
             )
             readme = (
@@ -1434,15 +1286,8 @@ class RealDataEvidenceTests(unittest.TestCase):
                     site,
                 )
 
-            self.assertIn(
-                "fixture ViewSam turbo-picard/Picard digests differ",
-                errors,
-            )
-            self.assertIn(
-                "fixture ViewSam missing Picard artifact file: missing-picard.out",
-                errors,
-            )
-
+            assert "fixture ViewSam turbo-picard/Picard digests differ" in errors
+            assert "fixture ViewSam missing Picard artifact file: missing-picard.out" in errors
 
     def test_dataset_recomputes_sam_and_metrics_artifact_digests(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1452,35 +1297,22 @@ class RealDataEvidenceTests(unittest.TestCase):
             sam_path = evidence_dir / "turbo.sam"
             metrics_path = evidence_dir / "picard.metrics.txt"
             sam_path.write_text(
-                "@HD\tVN:1.6\n"
-                "r1\t0\tchr1\t1\t60\t4M\t*\t0\t0\tACGT\tFFFF\tZF:f:1.0\n",
+                "@HD\tVN:1.6\nr1\t0\tchr1\t1\t60\t4M\t*\t0\t0\tACGT\tFFFF\tZF:f:1.0\n",
                 encoding="utf-8",
             )
             metrics_path.write_text("# comment\nPF_BASES\n10\n", encoding="utf-8")
 
-            self.assertEqual(
-                verify_real_data_evidence.recomputable_artifact_digest(
-                    sam_path, "SAM record digest"
-                ),
-                verify_real_data_evidence.digest_sam_records(sam_path),
-            )
-            self.assertEqual(
-                verify_real_data_evidence.recomputable_artifact_digest(
-                    metrics_path, "stable metrics digest"
-                ),
-                verify_real_data_evidence.digest_stable_text(metrics_path),
-            )
-            self.assertEqual(
-                verify_real_data_evidence.recomputable_artifact_digest(
-                    metrics_path, "stable metrics digest with insert-size histogram"
-                ),
-                verify_real_data_evidence.digest_stable_text(metrics_path),
-            )
+            assert verify_real_data_evidence.recomputable_artifact_digest(
+                sam_path, "SAM record digest"
+            ) == verify_real_data_evidence.digest_sam_records(sam_path)
+            assert verify_real_data_evidence.recomputable_artifact_digest(
+                metrics_path, "stable metrics digest"
+            ) == verify_real_data_evidence.digest_stable_text(metrics_path)
+            assert verify_real_data_evidence.recomputable_artifact_digest(
+                metrics_path, "stable metrics digest with insert-size histogram"
+            ) == verify_real_data_evidence.digest_stable_text(metrics_path)
 
-            self.assertNotEqual(
-                verify_real_data_evidence.digest_sam_records(sam_path),
-                "not-the-digest",
-            )
+            assert verify_real_data_evidence.digest_sam_records(sam_path) != "not-the-digest"
 
     def test_dataset_rejects_command_artifact_outside_evidence_directory(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1550,15 +1382,14 @@ class RealDataEvidenceTests(unittest.TestCase):
                                 "picard_artifact": "evidence/picard.out",
                                 "turbo_digest": "abc123",
                                 "picard_digest": "abc123",
-                            }
+                            },
                         ],
                     }
                 ),
                 encoding="utf-8",
             )
             evidence_md.write_text(
-                "Picard: `Version:3.4.0`\n"
-                f"| {command} | PASS | {comparison} | 0.001s | 0.001s | 1.00x |\n",
+                f"Picard: `Version:3.4.0`\n| {command} | PASS | {comparison} | 0.001s | 0.001s | 1.00x |\n",
                 encoding="utf-8",
             )
             readme = (
@@ -1577,14 +1408,8 @@ class RealDataEvidenceTests(unittest.TestCase):
                     site,
                 )
 
-            self.assertIn(
-                "fixture ViewSam turbo-picard artifact must stay under evidence directory: outside.out",
-                errors,
-            )
-            self.assertIn(
-                f"fixture CleanSam turbo-picard artifact must be repository-relative: {absolute_artifact}",
-                errors,
-            )
+            assert "fixture ViewSam turbo-picard artifact must stay under evidence directory: outside.out" in errors
+            assert f"fixture CleanSam turbo-picard artifact must be repository-relative: {absolute_artifact}" in errors
 
     def test_dataset_rejects_unreviewed_or_duplicate_command_rows(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1646,8 +1471,7 @@ class RealDataEvidenceTests(unittest.TestCase):
                 encoding="utf-8",
             )
             evidence_md.write_text(
-                "Picard: `Version:3.4.0`\n"
-                f"| {command} | PASS | {comparison} | 0.001s | 0.001s | 1.00x |\n",
+                f"Picard: `Version:3.4.0`\n| {command} | PASS | {comparison} | 0.001s | 0.001s | 1.00x |\n",
                 encoding="utf-8",
             )
             readme = (
@@ -1666,8 +1490,8 @@ class RealDataEvidenceTests(unittest.TestCase):
                     site,
                 )
 
-            self.assertIn("fixture duplicate command evidence: ViewSam", errors)
-            self.assertIn("fixture unreviewed extra command evidence: CleanSam", errors)
+            assert "fixture duplicate command evidence: ViewSam" in errors
+            assert "fixture unreviewed extra command evidence: CleanSam" in errors
 
     def test_dataset_rejects_malformed_command_rows_without_crashing(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1706,8 +1530,7 @@ class RealDataEvidenceTests(unittest.TestCase):
             }
             evidence_json.write_text(json.dumps(base_evidence), encoding="utf-8")
             evidence_md.write_text(
-                "Picard: `Version:3.4.0`\n"
-                f"| {command} | PASS | {comparison} | 0.001s | 0.001s | 1.00x |\n",
+                f"Picard: `Version:3.4.0`\n| {command} | PASS | {comparison} | 0.001s | 0.001s | 1.00x |\n",
                 encoding="utf-8",
             )
             readme = (
@@ -1726,7 +1549,7 @@ class RealDataEvidenceTests(unittest.TestCase):
                     site,
                 )
 
-            self.assertIn("fixture evidence commands must be a list", errors)
+            assert "fixture evidence commands must be a list" in errors
 
             base_evidence["commands"] = ["not-an-object"]
             evidence_json.write_text(json.dumps(base_evidence), encoding="utf-8")
@@ -1737,7 +1560,7 @@ class RealDataEvidenceTests(unittest.TestCase):
                     site,
                 )
 
-            self.assertIn("fixture evidence command row 0 must be an object", errors)
+            assert "fixture evidence command row 0 must be an object" in errors
 
     def test_dataset_requires_machine_readable_tool_versions(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1789,8 +1612,7 @@ class RealDataEvidenceTests(unittest.TestCase):
                 encoding="utf-8",
             )
             evidence_md.write_text(
-                "Picard: `Version:3.4.0`\n"
-                f"| {command} | PASS | {comparison} | 0.001s | 0.001s | 1.00x |\n",
+                f"Picard: `Version:3.4.0`\n| {command} | PASS | {comparison} | 0.001s | 0.001s | 1.00x |\n",
                 encoding="utf-8",
             )
             readme = (
@@ -1809,8 +1631,8 @@ class RealDataEvidenceTests(unittest.TestCase):
                     site,
                 )
 
-            self.assertIn("fixture evidence Picard version changed", errors)
-            self.assertIn("fixture evidence missing turbo-picard version", errors)
+            assert "fixture evidence Picard version changed" in errors
+            assert "fixture evidence missing turbo-picard version" in errors
 
     def test_dataset_rejects_malformed_input_summary_without_crashing(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1857,8 +1679,7 @@ class RealDataEvidenceTests(unittest.TestCase):
                 encoding="utf-8",
             )
             evidence_md.write_text(
-                "Picard: `Version:3.4.0`\n"
-                f"| {command} | PASS | {comparison} | 0.001s | 0.001s | 1.00x |\n",
+                f"Picard: `Version:3.4.0`\n| {command} | PASS | {comparison} | 0.001s | 0.001s | 1.00x |\n",
                 encoding="utf-8",
             )
             readme = (
@@ -1877,8 +1698,8 @@ class RealDataEvidenceTests(unittest.TestCase):
                     site,
                 )
 
-            self.assertIn("fixture evidence input must be an object", errors)
-            self.assertIn("fixture evidence SHA-256 changed", errors)
+            assert "fixture evidence input must be an object" in errors
+            assert "fixture evidence SHA-256 changed" in errors
 
     def test_dataset_rejects_malformed_top_level_evidence_without_crashing(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1905,8 +1726,7 @@ class RealDataEvidenceTests(unittest.TestCase):
             }
             evidence_json.write_text(json.dumps(["not", "an", "object"]), encoding="utf-8")
             evidence_md.write_text(
-                "Picard: `Version:3.4.0`\n"
-                f"| {command} | PASS | {comparison} | 0.001s | 0.001s | 1.00x |\n",
+                f"Picard: `Version:3.4.0`\n| {command} | PASS | {comparison} | 0.001s | 0.001s | 1.00x |\n",
                 encoding="utf-8",
             )
             readme = (
@@ -1925,8 +1745,8 @@ class RealDataEvidenceTests(unittest.TestCase):
                     site,
                 )
 
-            self.assertIn("fixture evidence JSON must be an object", errors)
-            self.assertIn("fixture evidence SHA-256 changed", errors)
+            assert "fixture evidence JSON must be an object" in errors
+            assert "fixture evidence SHA-256 changed" in errors
 
     def test_manifest_entry_artifact_must_match_checked_manifest_entry(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1952,20 +1772,16 @@ class RealDataEvidenceTests(unittest.TestCase):
             )
 
             with mock.patch.object(verify_real_data_evidence, "ROOT", root):
-                self.assertEqual(
-                    verify_real_data_evidence.validate_manifest_entry_artifact(dataset),
-                    ["fixture manifest-entry.json does not match manifest entry"],
-                )
+                assert verify_real_data_evidence.validate_manifest_entry_artifact(dataset) == [
+                    "fixture manifest-entry.json does not match manifest entry"
+                ]
 
             (evidence_dir / "manifest-entry.json").write_text(
                 json.dumps(dataset),
                 encoding="utf-8",
             )
             with mock.patch.object(verify_real_data_evidence, "ROOT", root):
-                self.assertEqual(
-                    verify_real_data_evidence.validate_manifest_entry_artifact(dataset),
-                    [],
-                )
+                assert verify_real_data_evidence.validate_manifest_entry_artifact(dataset) == []
 
     def test_release_candidate_requires_manifest_entry_artifact(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1987,17 +1803,13 @@ class RealDataEvidenceTests(unittest.TestCase):
             }
 
             with mock.patch.object(verify_real_data_evidence, "ROOT", root):
-                self.assertEqual(
-                    verify_real_data_evidence.validate_manifest_entry_artifact(dataset),
-                    ["fixture release_candidate missing manifest-entry.json"],
-                )
+                assert verify_real_data_evidence.validate_manifest_entry_artifact(dataset) == [
+                    "fixture release_candidate missing manifest-entry.json"
+                ]
 
             dataset["release_tier"] = "public_smoke"
             with mock.patch.object(verify_real_data_evidence, "ROOT", root):
-                self.assertEqual(
-                    verify_real_data_evidence.validate_manifest_entry_artifact(dataset),
-                    [],
-                )
+                assert verify_real_data_evidence.validate_manifest_entry_artifact(dataset) == []
 
     def test_markduplicates_composite_digest_uses_sidecars(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -2021,33 +1833,25 @@ class RealDataEvidenceTests(unittest.TestCase):
                 "duplicate-marking semantic digest plus stable metrics digest",
             )
 
-            self.assertIsNotNone(digest)
+            assert digest is not None
             assert digest is not None
             duplicate_digest, metrics_digest = digest.split(";metrics=")
-            self.assertRegex(duplicate_digest, r"^[0-9a-f]{64}$")
-            self.assertRegex(metrics_digest, r"^[0-9a-f]{64}$")
+            assert re.search(r"^[0-9a-f]{64}$", duplicate_digest)
+            assert re.search(r"^[0-9a-f]{64}$", metrics_digest)
 
             artifact.with_suffix(".view.sam").write_text(
-                "@HD\tVN:1.6\n"
-                "read-b\t1024\tchr1\t10\t60\t4M\t=\t40\t100\tACGT\tFFFF\tDS:i:2\n",
+                "@HD\tVN:1.6\nread-b\t1024\tchr1\t10\t60\t4M\t=\t40\t100\tACGT\tFFFF\tDS:i:2\n",
                 encoding="utf-8",
             )
-            self.assertNotEqual(
-                digest,
-                verify_real_data_evidence.recomputable_artifact_digest(
-                    artifact,
-                    "duplicate-marking semantic digest plus stable metrics digest",
-                ),
+            assert digest != verify_real_data_evidence.recomputable_artifact_digest(
+                artifact, "duplicate-marking semantic digest plus stable metrics digest"
             )
 
     def test_recomputable_digest_handles_validate_sam_summary_exit_code(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             summary = Path(tmp) / "summary.txt"
             summary.write_text(
-                "# ignored\n\n"
-                "## HISTOGRAM\tjava.lang.String\n"
-                "Error Type\tCount\n"
-                "ERROR:MATE_NOT_FOUND\t2\n",
+                "# ignored\n\n## HISTOGRAM\tjava.lang.String\nError Type\tCount\nERROR:MATE_NOT_FOUND\t2\n",
                 encoding="utf-8",
             )
 
@@ -2057,23 +1861,15 @@ class RealDataEvidenceTests(unittest.TestCase):
                 2,
             )
 
-            self.assertEqual(
-                digest,
-                verify_real_data_evidence.digest_validate_sam_summary(summary, 2),
+            assert digest == verify_real_data_evidence.digest_validate_sam_summary(summary, 2)
+            assert digest != verify_real_data_evidence.recomputable_artifact_digest(
+                summary, "summary validation histogram plus exit code", 0
             )
-            self.assertNotEqual(
-                digest,
+            assert (
                 verify_real_data_evidence.recomputable_artifact_digest(
-                    summary,
-                    "summary validation histogram plus exit code",
-                    0,
-                ),
-            )
-            self.assertIsNone(
-                verify_real_data_evidence.recomputable_artifact_digest(
-                    summary,
-                    "summary validation histogram plus exit code",
+                    summary, "summary validation histogram plus exit code"
                 )
+                is None
             )
 
     def test_required_markdown_comparison_notes_tracks_digest_types(self) -> None:
@@ -2082,26 +1878,22 @@ class RealDataEvidenceTests(unittest.TestCase):
         )
         text = "\n".join(needle for needle, _description in notes)
 
-        self.assertIn("## Comparison details", text)
-        self.assertEqual(
-            set(verify_real_data_evidence.KNOWN_COMPARISONS),
-            set(verify_real_data_evidence.COMPARISON_MARKDOWN_NOTES),
+        assert "## Comparison details" in text
+        assert set(verify_real_data_evidence.KNOWN_COMPARISONS) == set(
+            verify_real_data_evidence.COMPARISON_MARKDOWN_NOTES
         )
-        self.assertEqual(len(notes), len(set(notes)))
-        self.assertEqual(
-            len(notes),
-            len(verify_real_data_evidence.KNOWN_COMPARISONS) + 1,
-        )
-        self.assertIn("exact BAM index bytes", text)
-        self.assertIn("FASTQ outputs byte-for-byte", text)
-        self.assertIn("ignores headers", text)
-        self.assertIn("sorted @RG header fields", text)
-        self.assertIn("after a BAM-writing command", text)
-        self.assertIn("RevertSam rewrites aligned records", text)
-        self.assertIn("tie-order differences", text)
-        self.assertIn("generated headers do not affect parity", text)
-        self.assertIn("duplicate flags", text)
-        self.assertIn("same Picard and turbo-picard exit code", text)
+        assert len(notes) == len(set(notes))
+        assert len(notes) == len(verify_real_data_evidence.KNOWN_COMPARISONS) + 1
+        assert "exact BAM index bytes" in text
+        assert "FASTQ outputs byte-for-byte" in text
+        assert "ignores headers" in text
+        assert "sorted @RG header fields" in text
+        assert "after a BAM-writing command" in text
+        assert "RevertSam rewrites aligned records" in text
+        assert "tie-order differences" in text
+        assert "generated headers do not affect parity" in text
+        assert "duplicate flags" in text
+        assert "same Picard and turbo-picard exit code" in text
 
 
 if __name__ == "__main__":

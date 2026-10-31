@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-"""Verify benchmark suite coverage is explicit and aligned with public evidence."""
 
 from __future__ import annotations
 
@@ -7,15 +6,17 @@ import ast
 import json
 import sys
 from pathlib import Path
-
+from typing import TYPE_CHECKING, Any
 
 ROOT = Path(__file__).resolve().parents[1]
 TOOL_DIR = Path(__file__).resolve().parent
 if str(TOOL_DIR) not in sys.path:
     sys.path.insert(0, str(TOOL_DIR))
 
-from verify_command_matrix import matrix_native_commands  # noqa: E402
-
+if TYPE_CHECKING:
+    from tools.verify_command_matrix import matrix_native_commands
+else:
+    from verify_command_matrix import matrix_native_commands
 
 BENCH_SUITE = ROOT / "tools" / "bench_suite.py"
 BENCHMARK_DATA = ROOT / "docs" / "site" / "assets" / "benchmark-data.json"
@@ -48,10 +49,7 @@ def suite_benchmark_scripts(tree: ast.AST) -> list[str]:
     for node in ast.walk(tree):
         if not isinstance(node, ast.Assign):
             continue
-        if not any(
-            isinstance(target, ast.Name) and target.id == "BENCHMARK_SPECS"
-            for target in node.targets
-        ):
+        if not any(isinstance(target, ast.Name) and target.id == "BENCHMARK_SPECS" for target in node.targets):
             continue
         scripts: list[str] = []
         if not isinstance(node.value, ast.List):
@@ -98,12 +96,12 @@ def string_literal_value(node: ast.AST) -> str | None:
     return None
 
 
-def manifest_benchmark_commands(data: dict) -> set[str]:
+def manifest_benchmark_commands(data: dict[str, Any]) -> set[str]:
     commands, _errors = manifest_benchmark_commands_with_errors(data)
     return commands
 
 
-def manifest_benchmark_commands_with_errors(data: dict) -> tuple[set[str], list[str]]:
+def manifest_benchmark_commands_with_errors(data: dict[str, Any]) -> tuple[set[str], list[str]]:
     errors: list[str] = []
     commands: set[str] = set()
     rows = data.get("benchmarks", [])

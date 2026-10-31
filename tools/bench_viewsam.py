@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+
+from __future__ import annotations
+
 import argparse
 import os
 import pathlib
@@ -7,18 +10,17 @@ import subprocess
 import sys
 import tempfile
 import time
-
+from collections.abc import Sequence
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 
 
-def run(command, *, cwd=ROOT):
+def run(command: Sequence[str], *, cwd: pathlib.Path = ROOT) -> float:
     start = time.perf_counter()
     completed = subprocess.run(
         command,
         cwd=cwd,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        capture_output=True,
         text=True,
         check=False,
     )
@@ -30,13 +32,12 @@ def run(command, *, cwd=ROOT):
     return elapsed
 
 
-def run_capture(command, *, cwd=ROOT):
+def run_capture(command: Sequence[str], *, cwd: pathlib.Path = ROOT) -> tuple[float, str]:
     start = time.perf_counter()
     completed = subprocess.run(
         command,
         cwd=cwd,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        capture_output=True,
         text=True,
         check=False,
     )
@@ -48,7 +49,7 @@ def run_capture(command, *, cwd=ROOT):
     return elapsed, completed.stdout
 
 
-def conda_runner():
+def conda_runner() -> str:
     for name in ("mamba", "micromamba"):
         path = shutil.which(name)
         if path:
@@ -56,7 +57,7 @@ def conda_runner():
     raise SystemExit("mamba or micromamba is required to benchmark against Picard")
 
 
-def write_sam(path, reads):
+def write_sam(path: pathlib.Path, reads: int) -> None:
     sequence = "ACGT" * 25
     qualities = "F" * len(sequence)
     with open(path, "w", encoding="utf-8") as handle:
@@ -68,11 +69,11 @@ def write_sam(path, reads):
             )
 
 
-def stable_records(text):
+def stable_records(text: str) -> list[str]:
     return [line.rstrip("\n") for line in text.splitlines() if not line.startswith("@")]
 
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser(description="Benchmark turbo-picard ViewSam against Picard.")
     parser.add_argument("--reads", type=int, default=50_000, help="SAM records to synthesize")
     parser.add_argument(
@@ -106,9 +107,7 @@ def main():
             "QUIET=true",
         ]
         turbo_time, turbo_stdout = run_capture([str(turbo), *common])
-        picard_time, picard_stdout = run_capture(
-            [runner, "run", "-p", args.conda_prefix, "picard", *common]
-        )
+        picard_time, picard_stdout = run_capture([runner, "run", "-p", args.conda_prefix, "picard", *common])
 
         parity = stable_records(turbo_stdout) == stable_records(picard_stdout)
         speedup = picard_time / turbo_time if turbo_time > 0 else float("inf")

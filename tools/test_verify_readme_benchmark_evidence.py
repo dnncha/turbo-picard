@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-"""Tests for README benchmark evidence consistency checks."""
 
 from __future__ import annotations
 
@@ -7,7 +6,6 @@ import importlib.util
 import sys
 import unittest
 from pathlib import Path
-
 
 MODULE_PATH = Path(__file__).with_name("verify_readme_benchmark_evidence.py")
 SPEC = importlib.util.spec_from_file_location("verify_readme_benchmark_evidence", MODULE_PATH)
@@ -72,11 +70,9 @@ CITATION.cff
 SHA-256
 """
 
-        errors = verify_readme_benchmark_evidence.validate_readme_benchmark_evidence(
-            readme, data
-        )
+        errors = verify_readme_benchmark_evidence.validate_readme_benchmark_evidence(readme, data)
 
-        self.assertEqual(errors, [])
+        assert errors == []
 
     def test_readme_claim_mismatches_are_reported(self) -> None:
         data = {
@@ -102,32 +98,20 @@ SHA-256
             data,
         )
 
-        self.assertIn("missing README parity claim: `1/1`", errors)
-        self.assertIn("missing README benchmark table row: RealCommand 11.00x PASS", errors)
-        self.assertIn(
-            "missing README benchmark-log evidence verifier command",
-            errors,
-        )
-        self.assertIn(
-            "missing README benchmark-suite coverage verifier command",
-            errors,
-        )
-        self.assertIn(
-            "missing README benchmark-threshold verifier command",
-            errors,
-        )
-        self.assertIn(
-            "missing README release-ready real-data verifier command",
-            errors,
-        )
-        self.assertIn("missing README adoption guide link", errors)
-        self.assertIn("missing README benchmark documentation link", errors)
-        self.assertIn("missing README citation documentation link", errors)
-        self.assertIn("missing README software citation pointer", errors)
-        self.assertIn("missing README pinned input SHA-256 guidance", errors)
-        self.assertIn("missing README benchmark date", errors)
-        self.assertIn("missing README benchmark source command", errors)
-        self.assertIn("missing README raw benchmark artifact path", errors)
+        assert "missing README parity claim: `1/1`" in errors
+        assert "missing README benchmark table row: RealCommand 11.00x PASS" in errors
+        assert "missing README benchmark-log evidence verifier command" in errors
+        assert "missing README benchmark-suite coverage verifier command" in errors
+        assert "missing README benchmark-threshold verifier command" in errors
+        assert "missing README release-ready real-data verifier command" in errors
+        assert "missing README adoption guide link" in errors
+        assert "missing README benchmark documentation link" in errors
+        assert "missing README citation documentation link" in errors
+        assert "missing README software citation pointer" in errors
+        assert "missing README pinned input SHA-256 guidance" in errors
+        assert "missing README benchmark date" in errors
+        assert "missing README benchmark source command" in errors
+        assert "missing README raw benchmark artifact path" in errors
 
     def test_benchmarks_readme_claims_match_benchmark_manifest(self) -> None:
         data = {
@@ -143,11 +127,9 @@ and a `12.34x` top speedup. This is fixture-specific evidence, not a capacity
 or production-scale guarantee.
 """
 
-        errors = verify_readme_benchmark_evidence.validate_benchmarks_readme_evidence(
-            benchmarks_readme, data
-        )
+        errors = verify_readme_benchmark_evidence.validate_benchmarks_readme_evidence(benchmarks_readme, data)
 
-        self.assertEqual(errors, [])
+        assert errors == []
 
     def test_benchmarks_readme_claim_mismatches_are_reported(self) -> None:
         data = {
@@ -158,15 +140,13 @@ or production-scale guarantee.
             }
         }
 
-        errors = verify_readme_benchmark_evidence.validate_benchmarks_readme_evidence(
-            "8.55x floor speedup", data
-        )
+        errors = verify_readme_benchmark_evidence.validate_benchmarks_readme_evidence("8.55x floor speedup", data)
 
-        self.assertIn("missing benchmarks README floor-speedup claim", errors)
-        self.assertIn("missing benchmarks README geometric-mean claim", errors)
-        self.assertIn("missing benchmarks README top-speedup claim", errors)
-        self.assertIn("missing benchmarks README fixture-specific evidence caveat", errors)
-        self.assertIn("missing benchmarks README capacity caveat", errors)
+        assert "missing benchmarks README floor-speedup claim" in errors
+        assert "missing benchmarks README geometric-mean claim" in errors
+        assert "missing benchmarks README top-speedup claim" in errors
+        assert "missing benchmarks README fixture-specific evidence caveat" in errors
+        assert "missing benchmarks README capacity caveat" in errors
 
 
 if __name__ == "__main__":

@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-"""Append or replace a real-data evidence entry in the checked manifest."""
 
 from __future__ import annotations
 
@@ -9,8 +8,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-import verify_real_data_evidence
-
+import verify_real_data_evidence  # type: ignore[import-not-found]
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_MANIFEST = ROOT / "benchmarks" / "real-data" / "manifest.json"
@@ -41,18 +39,16 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def load_json(path: Path) -> dict:
+def load_json(path: Path) -> object:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
 def validate_entry_path(path: Path) -> None:
     if path.name != "manifest-entry.json":
-        raise ValueError(
-            f"--entry must point to a comparator-generated manifest-entry.json: {path}"
-        )
+        raise ValueError(f"--entry must point to a comparator-generated manifest-entry.json: {path}")
 
 
-def merge_entry(manifest: dict, entry: dict, *, replace: bool = False) -> dict:
+def merge_entry(manifest: object, entry: object, *, replace: bool = False) -> dict[str, object]:
     if not isinstance(manifest, dict):
         raise ValueError("manifest must be a JSON object")
     if not isinstance(entry, dict):
@@ -65,7 +61,7 @@ def merge_entry(manifest: dict, entry: dict, *, replace: bool = False) -> dict:
     if not isinstance(dataset_id, str) or not dataset_id:
         raise ValueError("manifest entry missing non-empty id")
 
-    merged_datasets = []
+    merged_datasets: list[object] = []
     replaced = False
     for index, dataset in enumerate(manifest["datasets"]):
         if not isinstance(dataset, dict):
@@ -74,9 +70,7 @@ def merge_entry(manifest: dict, entry: dict, *, replace: bool = False) -> dict:
             merged_datasets.append(dataset)
             continue
         if not replace:
-            raise ValueError(
-                f"dataset id already exists: {dataset_id} (use --replace to update it)"
-            )
+            raise ValueError(f"dataset id already exists: {dataset_id} (use --replace to update it)")
         merged_datasets.append(entry)
         replaced = True
 
@@ -85,7 +79,7 @@ def merge_entry(manifest: dict, entry: dict, *, replace: bool = False) -> dict:
     return {**manifest, "datasets": merged_datasets}
 
 
-def write_manifest(path: Path, manifest: dict) -> None:
+def write_manifest(path: Path, manifest: object) -> None:
     path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
 
 
@@ -93,7 +87,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parse_args() if argv is None else parse_args_from(argv)
     try:
         manifest = load_json(args.manifest)
-        merged = manifest
+        merged: object = manifest
         for entry_path in args.entry:
             validate_entry_path(entry_path)
             entry = load_json(entry_path)

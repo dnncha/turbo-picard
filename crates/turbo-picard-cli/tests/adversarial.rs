@@ -1,38 +1,10 @@
-//! Scientific boundary cases: exercise the executable across formats and paths.
-use assert_cmd::Command;
 use rust_htslib::bam::{self, Read};
 use std::fs;
-use std::path::Path;
+
+use support::{arg, cli, convert, flags};
 
 const HEADER: &str = "@HD\tVN:1.6\tSO:coordinate\n@SQ\tSN:chr1\tLN:1000\n@RG\tID:rg\tSM:sample\tLB:lib\tPL:ILLUMINA\n";
 const FRAGMENT: &str = "frag\t0\tchr1\t10\t60\t4M\t*\t0\t0\tACGT\tIIII\tRG:Z:rg\n";
-
-fn cli(args: &[String]) -> Command {
-    let mut command = Command::cargo_bin("turbo-picard").unwrap();
-    command.env("TURBO_PICARD_REQUIRE_NATIVE", "1").args(args);
-    command
-}
-
-fn arg(key: &str, path: &Path) -> String {
-    format!("{key}={}", path.display())
-}
-
-fn convert(input: &Path, output: &Path) {
-    cli(&["ViewSam".into(), arg("I", input), arg("O", output)])
-        .assert()
-        .success();
-}
-
-fn flags(path: &Path) -> Vec<(Vec<u8>, u16)> {
-    bam::Reader::from_path(path)
-        .unwrap()
-        .records()
-        .map(|r| {
-            let r = r.unwrap();
-            (r.qname().to_vec(), r.flags())
-        })
-        .collect()
-}
 
 #[test]
 fn duplicate_selection_is_format_independent_and_keeps_the_best_read() {
@@ -494,7 +466,7 @@ fn validation_exit_status_distinguishes_warnings_errors_and_mixed_reports() {
     let dir = tempfile::tempdir().unwrap();
     let input = dir.path().join("input.sam");
     for (text, expected) in [
-        (format!("{HEADER}{FRAGMENT}"), 1), // Missing NM is a warning.
+        (format!("{HEADER}{FRAGMENT}"), 1),
         (
             format!("{HEADER}{}", FRAGMENT.replace("\t10\t", "\t1000\t")),
             2,
@@ -649,4 +621,38 @@ fn native_only_errors_preserve_the_actual_rejection_reason() {
     .stderr(predicates::str::contains(
         "upstream Picard fallback is disabled",
     ));
+}
+
+#[cfg(test)]
+mod support {
+    use assert_cmd::Command;
+    use rust_htslib::bam::{self, Read};
+    use std::path::Path;
+
+    pub fn cli(args: &[String]) -> Command {
+        let mut command = Command::cargo_bin("turbo-picard").unwrap();
+        command.env("TURBO_PICARD_REQUIRE_NATIVE", "1").args(args);
+        command
+    }
+
+    pub fn arg(key: &str, path: &Path) -> String {
+        format!("{key}={}", path.display())
+    }
+
+    pub fn convert(input: &Path, output: &Path) {
+        cli(&["ViewSam".into(), arg("I", input), arg("O", output)])
+            .assert()
+            .success();
+    }
+
+    pub fn flags(path: &Path) -> Vec<(Vec<u8>, u16)> {
+        bam::Reader::from_path(path)
+            .unwrap()
+            .records()
+            .map(|r| {
+                let r = r.unwrap();
+                (r.qname().to_vec(), r.flags())
+            })
+            .collect()
+    }
 }

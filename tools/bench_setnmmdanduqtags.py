@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+
+from __future__ import annotations
+
 import argparse
 import os
 import pathlib
@@ -7,18 +10,17 @@ import subprocess
 import sys
 import tempfile
 import time
-
+from collections.abc import Sequence
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 
 
-def run(command, *, cwd=ROOT):
+def run(command: Sequence[str], *, cwd: pathlib.Path = ROOT) -> float:
     start = time.perf_counter()
     completed = subprocess.run(
         command,
         cwd=cwd,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        capture_output=True,
         text=True,
         check=False,
     )
@@ -30,7 +32,7 @@ def run(command, *, cwd=ROOT):
     return elapsed
 
 
-def conda_runner():
+def conda_runner() -> str:
     for name in ("mamba", "micromamba"):
         path = shutil.which(name)
         if path:
@@ -38,7 +40,7 @@ def conda_runner():
     raise SystemExit("mamba or micromamba is required to benchmark against Picard")
 
 
-def write_reference(path, reads):
+def write_reference(path: pathlib.Path, reads: int) -> None:
     sequence = ("ACGT" * ((reads + 200) // 4 + 1))[: reads + 200]
     with open(path, "w", encoding="utf-8") as handle:
         handle.write(">chr1\n")
@@ -48,32 +50,23 @@ def write_reference(path, reads):
         handle.write(f"chr1\t{len(sequence)}\t6\t80\t81\n")
 
 
-def write_sam(path, reads):
+def write_sam(path: pathlib.Path, reads: int) -> None:
     read_sequence = "ACGA" + ("ACGT" * 24)
     qualities = "F" * len(read_sequence)
     with open(path, "w", encoding="utf-8") as handle:
         handle.write("@HD\tVN:1.6\tSO:coordinate\n")
         handle.write(f"@SQ\tSN:chr1\tLN:{reads + 200}\n")
         for index in range(1, reads + 1):
-            handle.write(
-                f"read{index:09d}\t0\tchr1\t{index}\t60\t100M\t*\t0\t0\t"
-                f"{read_sequence}\t{qualities}\n"
-            )
+            handle.write(f"read{index:09d}\t0\tchr1\t{index}\t60\t100M\t*\t0\t0\t{read_sequence}\t{qualities}\n")
 
 
-def stable_sam(path):
+def stable_sam(path: pathlib.Path) -> list[str]:
     with open(path, encoding="utf-8") as handle:
-        return [
-            line.rstrip("\n")
-            for line in handle
-            if line.strip() and not line.startswith("@PG")
-        ]
+        return [line.rstrip("\n") for line in handle if line.strip() and not line.startswith("@PG")]
 
 
-def main():
-    parser = argparse.ArgumentParser(
-        description="Benchmark turbo-picard SetNmMdAndUqTags against Picard."
-    )
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Benchmark turbo-picard SetNmMdAndUqTags against Picard.")
     parser.add_argument("--reads", type=int, default=100_000, help="reads to synthesize")
     parser.add_argument(
         "--conda-prefix",
@@ -110,9 +103,7 @@ def main():
             "QUIET=true",
         ]
         turbo_time = run([str(turbo), *common, f"O={turbo_out}"])
-        picard_time = run(
-            [runner, "run", "-p", args.conda_prefix, "picard", *common, f"O={picard_out}"]
-        )
+        picard_time = run([runner, "run", "-p", args.conda_prefix, "picard", *common, f"O={picard_out}"])
         run([str(turbo), "ViewSam", f"I={turbo_out}", f"O={turbo_sam}"])
         run([str(turbo), "ViewSam", f"I={picard_out}", f"O={picard_sam}"])
 

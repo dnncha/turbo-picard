@@ -1,19 +1,25 @@
 #!/usr/bin/env python3
-"""Verify the PyPI packaging metadata and release notes stay useful."""
 
 from __future__ import annotations
 
 import argparse
+import importlib
 import json
-from pathlib import Path
 import re
 import sys
 import time
+import urllib.parse
 import urllib.request
+from pathlib import Path
+from types import ModuleType
+from typing import Any
 
+MODULE_DESCRIPTION = "Verify the PyPI packaging metadata and release notes stay useful."
+
+tomllib: ModuleType | None
 try:
-    import tomllib
-except ModuleNotFoundError:  # pragma: no cover - exercised on older local Python.
+    tomllib = importlib.import_module("tomllib")
+except ModuleNotFoundError:
     tomllib = None
 
 
@@ -44,7 +50,7 @@ def workspace_version(root: Path = ROOT) -> str:
 
 
 def inline_table_value(text: str, key: str, field: str) -> str | None:
-    match = re.search(rf'(?m)^{re.escape(key)}\s*=\s*\{{([^}}]+)\}}', text)
+    match = re.search(rf"(?m)^{re.escape(key)}\s*=\s*\{{([^}}]+)\}}", text)
     if not match:
         return None
     field_match = re.search(rf'{re.escape(field)}\s*=\s*"([^"]+)"', match.group(1))
@@ -92,13 +98,14 @@ def bool_value(text: str, section: str, key: str) -> bool | None:
     return match.group(1) == "true"
 
 
-def load_pyproject(root: Path = ROOT) -> dict:
+def load_pyproject(root: Path = ROOT) -> dict[str, Any]:
     path = root / "pyproject.toml"
     if not path.is_file():
         raise FileNotFoundError("pyproject.toml is required for PyPI packaging")
     text = path.read_text(encoding="utf-8")
     if tomllib is not None:
-        return tomllib.loads(text)
+        parsed: dict[str, Any] = tomllib.loads(text)
+        return parsed
     return {
         "build-system": {
             "requires": string_array_value(text, "build-system", "requires"),
@@ -194,19 +201,14 @@ def validate_pyproject(root: Path = ROOT) -> list[str]:
         errors.append("pyproject.toml tool.maturin.strip must be true")
     include = maturin.get("include", [])
     if not any(
-        isinstance(item, dict)
-        and item.get("path") == "LICENSE"
-        and item.get("format") == "sdist"
-        for item in include
+        isinstance(item, dict) and item.get("path") == "LICENSE" and item.get("format") == "sdist" for item in include
     ):
         errors.append("pyproject.toml tool.maturin.include must put LICENSE in the sdist")
     return errors
 
 
 def validate_cli_bins(root: Path = ROOT) -> list[str]:
-    text = (root / "crates" / "turbo-picard-cli" / "Cargo.toml").read_text(
-        encoding="utf-8"
-    )
+    text = (root / "crates" / "turbo-picard-cli" / "Cargo.toml").read_text(encoding="utf-8")
     bins = set(re.findall(r'(?m)^name\s*=\s*"([^"]+)"', text))
     errors: list[str] = []
     for binary in ["turbo-picard", "picard"]:
@@ -226,7 +228,11 @@ def validate_docs(root: Path = ROOT) -> list[str]:
         (quickstart, "Start with ``turbo-picard``", "quickstart missing explicit entrypoint guidance"),
         (packaging, "PyPI", "packaging docs missing PyPI section"),
         (packaging, "https://pypi.org/project/turbo-picard/", "packaging docs missing PyPI project link"),
-        (packaging, "python3 -m maturin build --release --compatibility pypi --out dist", "packaging docs missing maturin build command"),
+        (
+            packaging,
+            "python3 -m maturin build --release --compatibility pypi --out dist",
+            "packaging docs missing maturin build command",
+        ),
         (packaging, "python3 -m twine check dist/*", "packaging docs missing twine check command"),
         (packaging, "Trusted Publishing", "packaging docs missing PyPI publishing note"),
         (packaging, ".github/workflows/publish-pypi.yml", "packaging docs missing PyPI workflow filename"),
@@ -247,16 +253,28 @@ def validate_publish_workflow(root: Path = ROOT) -> list[str]:
         ("Validate publishing ref", "PyPI workflow must validate the publishing ref"),
         ("expected_ref=\"v$(python3 - <<'PY'", "PyPI workflow must derive the expected tag from the workspace version"),
         ('test "${GITHUB_REF_TYPE}" = "tag"', "PyPI workflow must publish only from a tag"),
-        ('test "${GITHUB_REF_NAME}" = "${expected_ref}"', "PyPI workflow must publish only from the matching version tag"),
+        (
+            'test "${GITHUB_REF_NAME}" = "${expected_ref}"',
+            "PyPI workflow must publish only from the matching version tag",
+        ),
         ("Build Linux wheels", "PyPI workflow must build Linux wheels"),
         ("wheels-linux-x86_64", "PyPI workflow must upload Linux wheel artifacts"),
         ("linux-aarch64:", "PyPI workflow must build Linux ARM64 wheels"),
         ("Build Linux ARM64 wheels", "PyPI workflow must name the Linux ARM64 build"),
         ("wheels-linux-aarch64", "PyPI workflow must upload Linux ARM64 wheel artifacts"),
-        ("apt-get install -y --no-install-recommends perl libclang-dev", "PyPI workflow must install ARM64 cross-build dependencies"),
+        (
+            "apt-get install -y --no-install-recommends perl libclang-dev",
+            "PyPI workflow must install ARM64 cross-build dependencies",
+        ),
         ("find /usr/lib -name libclang.so", "PyPI workflow must locate libclang in the ARM64 cross image"),
-        ("BINDGEN_EXTRA_CLANG_ARGS_aarch64_unknown_linux_gnu", "PyPI workflow must provide bindgen target arguments for Linux ARM64"),
-        ("--target=aarch64-unknown-linux-gnu --sysroot=$target_sysroot", "PyPI workflow must bindgen against the Linux ARM64 sysroot"),
+        (
+            "BINDGEN_EXTRA_CLANG_ARGS_aarch64_unknown_linux_gnu",
+            "PyPI workflow must provide bindgen target arguments for Linux ARM64",
+        ),
+        (
+            "--target=aarch64-unknown-linux-gnu --sysroot=$target_sysroot",
+            "PyPI workflow must bindgen against the Linux ARM64 sysroot",
+        ),
         ("macos-x86_64:", "PyPI workflow must build macOS Intel wheels"),
         ("Build macOS Intel wheels", "PyPI workflow must name the macOS Intel build"),
         ("macos-15-intel", "PyPI workflow must use an Intel macOS runner"),
@@ -264,7 +282,10 @@ def validate_publish_workflow(root: Path = ROOT) -> list[str]:
         ("Smoke-test macOS arm64 wheel", "PyPI workflow must smoke-test the macOS arm64 wheel"),
         ("Smoke-test macOS Intel wheel", "PyPI workflow must smoke-test the macOS Intel wheel"),
         ("verify_pypi_wheel_install_smoke.sh", "PyPI workflow must run the reusable wheel install smoke"),
-        ("needs: [linux, linux-aarch64, macos, macos-x86_64, sdist]", "PyPI publishing must wait for all wheel architectures"),
+        (
+            "needs: [linux, linux-aarch64, macos, macos-x86_64, sdist]",
+            "PyPI publishing must wait for all wheel architectures",
+        ),
         ("manylinux: 2014", "PyPI workflow must pin manylinux2014-compatible Linux wheels"),
         ("perl-core", "PyPI workflow must install Perl core in manylinux for vendored OpenSSL"),
         ("llvm-toolset-7.0-clang-devel", "PyPI workflow must install libclang for bindgen in manylinux"),
@@ -277,7 +298,10 @@ def validate_publish_workflow(root: Path = ROOT) -> list[str]:
         ("environment: pypi", "PyPI workflow must use the pypi environment"),
         ("validate:", "PyPI workflow must validate distributions before publishing"),
         ("Validate distributions", "PyPI workflow must name the distribution validation job"),
-        ("python3 tools/verify_release_artifacts.py --dist dist", "PyPI workflow must validate built artifact contents"),
+        (
+            "python3 tools/verify_release_artifacts.py --dist dist",
+            "PyPI workflow must validate built artifact contents",
+        ),
         ("Build release handoff manifest", "PyPI workflow must build a release handoff manifest"),
         ("python3 tools/build_release_manifest.py", "PyPI workflow must run the release handoff manifest builder"),
         ("Upload release handoff manifest", "PyPI workflow must upload the release handoff manifest"),
@@ -286,12 +310,18 @@ def validate_publish_workflow(root: Path = ROOT) -> list[str]:
         ("python3 -m venv", "PyPI workflow must create an isolated install smoke environment"),
         ("dist/turbo_picard-*-manylinux_2_17_x86_64*.whl", "PyPI workflow must install the Linux x86_64 wheel"),
         ("-m pip install --no-deps", "PyPI workflow must smoke-test the built wheel without network dependencies"),
-        ("turbo-picard\" --version", "PyPI workflow must execute the installed turbo-picard entrypoint"),
-        ("turbo-picard\" doctor", "PyPI workflow must smoke-test the installed doctor command"),
-        ("turbo-picard\" trial MarkDuplicates I=input.bam O=marked.bam M=metrics.txt", "PyPI workflow must smoke-test the trial contract"),
-        ("picard\" --version", "PyPI workflow must execute the installed compatibility shim"),
+        ('turbo-picard" --version', "PyPI workflow must execute the installed turbo-picard entrypoint"),
+        ('turbo-picard" doctor', "PyPI workflow must smoke-test the installed doctor command"),
+        (
+            'turbo-picard" trial MarkDuplicates I=input.bam O=marked.bam M=metrics.txt',
+            "PyPI workflow must smoke-test the trial contract",
+        ),
+        ('picard" --version', "PyPI workflow must execute the installed compatibility shim"),
         ("bash tools/verify_install_smoke.sh", "PyPI workflow must execute a real data-path install smoke"),
-        ("needs: [linux, linux-aarch64, macos, macos-x86_64, sdist, validate]", "PyPI publishing must wait for artifact validation"),
+        (
+            "needs: [linux, linux-aarch64, macos, macos-x86_64, sdist, validate]",
+            "PyPI publishing must wait for artifact validation",
+        ),
         ("Verify live PyPI metadata", "PyPI workflow must verify the live record after upload"),
         ("verify_pypi_package.py --live", "PyPI workflow must compare live metadata with README"),
         ("--retries 12 --retry-delay 5", "PyPI workflow must allow for PyPI metadata propagation"),
@@ -304,7 +334,6 @@ def validate_live_metadata(
     expected_version: str,
     readme: str,
 ) -> list[str]:
-    """Validate the public PyPI JSON record against the release source."""
 
     if not isinstance(payload, dict):
         return ["live PyPI metadata response must be a JSON object"]
@@ -317,9 +346,7 @@ def validate_live_metadata(
         errors.append(f"live PyPI package name must be {PACKAGE_NAME}")
     version = info.get("version")
     if version != expected_version:
-        errors.append(
-            f"live PyPI version {version or '<missing>'} must be {expected_version}"
-        )
+        errors.append(f"live PyPI version {version or '<missing>'} must be {expected_version}")
     content_type = str(info.get("description_content_type") or "")
     if not content_type.startswith("text/markdown"):
         errors.append("live PyPI long description must declare Markdown content")
@@ -339,7 +366,9 @@ def fetch_live_metadata(timeout: float = 15.0) -> object:
             "User-Agent": "turbo-picard-release-verifier",
         },
     )
-    with urllib.request.urlopen(request, timeout=timeout) as response:
+    if urllib.parse.urlsplit(PYPI_JSON_URL).scheme != "https":
+        raise ValueError(f"PyPI metadata URL must use https: {PYPI_JSON_URL}")
+    with urllib.request.build_opener().open(request, timeout=timeout) as response:
         return json.load(response)
 
 
@@ -350,7 +379,6 @@ def validate_live_pypi(
     retry_delay: float = 0.0,
     timeout: float = 15.0,
 ) -> list[str]:
-    """Fetch and validate the public PyPI record, retrying eventual consistency."""
 
     if retries < 1:
         return ["--retries must be at least 1"]
@@ -364,9 +392,7 @@ def validate_live_pypi(
     last_errors: list[str] = []
     for attempt in range(retries):
         try:
-            errors = validate_live_metadata(
-                fetch_live_metadata(timeout=timeout), expected_version, readme
-            )
+            errors = validate_live_metadata(fetch_live_metadata(timeout=timeout), expected_version, readme)
         except (OSError, ValueError, json.JSONDecodeError) as error:
             errors = [f"live PyPI metadata request failed: {error}"]
         if not errors:
@@ -387,7 +413,7 @@ def collect_errors(root: Path = ROOT) -> list[str]:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(description=MODULE_DESCRIPTION)
     parser.add_argument(
         "--live",
         action="store_true",

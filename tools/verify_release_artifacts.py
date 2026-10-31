@@ -1,17 +1,15 @@
 #!/usr/bin/env python3
-"""Verify built PyPI artifacts match the checked-out release source."""
 
 from __future__ import annotations
 
 import argparse
-from email.parser import BytesParser
-from email.policy import compat32
-from pathlib import Path, PurePosixPath
 import re
 import sys
 import tarfile
 import zipfile
-
+from email.parser import BytesParser
+from email.policy import compat32
+from pathlib import Path, PurePosixPath
 
 ROOT = Path(__file__).resolve().parents[1]
 PACKAGE_NAME = "turbo-picard"
@@ -35,9 +33,7 @@ def normalize_text(text: str) -> str:
     return text.replace("\r\n", "\n").replace("\r", "\n").rstrip()
 
 
-def metadata_from_bytes(
-    raw: bytes, artifact: Path
-) -> tuple[str | None, str | None, str | None, list[str]]:
+def metadata_from_bytes(raw: bytes, artifact: Path) -> tuple[str | None, str | None, str | None, list[str]]:
     message = BytesParser(policy=compat32).parsebytes(raw)
     errors: list[str] = []
     name = message.get("Name")
@@ -65,10 +61,7 @@ def validate_metadata(
     if name != PACKAGE_NAME:
         errors.append(f"{artifact.name} metadata Name must be {PACKAGE_NAME}")
     if version != expected_version:
-        errors.append(
-            f"{artifact.name} metadata Version {version or '<missing>'} "
-            f"must be {expected_version}"
-        )
+        errors.append(f"{artifact.name} metadata Version {version or '<missing>'} must be {expected_version}")
     message = BytesParser(policy=compat32).parsebytes(raw)
     if not (message.get("Description-Content-Type") or "").startswith("text/markdown"):
         errors.append(f"{artifact.name} metadata must declare a Markdown long description")
@@ -108,9 +101,7 @@ def validate_wheel(
             names = archive.namelist()
             metadata_paths = [name for name in names if name.endswith(".dist-info/METADATA")]
             if len(metadata_paths) != 1:
-                errors.append(
-                    f"{artifact.name} must contain exactly one dist-info/METADATA file"
-                )
+                errors.append(f"{artifact.name} must contain exactly one dist-info/METADATA file")
             else:
                 errors.extend(
                     validate_metadata(
@@ -127,9 +118,7 @@ def validate_wheel(
             for script in ("turbo-picard", "picard"):
                 if not any(PurePosixPath(name).name == script for name in names):
                     errors.append(f"{artifact.name} missing {script} entrypoint")
-            script_paths = [
-                name for name in names if PurePosixPath(name).name == "turbo-picard"
-            ]
+            script_paths = [name for name in names if PurePosixPath(name).name == "turbo-picard"]
             expected_architecture = wheel_platform_architecture(artifact)
             if expected_architecture is not None and len(script_paths) == 1:
                 actual_architecture = binary_architecture(archive.read(script_paths[0]))
@@ -161,9 +150,7 @@ def validate_sdist(
                 if path.is_absolute() or ".." in path.parts:
                     errors.append(f"{artifact.name} contains unsafe path {member.name}")
                 if not member.name.startswith(expected_root):
-                    errors.append(
-                        f"{artifact.name} contains member outside {expected_root}: {member.name}"
-                    )
+                    errors.append(f"{artifact.name} contains member outside {expected_root}: {member.name}")
             files = {member.name for member in members if member.isfile()}
             required = {
                 f"{expected_root}README.md",
@@ -171,27 +158,21 @@ def validate_sdist(
                 f"{expected_root}Cargo.toml",
                 f"{expected_root}pyproject.toml",
             }
-            for path in sorted(required - files):
-                errors.append(f"{artifact.name} missing {path}")
+            for missing in sorted(required - files):
+                errors.append(f"{artifact.name} missing {missing}")
             readme_path = f"{expected_root}README.md"
             if readme_path in files:
                 packaged_readme = archive.extractfile(readme_path)
                 packaged_text = (
-                    None
-                    if packaged_readme is None
-                    else normalize_text(packaged_readme.read().decode("utf-8"))
+                    None if packaged_readme is None else normalize_text(packaged_readme.read().decode("utf-8"))
                 )
                 if packaged_text != normalize_text(readme):
-                    errors.append(
-                        f"{artifact.name} README.md must match the checked-out README.md"
-                    )
+                    errors.append(f"{artifact.name} README.md must match the checked-out README.md")
             pkg_info_path = f"{expected_root}PKG-INFO"
             if pkg_info_path in files:
                 pkg_info = archive.extractfile(pkg_info_path)
                 if pkg_info is not None:
-                    errors.extend(
-                        validate_metadata(artifact, pkg_info.read(), expected_version, readme)
-                    )
+                    errors.extend(validate_metadata(artifact, pkg_info.read(), expected_version, readme))
     except (OSError, tarfile.TarError, UnicodeDecodeError) as error:
         errors.append(f"{artifact.name} is not a readable source distribution: {error}")
     return errors
@@ -201,9 +182,7 @@ def validate_repository(root: Path, version: str) -> list[str]:
     errors: list[str] = []
     readme = (root / "README.md").read_text(encoding="utf-8")
     normalized_readme = re.sub(r"\s+", " ", normalize_text(readme))
-    required_markers = (
-        f"The current source release is `{version}`",
-    )
+    required_markers = (f"The current source release is `{version}`",)
     for marker in required_markers:
         if marker not in normalized_readme:
             errors.append(f"README.md must contain current release marker: {marker}")
@@ -216,7 +195,7 @@ def collect_errors(dist: Path, root: Path = ROOT) -> list[str]:
     readme = (root / "README.md").read_text(encoding="utf-8")
     artifacts = sorted(path for path in dist.iterdir() if path.is_file()) if dist.is_dir() else []
     if not artifacts:
-        return errors + [f"{dist} contains no release artifacts"]
+        return [*errors, f"{dist} contains no release artifacts"]
     for artifact in artifacts:
         if artifact.name.endswith(".whl"):
             errors.extend(validate_wheel(artifact, version, readme))
@@ -227,8 +206,11 @@ def collect_errors(dist: Path, root: Path = ROOT) -> list[str]:
     return errors
 
 
+_DESCRIPTION = "Verify built PyPI artifacts match the checked-out release source."
+
+
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(description=_DESCRIPTION)
     parser.add_argument("--dist", type=Path, default=ROOT / "dist")
     parser.add_argument(
         "--source-only",

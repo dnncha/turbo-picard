@@ -6,6 +6,7 @@ pub mod external_sort;
 pub mod hts_io;
 pub mod markdup_config;
 pub mod picard_args;
+pub mod sort_error;
 
 mod merge_tree;
 mod temp_runs;

@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-"""Tests for release-facing prose quality checks."""
 
 from __future__ import annotations
 
@@ -8,7 +7,6 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
-
 
 MODULE_PATH = Path(__file__).with_name("verify_release_text_quality.py")
 SPEC = importlib.util.spec_from_file_location("verify_release_text_quality", MODULE_PATH)
@@ -45,7 +43,7 @@ Evidence, citation, fallback, and Bioconda boundaries stay explicit.
 
     def test_accepts_current_reader_cues(self) -> None:
         root = self.make_tree()
-        self.assertEqual([], verify_release_text_quality.validate_release_text(root))
+        assert verify_release_text_quality.validate_release_text(root) == []
 
     def test_rejects_hype_phrase(self) -> None:
         root = self.make_tree()
@@ -62,18 +60,9 @@ This is a seamless comprehensive solution and the first choice.
         )
 
         errors = verify_release_text_quality.validate_release_text(root)
-        self.assertIn(
-            "README.md contains release-text banned phrase: seamless",
-            errors,
-        )
-        self.assertIn(
-            "README.md contains release-text banned phrase: comprehensive solution",
-            errors,
-        )
-        self.assertIn(
-            "README.md contains release-text banned phrase: first choice",
-            errors,
-        )
+        assert "README.md contains release-text banned phrase: seamless" in errors
+        assert "README.md contains release-text banned phrase: comprehensive solution" in errors
+        assert "README.md contains release-text banned phrase: first choice" in errors
 
     def test_rejects_missing_reader_cue(self) -> None:
         root = self.make_tree()
@@ -89,11 +78,7 @@ bioconda-utils build --docker --mulled-test turbo-picard
         )
 
         errors = verify_release_text_quality.validate_release_text(root)
-        self.assertIn(
-            "packaging/bioconda/BIOCONDA_PR.md missing reader cue: "
-            "This PR adds `turbo-picard`",
-            errors,
-        )
+        assert "packaging/bioconda/BIOCONDA_PR.md missing reader cue: This PR adds `turbo-picard`" in errors
 
     def test_rejects_internal_planning_docs(self) -> None:
         root = self.make_tree()
@@ -104,11 +89,7 @@ bioconda-utils build --docker --mulled-test turbo-picard
         )
 
         errors = verify_release_text_quality.validate_release_text(root)
-        self.assertIn(
-            "docs/superpowers contains internal planning notes; "
-            "keep release-facing docs public",
-            errors,
-        )
+        assert "docs/superpowers contains internal planning notes; keep release-facing docs public" in errors
 
     def test_rejects_internal_process_language(self) -> None:
         root = self.make_tree()
@@ -116,23 +97,13 @@ bioconda-utils build --docker --mulled-test turbo-picard
         ai_phrase = "AI " + "slop"
         readme = root / "benchmarks/production/README.md"
         readme.write_text(
-            readme.read_text(encoding="utf-8")
-            + f"\nTrack {phrase} here. Avoid {ai_phrase}.\n",
+            readme.read_text(encoding="utf-8") + f"\nTrack {phrase} here. Avoid {ai_phrase}.\n",
             encoding="utf-8",
         )
 
         errors = verify_release_text_quality.validate_release_text(root)
-        self.assertIn(
-            "benchmarks/production/README.md contains release-text banned phrase: "
-            + phrase,
-            errors,
-        )
-        self.assertIn(
-            "benchmarks/production/README.md contains release-text banned phrase: "
-            + "ai "
-            + "slop",
-            errors,
-        )
+        assert "benchmarks/production/README.md contains release-text banned phrase: " + phrase in errors
+        assert "benchmarks/production/README.md contains release-text banned phrase: " + "ai " + "slop" in errors
 
     def test_rejects_unsupported_market_positioning(self) -> None:
         root = self.make_tree()
@@ -143,10 +114,7 @@ bioconda-utils build --docker --mulled-test turbo-picard
         )
 
         errors = verify_release_text_quality.validate_release_text(root)
-        self.assertIn(
-            "docs/is-this-for-you.rst contains release-text banned phrase: market default",
-            errors,
-        )
+        assert "docs/is-this-for-you.rst contains release-text banned phrase: market default" in errors
 
     def test_scans_hosted_docs_template(self) -> None:
         root = self.make_tree()
@@ -157,10 +125,7 @@ bioconda-utils build --docker --mulled-test turbo-picard
         )
 
         errors = verify_release_text_quality.validate_release_text(root)
-        self.assertIn(
-            "docs/_templates/base.html contains release-text banned phrase: first choice",
-            errors,
-        )
+        assert "docs/_templates/base.html contains release-text banned phrase: first choice" in errors
 
 
 if __name__ == "__main__":

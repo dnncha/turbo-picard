@@ -1,12 +1,10 @@
 #!/usr/bin/env python3
-"""Verify workflow starter files keep key migration patterns visible."""
 
 from __future__ import annotations
 
 import re
 import sys
 from pathlib import Path
-
 
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOWS = ROOT / "packaging" / "workflows"
@@ -54,7 +52,11 @@ def validate_workflow_starters() -> list[str]:
         (WORKFLOWS / "samtofastq.wdl", "OUTPUT_PER_RG=", "WDL SamToFastq per-read-group toggle"),
         (WORKFLOWS / "samtofastq.wdl", "RG_TAG=", "WDL SamToFastq read-group tag selection"),
         (WORKFLOWS / "samtofastq.wdl", "OUTPUT_DIR=", "WDL SamToFastq per-read-group output directory"),
-        (WORKFLOWS / "samtofastq.wdl", "if output_per_rg then \"OUTPUT_PER_RG=true\"", "WDL SamToFastq conditional output args"),
+        (
+            WORKFLOWS / "samtofastq.wdl",
+            'if output_per_rg then "OUTPUT_PER_RG=true"',
+            "WDL SamToFastq conditional output args",
+        ),
         (WORKFLOWS / "samtofastq.wdl", "File? fastq", "WDL SamToFastq optional single-FASTQ output"),
         (WORKFLOWS / "samtofastq.wdl", "Boolean output_per_rg = false", "WDL SamToFastq default single-FASTQ mode"),
         (WORKFLOWS / "fastqtosam.nf", "USE_SEQUENTIAL_FASTQS=", "Nextflow FastqToSam sequential FASTQ support"),
@@ -74,9 +76,7 @@ def validate_workflow_starters() -> list[str]:
     for path in [WORKFLOWS / "fixmateinformation.nf", WORKFLOWS / "fixmateinformation.wdl"]:
         text = _read(path)
         if "SORT_ORDER=coordinate" in text:
-            errors.append(
-                f"{path.relative_to(ROOT)} still hard-codes FixMateInformation SORT_ORDER=coordinate"
-            )
+            errors.append(f"{path.relative_to(ROOT)} still hard-codes FixMateInformation SORT_ORDER=coordinate")
 
     snakefile = _read(WORKFLOWS / "Snakefile")
     match = re.search(
@@ -86,9 +86,7 @@ def validate_workflow_starters() -> list[str]:
     if not match:
         errors.append("packaging/workflows/Snakefile missing fix_mate_information rule")
     elif "SORT_ORDER=coordinate" in match.group("body"):
-        errors.append(
-            "packaging/workflows/Snakefile still hard-codes FixMateInformation SORT_ORDER=coordinate"
-        )
+        errors.append("packaging/workflows/Snakefile still hard-codes FixMateInformation SORT_ORDER=coordinate")
 
     readme = _read(README)
     for needle, description in [
@@ -177,9 +175,7 @@ def validate_workflow_starters() -> list[str]:
     if trial_samtofastq_wdl_path.exists():
         trial_samtofastq_wdl = _read(trial_samtofastq_wdl_path)
         if "File? fastq" not in trial_samtofastq_wdl:
-            errors.append(
-                "packaging/workflows/trial-samtofastq.wdl missing optional single-FASTQ output"
-            )
+            errors.append("packaging/workflows/trial-samtofastq.wdl missing optional single-FASTQ output")
 
     for path in [
         WORKFLOWS / "samtofastq.wdl",
@@ -190,7 +186,13 @@ def validate_workflow_starters() -> list[str]:
         if not path.exists():
             continue
         text = _read(path)
-        if "FASTQ=" in text and "OUTPUT_PER_RG=true" in text and "if output_per_rg then \"OUTPUT_PER_RG=true\"" not in text and "def outputArgs = outputPerRg" not in text and "def outputArgs = meta.output_per_rg" not in text:
+        if (
+            "FASTQ=" in text
+            and "OUTPUT_PER_RG=true" in text
+            and 'if output_per_rg then "OUTPUT_PER_RG=true"' not in text
+            and "def outputArgs = outputPerRg" not in text
+            and "def outputArgs = meta.output_per_rg" not in text
+        ):
             errors.append(
                 f"{path.relative_to(ROOT)} still mixes FASTQ output with OUTPUT_PER_RG=true in the same command path"
             )

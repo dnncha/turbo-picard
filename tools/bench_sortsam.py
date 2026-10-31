@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+
+from __future__ import annotations
+
 import argparse
 import os
 import pathlib
@@ -7,18 +10,17 @@ import subprocess
 import sys
 import tempfile
 import time
-
+from collections.abc import Sequence
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 
 
-def run(command, *, cwd=ROOT):
+def run(command: Sequence[str], *, cwd: pathlib.Path = ROOT) -> float:
     start = time.perf_counter()
     completed = subprocess.run(
         command,
         cwd=cwd,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        capture_output=True,
         text=True,
         check=False,
     )
@@ -30,7 +32,7 @@ def run(command, *, cwd=ROOT):
     return elapsed
 
 
-def conda_runner():
+def conda_runner() -> str:
     for name in ("mamba", "micromamba"):
         path = shutil.which(name)
         if path:
@@ -38,31 +40,27 @@ def conda_runner():
     raise SystemExit("mamba or micromamba is required to benchmark against Picard")
 
 
-def write_unsorted_sam(path, reads):
+def write_unsorted_sam(path: pathlib.Path, reads: int) -> None:
     sequence = "ACGT" * 25
     qualities = "F" * len(sequence)
     with open(path, "w", encoding="utf-8") as handle:
         handle.write("@HD\tVN:1.6\tSO:unsorted\n")
         handle.write(f"@SQ\tSN:chr1\tLN:{reads + len(sequence) + 100}\n")
         for index in range(reads, 0, -1):
-            handle.write(
-                f"read{index:09d}\t0\tchr1\t{index}\t60\t{len(sequence)}M\t*\t0\t0\t{sequence}\t{qualities}\n"
-            )
+            handle.write(f"read{index:09d}\t0\tchr1\t{index}\t60\t{len(sequence)}M\t*\t0\t0\t{sequence}\t{qualities}\n")
 
 
-def stable_rows(path):
-    rows = []
+def stable_rows(path: pathlib.Path) -> list[str]:
+    rows: list[str] = []
     with open(path, encoding="utf-8") as handle:
         for line in handle:
-            line = line.rstrip("\n")
-            if line.startswith("@HD"):
-                rows.append(line)
-            elif not line.startswith("@"):
-                rows.append(line)
+            stripped = line.rstrip("\n")
+            if stripped.startswith("@HD") or not stripped.startswith("@"):
+                rows.append(stripped)
     return rows
 
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser(description="Benchmark turbo-picard SortSam against Picard.")
     parser.add_argument("--reads", type=int, default=200_000, help="reads to synthesize")
     parser.add_argument(

@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-"""Benchmark Picard and turbo-picard MarkDuplicates with reproducible JSONL output."""
 
 from __future__ import annotations
 
@@ -98,11 +97,7 @@ def run_once(
     stdout_path = output_dir / f"{stem}.stdout.txt"
     stderr_path = output_dir / f"{stem}.stderr.txt"
 
-    command = shlex.split(base_command) + [
-        f"I={input_bam}",
-        f"O={output_bam}",
-        f"M={metrics_file}",
-    ]
+    command = [*shlex.split(base_command), f"I={input_bam}", f"O={output_bam}", f"M={metrics_file}"]
     timed_command = time_command(command)
 
     start = time.perf_counter()

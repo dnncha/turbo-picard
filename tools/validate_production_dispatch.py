@@ -1,12 +1,10 @@
 #!/usr/bin/env python3
-"""Validate inputs for a production-evidence benchmark dispatch."""
 
 from __future__ import annotations
 
 import argparse
 import re
-from typing import Iterable
-
+from collections.abc import Iterable
 
 PROFILE_CHOICES = (
     "wgs_30x",
@@ -23,8 +21,11 @@ SAM_TAG_PATTERN = re.compile(r"[A-Za-z0-9]{2}")
 SHA256_PATTERN = re.compile(r"[0-9a-fA-F]{64}")
 
 
+_DESCRIPTION = "Validate inputs for a production-evidence benchmark dispatch."
+
+
 def parser() -> argparse.ArgumentParser:
-    result = argparse.ArgumentParser(description=__doc__)
+    result = argparse.ArgumentParser(description=_DESCRIPTION)
     result.add_argument("--dataset-id", required=True)
     result.add_argument("--input-url", required=True)
     result.add_argument("--input-format", required=True)

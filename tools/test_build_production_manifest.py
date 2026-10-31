@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-"""Tests for the production evidence manifest adapter."""
 
 from __future__ import annotations
 
@@ -9,7 +8,9 @@ import tempfile
 import unittest
 from argparse import Namespace
 from pathlib import Path
+from typing import Any
 
+import pytest
 
 MODULE_PATH = Path(__file__).with_name("build_production_manifest.py")
 SPEC = importlib.util.spec_from_file_location("build_production_manifest", MODULE_PATH)
@@ -19,7 +20,7 @@ assert SPEC.loader is not None
 SPEC.loader.exec_module(build_production_manifest)
 
 
-def tool_report(version: str, command: str) -> dict[str, object]:
+def tool_report(version: str, command: str) -> dict[str, Any]:
     return {
         "status": "complete",
         "version": {"text": version, "exit_code": 0},
@@ -35,7 +36,7 @@ def tool_report(version: str, command: str) -> dict[str, object]:
     }
 
 
-def report_fixture() -> dict[str, object]:
+def report_fixture() -> dict[str, Any]:
     return {
         "schema_version": 1,
         "input": {
@@ -87,15 +88,15 @@ class BuildProductionManifestTests(unittest.TestCase):
     def test_builds_manifest_with_resource_and_provenance_fields(self) -> None:
         manifest = build_production_manifest.build_manifest(args_fixture(), report_fixture())
 
-        self.assertEqual(manifest["tier"], "production_scale")
-        self.assertEqual(manifest["input"]["read_count"], 100)
-        self.assertEqual(manifest["software"]["turbo_picard_commit"], "b" * 40)
+        assert manifest["tier"] == "production_scale"
+        assert manifest["input"]["read_count"] == 100
+        assert manifest["software"]["turbo_picard_commit"] == "b" * 40
         command = manifest["commands"][0]
-        self.assertEqual(command["parity"], "PASS")
-        self.assertEqual(command["repeats"], 5)
-        self.assertEqual(command["wall_seconds"]["turbo_picard_p95"], 2.5)
-        self.assertEqual(command["peak_rss_bytes"]["picard_max"], 120.0)
-        self.assertEqual(manifest["independent_reproduction"]["status"], "not_run")
+        assert command["parity"] == "PASS"
+        assert command["repeats"] == 5
+        assert command["wall_seconds"]["turbo_picard_p95"] == 2.5
+        assert command["peak_rss_bytes"]["picard_max"] == 120.0
+        assert manifest["independent_reproduction"]["status"] == "not_run"
 
     def test_writes_json_file(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -104,22 +105,22 @@ class BuildProductionManifestTests(unittest.TestCase):
             manifest = build_production_manifest.build_manifest(args, report_fixture())
             output.write_text("{}\n", encoding="utf-8")
             output.write_text(json.dumps(manifest), encoding="utf-8")
-            self.assertEqual(json.loads(output.read_text())["dataset_id"], "HG002-markduplicates")
+            assert json.loads(output.read_text())["dataset_id"] == "HG002-markduplicates"
 
     def test_rejects_incomplete_candidate(self) -> None:
         report = report_fixture()
         report["tools"]["turbo-picard"]["status"] = "incomplete"
-        with self.assertRaises(SystemExit):
+        with pytest.raises(SystemExit):
             build_production_manifest.build_manifest(args_fixture(), report)
 
     def test_production_manifest_requires_profile(self) -> None:
         report = report_fixture()
         del report["protocol"]["profile"]
-        with self.assertRaisesRegex(SystemExit, "require protocol.profile"):
+        with pytest.raises(SystemExit, match=r"require protocol\.profile"):
             build_production_manifest.build_manifest(args_fixture(), report)
 
     def test_production_manifest_rejects_zero_read_count(self) -> None:
-        with self.assertRaisesRegex(SystemExit, "read-count greater than zero"):
+        with pytest.raises(SystemExit, match="read-count greater than zero"):
             build_production_manifest.build_manifest(args_fixture(read_count=0), report_fixture())
 
     def test_accepts_picard_version_probe_that_returns_one(self) -> None:
@@ -129,12 +130,12 @@ class BuildProductionManifestTests(unittest.TestCase):
             "exit_code": 1,
         }
         manifest = build_production_manifest.build_manifest(args_fixture(), report)
-        self.assertEqual(manifest["software"]["picard_version"], "Version:3.4.0")
+        assert manifest["software"]["picard_version"] == "Version:3.4.0"
 
     def test_failed_parity_requires_a_difference(self) -> None:
         report = report_fixture()
         report["tools"]["turbo-picard"]["parity"] = {"status": "FAIL", "comparator": "exact"}
-        with self.assertRaises(SystemExit):
+        with pytest.raises(SystemExit):
             build_production_manifest.build_manifest(args_fixture(), report)
 
     def test_cram_manifest_carries_reported_reference_hash(self) -> None:
@@ -142,33 +143,33 @@ class BuildProductionManifestTests(unittest.TestCase):
         report["input"]["format"] = "CRAM"
         report["input"]["reference_fasta"] = {"sha256": "c" * 64}
         manifest = build_production_manifest.build_manifest(args_fixture(), report)
-        self.assertEqual(manifest["input"]["format"], "CRAM")
-        self.assertEqual(manifest["input"]["reference_fasta_sha256"], "c" * 64)
+        assert manifest["input"]["format"] == "CRAM"
+        assert manifest["input"]["reference_fasta_sha256"] == "c" * 64
 
     def test_cram_manifest_requires_reference_hash(self) -> None:
         report = report_fixture()
         report["input"]["format"] = "CRAM"
-        with self.assertRaises(SystemExit):
+        with pytest.raises(SystemExit):
             build_production_manifest.build_manifest(args_fixture(), report)
 
     def test_manifest_carries_profile_from_runner_protocol(self) -> None:
         report = report_fixture()
         report["protocol"].update({"profile": "umi_panel", "barcode_tag": "RX"})
         manifest = build_production_manifest.build_manifest(args_fixture(), report)
-        self.assertEqual(manifest["commands"][0]["profile"], "umi_panel")
-        self.assertEqual(manifest["commands"][0]["barcode_tags"], {"barcode_tag": "RX"})
+        assert manifest["commands"][0]["profile"] == "umi_panel"
+        assert manifest["commands"][0]["barcode_tags"] == {"barcode_tag": "RX"}
 
     def test_umi_profile_requires_a_barcode_tag(self) -> None:
         report = report_fixture()
         report["protocol"]["profile"] = "umi_panel"
-        with self.assertRaises(SystemExit):
+        with pytest.raises(SystemExit):
             build_production_manifest.build_manifest(args_fixture(), report)
 
     def test_independent_reproduction_requires_matching_provenance(self) -> None:
         report = report_fixture()
-        protocol_hash = build_production_manifest.build_manifest(
-            args_fixture(), report
-        )["commands"][0]["arguments_sha256"]
+        protocol_hash = build_production_manifest.build_manifest(args_fixture(), report)["commands"][0][
+            "arguments_sha256"
+        ]
         manifest = build_production_manifest.build_manifest(
             args_fixture(
                 independent_status="pass",
@@ -181,13 +182,10 @@ class BuildProductionManifestTests(unittest.TestCase):
             ),
             report,
         )
-        self.assertEqual(
-            manifest["independent_reproduction"]["host_profile"],
-            "independent-linux-x86_64",
-        )
+        assert manifest["independent_reproduction"]["host_profile"] == "independent-linux-x86_64"
 
     def test_independent_reproduction_rejects_different_commit(self) -> None:
-        with self.assertRaises(SystemExit):
+        with pytest.raises(SystemExit):
             build_production_manifest.build_manifest(
                 args_fixture(
                     independent_status="pass",

@@ -1,8 +1,22 @@
 from __future__ import annotations
 
+import sys
+from collections.abc import Callable
 from pathlib import Path
+from typing import TYPE_CHECKING, Protocol
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "tools"))
+
+if TYPE_CHECKING:
+    from tools.build_marketing_site import deploy_to_sphinx
+else:
+    from build_marketing_site import deploy_to_sphinx
+
+
+class SphinxApplication(Protocol):
+    def connect(self, event: str, callback: Callable[..., object]) -> int: ...
+
 
 project = "turbo-picard"
 author = "turbo-picard contributors"
@@ -43,8 +57,6 @@ html_theme_options = {
     },
 }
 
-# One search/social description per page (<= 160 characters). The base
-# template emits these as description, Open Graph and Twitter card tags.
 PAGE_DESCRIPTIONS = {
     "adoption": "Swap one Picard step in a WDL, Nextflow, Snakemake or shell pipeline for Turbo Picard, compare outputs side by side, and keep Picard as fallback.",
     "agentic-coders": "Decision rules and machine-readable commands for coding agents choosing a fast Picard-compatible tool for BAM, CRAM, FASTQ, VCF and QC tasks.",
@@ -81,14 +93,13 @@ copybutton_prompt_is_regexp = True
 nitpicky = True
 
 
-def setup(app):
-    import sys
-    sys.path.insert(0, str(ROOT / "tools"))
-    from build_marketing_site import deploy_to_sphinx
+def setup(app: SphinxApplication) -> dict[str, bool]:
     app.connect("build-finished", deploy_to_sphinx)
     app.connect("html-page-context", _page_description)
     return {"parallel_read_safe": True, "parallel_write_safe": True}
 
 
-def _page_description(app, pagename, templatename, context, doctree):
+def _page_description(
+    _app: object, pagename: str, _templatename: str, context: dict[str, object], _doctree: object
+) -> None:
     context["tp_description"] = PAGE_DESCRIPTIONS.get(pagename, "")

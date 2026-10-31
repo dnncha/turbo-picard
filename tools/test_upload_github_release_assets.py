@@ -2,23 +2,33 @@ from __future__ import annotations
 
 import hashlib
 import json
-from pathlib import Path
 import tempfile
 import unittest
-from unittest.mock import patch
+from pathlib import Path
+from types import TracebackType
+from typing import Any
+from urllib.request import Request
+
+import pytest
 
 from tools import upload_github_release_assets as upload
 
 
 class FakeResponse:
-    def __init__(self, payload: dict):
+    def __init__(self, payload: dict[str, Any]) -> None:
         self.payload = json.dumps(payload).encode("utf-8")
 
-    def __enter__(self):
+    def __enter__(self) -> FakeResponse:
         return self
 
-    def __exit__(self, *_args):
-        return False
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        traceback: TracebackType | None,
+        /,
+    ) -> None:
+        return None
 
     def read(self) -> bytes:
         return self.payload
@@ -26,9 +36,7 @@ class FakeResponse:
 
 class UploadGitHubReleaseAssetsTests(unittest.TestCase):
     def make_release_assets(self, root: Path) -> Path:
-        (root / "Cargo.toml").write_text(
-            '[workspace.package]\nversion = "0.1.14"\n', encoding="utf-8"
-        )
+        (root / "Cargo.toml").write_text('[workspace.package]\nversion = "0.1.14"\n', encoding="utf-8")
         assets = root / "assets"
         assets.mkdir()
         distribution_names = [
@@ -44,15 +52,13 @@ class UploadGitHubReleaseAssetsTests(unittest.TestCase):
             for name in distribution_names:
                 path = assets / name
                 stream.write(f"{upload.asset_digest(path)}  ./{name}\n")
-        (assets / "GITHUB_SOURCE_SHA256.txt").write_text(
-            f"{'a' * 64}  v0.1.14.tar.gz\n", encoding="utf-8"
-        )
+        (assets / "GITHUB_SOURCE_SHA256.txt").write_text(f"{'a' * 64}  v0.1.14.tar.gz\n", encoding="utf-8")
         (assets / "turbo-picard-release-manifest.json").write_text(
             json.dumps({"workspace_version": "0.1.14"}), encoding="utf-8"
         )
         return assets
 
-    def release_payload(self, assets: list[dict] | None = None) -> dict:
+    def release_payload(self, assets: list[dict[str, Any]] | None = None) -> dict[str, Any]:
         return {
             "tag_name": "v0.1.14",
             "draft": False,
@@ -64,15 +70,16 @@ class UploadGitHubReleaseAssetsTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             assets = self.make_release_assets(root)
-            requests = []
+            requests: list[Request] = []
 
-            def opener(request, timeout):
+            def opener(request: Request, timeout: float) -> FakeResponse:
                 requests.append(request)
                 if request.get_method() == "GET":
                     return FakeResponse(self.release_payload())
                 name = request.full_url.split("?name=", 1)[1]
                 name = name.replace("%2E", ".")
                 data = request.data or b""
+                assert isinstance(data, bytes)
                 return FakeResponse(
                     {
                         "name": name,
@@ -89,10 +96,10 @@ class UploadGitHubReleaseAssetsTests(unittest.TestCase):
                 root=root,
                 opener=opener,
             )
-            self.assertEqual(len(uploaded), 8)
-            self.assertEqual(requests[0].get_method(), "GET")
-            self.assertTrue(all(request.headers["Authorization"] == "Bearer test-token" for request in requests))
-            self.assertTrue(all(request.full_url.startswith("https://uploads.github.com/") for request in requests[1:]))
+            assert len(uploaded) == 8
+            assert requests[0].get_method() == "GET"
+            assert all(request.headers["Authorization"] == "Bearer test-token" for request in requests)
+            assert all(request.full_url.startswith("https://uploads.github.com/") for request in requests[1:])
 
     def test_identical_assets_make_reruns_idempotent(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -106,9 +113,9 @@ class UploadGitHubReleaseAssetsTests(unittest.TestCase):
                 }
                 for path in assets.iterdir()
             ]
-            calls = []
+            calls: list[Request] = []
 
-            def opener(request, timeout):
+            def opener(request: Request, timeout: float) -> FakeResponse:
                 calls.append(request)
                 return FakeResponse(self.release_payload(existing))
 
@@ -120,8 +127,8 @@ class UploadGitHubReleaseAssetsTests(unittest.TestCase):
                 root=root,
                 opener=opener,
             )
-            self.assertEqual(result, [])
-            self.assertEqual(len(calls), 1)
+            assert result == []
+            assert len(calls) == 1
 
     def test_refuses_to_replace_a_different_asset_before_upload(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -129,13 +136,13 @@ class UploadGitHubReleaseAssetsTests(unittest.TestCase):
             assets = self.make_release_assets(root)
             first = next(assets.iterdir())
             existing = [{"name": first.name, "size": first.stat().st_size + 1, "digest": "sha256:" + "0" * 64}]
-            calls = []
+            calls: list[Request] = []
 
-            def opener(request, timeout):
+            def opener(request: Request, timeout: float) -> FakeResponse:
                 calls.append(request)
                 return FakeResponse(self.release_payload(existing))
 
-            with self.assertRaisesRegex(RuntimeError, "different asset"):
+            with pytest.raises(RuntimeError, match="different asset"):
                 upload.upload_release_assets(
                     assets,
                     repository="dnncha/turbo-picard",
@@ -144,13 +151,13 @@ class UploadGitHubReleaseAssetsTests(unittest.TestCase):
                     root=root,
                     opener=opener,
                 )
-            self.assertEqual(len(calls), 1)
+            assert len(calls) == 1
 
     def test_rejects_tag_that_does_not_match_workspace_version(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             assets = self.make_release_assets(root)
-            with self.assertRaisesRegex(ValueError, "must match workspace version tag"):
+            with pytest.raises(ValueError, match="must match workspace version tag"):
                 upload.upload_release_assets(
                     assets,
                     repository="dnncha/turbo-picard",

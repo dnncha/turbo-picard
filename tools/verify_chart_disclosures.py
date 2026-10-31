@@ -1,12 +1,10 @@
 #!/usr/bin/env python3
-"""Ensure lightweight chart artifact boundaries are disclosed in user-facing docs."""
 
 from __future__ import annotations
 
 import pathlib
 import re
 import sys
-
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 README = ROOT / "README.md"
@@ -66,14 +64,10 @@ def validate_chart_disclosures(
     for command in chart_commands:
         readme_section = section_for_command(readme_text, command)
         if not has_chart_boundary_wording(readme_section):
-            errors.append(
-                f"README chart disclosure missing lightweight PDF wording for {command}"
-            )
+            errors.append(f"README chart disclosure missing lightweight PDF wording for {command}")
         native_scope = matrix_native_scope(matrix_text, command)
         if not has_chart_boundary_wording(native_scope):
-            errors.append(
-                f"command matrix native_scope missing lightweight PDF wording for {command}"
-            )
+            errors.append(f"command matrix native_scope missing lightweight PDF wording for {command}")
     return errors
 
 

@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+
+from __future__ import annotations
+
 import argparse
 import os
 import pathlib
@@ -8,18 +11,17 @@ import subprocess
 import sys
 import tempfile
 import time
-
+from collections.abc import Sequence
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 
 
-def run(command, *, cwd=ROOT):
+def run(command: Sequence[str], *, cwd: pathlib.Path = ROOT) -> tuple[float, subprocess.CompletedProcess[str]]:
     start = time.perf_counter()
     completed = subprocess.run(
         command,
         cwd=cwd,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        capture_output=True,
         text=True,
         check=False,
     )
@@ -31,7 +33,7 @@ def run(command, *, cwd=ROOT):
     return elapsed, completed
 
 
-def conda_runner():
+def conda_runner() -> str:
     for name in ("mamba", "micromamba"):
         path = shutil.which(name)
         if path:
@@ -39,27 +41,25 @@ def conda_runner():
     raise SystemExit("mamba or micromamba is required to benchmark against Picard")
 
 
-def write_coordinate_sam(path, reads):
+def write_coordinate_sam(path: pathlib.Path, reads: int) -> None:
     sequence = "ACGT" * 25
     qualities = "F" * len(sequence)
     with open(path, "w", encoding="utf-8") as handle:
         handle.write("@HD\tVN:1.6\tSO:coordinate\n")
         handle.write(f"@SQ\tSN:chr1\tLN:{reads + len(sequence) + 100}\n")
         for index in range(1, reads + 1):
-            handle.write(
-                f"read{index:09d}\t0\tchr1\t{index}\t60\t{len(sequence)}M\t*\t0\t0\t{sequence}\t{qualities}\n"
-            )
+            handle.write(f"read{index:09d}\t0\tchr1\t{index}\t60\t{len(sequence)}M\t*\t0\t0\t{sequence}\t{qualities}\n")
 
 
-def read_u32(data, offset):
+def read_u32(data: bytes, offset: int) -> tuple[int, int]:
     return struct.unpack_from("<I", data, offset)[0], offset + 4
 
 
-def read_u64(data, offset):
+def read_u64(data: bytes, offset: int) -> tuple[int, int]:
     return struct.unpack_from("<Q", data, offset)[0], offset + 8
 
 
-def bai_idxstats_summary(path):
+def bai_idxstats_summary(path: pathlib.Path) -> tuple[int, tuple[tuple[int | None, int | None], ...], int | None]:
     data = path.read_bytes()
     if len(data) < 8 or data[:4] != b"BAI\1":
         raise SystemExit(f"{path} is not a BAI index")
@@ -68,8 +68,8 @@ def bai_idxstats_summary(path):
     references = []
     for _ in range(reference_count):
         bin_count, offset = read_u32(data, offset)
-        mapped = None
-        unmapped = None
+        mapped: int | None = None
+        unmapped: int | None = None
         regular_bin_count = 0
         for _ in range(bin_count):
             bin_id, offset = read_u32(data, offset)
@@ -94,7 +94,7 @@ def bai_idxstats_summary(path):
     return reference_count, tuple(references), no_coordinate_count
 
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser(description="Benchmark turbo-picard BuildBamIndex against Picard.")
     parser.add_argument("--reads", type=int, default=300_000, help="reads to synthesize")
     parser.add_argument(

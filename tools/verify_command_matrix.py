@@ -1,9 +1,13 @@
 #!/usr/bin/env python3
+from __future__ import annotations
+
+import json
 import pathlib
 import re
 import sys
-import json
+from collections.abc import Collection, Sequence
 
+Entry = dict[str, str]
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 MATRIX = ROOT / "docs" / "command-matrix.yml"
@@ -18,23 +22,21 @@ VALID_STATUSES = {"native", "partial-native", "scaffold", "fallback-only"}
 ACCELERATED_STATUSES = {"native", "partial-native", "scaffold"}
 
 
-def matrix_documented_commands():
-    commands = []
-    current_name = None
+def matrix_documented_commands() -> set[str]:
+    commands: list[str] = []
+    current_name: str | None = None
     for line in MATRIX.read_text(encoding="utf-8").splitlines():
         name_match = re.match(r"\s+- name: (.+)", line)
         if name_match:
             current_name = name_match.group(1)
             continue
-        status_match = re.match(
-            r"\s+status: (native|partial-native|scaffold|fallback-only)", line
-        )
+        status_match = re.match(r"\s+status: (native|partial-native|scaffold|fallback-only)", line)
         if status_match and current_name:
             commands.append(current_name)
     return set(commands)
 
 
-def matrix_picard_reference(text=None):
+def matrix_picard_reference(text: str | None = None) -> str | None:
     text = MATRIX.read_text(encoding="utf-8") if text is None else text
     for line in text.splitlines():
         reference_match = re.match(r'picard_reference:\s+"?([^"]+)"?\s*$', line)
@@ -43,9 +45,9 @@ def matrix_picard_reference(text=None):
     return None
 
 
-def matrix_native_commands():
-    commands = []
-    current_name = None
+def matrix_native_commands() -> set[str]:
+    commands: list[str] = []
+    current_name: str | None = None
     for line in MATRIX.read_text(encoding="utf-8").splitlines():
         name_match = re.match(r"\s+- name: (.+)", line)
         if name_match:
@@ -57,34 +59,28 @@ def matrix_native_commands():
     return set(commands)
 
 
-def matrix_accelerated_commands():
-    commands = []
-    current_name = None
+def matrix_accelerated_commands() -> set[str]:
+    commands: list[str] = []
+    current_name: str | None = None
     for line in MATRIX.read_text(encoding="utf-8").splitlines():
         name_match = re.match(r"\s+- name: (.+)", line)
         if name_match:
             current_name = name_match.group(1)
             continue
-        status_match = re.match(
-            r"\s+status: (native|partial-native|scaffold)", line
-        )
+        status_match = re.match(r"\s+status: (native|partial-native|scaffold)", line)
         if status_match and current_name:
             commands.append(current_name)
     return set(commands)
 
 
-def picard_reference_commands():
+def picard_reference_commands() -> set[str]:
     if not PICARD_COMMANDS.is_file():
         return set()
-    return {
-        line.strip()
-        for line in PICARD_COMMANDS.read_text(encoding="utf-8").splitlines()
-        if line.strip()
-    }
+    return {line.strip() for line in PICARD_COMMANDS.read_text(encoding="utf-8").splitlines() if line.strip()}
 
 
-def matrix_parity_scripts():
-    scripts = []
+def matrix_parity_scripts() -> list[str]:
+    scripts: list[str] = []
     for line in MATRIX.read_text(encoding="utf-8").splitlines():
         script_match = re.match(r"\s+parity_script: (.+)", line)
         if script_match:
@@ -94,9 +90,9 @@ def matrix_parity_scripts():
     return scripts
 
 
-def matrix_entries():
-    entries = []
-    current = None
+def matrix_entries() -> list[Entry]:
+    entries: list[Entry] = []
+    current: Entry | None = None
     for line in MATRIX.read_text(encoding="utf-8").splitlines():
         name_match = re.match(r"\s+- name: (.+)", line)
         if name_match:
@@ -114,14 +110,14 @@ def matrix_entries():
     return entries
 
 
-def dispatcher_commands():
+def dispatcher_commands() -> set[str]:
     text = CLI.read_text(encoding="utf-8")
     text = text.split("fn print_top_level_help", 1)[0]
     return set(re.findall(r'Some\("([^"]+)"\) =>', text))
 
 
-def validate_scope_notes(entries):
-    errors = []
+def validate_scope_notes(entries: Sequence[Entry]) -> list[str]:
+    errors: list[str] = []
     for entry in entries:
         for key in ("native_scope", "fallback_scope"):
             value = entry.get(key, "").strip()
@@ -132,10 +128,10 @@ def validate_scope_notes(entries):
     return errors
 
 
-def validate_matrix_entry_structure(entries):
-    errors = []
-    seen = set()
-    parity_owners = {}
+def validate_matrix_entry_structure(entries: Sequence[Entry]) -> list[str]:
+    errors: list[str] = []
+    seen: set[str] = set()
+    parity_owners: dict[str, str] = {}
     for entry in entries:
         name = entry.get("name", "").strip()
         if not name:
@@ -162,23 +158,21 @@ def validate_matrix_entry_structure(entries):
     return errors
 
 
-def validate_picard_reference(reference, expected=EXPECTED_PICARD_REFERENCE):
+def validate_picard_reference(reference: str | None, expected: str = EXPECTED_PICARD_REFERENCE) -> list[str]:
     if reference is None:
         return ["command matrix missing picard_reference"]
     if reference != expected:
-        return [
-            f"command matrix picard_reference must be {expected}, got {reference}"
-        ]
+        return [f"command matrix picard_reference must be {expected}, got {reference}"]
     return []
 
 
-def release_candidate_real_data_commands(manifest_text=None):
+def release_candidate_real_data_commands(manifest_text: str | None = None) -> set[str]:
     text = REAL_DATA_MANIFEST.read_text(encoding="utf-8") if manifest_text is None else manifest_text
     try:
         manifest = json.loads(text)
     except ValueError:
         return set()
-    commands = set()
+    commands: set[str] = set()
     for dataset in manifest.get("datasets", []):
         if not isinstance(dataset, dict):
             continue
@@ -190,8 +184,8 @@ def release_candidate_real_data_commands(manifest_text=None):
     return commands
 
 
-def validate_real_data_scope_claims(entries, release_candidate_commands):
-    errors = []
+def validate_real_data_scope_claims(entries: Sequence[Entry], release_candidate_commands: Collection[str]) -> list[str]:
+    errors: list[str] = []
     for entry in entries:
         scope = entry.get("native_scope", "")
         if "real-data parity" not in scope.lower():
@@ -204,19 +198,15 @@ def validate_real_data_scope_claims(entries, release_candidate_commands):
     return errors
 
 
-def validate_release_candidate_scope_mentions(entries, release_candidate_commands):
-    entries_by_name = {
-        entry.get("name", ""): entry
-        for entry in entries
-        if isinstance(entry.get("name", ""), str)
-    }
+def validate_release_candidate_scope_mentions(
+    entries: Sequence[Entry], release_candidate_commands: Collection[str]
+) -> list[str]:
+    entries_by_name = {entry.get("name", ""): entry for entry in entries if isinstance(entry.get("name", ""), str)}
     errors = []
     for command in sorted(release_candidate_commands):
         entry = entries_by_name.get(command)
         if entry is None:
-            errors.append(
-                f"{command} has release_candidate manifest evidence but is missing from command matrix"
-            )
+            errors.append(f"{command} has release_candidate manifest evidence but is missing from command matrix")
             continue
         if "real-data parity" not in entry.get("native_scope", "").lower():
             errors.append(
@@ -225,45 +215,31 @@ def validate_release_candidate_scope_mentions(entries, release_candidate_command
     return errors
 
 
-def cram_parity_commands(script_text=None):
+def cram_parity_commands(script_text: str | None = None) -> set[str]:
     text = CRAM_PARITY_SCRIPT.read_text(encoding="utf-8") if script_text is None else script_text
     match = re.search(r"CRAM hot-path parity passed for:\s*([^\n\"]+)", text)
     if not match:
         return set()
-    return {
-        command.strip()
-        for command in match.group(1).split(",")
-        if command.strip()
-    }
+    return {command.strip() for command in match.group(1).split(",") if command.strip()}
 
 
-def validate_cram_scope_mentions(entries, cram_commands):
-    entries_by_name = {
-        entry.get("name", ""): entry
-        for entry in entries
-        if isinstance(entry.get("name", ""), str)
-    }
+def validate_cram_scope_mentions(entries: Sequence[Entry], cram_commands: Collection[str]) -> list[str]:
+    entries_by_name = {entry.get("name", ""): entry for entry in entries if isinstance(entry.get("name", ""), str)}
     errors = []
     for command in sorted(cram_commands):
         entry = entries_by_name.get(command)
         if entry is None:
-            errors.append(
-                f"{command} has CRAM parity coverage but is missing from command matrix"
-            )
+            errors.append(f"{command} has CRAM parity coverage but is missing from command matrix")
             continue
         if "cram" not in entry.get("native_scope", "").lower():
-            errors.append(
-                f"{command} has CRAM parity coverage but command matrix native_scope does not mention CRAM"
-            )
+            errors.append(f"{command} has CRAM parity coverage but command matrix native_scope does not mention CRAM")
     return errors
 
 
-def validate_command_docs_scope_language(text):
-    errors = []
+def validate_command_docs_scope_language(text: str) -> list[str]:
+    errors: list[str] = []
     if "Common native command examples" in text:
-        errors.append(
-            "commands docs must not label mixed native/partial-native examples as native"
-        )
+        errors.append("commands docs must not label mixed native/partial-native examples as native")
     for needle, description in [
         ("Picard 3.4.0", "Picard 3.4.0 compatibility wording"),
         ("--list-commands", "list-commands pointer"),
@@ -276,12 +252,10 @@ def validate_command_docs_scope_language(text):
     return errors
 
 
-def validate_command_docs_examples(entries, text):
-    errors = []
+def validate_command_docs_examples(entries: Sequence[Entry], text: str) -> list[str]:
+    errors: list[str] = []
     if re.search(r"\bpicard\s+ViewSam\b[^\n]*\bO=", text):
-        errors.append(
-            "commands docs must show upstream ViewSam writing to stdout, not O= output"
-        )
+        errors.append("commands docs must show upstream ViewSam writing to stdout, not O= output")
     for entry in entries:
         status = entry.get("status", "")
         command = entry.get("name", "")
@@ -290,8 +264,8 @@ def validate_command_docs_examples(entries, text):
     return errors
 
 
-def validate_command_docs_status_summary(entries, text):
-    errors = []
+def validate_command_docs_status_summary(entries: Sequence[Entry], text: str) -> list[str]:
+    errors: list[str] = []
     for entry in entries:
         command = entry.get("name", "")
         status = entry.get("status", "")
@@ -301,15 +275,9 @@ def validate_command_docs_status_summary(entries, text):
             continue
         status_line = f"* ``{command}``: ``{status}``"
         if status_line not in text:
-            errors.append(
-                f"commands docs missing matrix status summary for {command}: {status}"
-            )
-    accelerated_count = sum(
-        1 for entry in entries if entry.get("status") in ACCELERATED_STATUSES
-    )
-    fallback_count = sum(
-        1 for entry in entries if entry.get("status") == "fallback-only"
-    )
+            errors.append(f"commands docs missing matrix status summary for {command}: {status}")
+    accelerated_count = sum(1 for entry in entries if entry.get("status") in ACCELERATED_STATUSES)
+    fallback_count = sum(1 for entry in entries if entry.get("status") == "fallback-only")
     if f"{accelerated_count} accelerated" not in text:
         errors.append("commands docs missing accelerated command count summary")
     if f"{fallback_count} delegated" not in text:
@@ -317,36 +285,32 @@ def validate_command_docs_status_summary(entries, text):
     return errors
 
 
-def validate_picard_reference_coverage(entries):
-    errors = []
+def validate_picard_reference_coverage(entries: Sequence[Entry]) -> list[str]:
+    errors: list[str] = []
     matrix_names = {entry.get("name", "") for entry in entries}
     for command in sorted(picard_reference_commands()):
         if command not in matrix_names:
-            errors.append(
-                f"command matrix missing upstream Picard 3.4.0 command: {command}"
-            )
+            errors.append(f"command matrix missing upstream Picard 3.4.0 command: {command}")
     for entry in entries:
         name = entry.get("name", "")
         status = entry.get("status", "")
         if name in picard_reference_commands() and status == "scaffold":
-            errors.append(
-                f"{name} is still scaffold; migrate to accelerated or fallback-only"
-            )
+            errors.append(f"{name} is still scaffold; migrate to accelerated or fallback-only")
     return errors
 
 
-def set_enables_errexit(tokens):
-    for index, token in enumerate(tokens):
-        if token.startswith("#") or token in {";", "&&", "||"}:
+def set_enables_errexit(tokens: Sequence[str]) -> bool:
+    for index, argument in enumerate(tokens):
+        if argument.startswith("#") or argument in {";", "&&", "||"}:
             return False
-        if token == "-o" and tokens[index + 1 : index + 2] == ["errexit"]:
+        if argument == "-o" and tokens[index + 1 : index + 2] == ["errexit"]:
             return True
-        if re.fullmatch(r"-[A-Za-z]*e[A-Za-z]*", token):
+        if re.fullmatch(r"-[A-Za-z]*e[A-Za-z]*", argument):
             return True
     return False
 
 
-def enables_errexit(text):
+def enables_errexit(text: str) -> bool:
     for line in text.splitlines():
         tokens = line.replace(";", " ; ").split()
         if tokens[:1] == ["set"] and set_enables_errexit(tokens[1:]):
@@ -354,14 +318,11 @@ def enables_errexit(text):
     return False
 
 
-def validate_parity_script_files(scripts, root=ROOT):
-    errors = []
+def validate_parity_script_files(scripts: Sequence[str], root: pathlib.Path = ROOT) -> list[str]:
+    errors: list[str] = []
     missing_scripts = [script for script in scripts if not (root / script).is_file()]
     if missing_scripts:
-        return [
-            "matrix parity scripts missing from repository: "
-            + ", ".join(missing_scripts)
-        ]
+        return ["matrix parity scripts missing from repository: " + ", ".join(missing_scripts)]
     for script in scripts:
         text = (root / script).read_text(encoding="utf-8")
         if not text.startswith("#!"):
@@ -371,17 +332,14 @@ def validate_parity_script_files(scripts, root=ROOT):
     return errors
 
 
-def validate_parity_script_ci_coverage(scripts, ci_text):
+def validate_parity_script_ci_coverage(scripts: Sequence[str], ci_text: str) -> list[str]:
     scripts_missing_from_ci = [script for script in scripts if script not in ci_text]
     if scripts_missing_from_ci:
-        return [
-            "matrix parity scripts missing from CI: "
-            + ", ".join(scripts_missing_from_ci)
-        ]
+        return ["matrix parity scripts missing from CI: " + ", ".join(scripts_missing_from_ci)]
     return []
 
 
-def main():
+def main() -> int:
     reference_errors = validate_picard_reference(matrix_picard_reference())
     if reference_errors:
         for error in reference_errors:
@@ -455,9 +413,7 @@ def main():
         for error in cram_scope_errors:
             print(error, file=sys.stderr)
         return 1
-    command_docs_errors = validate_command_docs_scope_language(
-        COMMAND_DOCS.read_text(encoding="utf-8")
-    )
+    command_docs_errors = validate_command_docs_scope_language(COMMAND_DOCS.read_text(encoding="utf-8"))
     command_docs_errors.extend(
         validate_command_docs_examples(
             matrix_entries(),
