@@ -28,7 +28,7 @@ view_to_sam() {
   parity_view_to_sam "$reference" "$1" "$2" "$repo_root"
 }
 
-for fixture in basic paired scoring softclip secondary pair-score-tie clear-dt tagging-all duplicate-set-members barcode-tag read-barcode-tags optical multi-input multi-library multi-input-libraries remove-sequencing-duplicates; do
+for fixture in basic paired scoring softclip secondary pair-score-tie pair-score-tie-reverse-r1 clear-dt tagging-all duplicate-set-members barcode-tag read-barcode-tags optical multi-input multi-library multi-input-libraries remove-sequencing-duplicates; do
   fixture_dir="$repo_root/fixtures/markduplicates/$fixture"
   fixture_workdir="$workdir/$fixture"
   tagging_policy="DontTag"
@@ -51,6 +51,9 @@ for fixture in basic paired scoring softclip secondary pair-score-tie clear-dt t
   if [[ "$fixture" == "read-barcode-tags" ]]; then
     read_one_barcode_tag="BX"
     read_two_barcode_tag="BY"
+  fi
+  if [[ "$fixture" == "pair-score-tie-reverse-r1" ]]; then
+    read_name_regex=""
   fi
   if [[ "$fixture" == "optical" ]]; then
     tagging_policy="All"
