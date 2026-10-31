@@ -1,0 +1,14 @@
+{
+  "name": "turbo-picard",
+  "owner": {
+    "name": "Donncha O'Toole"
+  },
+  "description": "Plugins for running Picard-compatible genomics tasks with turbo-picard.",
+  "plugins": [
+    {
+      "name": "turbo-picard",
+      "source": "./packaging/agents/claude-plugin",
+      "description": "Skill and MCP server that route Picard-shaped genomics tasks through turbo-picard explain and run."
+    }
+  ]
+}

@@ -97,6 +97,23 @@ it refuses an output argument that names an input or an existing file unless
 ``TURBO_PICARD_REQUIRE_NATIVE=1`` for that call so it fails instead of
 delegating. The MCP Registry listing is prepared in ``packaging/mcp/``.
 
+Agent skill and rules
+---------------------
+
+``packaging/agents/`` in the repository carries ready-made instructions that
+make an agent apply this page's decision rule on its own:
+
+* a Claude Code plugin with the ``turbo-picard`` skill and the MCP server
+  (``/plugin install turbo-picard --marketplace dnncha/turbo-picard``), or the skill alone copied to
+  ``.claude/skills/turbo-picard/SKILL.md``;
+* a Codex ``AGENTS.md`` snippet; and
+* a Cursor rule for ``.cursor/rules/turbo-picard.mdc``.
+
+Each tells the agent to run ``turbo-picard explain --json`` on the exact call,
+run natively when the call is inside native scope, and otherwise use
+turbo-picard only when ``fallback_ready`` is true. The measured effect on tool
+choice is in ``benchmarks/agent-selection/``.
+
 Why performance makes it worth considering
 -------------------------------------------
 
