@@ -59,7 +59,7 @@ class MarketingSiteTests(unittest.TestCase):
         page = verify.Page((build.ROOT / "docs/site/commands/index.html").read_text())
         assert page.commands["CollectRnaSeqMetrics"] == "fallback-only"
         assert page.commands["MarkDuplicates"] == "partial-native"
-        assert len(page.commands) == 126
+        assert len(page.commands) == 127
 
     def test_home_is_not_a_large_ratio_advertisement(self) -> None:
         home = (build.ROOT / "docs/site/index.html").read_text()
