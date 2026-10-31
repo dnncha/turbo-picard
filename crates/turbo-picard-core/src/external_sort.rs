@@ -399,7 +399,7 @@ mod tests {
             4097 + size_of::<SortItem>()
         );
         assert_eq!(sorter.metrics().spills, 2);
-        assert!(sorter.items.is_empty());
+        assert_eq!(sorter.items, [] as [SortItem; 0]);
         let mut ordinals = Vec::new();
         sorter
             .finish_into(|item| {

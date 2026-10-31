@@ -183,7 +183,7 @@ mod tests {
         let mut record = bam::Record::new();
         record.set(b"read", None, b"ACGT", &[255; 4]);
         assert_eq!(record.seq_len(), 4);
-        assert!(base_qualities(&record).is_empty());
+        assert_eq!(base_qualities(&record), []);
         record.set(b"read", None, b"ACGT", &[0, 15, 30, 40]);
         assert_eq!(base_qualities(&record), &[0, 15, 30, 40]);
     }
