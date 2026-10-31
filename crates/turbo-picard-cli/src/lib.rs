@@ -1520,7 +1520,9 @@ fn trial_fit_for(command: &str, status: &str) -> &'static str {
         return "fallback-only";
     }
     match command {
-        "AccelerationStatus" | "capabilities" | "doctor" | "explain" | "trial" => "not-a-workload",
+        "AccelerationStatus" | "capabilities" | "doctor" | "explain" | "mcp" | "trial" => {
+            "not-a-workload"
+        }
         "MarkDuplicates" => "recommended-first-trial",
         "SortSam"
         | "SamToFastq"
@@ -1543,7 +1545,7 @@ fn trial_why_for(command: &str, status: &str) -> &'static str {
         return "No native implementation is documented; use upstream Picard or choose a native command for a speed trial.";
     }
     match command {
-        "AccelerationStatus" | "capabilities" | "doctor" | "explain" | "trial" => {
+        "AccelerationStatus" | "capabilities" | "doctor" | "explain" | "mcp" | "trial" => {
             "This is a turbo-picard utility command, not a Picard data-processing workload or speed-trial candidate."
         }
         "MarkDuplicates" => {

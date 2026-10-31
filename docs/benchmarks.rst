@@ -86,9 +86,9 @@ different parts of the system.
 
 The public benchmark suite currently reports 32 command speedups, covering the
 native or partly native data-processing commands in the matrix.
-``AccelerationStatus``, ``capabilities``, ``doctor``, ``explain``, and ``trial`` are exempt
-because they are status/preflight commands with no Picard data-processing
-runtime to benchmark.
+``AccelerationStatus``, ``capabilities``, ``doctor``, ``explain``, ``mcp`` and
+``trial`` are exempt because they are status, preflight or agent-protocol
+commands with no Picard data-processing runtime to benchmark.
 Two benchmark scopes are deliberately narrow: ``CollectMultipleMetrics`` is benchmarked with
 ``PROGRAM=CollectQualityYieldMetrics``, and chart-producing child programs still
 use the chart-output disclosure below.
@@ -97,6 +97,7 @@ Benchmark exemption: ``AccelerationStatus`` — status/preflight command with no
 Benchmark exemption: ``capabilities`` — discovery/preflight command with no Picard data-processing runtime to benchmark.
 Benchmark exemption: ``doctor`` — status/preflight command with no Picard data-processing runtime to benchmark.
 Benchmark exemption: ``explain`` — status/preflight command with no Picard data-processing runtime to benchmark.
+Benchmark exemption: ``mcp`` — agent protocol server with no Picard data-processing runtime to benchmark.
 Benchmark exemption: ``trial`` — status/preflight command with no Picard data-processing runtime to benchmark.
 Benchmark exemption: ``CollectHsMetrics`` — ALL_READS metrics and sidecar parity are guarded separately; public performance benchmark awaits representative capture data. The real-data comparator now supports pinned WES/capture interval-lists for command-level parity trials.
 

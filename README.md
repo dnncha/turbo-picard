@@ -266,7 +266,7 @@ Saved benchmark run:
 - Command: `python3 tools/bench_suite.py --repeats 3 --skip-build`
 - Raw log: `docs/site/assets/bench-suite-output.txt`
 - benchmark exceptions: `AccelerationStatus`, `capabilities`, `doctor`,
-  `explain`, and `trial` are utility commands, not Picard workload
+  `explain`, `mcp`, and `trial` are utility commands, not Picard workload
   comparisons. `CollectHsMetrics` has separate ALL_READS and sidecar parity
   coverage, plus a real-data comparator path for pinned WES/capture intervals;
   representative capture-data performance evidence is still pending.

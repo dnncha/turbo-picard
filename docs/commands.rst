@@ -100,13 +100,13 @@ Machine-readable coverage
 The canonical command matrix lives in ``docs/command-matrix.yml``. It records
 the current status, parity script, native scope, and fallback scope for each
 Picard 3.4.0 command plus turbo-only utilities such as
-``AccelerationStatus``, ``doctor``, ``explain``, and ``trial``.
+``AccelerationStatus``, ``doctor``, ``explain``, ``mcp``, and ``trial``.
 The ``capabilities`` utility combines that matrix with the checked-in benchmark
 evidence in one schema-versioned response for coding agents and CI policies.
 
 Current matrix status summary:
 
-* ``38 accelerated`` commands with native or partial-native Rust implementations
+* ``39 accelerated`` commands with native or partial-native Rust implementations
 * ``88 delegated`` Picard 3.4.0 commands forwarded to upstream Picard
 
 Accelerated command status:
@@ -131,6 +131,7 @@ Accelerated command status:
   the command line does not set ``USE_FAST_ALGORITHM``.
 * ``doctor``: ``native``
 * ``explain``: ``native``
+* ``mcp``: ``native``
 * ``trial``: ``native``
 * ``CreateSequenceDictionary``: ``native``
 * ``FastqToSam``: ``partial-native``

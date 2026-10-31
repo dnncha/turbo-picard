@@ -58,6 +58,7 @@ AccelerationStatus
 capabilities
 doctor
 explain
+mcp
 trial
 CollectHsMetrics
 IntervalListTools
