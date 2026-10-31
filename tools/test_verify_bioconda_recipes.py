@@ -1248,12 +1248,8 @@ source:
         assert "missing-second missing meta.yaml" in stderr.getvalue()
 
     def test_full_metapackage_in_repository_is_valid(self) -> None:
-        meta_yaml = (
-            verify_bioconda_recipes.FULL_METAPACKAGE / "meta.yaml"
-        ).read_text(encoding="utf-8")
-        self.assertEqual(
-            verify_bioconda_recipes.validate_full_metapackage(meta_yaml, "3.4.0"), []
-        )
+        meta_yaml = (verify_bioconda_recipes.FULL_METAPACKAGE / "meta.yaml").read_text(encoding="utf-8")
+        assert verify_bioconda_recipes.validate_full_metapackage(meta_yaml, "3.4.0") == []
 
     def test_full_metapackage_requires_pinned_picard_java_and_readiness_tests(self) -> None:
         meta_yaml = """{% set name = "turbo-picard-full" %}
@@ -1281,7 +1277,7 @@ requirements:
             "picard shim",
             "fallback_ready",
         ):
-            self.assertIn(needle, joined)
+            assert needle in joined
 
 
 if __name__ == "__main__":
