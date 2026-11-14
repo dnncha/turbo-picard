@@ -200,8 +200,8 @@ commands:
   - name: CollectWgsMetrics
     status: partial-native
     parity_script: tools/verify_basic_collectwgsmetrics_parity.sh
-    native_scope: "Common coordinate-sorted whole-genome coverage metrics for SAM/BAM/CRAM with REFERENCE_SEQUENCE, optional interval territory, explicit base-quality histogram output, STOP_AFTER, Picard-style theoretical het sensitivity sampling, and a native USE_FAST_ALGORITHM mode that defaults SAMPLE_SIZE to 0 unless that option is set explicitly. INCLUDE_BQ_HISTOGRAM defaults to false to match Picard 3.4.0 histogram output. TURBO_PICARD_WGS_FAST_DEFAULT=true applies the same SAMPLE_SIZE default when USE_FAST_ALGORITHM is omitted."
-    fallback_scope: Unsupported advanced WGS options should use upstream Picard.
+    native_scope: "Common coordinate-sorted whole-genome coverage metrics for SAM/BAM/CRAM with REFERENCE_SEQUENCE, optional interval territory, explicit base-quality histogram output, STOP_AFTER, Picard-style theoretical het sensitivity sampling, and a native USE_FAST_ALGORITHM mode that defaults SAMPLE_SIZE to 0 unless that option is set explicitly. INCLUDE_BQ_HISTOGRAM defaults to false to match Picard 3.4.0 histogram output. TURBO_PICARD_WGS_FAST_DEFAULT=true applies the same SAMPLE_SIZE default when USE_FAST_ALGORITHM is omitted. EXCLUDE_SUPPLEMENTARY=true is a turbo-picard option that counts primary alignments only and marks the metrics file."
+    fallback_scope: "Unsupported advanced WGS options, COVERAGE_CAP above 65535, and INTERVALS inputs that reach LOCUS_ACCUMULATION_CAP use upstream Picard."
   - name: CollectWgsMetricsWithNonZeroCoverage
     status: fallback-only
     native_scope: "Delegated to upstream Picard 3.4.0. turbo-picard runs the native accelerated implementation when one exists; otherwise it transparently forwards to upstream Picard when fallback is configured or auto-discovered."

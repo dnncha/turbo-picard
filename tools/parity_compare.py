@@ -76,74 +76,35 @@ def compare_metrics(picard_path: Path, turbo_path: Path, label: str) -> None:
                 raise SystemExit(f"{label} metrics differ between Picard and turbo-picard")
 
 
-def load_wgs_metrics(path: Path) -> dict[str, str]:
+def load_wgs_metrics(path: Path) -> tuple[dict[str, str], list[list[str]]]:
     with path.open(encoding="utf-8") as handle:
         rows = [line.rstrip("\n").split("\t") for line in handle if line.strip() and not line.startswith("#")]
     for index, row in enumerate(rows):
         if row and row[0] == "GENOME_TERRITORY":
             if index + 1 >= len(rows):
                 raise SystemExit(f"{path} is missing a WGS metrics row")
-            return dict(zip(row, rows[index + 1]))
+            return dict(zip(row, rows[index + 1])), rows[index + 2 :]
     raise SystemExit(f"{path} is missing a WGS metrics header")
 
 
 def compare_wgs_metrics(picard_path: Path, turbo_path: Path, label: str) -> None:
-    picard = load_wgs_metrics(picard_path)
-    turbo = load_wgs_metrics(turbo_path)
+    picard, picard_histogram = load_wgs_metrics(picard_path)
+    turbo, turbo_histogram = load_wgs_metrics(turbo_path)
     if picard.keys() != turbo.keys():
         raise SystemExit(f"{label} WGS metric columns differ from Picard")
-
-    exact_fields = {
-        "MEDIAN_COVERAGE",
-        "MAD_COVERAGE",
-        "PCT_EXC_ADAPTER",
-        "PCT_EXC_UNPAIRED",
-        "FOLD_80_BASE_PENALTY",
-        "FOLD_90_BASE_PENALTY",
-        "FOLD_95_BASE_PENALTY",
-        "HET_SNP_Q",
-    }
-    tolerances = {
-        "GENOME_TERRITORY": 1.0,
-        "MEAN_COVERAGE": 0.01,
-        "SD_COVERAGE": 0.02,
-        "PCT_EXC_MAPQ": 0.00001,
-        "PCT_EXC_DUPE": 0.001,
-        "PCT_EXC_BASEQ": 0.001,
-        "PCT_EXC_OVERLAP": 0.05,
-        "PCT_EXC_CAPPED": 0.05,
-        "PCT_EXC_TOTAL": 0.005,
-        "HET_SNP_SENSITIVITY": 0.00001,
-    }
-    for depth in (1, 5, 10, 15, 20, 25, 30, 40, 50, 60, 70, 80, 90, 100):
-        tolerances[f"PCT_{depth}X"] = 0.00001
-
-    for field in exact_fields:
-        if picard[field] != turbo[field]:
-            raise SystemExit(
-                f"{label} WGS metric {field} differs from Picard: Picard={picard[field]} turbo={turbo[field]}"
-            )
-    for field, tolerance in tolerances.items():
-        if picard[field] == turbo[field]:
-            continue
-        try:
-            picard_value = float(picard[field])
-            turbo_value = float(turbo[field])
-        except ValueError:
-            if picard[field] != turbo[field]:
-                raise SystemExit(
-                    f"{label} WGS metric {field} differs from Picard: Picard={picard[field]} turbo={turbo[field]}"
-                ) from None
-            continue
-        if (
-            not math.isfinite(picard_value)
-            or not math.isfinite(turbo_value)
-            or abs(picard_value - turbo_value) > tolerance
-        ):
-            raise SystemExit(
-                f"{label} WGS metric {field} differs from Picard beyond "
-                f"tolerance {tolerance}: Picard={picard[field]} turbo={turbo[field]}"
-            )
+    for field, expected in picard.items():
+        if turbo[field] != expected:
+            raise SystemExit(f"{label} WGS metric {field} differs from Picard: Picard={expected} turbo={turbo[field]}")
+    if picard_histogram != turbo_histogram:
+        differing = next(
+            (
+                index
+                for index, (expected, actual) in enumerate(zip(picard_histogram, turbo_histogram))
+                if expected != actual
+            ),
+            min(len(picard_histogram), len(turbo_histogram)),
+        )
+        raise SystemExit(f"{label} WGS coverage histogram differs from Picard at row {differing}")
 
 
 def compare_sam_record_lines(

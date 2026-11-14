@@ -3818,6 +3818,52 @@ fn collectwgsmetrics_writes_coverage_metrics() {
 }
 
 #[test]
+fn collectwgsmetrics_counts_supplementary_reads_unless_asked_to_exclude_them() {
+    let tempdir = tempfile::tempdir().expect("tempdir exists");
+    let input = tempdir.path().join("input.sam");
+    let reference = tempdir.path().join("ref.fa");
+    fs::write(&reference, ">chr1\nACGTNCGTACGT\n").expect("reference is written");
+    fs::write(
+        &input,
+        concat!(
+            "@HD\tVN:1.6\tSO:coordinate\n",
+            "@SQ\tSN:chr1\tLN:12\n",
+            "read-a\t0\tchr1\t1\t60\t6M\t*\t0\t0\tACGTAC\tFFFFFF\n",
+            "read-b\t2048\tchr1\t9\t60\t4M\t*\t0\t0\tACGT\tFFFF\n",
+        ),
+    )
+    .expect("input fixture is written");
+    let histogram_for = |extra: &[&str]| {
+        let output = tempdir.path().join(format!("wgs{}.txt", extra.len()));
+        let mut args = vec![
+            "CollectWgsMetrics".to_string(),
+            format!("I={}", input.display()),
+            format!("O={}", output.display()),
+            format!("R={}", reference.display()),
+            "COUNT_UNPAIRED=true".to_string(),
+            "SAMPLE_SIZE=1".to_string(),
+        ];
+        args.extend(extra.iter().map(|value| (*value).to_string()));
+        Command::cargo_bin("picard")
+            .expect("binary exists")
+            .args(&args)
+            .assert()
+            .success();
+        fs::read_to_string(&output).expect("metrics output exists")
+    };
+
+    let picard_like = histogram_for(&[]);
+    assert!(picard_like.starts_with("## METRICS CLASS\tpicard.analysis.WgsMetrics\n"));
+    assert!(picard_like.contains("\n11\t0.818182\t"));
+    assert!(picard_like.contains("\n0\t2\n1\t9\n"));
+
+    let primary_only = histogram_for(&["EXCLUDE_SUPPLEMENTARY=true"]);
+    assert!(primary_only.starts_with("# turbo-picard EXCLUDE_SUPPLEMENTARY=true"));
+    assert!(primary_only.contains("\n11\t0.454545\t"));
+    assert!(primary_only.contains("\n0\t6\n1\t5\n"));
+}
+
+#[test]
 fn collectwgsmetrics_accepts_common_temp_options() {
     let tempdir = tempfile::tempdir().expect("tempdir exists");
     let input = tempdir.path().join("input.sam");

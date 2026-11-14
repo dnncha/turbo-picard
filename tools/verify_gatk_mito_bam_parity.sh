@@ -212,6 +212,13 @@ turbo CollectWgsMetrics \
 python3 "$compare" wgs-metrics --label "GATK mito BAM CollectWgsMetrics" \
   --picard "$workdir/picard-wgs.txt" --turbo "$workdir/turbo-wgs.txt"
 
+cp "$input_bam" "$workdir/indexed-wgs.bam"
+turbo BuildBamIndex "I=$workdir/indexed-wgs.bam"
+TURBO_PICARD_REGION_WORKERS=4 TURBO_PICARD_WGS_REGION_SPAN=997 turbo CollectWgsMetrics \
+  "I=$workdir/indexed-wgs.bam" "O=$workdir/turbo-wgs-regions.txt" "R=$reference"
+python3 "$compare" wgs-metrics --label "GATK mito BAM CollectWgsMetrics by indexed region" \
+  --picard "$workdir/picard-wgs.txt" --turbo "$workdir/turbo-wgs-regions.txt"
+
 header_sam="$workdir/replacement-header.sam"
 printf '@HD\tVN:1.6\tSO:coordinate\n@SQ\tSN:chrM\tLN:16569\n@RG\tID:rg1\tSM:sample\tLB:lib\tPL:ILLUMINA\n' > "$header_sam"
 picard ReplaceSamHeader \

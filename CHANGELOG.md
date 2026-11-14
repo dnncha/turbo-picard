@@ -2,6 +2,42 @@
 
 ## Unreleased
 
+### Scientific correctness
+
+- `CollectWgsMetrics` is rebuilt to follow Picard's locus pileup on real
+  whole-genome data. Before this change its output differed from Picard on real
+  genomes while matching on the small parity fixtures: on a 4x GRCh38 genome
+  Picard 3.5.0 reported mean coverage 3.815218 over a territory of
+  3,043,453,562 and turbo-picard 0.1.18 reported 3.600677 over 3,217,346,917.
+  The command now excludes reference `N` bases from the territory, counts
+  supplementary alignments, applies the adapter, mapping-quality, duplicate and
+  pairing exclusions in Picard's order and counts them per read, drops reads
+  that fail vendor quality, treats base quality 2 and below and `N` read bases
+  as Picard does, detects overlap by read name at each locus, applies
+  `LOCUS_ACCUMULATION_CAP` and `STOP_AFTER` as the locus iterator does, and
+  computes theoretical het sensitivity from the unfiltered depth and base
+  quality histograms. On the whole 4x genome and on nine option sets on a
+  139 Mb slice the output now equals Picard 3.5.0 field for field.
+- The parity comparator now requires every WgsMetrics field and every histogram
+  row to equal Picard's. It previously allowed a territory difference of one
+  and overlap differences of 0.05.
+
+### Performance
+
+- `CollectWgsMetrics` on an indexed BAM or CRAM reads the genome as independent
+  regions on several threads. `TURBO_PICARD_REGION_WORKERS` sets the worker
+  count; `1` selects the single pass.
+  On one host the whole 4x HG02675 genome took 22 s with six workers and gave
+  the same file as Picard 3.5.0, which took 1,034 s. The 30x genome took 194 s;
+  `riker wgs` took 147 s there. Details and limits are in
+  `benchmarks/wgs-coverage-2026-11-13/README.md`.
+
+### Options beyond Picard
+
+- `CollectWgsMetrics EXCLUDE_SUPPLEMENTARY=true` counts primary alignments
+  only. Picard counts supplementary alignments, so the metrics file starts with
+  a comment line that records the setting.
+
 ## 0.1.18 — 2026-10-31
 
 ### Agent integration

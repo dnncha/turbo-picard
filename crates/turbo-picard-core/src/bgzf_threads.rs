@@ -6,6 +6,7 @@ pub enum HtsThreadRole {
     Writer,
     Index,
     PipelineReader,
+    RegionWorker,
 }
 
 pub fn bgzf_threads() -> Option<usize> {
@@ -30,6 +31,7 @@ fn explicit_threads(role: HtsThreadRole) -> ExplicitThreads {
         HtsThreadRole::Writer => "TURBO_PICARD_WRITER_THREADS",
         HtsThreadRole::Index => "TURBO_PICARD_INDEX_THREADS",
         HtsThreadRole::PipelineReader => "TURBO_PICARD_PIPELINE_READER_THREADS",
+        HtsThreadRole::RegionWorker => "TURBO_PICARD_REGION_WORKERS",
     };
     std::env::var(role_var)
         .ok()
@@ -65,12 +67,14 @@ fn default_threads(role: HtsThreadRole) -> usize {
         .unwrap_or(16);
     let reserved = match role {
         HtsThreadRole::PipelineReader => 2,
+        HtsThreadRole::RegionWorker => 0,
         _ => 1,
     };
     let role_cap = match role {
         HtsThreadRole::Reader => 8,
         HtsThreadRole::Writer | HtsThreadRole::Index => 12,
         HtsThreadRole::PipelineReader => 2,
+        HtsThreadRole::RegionWorker => 32,
     };
     available
         .saturating_sub(reserved)

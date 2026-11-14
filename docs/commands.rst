@@ -129,6 +129,9 @@ Accelerated command status:
   stays native and defaults ``SAMPLE_SIZE`` to ``0`` unless it is set explicitly.
   ``TURBO_PICARD_WGS_FAST_DEFAULT=true`` applies that sample-size default when
   the command line does not set ``USE_FAST_ALGORITHM``.
+  ``EXCLUDE_SUPPLEMENTARY=true`` is a turbo-picard option that counts primary
+  alignments only. Picard counts supplementary alignments, so this changes the
+  result; the metrics file starts with a comment line that records the setting.
 * ``doctor``: ``native``
 * ``explain``: ``native``
 * ``mcp``: ``native``

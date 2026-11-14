@@ -11,6 +11,8 @@ mod hs_metrics;
 mod sam_sort;
 mod sam_structure;
 mod vcf_headers;
+mod wgs_metrics;
+mod wgs_regions;
 
 const PICARD_REFERENCE_COMMANDS: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
@@ -33,9 +35,9 @@ use rust_htslib::bam::index;
 use rust_htslib::bam::record::{Aux, Cigar, CigarString};
 use rust_htslib::bam::{self, Read};
 use rust_htslib::faidx;
-use rustc_hash::{FxBuildHasher, FxHashMap};
+use rustc_hash::FxHashMap;
 use std::cmp::Ordering;
-use std::collections::{BTreeMap, BTreeSet, BinaryHeap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, BinaryHeap};
 use std::env;
 use std::fmt::Write as FmtWrite;
 use std::fs;
@@ -2174,6 +2176,10 @@ Supported options:
   VALIDATION_STRINGENCY
   QUIET
 
+Options that change the result away from Picard:
+  EXCLUDE_SUPPLEMENTARY Count primary alignments only. Picard counts supplementary
+                        alignments; the metrics file records when this is set.
+
 INCLUDE_BQ_HISTOGRAM defaults to false to match Picard 3.4.0 histogram output.
 USE_FAST_ALGORITHM=true switches to a leaner native WGS mode by defaulting
 SAMPLE_SIZE to 0 unless the caller sets it explicitly.
@@ -2985,17 +2991,6 @@ fn clean_cigar_text(cigar: &str, start: u64, target_len: u64) -> Result<Option<S
         }
     }
     Ok(Some(text))
-}
-
-fn bam_cigar_to_op(cigar: Cigar) -> Option<(u32, u8)> {
-    match cigar {
-        Cigar::Match(len) | Cigar::Equal(len) | Cigar::Diff(len) => Some((len, b'M')),
-        Cigar::Ins(len) => Some((len, b'I')),
-        Cigar::Del(len) => Some((len, b'D')),
-        Cigar::RefSkip(len) => Some((len, b'N')),
-        Cigar::SoftClip(len) => Some((len, b'S')),
-        Cigar::HardClip(_) | Cigar::Pad(_) => None,
-    }
 }
 
 fn parse_cigar_text(cigar: &str) -> Result<Vec<(u64, char)>, String> {
@@ -4655,7 +4650,6 @@ fn run_collectmultiplemetrics_single_pass(
                 let reference = reference
                     .as_ref()
                     .ok_or_else(|| "reference checked above".to_string())?;
-                let reference_contigs = read_reference_contigs_for_wgs(reference)?;
                 let coverage_cap = optional_u32(args, "COVERAGE_CAP")?.unwrap_or(250);
                 let use_fast_algorithm =
                     if let Some(use_fast_algorithm) = optional_bool(args, "USE_FAST_ALGORITHM")? {
@@ -4667,12 +4661,21 @@ fn run_collectmultiplemetrics_single_pass(
                     .unwrap_or(if use_fast_algorithm { 0 } else { 10_000 });
                 let include_bq_histogram =
                     optional_bool(args, "INCLUDE_BQ_HISTOGRAM")?.unwrap_or(false);
-                let mut summary = WgsMetricsSummary::new(&reference_contigs, None, coverage_cap);
-                if let Some(limit) = optional_i64(args, "STOP_AFTER")?
-                    && limit >= 0
-                {
-                    summary.limit_included_loci(usize_or_max(limit));
-                }
+                let summary = wgs_metrics::WgsCollector::for_run(
+                    reference,
+                    None,
+                    wgs_metrics::WgsOptions {
+                        minimum_mapping_quality: 20,
+                        minimum_base_quality: 20,
+                        coverage_cap,
+                        locus_accumulation_cap: 100_000,
+                        count_unpaired: true,
+                        exclude_supplementary: false,
+                    },
+                    optional_i64(args, "STOP_AFTER")?
+                        .filter(|limit| *limit >= 0)
+                        .map(usize_or_max),
+                )?;
                 wgs = Some((
                     summary,
                     collectmultiplemetrics_metric_path(output, ".wgs_metrics", file_extension),
@@ -4766,27 +4769,8 @@ fn run_collectmultiplemetrics_single_pass(
         if let Some((metrics, _, _, _, window_size, ..)) = gc_bias.as_mut() {
             metrics.observe(record, &target_names, *window_size)?;
         }
-        if let Some((
-            metrics,
-            _,
-            minimum_mapping_quality,
-            minimum_base_quality,
-            coverage_cap,
-            locus_accumulation_cap,
-            count_unpaired,
-            _sample_size,
-            _include_bq_histogram,
-        )) = wgs.as_mut()
-        {
-            metrics.observe(
-                record,
-                &target_names,
-                *minimum_mapping_quality,
-                *minimum_base_quality,
-                *coverage_cap,
-                *locus_accumulation_cap,
-                *count_unpaired,
-            )?;
+        if let Some((metrics, ..)) = wgs.as_mut() {
+            metrics.observe(record, &target_names)?;
         }
         Ok(())
     };
@@ -5125,25 +5109,9 @@ fn run_collectmultiplemetrics_single_pass(
                 Ok(())
             }));
         }
-        if let Some((
-            worker,
-            _,
-            minimum_mapping_quality,
-            minimum_base_quality,
-            coverage_cap,
-            locus_accumulation_cap,
-            count_unpaired,
-            _,
-            _,
-        )) = &wgs_worker
-        {
+        if let Some((worker, ..)) = &wgs_worker {
             let worker = Arc::clone(worker);
             let target_names = Arc::clone(&target_names);
-            let minimum_mapping_quality = *minimum_mapping_quality;
-            let minimum_base_quality = *minimum_base_quality;
-            let coverage_cap = *coverage_cap;
-            let locus_accumulation_cap = *locus_accumulation_cap;
-            let count_unpaired = *count_unpaired;
             handlers.push(Box::new(move |batch| {
                 let mut metrics = worker
                     .lock()
@@ -5153,15 +5121,7 @@ fn run_collectmultiplemetrics_single_pass(
                         continue;
                     }
                     let record = &entry.record;
-                    if let Err(error) = metrics.observe(
-                        record,
-                        target_names.as_slice(),
-                        minimum_mapping_quality,
-                        minimum_base_quality,
-                        coverage_cap,
-                        locus_accumulation_cap,
-                        count_unpaired,
-                    ) {
+                    if let Err(error) = metrics.observe(record, target_names.as_slice()) {
                         return Err(format!("CollectWgsMetrics failed: {error}"));
                     }
                 }
@@ -5682,12 +5642,25 @@ fn run_collectwgsmetrics(args: &[String]) -> Result<(), CommandError> {
     let input = required_scalar_for(&args, "INPUT", "CollectWgsMetrics")?;
     let output = required_scalar_for(&args, "OUTPUT", "CollectWgsMetrics")?;
     let reference = required_scalar_for(&args, "REFERENCE_SEQUENCE", "CollectWgsMetrics")?;
-    let minimum_mapping_quality = optional_u32(&args, "MINIMUM_MAPPING_QUALITY")?.unwrap_or(20);
-    let minimum_base_quality = optional_u32(&args, "MINIMUM_BASE_QUALITY")?.unwrap_or(20);
     let coverage_cap = optional_u32(&args, "COVERAGE_CAP")?.unwrap_or(250);
-    let locus_accumulation_cap = optional_u32(&args, "LOCUS_ACCUMULATION_CAP")?.unwrap_or(100_000);
-    let stop_after = optional_i64(&args, "STOP_AFTER")?.unwrap_or(-1);
-    let count_unpaired = optional_bool(&args, "COUNT_UNPAIRED")?.unwrap_or(false);
+    if coverage_cap > u32::from(u16::MAX) {
+        return Err(unsupported(
+            "unsupported CollectWgsMetrics COVERAGE_CAP above 65535",
+        ));
+    }
+    let options = wgs_metrics::WgsOptions {
+        minimum_mapping_quality: u8_or_max(
+            optional_u32(&args, "MINIMUM_MAPPING_QUALITY")?.unwrap_or(20),
+        ),
+        minimum_base_quality: u8_or_max(optional_u32(&args, "MINIMUM_BASE_QUALITY")?.unwrap_or(20)),
+        coverage_cap,
+        locus_accumulation_cap: optional_u32(&args, "LOCUS_ACCUMULATION_CAP")?.unwrap_or(100_000),
+        count_unpaired: optional_bool(&args, "COUNT_UNPAIRED")?.unwrap_or(false),
+        exclude_supplementary: optional_bool(&args, "EXCLUDE_SUPPLEMENTARY")?.unwrap_or(false),
+    };
+    let stop_after = optional_i64(&args, "STOP_AFTER")?
+        .filter(|limit| *limit > 0)
+        .map(usize_or_max);
     let use_fast_algorithm =
         if let Some(use_fast_algorithm) = optional_bool(&args, "USE_FAST_ALGORITHM")? {
             use_fast_algorithm
@@ -5700,74 +5673,39 @@ fn run_collectwgsmetrics(args: &[String]) -> Result<(), CommandError> {
 
     let reference_contigs = read_reference_contigs_for_wgs(&reference)?;
     let interval_masks = collectwgs_interval_masks(args.get("INTERVALS"), &reference_contigs)?;
-    let mut summary =
-        WgsMetricsSummary::new(&reference_contigs, interval_masks.as_ref(), coverage_cap);
-    if stop_after >= 0 {
-        summary.limit_included_loci(usize_or_max(stop_after));
-    }
-    let stop_after_u32 = if stop_after < 0 {
-        0
-    } else {
-        u32_or_max(stop_after)
-    };
-    if has_sam_extension(&input)
-        && collectwgs_sam_text_records_are_unpaired(&input, stop_after_u32)?
-    {
-        collect_wgs_unpaired_sam_text(
-            &input,
-            &mut summary,
-            u8_or_max(minimum_mapping_quality),
-            u8_or_max(minimum_base_quality),
-            coverage_cap,
-            locus_accumulation_cap,
-            count_unpaired,
-            stop_after_u32,
-        )?;
-        summary.finish();
-        return Ok(write_text_or_gzip(
-            &output,
-            &summary.to_picard_text(sample_size, include_bq_histogram),
-        )?);
-    }
+    let mut collector =
+        wgs_metrics::WgsCollector::for_run(&reference, interval_masks, options, stop_after)?;
 
-    let mut reader = open_bam_reader_for_args(&input, &args).map_err(|error| error.clone())?;
-    let target_names = reader
-        .header()
-        .target_names()
-        .iter()
-        .map(|name| String::from_utf8_lossy(name).to_string())
-        .collect::<Vec<_>>();
-    if hts_io::is_hts_container_input(&input) {
-        cmm_pipeline::pipeline_bam_records(reader, stop_after_u32, 8192, |record| {
-            summary.observe(
-                &record,
-                &target_names,
-                u8_or_max(minimum_mapping_quality),
-                u8_or_max(minimum_base_quality),
-                coverage_cap,
-                locus_accumulation_cap,
-                count_unpaired,
-            )
-        })?;
-    } else {
-        for record in limited_records(&mut reader, stop_after_u32) {
-            let record = record.map_err(|error| error.to_string())?;
-            summary.observe(
-                &record,
-                &target_names,
-                u8_or_max(minimum_mapping_quality),
-                u8_or_max(minimum_base_quality),
-                coverage_cap,
-                locus_accumulation_cap,
-                count_unpaired,
-            )?;
+    let by_region = stop_after.is_none()
+        && hts_io::is_hts_container_input(&input)
+        && wgs_regions::collect_by_region(&input, &reference, &mut collector)?;
+    if !by_region {
+        let mut reader = open_bam_reader_for_args(&input, &args).map_err(|error| error.clone())?;
+        let target_names = reader
+            .header()
+            .target_names()
+            .iter()
+            .map(|name| String::from_utf8_lossy(name).to_string())
+            .collect::<Vec<_>>();
+        let mut record = bam::Record::new();
+        while let Some(result) = reader.read(&mut record) {
+            result.map_err(|error| error.to_string())?;
+            collector.observe(&record, &target_names)?;
+            if collector.stopped() {
+                break;
+            }
         }
     }
-    summary.finish();
+    if collector.accumulation_cap_reached() && collector.has_intervals() {
+        return Err(unsupported(
+            "unsupported CollectWgsMetrics INTERVALS input that reaches LOCUS_ACCUMULATION_CAP",
+        ));
+    }
+    collector.finish();
 
     Ok(write_text_or_gzip(
         &output,
-        &summary.to_picard_text(sample_size, include_bq_histogram),
+        &collector.to_picard_text(sample_size, include_bq_histogram),
     )?)
 }
 
@@ -11438,6 +11376,7 @@ fn reject_unsupported_collectwgsmetrics_args(args: &PicardArgs) -> Result<(), Co
         "COMPRESSION_LEVEL",
         "TMP_DIR",
         "MAX_RECORDS_IN_RAM",
+        "EXCLUDE_SUPPLEMENTARY",
     ];
     for key in args.keys() {
         if !supported.contains(&key.as_str()) {
@@ -11451,6 +11390,7 @@ fn reject_unsupported_collectwgsmetrics_args(args: &PicardArgs) -> Result<(), Co
     optional_bool(args, "INCLUDE_BQ_HISTOGRAM")?;
     optional_bool(args, "USE_FAST_ALGORITHM")?;
     optional_bool(args, "COUNT_UNPAIRED")?;
+    optional_bool(args, "EXCLUDE_SUPPLEMENTARY")?;
     optional_u32(args, "MINIMUM_MAPPING_QUALITY")?;
     optional_u32(args, "MINIMUM_BASE_QUALITY")?;
     optional_u32(args, "COVERAGE_CAP")?;
@@ -13524,1074 +13464,6 @@ fn is_chimeric_sam_record(
             flags & 0x20 != 0,
             template_length,
         )
-}
-
-fn bam_cigar_reference_len(record: &bam::Record) -> usize {
-    record
-        .cigar()
-        .iter()
-        .map(|cigar| match cigar {
-            Cigar::Match(len)
-            | Cigar::Equal(len)
-            | Cigar::Diff(len)
-            | Cigar::Del(len)
-            | Cigar::RefSkip(len) => *len as usize,
-            _ => 0,
-        })
-        .sum()
-}
-
-#[derive(Debug, Default)]
-struct WgsOverlapBitmap {
-    words: Vec<u64>,
-}
-
-impl WgsOverlapBitmap {
-    fn with_bit_len(bits: usize) -> Self {
-        Self {
-            words: vec![0; bits.div_ceil(64)],
-        }
-    }
-
-    fn set(&mut self, index: usize) {
-        if let Some(word) = self.words.get_mut(index / 64) {
-            *word |= 1_u64 << (index % 64);
-        }
-    }
-
-    fn get(&self, index: usize) -> bool {
-        self.words
-            .get(index / 64)
-            .copied()
-            .is_some_and(|word| word & (1_u64 << (index % 64)) != 0)
-    }
-}
-
-#[derive(Debug)]
-struct WgsCachedMate {
-    overlap_start: u32,
-    bitmap: WgsOverlapBitmap,
-}
-
-impl WgsCachedMate {
-    fn covered_at(&self, reference_index: usize) -> bool {
-        if reference_index < self.overlap_start as usize {
-            return false;
-        }
-        let index = reference_index - self.overlap_start as usize;
-        self.bitmap.get(index)
-    }
-}
-
-#[derive(Debug)]
-struct WgsMateBuffer {
-    pending: FxHashMap<Vec<u8>, WgsCachedMate>,
-}
-
-enum WgsMatePeek {
-    Alone,
-    WouldBuffer {
-        overlap_start: u32,
-        overlap_len: u32,
-    },
-    PairWith(WgsCachedMate),
-}
-
-impl WgsMateBuffer {
-    const INITIAL_CAPACITY: usize = 4096;
-
-    fn clear(&mut self) {
-        self.pending.clear();
-    }
-
-    fn probe(&mut self, record: &bam::Record) -> WgsMatePeek {
-        if !record.is_paired() || record.is_unmapped() || record.is_mate_unmapped() {
-            return WgsMatePeek::Alone;
-        }
-        let tid = record.tid();
-        let mtid = record.mtid();
-        if tid < 0 || mtid < 0 || tid != mtid {
-            return WgsMatePeek::Alone;
-        }
-        let qname = record.qname();
-        if qname.is_empty() {
-            return WgsMatePeek::Alone;
-        }
-        if let Some(cached) = self.pending.remove(qname) {
-            return WgsMatePeek::PairWith(cached);
-        }
-        let read_start = u32_or_max(record.pos().max(0));
-        let mate_start = u32_or_max(record.mpos().max(0));
-        let read_end = read_start.saturating_add(u32_or_max(bam_cigar_reference_len(record)));
-        if mate_start >= read_start && mate_start < read_end {
-            let overlap_len = read_end - mate_start;
-            return WgsMatePeek::WouldBuffer {
-                overlap_start: mate_start,
-                overlap_len,
-            };
-        }
-        WgsMatePeek::Alone
-    }
-
-    fn insert(&mut self, qname: &[u8], cached: WgsCachedMate) {
-        self.pending.insert(qname.to_vec(), cached);
-    }
-}
-
-impl Default for WgsMateBuffer {
-    fn default() -> Self {
-        Self {
-            pending: FxHashMap::with_capacity_and_hasher(Self::INITIAL_CAPACITY, FxBuildHasher),
-        }
-    }
-}
-
-enum WgsOverlapMode<'a> {
-    Buffer {
-        overlap_start: u32,
-        bitmap: &'a mut WgsOverlapBitmap,
-    },
-    Pair(&'a WgsCachedMate),
-}
-
-impl WgsOverlapMode<'_> {
-    #[inline]
-    fn is_mate_covered(&self, reference_index: usize) -> bool {
-        match self {
-            Self::Buffer { .. } => false,
-            Self::Pair(cached) => cached.covered_at(reference_index),
-        }
-    }
-
-    #[inline]
-    fn on_depth_counted(&mut self, reference_index: usize) {
-        if let Self::Buffer {
-            overlap_start,
-            bitmap,
-        } = self
-        {
-            if reference_index < *overlap_start as usize {
-                return;
-            }
-            let index = reference_index - *overlap_start as usize;
-            bitmap.set(index);
-        }
-    }
-}
-
-fn wgs_locus_included(contig: &WgsContigMetadata, index: usize) -> bool {
-    wgs_locus_included_at(contig.included.as_deref(), index, contig.length)
-}
-
-#[inline]
-fn wgs_locus_included_at(mask: Option<&[bool]>, index: usize, contig_length: usize) -> bool {
-    mask.is_none_or(|included| included.get(index).copied().unwrap_or(false))
-        && index < contig_length
-}
-
-fn wgs_included_loci(contig: &WgsContigMetadata) -> usize {
-    contig.included.as_ref().map_or(contig.length, |mask| {
-        mask.iter().filter(|included| **included).count()
-    })
-}
-
-fn collectwgs_sam_text_records_are_unpaired(input: &str, stop_after: u32) -> Result<bool, String> {
-    let file = fs::File::open(input).map_err(|error| error.to_string())?;
-    let mut reader = BufReader::with_capacity(1024 * 1024, file);
-    let mut line = Vec::new();
-    let mut observed = 0_u32;
-
-    loop {
-        line.clear();
-        if reader
-            .read_until(b'\n', &mut line)
-            .map_err(|error| error.to_string())?
-            == 0
-        {
-            return Ok(true);
-        }
-        if line.starts_with(b"@") || line.iter().all(u8::is_ascii_whitespace) {
-            continue;
-        }
-        let line = trim_ascii_line_end(&line);
-        let mut fields = line.split(|byte| *byte == b'\t');
-        fields
-            .next()
-            .ok_or_else(|| "malformed CollectWgsMetrics SAM record".to_string())?;
-        let flags = parse_u16_bytes(
-            fields
-                .next()
-                .ok_or_else(|| "malformed CollectWgsMetrics SAM record".to_string())?,
-        )?;
-        if flags & 0x1 != 0 {
-            return Ok(false);
-        }
-        observed = observed.saturating_add(1);
-        if stop_after > 0 && observed >= stop_after {
-            return Ok(true);
-        }
-    }
-}
-
-#[expect(
-    clippy::too_many_arguments,
-    reason = "mirrors the Picard option set one-to-one"
-)]
-fn collect_wgs_unpaired_sam_text(
-    input: &str,
-    summary: &mut WgsMetricsSummary,
-    minimum_mapping_quality: u8,
-    minimum_base_quality: u8,
-    coverage_cap: u32,
-    locus_accumulation_cap: u32,
-    count_unpaired: bool,
-    stop_after: u32,
-) -> Result<(), String> {
-    let file = fs::File::open(input).map_err(|error| error.to_string())?;
-    let mut reader = BufReader::with_capacity(1024 * 1024, file);
-    let mut line = Vec::new();
-    let mut qualities = Vec::new();
-    let mut cigars = Vec::new();
-    let mut observed = 0_u32;
-
-    loop {
-        line.clear();
-        if reader
-            .read_until(b'\n', &mut line)
-            .map_err(|error| error.to_string())?
-            == 0
-        {
-            break;
-        }
-        if line.starts_with(b"@") || line.iter().all(u8::is_ascii_whitespace) {
-            continue;
-        }
-        observe_wgs_unpaired_sam_line(
-            summary,
-            &line,
-            &mut qualities,
-            &mut cigars,
-            minimum_mapping_quality,
-            minimum_base_quality,
-            coverage_cap,
-            locus_accumulation_cap,
-            count_unpaired,
-        )?;
-        observed = observed.saturating_add(1);
-        if stop_after > 0 && observed >= stop_after {
-            break;
-        }
-    }
-    Ok(())
-}
-
-#[expect(
-    clippy::too_many_arguments,
-    reason = "mirrors the Picard option set one-to-one"
-)]
-fn observe_wgs_unpaired_sam_line(
-    summary: &mut WgsMetricsSummary,
-    line: &[u8],
-    qualities: &mut Vec<u8>,
-    cigars: &mut Vec<Cigar>,
-    minimum_mapping_quality: u8,
-    minimum_base_quality: u8,
-    coverage_cap: u32,
-    locus_accumulation_cap: u32,
-    count_unpaired: bool,
-) -> Result<(), String> {
-    let line = trim_ascii_line_end(line);
-    let mut fields = line.split(|byte| *byte == b'\t');
-    fields
-        .next()
-        .ok_or_else(|| "malformed CollectWgsMetrics SAM record".to_string())?;
-    let flags = parse_u16_bytes(
-        fields
-            .next()
-            .ok_or_else(|| "malformed CollectWgsMetrics SAM record".to_string())?,
-    )?;
-    let rname = fields
-        .next()
-        .ok_or_else(|| "malformed CollectWgsMetrics SAM record".to_string())?;
-    let pos = parse_i64_bytes(
-        fields
-            .next()
-            .ok_or_else(|| "malformed CollectWgsMetrics SAM record".to_string())?,
-    )?;
-    let mapq = parse_u8_bytes(
-        fields
-            .next()
-            .ok_or_else(|| "malformed CollectWgsMetrics SAM record".to_string())?,
-    )?;
-    let cigar = fields
-        .next()
-        .ok_or_else(|| "malformed CollectWgsMetrics SAM record".to_string())?;
-    fields
-        .next()
-        .ok_or_else(|| "malformed CollectWgsMetrics SAM record".to_string())?;
-    fields
-        .next()
-        .ok_or_else(|| "malformed CollectWgsMetrics SAM record".to_string())?;
-    fields
-        .next()
-        .ok_or_else(|| "malformed CollectWgsMetrics SAM record".to_string())?;
-    let sequence = fields
-        .next()
-        .ok_or_else(|| "malformed CollectWgsMetrics SAM record".to_string())?;
-    let quality_text = fields
-        .next()
-        .ok_or_else(|| "malformed CollectWgsMetrics SAM record".to_string())?;
-
-    if flags & 0x4 != 0 || flags & 0x100 != 0 || flags & 0x800 != 0 || rname == b"*" {
-        return Ok(());
-    }
-    qualities.clear();
-    if quality_text != b"*" {
-        qualities.extend(
-            quality_text
-                .iter()
-                .map(|quality| quality.saturating_sub(33)),
-        );
-    }
-    let contig = std::str::from_utf8(rname)
-        .map_err(|_| "malformed CollectWgsMetrics SAM contig".to_string())?;
-    let reference_offset_start = usize_or_max(pos.saturating_sub(1).max(0));
-    let is_duplicate = flags & 0x400 != 0;
-    let is_paired = flags & 0x1 != 0;
-    if let Some(len) = simple_match_cigar_len_bytes(cigar) {
-        let len =
-            u32::try_from(len).map_err(|_| "malformed CollectWgsMetrics CIGAR".to_string())?;
-        return summary.observe_cigar_ops_iter(
-            contig,
-            reference_offset_start,
-            qualities,
-            is_duplicate,
-            mapq,
-            is_paired,
-            std::iter::once(Cigar::Match(len)),
-            minimum_mapping_quality,
-            minimum_base_quality,
-            coverage_cap,
-            locus_accumulation_cap,
-            count_unpaired,
-            None,
-        );
-    }
-
-    parse_wgs_cigar_sam_text(cigar, cigars)?;
-    if sequence != b"*" && quality_text != b"*" && sequence.len() != qualities.len() {
-        return Err("malformed CollectWgsMetrics SAM sequence/quality length mismatch".to_string());
-    }
-    summary.observe_cigar_ops_iter(
-        contig,
-        reference_offset_start,
-        qualities,
-        is_duplicate,
-        mapq,
-        is_paired,
-        cigars.iter().copied(),
-        minimum_mapping_quality,
-        minimum_base_quality,
-        coverage_cap,
-        locus_accumulation_cap,
-        count_unpaired,
-        None,
-    )
-}
-
-fn simple_match_cigar_len_bytes(cigar: &[u8]) -> Option<u64> {
-    let length = cigar.strip_suffix(b"M")?;
-    if length.is_empty() || !length.iter().all(u8::is_ascii_digit) {
-        return None;
-    }
-    let mut parsed = 0_u64;
-    for byte in length {
-        parsed = parsed
-            .checked_mul(10)?
-            .checked_add(u64::from(byte - b'0'))?;
-    }
-    (parsed > 0).then_some(parsed)
-}
-
-fn parse_wgs_cigar_sam_text(cigar: &[u8], output: &mut Vec<Cigar>) -> Result<(), String> {
-    if cigar == b"*" {
-        output.clear();
-        return Ok(());
-    }
-    output.clear();
-    let mut len = 0_u64;
-    let mut saw_digit = false;
-    for byte in cigar {
-        if byte.is_ascii_digit() {
-            saw_digit = true;
-            len = len
-                .checked_mul(10)
-                .and_then(|value| value.checked_add(u64::from(byte - b'0')))
-                .ok_or_else(|| "malformed CollectWgsMetrics CIGAR".to_string())?;
-            continue;
-        }
-        if !saw_digit || len == 0 || len > u64::from(u32::MAX) {
-            return Err("malformed CollectWgsMetrics CIGAR".to_string());
-        }
-        let op_len = u32_or_max(len);
-        let cigar = match *byte {
-            b'M' => Cigar::Match(op_len),
-            b'=' => Cigar::Equal(op_len),
-            b'X' => Cigar::Diff(op_len),
-            b'I' => Cigar::Ins(op_len),
-            b'D' => Cigar::Del(op_len),
-            b'N' => Cigar::RefSkip(op_len),
-            b'S' => Cigar::SoftClip(op_len),
-            b'H' => Cigar::HardClip(op_len),
-            b'P' => Cigar::Pad(op_len),
-            _ => return Err("malformed CollectWgsMetrics CIGAR".to_string()),
-        };
-        output.push(cigar);
-        saw_digit = false;
-        len = 0;
-    }
-    if saw_digit {
-        return Err("malformed CollectWgsMetrics CIGAR".to_string());
-    }
-    Ok(())
-}
-
-#[derive(Debug)]
-struct WgsMetricsSummary {
-    contigs: BTreeMap<String, WgsContigMetadata>,
-    coverage_cap: u32,
-    total_aligned_bases: u64,
-    excluded_mapq: u64,
-    excluded_duplicate: u64,
-    excluded_unpaired: u64,
-    excluded_baseq: u64,
-    excluded_overlap: u64,
-    excluded_capped: u64,
-    base_quality_histogram: Vec<u64>,
-    sensitivity_base_quality_histogram: Vec<u64>,
-    coverage_histogram: Vec<u64>,
-    active_contig: Option<String>,
-    active_included: Option<Arc<[bool]>>,
-    active_depths: Vec<u16>,
-    active_depth_base: usize,
-    active_depth_offset: usize,
-    last_alignment_start: Option<usize>,
-    processed_contigs: HashSet<String>,
-    mate_buffer: WgsMateBuffer,
-}
-
-#[derive(Debug)]
-struct WgsContigMetadata {
-    length: usize,
-    included: Option<Arc<[bool]>>,
-}
-
-impl WgsMetricsSummary {
-    fn new(
-        reference_contigs: &[(String, usize)],
-        interval_masks: Option<&BTreeMap<String, Vec<bool>>>,
-        coverage_cap: u32,
-    ) -> Self {
-        let contigs = reference_contigs
-            .iter()
-            .map(|(name, length)| {
-                let included = interval_masks
-                    .and_then(|masks| masks.get(name).cloned())
-                    .map(Arc::<[bool]>::from);
-                (
-                    name.clone(),
-                    WgsContigMetadata {
-                        length: *length,
-                        included,
-                    },
-                )
-            })
-            .collect::<BTreeMap<_, _>>();
-        let included_loci = contigs.values().map(wgs_included_loci).sum::<usize>();
-        let mut coverage_histogram = vec![0; coverage_cap as usize + 1];
-        if included_loci > 0 {
-            coverage_histogram[0] = included_loci as u64;
-        }
-        Self {
-            contigs,
-            coverage_cap,
-            total_aligned_bases: 0,
-            excluded_mapq: 0,
-            excluded_duplicate: 0,
-            excluded_unpaired: 0,
-            excluded_baseq: 0,
-            excluded_overlap: 0,
-            excluded_capped: 0,
-            base_quality_histogram: vec![0; 256.max(coverage_cap as usize + 1)],
-            sensitivity_base_quality_histogram: vec![0; 256.max(coverage_cap as usize + 1)],
-            coverage_histogram,
-            active_contig: None,
-            active_included: None,
-            active_depths: Vec::new(),
-            active_depth_base: 0,
-            active_depth_offset: 0,
-            last_alignment_start: None,
-            processed_contigs: HashSet::new(),
-            mate_buffer: WgsMateBuffer::default(),
-        }
-    }
-
-    fn finish(&mut self) {
-        if let Some(contig) = self.active_contig.take() {
-            self.processed_contigs.insert(contig);
-        }
-        self.active_included = None;
-        self.mate_buffer.clear();
-        self.active_depths.clear();
-        self.active_depth_base = 0;
-        self.active_depth_offset = 0;
-        self.last_alignment_start = None;
-    }
-
-    fn ensure_contig(&mut self, contig: &str) -> Result<(), String> {
-        if self.active_contig.as_deref() == Some(contig) {
-            return Ok(());
-        }
-        if self.processed_contigs.contains(contig) {
-            return Err(format!(
-                "CollectWgsMetrics alignment is not coordinate-sorted: contig {contig} was revisited"
-            ));
-        }
-        if let Some(previous) = self.active_contig.take() {
-            self.processed_contigs.insert(previous);
-            self.active_depths.clear();
-            self.active_depth_base = 0;
-            self.active_depth_offset = 0;
-            self.last_alignment_start = None;
-            self.active_included = None;
-            self.mate_buffer.clear();
-        }
-        let Some(metadata) = self.contigs.get(contig) else {
-            return Err(format!(
-                "CollectWgsMetrics reference missing contig {contig}"
-            ));
-        };
-        self.active_depths.clear();
-        self.active_depth_base = 0;
-        self.active_depth_offset = 0;
-        self.last_alignment_start = None;
-        self.active_contig = Some(contig.to_string());
-        self.active_included = metadata.included.clone();
-        Ok(())
-    }
-
-    fn advance_depth_window(&mut self, alignment_start: usize) -> Result<(), String> {
-        const COMPACT_AFTER: usize = 64 * 1024;
-        if let Some(previous) = self.last_alignment_start
-            && alignment_start < previous
-        {
-            return Err(format!(
-                "CollectWgsMetrics alignment is not coordinate-sorted: position {alignment_start} follows {previous}"
-            ));
-        }
-        self.last_alignment_start = Some(alignment_start);
-        if alignment_start <= self.active_depth_base {
-            return Ok(());
-        }
-
-        let live_len = self
-            .active_depths
-            .len()
-            .saturating_sub(self.active_depth_offset);
-        let discard = (alignment_start - self.active_depth_base).min(live_len);
-        self.active_depth_offset += discard;
-        self.active_depth_base = alignment_start;
-
-        if self.active_depth_offset == self.active_depths.len() {
-            self.active_depths.clear();
-            self.active_depth_offset = 0;
-        } else if self.active_depth_offset >= COMPACT_AFTER
-            && self.active_depth_offset >= self.active_depths.len() / 2
-        {
-            let live_len = self.active_depths.len() - self.active_depth_offset;
-            self.active_depths
-                .copy_within(self.active_depth_offset.., 0);
-            self.active_depths.truncate(live_len);
-            self.active_depth_offset = 0;
-        }
-        Ok(())
-    }
-
-    #[inline]
-    fn ensure_depth_through(
-        &mut self,
-        absolute_end: usize,
-        contig_length: usize,
-    ) -> Result<(), String> {
-        if absolute_end > contig_length {
-            return Err("CollectWgsMetrics alignment extends beyond reference".to_string());
-        }
-        let required =
-            self.active_depth_offset + absolute_end.saturating_sub(self.active_depth_base);
-        if required > self.active_depths.len() {
-            self.active_depths.resize(required, 0);
-        }
-        Ok(())
-    }
-
-    #[inline]
-    fn filtered_depth(&self, reference_index: usize) -> u16 {
-        self.active_depths[self.active_depth_offset + reference_index - self.active_depth_base]
-    }
-
-    #[cfg(test)]
-    fn live_depth_len(&self) -> usize {
-        self.active_depths
-            .len()
-            .saturating_sub(self.active_depth_offset)
-    }
-
-    fn adjust_coverage_histogram(
-        histogram: &mut [u64],
-        old_depth: u32,
-        new_depth: u32,
-        coverage_cap: u32,
-    ) {
-        let old_index = old_depth.min(coverage_cap) as usize;
-        let new_index = new_depth.min(coverage_cap) as usize;
-        if old_index == new_index {
-            return;
-        }
-        histogram[old_index] = histogram[old_index].saturating_sub(1);
-        histogram[new_index] += 1;
-    }
-
-    #[inline]
-    fn increment_filtered_depth(&mut self, reference_index: usize) {
-        let window_index = self.active_depth_offset + reference_index - self.active_depth_base;
-        let old_depth = u32::from(self.active_depths[window_index]);
-        let new_depth = old_depth.saturating_add(1);
-        self.active_depths[window_index] = u16_or_max(new_depth);
-        Self::adjust_coverage_histogram(
-            &mut self.coverage_histogram,
-            old_depth,
-            new_depth,
-            self.coverage_cap,
-        );
-    }
-
-    fn exclude_locus_from_histograms(&mut self, depth: u32) {
-        let depth_index = depth.min(self.coverage_cap) as usize;
-        self.coverage_histogram[depth_index] =
-            self.coverage_histogram[depth_index].saturating_sub(1);
-    }
-
-    #[expect(
-        clippy::too_many_arguments,
-        reason = "mirrors the Picard option set one-to-one"
-    )]
-    fn observe(
-        &mut self,
-        record: &bam::Record,
-        target_names: &[String],
-        minimum_mapping_quality: u8,
-        minimum_base_quality: u8,
-        coverage_cap: u32,
-        locus_accumulation_cap: u32,
-        count_unpaired: bool,
-    ) -> Result<(), String> {
-        if record.is_unmapped() || record.is_secondary() || record.is_supplementary() {
-            return Ok(());
-        }
-        let tid = record.tid();
-        if tid < 0 {
-            return Ok(());
-        }
-        let Some(contig) = target_names.get(usize_or_max(tid)) else {
-            return Err("CollectWgsMetrics record references unknown target".to_string());
-        };
-        self.ensure_contig(contig)?;
-        self.advance_depth_window(usize_or_max(record.pos().max(0)))?;
-        match self.mate_buffer.probe(record) {
-            WgsMatePeek::Alone => self.observe_cigar_ops(
-                contig,
-                usize_or_max(record.pos().max(0)),
-                hts_io::base_qualities(record),
-                record.is_duplicate(),
-                record.mapq(),
-                record.is_paired(),
-                &record.cigar(),
-                minimum_mapping_quality,
-                minimum_base_quality,
-                coverage_cap,
-                locus_accumulation_cap,
-                count_unpaired,
-                None,
-            ),
-            WgsMatePeek::WouldBuffer {
-                overlap_start,
-                overlap_len,
-            } => {
-                let mut bitmap = WgsOverlapBitmap::with_bit_len(overlap_len as usize);
-                self.observe_cigar_ops(
-                    contig,
-                    usize_or_max(record.pos().max(0)),
-                    hts_io::base_qualities(record),
-                    record.is_duplicate(),
-                    record.mapq(),
-                    record.is_paired(),
-                    &record.cigar(),
-                    minimum_mapping_quality,
-                    minimum_base_quality,
-                    coverage_cap,
-                    locus_accumulation_cap,
-                    count_unpaired,
-                    Some(WgsOverlapMode::Buffer {
-                        overlap_start,
-                        bitmap: &mut bitmap,
-                    }),
-                )?;
-                self.mate_buffer.insert(
-                    record.qname(),
-                    WgsCachedMate {
-                        overlap_start,
-                        bitmap,
-                    },
-                );
-                Ok(())
-            }
-            WgsMatePeek::PairWith(cached) => self.observe_cigar_ops(
-                contig,
-                usize_or_max(record.pos().max(0)),
-                hts_io::base_qualities(record),
-                record.is_duplicate(),
-                record.mapq(),
-                record.is_paired(),
-                &record.cigar(),
-                minimum_mapping_quality,
-                minimum_base_quality,
-                coverage_cap,
-                locus_accumulation_cap,
-                count_unpaired,
-                Some(WgsOverlapMode::Pair(&cached)),
-            ),
-        }
-    }
-
-    #[expect(
-        clippy::too_many_arguments,
-        reason = "mirrors the Picard option set one-to-one"
-    )]
-    fn observe_cigar_ops(
-        &mut self,
-        contig: &str,
-        reference_offset_start: usize,
-        qualities: &[u8],
-        is_duplicate: bool,
-        mapq: u8,
-        is_paired: bool,
-        cigars: &bam::record::CigarStringView,
-        minimum_mapping_quality: u8,
-        minimum_base_quality: u8,
-        coverage_cap: u32,
-        locus_accumulation_cap: u32,
-        count_unpaired: bool,
-        overlap_mode: Option<WgsOverlapMode<'_>>,
-    ) -> Result<(), String> {
-        self.observe_cigar_ops_iter(
-            contig,
-            reference_offset_start,
-            qualities,
-            is_duplicate,
-            mapq,
-            is_paired,
-            cigars.iter().copied(),
-            minimum_mapping_quality,
-            minimum_base_quality,
-            coverage_cap,
-            locus_accumulation_cap,
-            count_unpaired,
-            overlap_mode,
-        )
-    }
-
-    #[expect(
-        clippy::too_many_arguments,
-        reason = "mirrors the Picard option set one-to-one"
-    )]
-    fn observe_cigar_ops_iter<I>(
-        &mut self,
-        contig: &str,
-        reference_offset_start: usize,
-        qualities: &[u8],
-        is_duplicate: bool,
-        mapq: u8,
-        is_paired: bool,
-        cigars: I,
-        minimum_mapping_quality: u8,
-        minimum_base_quality: u8,
-        coverage_cap: u32,
-        locus_accumulation_cap: u32,
-        count_unpaired: bool,
-        mut overlap_mode: Option<WgsOverlapMode<'_>>,
-    ) -> Result<(), String>
-    where
-        I: Iterator<Item = Cigar>,
-    {
-        self.ensure_contig(contig)?;
-        self.advance_depth_window(reference_offset_start)?;
-        let contig_length = self
-            .contigs
-            .get(contig)
-            .map(|metadata| metadata.length)
-            .ok_or_else(|| format!("CollectWgsMetrics reference missing contig {contig}"))?;
-        let mut read_offset = 0usize;
-        let mut reference_offset = reference_offset_start;
-        let exclude_unpaired = !count_unpaired && !is_paired;
-        let low_mapq = mapq < minimum_mapping_quality;
-        let locus_accumulation_cap = u16_or_max(locus_accumulation_cap);
-
-        let locus_mask = self.active_included.clone();
-        let fast_all_loci = locus_mask.is_none()
-            && !is_duplicate
-            && !low_mapq
-            && !exclude_unpaired
-            && overlap_mode.is_none();
-        for cigar in cigars {
-            let Some((len, op)) = bam_cigar_to_op(cigar) else {
-                continue;
-            };
-            let len = len as usize;
-            match op {
-                b'M' | b'=' | b'X' => {
-                    if fast_all_loci {
-                        let reference_end = reference_offset + len;
-                        self.ensure_depth_through(reference_end, contig_length)?;
-                        for index in 0..len {
-                            let read_index = read_offset + index;
-                            let reference_index = reference_offset + index;
-                            self.total_aligned_bases += 1;
-                            let Some(quality) = qualities.get(read_index) else {
-                                self.excluded_baseq += 1;
-                                continue;
-                            };
-                            if *quality < minimum_base_quality {
-                                self.excluded_baseq += 1;
-                            } else if self.filtered_depth(reference_index)
-                                >= u16_or_max(coverage_cap)
-                                || self.filtered_depth(reference_index) >= locus_accumulation_cap
-                            {
-                                let index = *quality as usize;
-                                self.base_quality_histogram[index] += 1;
-                                if *quality >= 30 {
-                                    self.sensitivity_base_quality_histogram[index] += 1;
-                                }
-                                self.excluded_capped += 1;
-                            } else {
-                                let index = *quality as usize;
-                                self.base_quality_histogram[index] += 1;
-                                if *quality >= 30 {
-                                    self.sensitivity_base_quality_histogram[index] += 1;
-                                }
-                                self.increment_filtered_depth(reference_index);
-                            }
-                        }
-                        read_offset += len;
-                        reference_offset += len;
-                        continue;
-                    }
-                    self.ensure_depth_through(reference_offset + len, contig_length)?;
-                    for index in 0..len {
-                        let read_index = read_offset + index;
-                        let reference_index = reference_offset + index;
-                        if !wgs_locus_included_at(
-                            locus_mask.as_deref(),
-                            reference_index,
-                            contig_length,
-                        ) {
-                            continue;
-                        }
-                        self.total_aligned_bases += 1;
-                        if is_duplicate {
-                            self.excluded_duplicate += 1;
-                        } else if low_mapq {
-                            self.excluded_mapq += 1;
-                        } else if exclude_unpaired {
-                            self.excluded_unpaired += 1;
-                        } else if qualities
-                            .get(read_index)
-                            .is_none_or(|quality| *quality < minimum_base_quality)
-                        {
-                            self.excluded_baseq += 1;
-                        } else if overlap_mode
-                            .as_ref()
-                            .is_some_and(|mode| mode.is_mate_covered(reference_index))
-                        {
-                            self.excluded_overlap += 1;
-                        } else if self.filtered_depth(reference_index) >= u16_or_max(coverage_cap)
-                            || self.filtered_depth(reference_index) >= locus_accumulation_cap
-                        {
-                            if let Some(quality) = qualities.get(read_index) {
-                                let index = *quality as usize;
-                                self.base_quality_histogram[index] += 1;
-                                if *quality >= 30 {
-                                    self.sensitivity_base_quality_histogram[index] += 1;
-                                }
-                            }
-                            self.excluded_capped += 1;
-                        } else {
-                            if let Some(quality) = qualities.get(read_index) {
-                                let index = *quality as usize;
-                                self.base_quality_histogram[index] += 1;
-                                if *quality >= 30 {
-                                    self.sensitivity_base_quality_histogram[index] += 1;
-                                }
-                            }
-                            self.increment_filtered_depth(reference_index);
-                            if let Some(mode) = overlap_mode.as_mut() {
-                                mode.on_depth_counted(reference_index);
-                            }
-                        }
-                    }
-                    read_offset += len;
-                    reference_offset += len;
-                }
-                b'I' | b'S' => {
-                    read_offset += len;
-                }
-                b'D' | b'N' => {
-                    reference_offset += len;
-                }
-                _ => {}
-            }
-        }
-        Ok(())
-    }
-
-    fn limit_included_loci(&mut self, limit: usize) {
-        let mut remaining = limit;
-        let mut excluded_loci = 0usize;
-        for contig in self.contigs.values_mut() {
-            for index in 0..contig.length {
-                if !wgs_locus_included(contig, index) {
-                    continue;
-                }
-                if remaining == 0 {
-                    if contig.included.is_none() {
-                        contig.included = Some(Arc::<[bool]>::from(vec![true; contig.length]));
-                    }
-                    if let Some(mask) = contig.included.as_mut() {
-                        Arc::make_mut(mask)[index] = false;
-                    }
-                    excluded_loci += 1;
-                } else {
-                    remaining -= 1;
-                }
-            }
-        }
-        for _ in 0..excluded_loci {
-            self.exclude_locus_from_histograms(0);
-        }
-    }
-
-    fn to_picard_text(&self, sample_size: u32, include_bq_histogram: bool) -> String {
-        let histogram = self.coverage_histogram.as_slice();
-        let genome_territory = histogram.iter().sum::<u64>();
-        let mean_coverage = mean_from_histogram_u32(histogram);
-        let sd_coverage = sample_standard_deviation_from_histogram_u32(histogram, mean_coverage);
-        let median_coverage = if genome_territory <= 1 {
-            0.0
-        } else {
-            median_f64_from_histogram_u64(histogram)
-        };
-        let mad_coverage = if genome_territory <= 1 {
-            0.0
-        } else {
-            mad_f64_from_histogram_u64(histogram, median_coverage)
-        };
-        let pct_exc_total = ratio(
-            self.excluded_mapq
-                + self.excluded_duplicate
-                + self.excluded_unpaired
-                + self.excluded_baseq
-                + self.excluded_overlap
-                + self.excluded_capped,
-            self.total_aligned_bases,
-        );
-        let het_sensitivity = if sample_size > 0 && genome_territory > 0 {
-            format_float(het_snp_sensitivity_from_histograms(
-                histogram,
-                &self.sensitivity_base_quality_histogram,
-                sample_size,
-            ))
-        } else {
-            "0".to_string()
-        };
-        let het_q = het_snp_q(&het_sensitivity);
-
-        let mut output = String::new();
-        output.push_str("## METRICS CLASS\tpicard.analysis.WgsMetrics\n");
-        output.push_str("GENOME_TERRITORY\tMEAN_COVERAGE\tSD_COVERAGE\tMEDIAN_COVERAGE\tMAD_COVERAGE\tPCT_EXC_ADAPTER\tPCT_EXC_MAPQ\tPCT_EXC_DUPE\tPCT_EXC_UNPAIRED\tPCT_EXC_BASEQ\tPCT_EXC_OVERLAP\tPCT_EXC_CAPPED\tPCT_EXC_TOTAL\tPCT_1X\tPCT_5X\tPCT_10X\tPCT_15X\tPCT_20X\tPCT_25X\tPCT_30X\tPCT_40X\tPCT_50X\tPCT_60X\tPCT_70X\tPCT_80X\tPCT_90X\tPCT_100X\tFOLD_80_BASE_PENALTY\tFOLD_90_BASE_PENALTY\tFOLD_95_BASE_PENALTY\tHET_SNP_SENSITIVITY\tHET_SNP_Q\n");
-        let _ = write!(
-            output,
-            "{}\t{}\t{}\t{}\t{}\t0\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n\n",
-            genome_territory,
-            format_float(mean_coverage),
-            if genome_territory < 2 {
-                "?".to_string()
-            } else {
-                format_float(sd_coverage)
-            },
-            format_float(median_coverage),
-            format_float(mad_coverage),
-            format_float(ratio(self.excluded_mapq, self.total_aligned_bases)),
-            format_float(ratio(self.excluded_duplicate, self.total_aligned_bases)),
-            format_float(ratio(self.excluded_unpaired, self.total_aligned_bases)),
-            format_float(ratio(self.excluded_baseq, self.total_aligned_bases)),
-            format_float(ratio(self.excluded_overlap, self.total_aligned_bases)),
-            format_float(ratio(self.excluded_capped, self.total_aligned_bases)),
-            format_float(pct_exc_total),
-            format_float(pct_at_least(histogram, 1)),
-            format_float(pct_at_least(histogram, 5)),
-            format_float(pct_at_least(histogram, 10)),
-            format_float(pct_at_least(histogram, 15)),
-            format_float(pct_at_least(histogram, 20)),
-            format_float(pct_at_least(histogram, 25)),
-            format_float(pct_at_least(histogram, 30)),
-            format_float(pct_at_least(histogram, 40)),
-            format_float(pct_at_least(histogram, 50)),
-            format_float(pct_at_least(histogram, 60)),
-            format_float(pct_at_least(histogram, 70)),
-            format_float(pct_at_least(histogram, 80)),
-            format_float(pct_at_least(histogram, 90)),
-            format_float(pct_at_least(histogram, 100)),
-            fold_base_penalty(histogram, mean_coverage, 80.0),
-            fold_base_penalty(histogram, mean_coverage, 90.0),
-            fold_base_penalty(histogram, mean_coverage, 95.0),
-            het_sensitivity,
-            het_q,
-        );
-        output.push_str("## HISTOGRAM\tjava.lang.Integer\n");
-        if include_bq_histogram {
-            output.push_str("coverage\thigh_quality_coverage_count\tunfiltered_baseq_count\n");
-            for coverage in 0..=self.coverage_cap as usize {
-                let _ = writeln!(
-                    output,
-                    "{coverage}\t{}\t{}",
-                    histogram.get(coverage).copied().unwrap_or(0),
-                    self.base_quality_histogram
-                        .get(coverage)
-                        .copied()
-                        .unwrap_or(0)
-                );
-            }
-        } else {
-            output.push_str("coverage\thigh_quality_coverage_count\n");
-            for coverage in 0..=self.coverage_cap as usize {
-                let _ = writeln!(
-                    output,
-                    "{coverage}\t{}",
-                    histogram.get(coverage).copied().unwrap_or(0)
-                );
-            }
-        }
-        output
-    }
 }
 
 fn mean_from_histogram_u32(histogram: &[u64]) -> f64 {
@@ -21420,183 +20292,6 @@ mod tests {
             f64::midpoint(deviations[middle - 1], deviations[middle])
         };
         assert!((mad - expected).abs() < 1e-9);
-    }
-
-    #[test]
-    fn wgs_coverage_histogram_matches_included_loci() {
-        let reference_contigs = vec![("chr1".to_string(), 12usize)];
-        let mut summary = WgsMetricsSummary::new(&reference_contigs, None, 250);
-        assert_eq!(summary.coverage_histogram[0], 12);
-
-        let qualities = vec![30_u8; 12];
-        summary
-            .observe_cigar_ops_iter(
-                "chr1",
-                0,
-                &qualities,
-                false,
-                30,
-                true,
-                std::iter::once(Cigar::Match(12)),
-                20,
-                20,
-                250,
-                100_000,
-                false,
-                None,
-            )
-            .expect("fixture alignment is valid");
-
-        let scanned = summary
-            .active_depths
-            .iter()
-            .map(|depth| u32::from(*depth).min(250))
-            .fold(vec![0u64; 251], |mut histogram, depth| {
-                histogram[depth as usize] += 1;
-                histogram
-            });
-        assert_eq!(summary.coverage_histogram, scanned);
-        assert_eq!(summary.coverage_histogram[1], 12);
-        assert_eq!(summary.coverage_histogram[0], 0);
-    }
-
-    #[test]
-    fn wgs_depth_window_is_bounded_by_live_alignments_not_contig_length() {
-        let reference_contigs = vec![("chr1".to_string(), 250_000_000usize)];
-        let mut summary = WgsMetricsSummary::new(&reference_contigs, None, 250);
-        assert_eq!(summary.active_depths, [] as [u16; 0]);
-
-        let qualities = vec![30_u8; 150];
-        summary
-            .observe_cigar_ops_iter(
-                "chr1",
-                100_000_000,
-                &qualities,
-                false,
-                30,
-                true,
-                std::iter::once(Cigar::Match(150)),
-                20,
-                20,
-                250,
-                100_000,
-                false,
-                None,
-            )
-            .expect("fixture alignment is valid");
-
-        assert_eq!(summary.active_depth_base, 100_000_000);
-        assert_eq!(summary.live_depth_len(), 150);
-
-        summary
-            .observe_cigar_ops_iter(
-                "chr1",
-                200_000_000,
-                &qualities,
-                false,
-                30,
-                true,
-                std::iter::once(Cigar::Match(150)),
-                20,
-                20,
-                250,
-                100_000,
-                false,
-                None,
-            )
-            .expect("fixture alignment is valid");
-
-        assert_eq!(summary.active_depth_base, 200_000_000);
-        assert_eq!(summary.live_depth_len(), 150);
-    }
-
-    #[test]
-    fn wgs_depth_window_preserves_overlap_across_advances() {
-        let reference_contigs = vec![("chr1".to_string(), 1_000usize)];
-        let mut summary = WgsMetricsSummary::new(&reference_contigs, None, 250);
-        let qualities = vec![30_u8; 10];
-
-        for start in [100, 105] {
-            summary
-                .observe_cigar_ops_iter(
-                    "chr1",
-                    start,
-                    &qualities,
-                    false,
-                    30,
-                    true,
-                    std::iter::once(Cigar::Match(10)),
-                    20,
-                    20,
-                    250,
-                    100_000,
-                    false,
-                    None,
-                )
-                .expect("fixture alignment is valid");
-        }
-
-        assert_eq!(summary.active_depth_base, 105);
-        assert_eq!(summary.live_depth_len(), 10);
-        assert_eq!(summary.coverage_histogram[2], 5);
-        assert_eq!(summary.coverage_histogram[1], 10);
-        assert_eq!(summary.coverage_histogram[0], 985);
-    }
-
-    #[test]
-    fn wgs_depth_window_rejects_decreasing_alignment_starts() {
-        let reference_contigs = vec![("chr1".to_string(), 1_000usize)];
-        let mut summary = WgsMetricsSummary::new(&reference_contigs, None, 250);
-        let qualities = vec![30_u8; 10];
-        summary
-            .observe_cigar_ops_iter(
-                "chr1",
-                100,
-                &qualities,
-                false,
-                30,
-                true,
-                std::iter::once(Cigar::Match(10)),
-                20,
-                20,
-                250,
-                100_000,
-                false,
-                None,
-            )
-            .expect("first alignment is valid");
-
-        let error = summary
-            .observe_cigar_ops_iter(
-                "chr1",
-                99,
-                &qualities,
-                false,
-                30,
-                true,
-                std::iter::once(Cigar::Match(10)),
-                20,
-                20,
-                250,
-                100_000,
-                false,
-                None,
-            )
-            .expect_err("decreasing coordinate must be rejected");
-        assert!(error.contains("not coordinate-sorted"));
-    }
-
-    #[test]
-    fn wgs_overlap_bitmap_get_checks_exact_bit() {
-        let mut bitmap = WgsOverlapBitmap::with_bit_len(130);
-        bitmap.set(0);
-        bitmap.set(65);
-
-        assert!(bitmap.get(0));
-        assert!(!bitmap.get(1));
-        assert!(!bitmap.get(64));
-        assert!(bitmap.get(65));
-        assert!(!bitmap.get(66));
     }
 
     #[test]

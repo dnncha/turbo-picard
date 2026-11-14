@@ -113,7 +113,7 @@ impl From<CommandArgError> for CommandError {
 
 #[cfg(test)]
 mod tests {
-    const SOURCES: [(&str, &str); 10] = [
+    const SOURCES: [(&str, &str); 12] = [
         ("agent_contract.rs", include_str!("agent_contract.rs")),
         ("cmm_pipeline.rs", include_str!("cmm_pipeline.rs")),
         ("command_error.rs", include_str!("command_error.rs")),
@@ -124,6 +124,8 @@ mod tests {
         ("sam_sort.rs", include_str!("sam_sort.rs")),
         ("sam_structure.rs", include_str!("sam_structure.rs")),
         ("vcf_headers.rs", include_str!("vcf_headers.rs")),
+        ("wgs_metrics.rs", include_str!("wgs_metrics.rs")),
+        ("wgs_regions.rs", include_str!("wgs_regions.rs")),
     ];
 
     const DELEGATION_MARKERS: [&str; 2] = ["not implemented yet", "should use upstream Picard"];

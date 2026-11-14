@@ -157,6 +157,25 @@ summary for ``wgs-only`` and ``wgs-bundle``. If ``riker`` wins a profile, record
 that gap and the next bottleneck instead of using the smoke fixture as a
 substitute for WGS-scale evidence.
 
+Whole-genome coverage metrics on real data
+------------------------------------------
+
+``CollectWgsMetrics`` in 0.1.18 matched Picard on the small parity fixtures and
+differed on real whole-genome data: on a 4x GRCh38 genome Picard 3.5.0 reported
+mean coverage 3.815218 and 0.1.18 reported 3.600677. The collector was rebuilt
+to follow Picard's locus pileup, and the comparator now requires every metric
+field and histogram row to be equal. The record of what differed, what has been
+compared since, and what is still unmeasured is in
+``benchmarks/wgs-coverage-2026-11-13/README.md``.
+
+To compare on your own BAM or CRAM, across default options, coverage caps,
+quality floors, the accumulation cap, ``STOP_AFTER`` and ``INTERVALS``:
+
+.. code-block:: bash
+
+   TURBO_PICARD_BIN=./target/release/turbo-picard \
+     tools/compare_wgs_metrics_real_data.sh input.bam reference.fa /tmp/wgs-compare picard
+
 Real-data parity evidence
 -------------------------
 
