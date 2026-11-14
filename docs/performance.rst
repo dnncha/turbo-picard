@@ -237,9 +237,10 @@ Each CRAM worker opens the reference independently, so budget memory per worker
 for CRAM inputs.
 
 Picard stops accumulating reads at a locus once ``LOCUS_ACCUMULATION_CAP`` reads
-cover it. That rule depends on file order across the whole pileup, so an input
-deep enough to reach the cap is processed in a single pass. With ``INTERVALS``
-such an input is passed to upstream Picard.
+cover it. That rule depends on file order across the whole pileup, so any contig
+whose pileup reaches the cap is reprocessed in a single pass and the other
+contigs keep their regional result. With ``INTERVALS`` such an input is passed
+to upstream Picard.
 
 ``CollectMultipleMetrics`` on BAM/CRAM inputs runs all selected collectors in
 one HTSlib pass (the same idea as riker's ``multi`` command) instead of

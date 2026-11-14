@@ -5695,11 +5695,11 @@ fn run_collectwgsmetrics(args: &[String]) -> Result<(), CommandError> {
                 break;
             }
         }
-        if collector.accumulation_cap_reached() && collector.has_intervals() {
-            return Err(unsupported(
-                "unsupported CollectWgsMetrics INTERVALS input that reaches LOCUS_ACCUMULATION_CAP",
-            ));
-        }
+    }
+    if collector.accumulation_cap_reached() && collector.has_intervals() {
+        return Err(unsupported(
+            "unsupported CollectWgsMetrics INTERVALS input that reaches LOCUS_ACCUMULATION_CAP",
+        ));
     }
     collector.finish();
 

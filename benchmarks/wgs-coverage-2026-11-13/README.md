@@ -38,38 +38,37 @@ differences of 0.05, and the fixtures were too small to exceed either.
 
 ## What was checked after the rewrite
 
-Each case compared every metric field and every histogram row, with
-`INCLUDE_BQ_HISTOGRAM=true`, for both the single pass
-(`TURBO_PICARD_REGION_WORKERS=1`) and six region workers.
+Each case compared every metric field and every histogram row for both the
+single pass (`TURBO_PICARD_REGION_WORKERS=1`) and six region workers.
 
-| Case on the slice | Options | Result |
+Whole 4x genome, `COUNT_UNPAIRED=true`, against the Picard 3.5.0 output saved
+on 31 October 2026: identical for both paths.
+
+Slice of the 4x genome, with `INCLUDE_BQ_HISTOGRAM=true`, against Picard 3.5.0:
+
+| Case | Options | Result |
 | --- | --- | --- |
-| default | none | identical to Picard, both paths |
-| count-unpaired | `COUNT_UNPAIRED=true` | identical to Picard, both paths |
-| coverage-cap-8 | `COVERAGE_CAP=8 COUNT_UNPAIRED=true` | identical to Picard, both paths |
-| no-quality-floor | `MINIMUM_BASE_QUALITY=0 MINIMUM_MAPPING_QUALITY=0` | identical to Picard, both paths |
-| accumulation-cap | `COVERAGE_CAP=4 LOCUS_ACCUMULATION_CAP=6 COUNT_UNPAIRED=true` | differed at 131 of 139,438,517 loci; the head-of-accumulator rule was corrected afterwards and this slice has not been rerun |
+| default | none | identical, both paths |
+| count-unpaired | `COUNT_UNPAIRED=true` | identical, both paths |
+| coverage-cap-8 | `COVERAGE_CAP=8 COUNT_UNPAIRED=true` | identical, both paths |
+| no-quality-floor | `MINIMUM_BASE_QUALITY=0 MINIMUM_MAPPING_QUALITY=0` | identical, both paths |
+| accumulation-cap | `COVERAGE_CAP=4 LOCUS_ACCUMULATION_CAP=6 COUNT_UNPAIRED=true` | identical, both paths |
+| stop-after | `STOP_AFTER=3000000 COUNT_UNPAIRED=true` | identical, both paths |
+| stop-after, small | `STOP_AFTER=70000` | identical, both paths |
+| intervals | four intervals, `COUNT_UNPAIRED=true` | identical, both paths |
+| intervals with stop-after | four intervals, `STOP_AFTER=2500000` | identical, both paths |
 
-The benchmark host stopped answering before the slice could be rerun with the
-corrected accumulation rule or with `STOP_AFTER` and `INTERVALS`. Those cases
-were instead compared on the checked-in NA12878 mitochondrial BAM
+The same cases were run on the checked-in NA12878 mitochondrial BAM
 (`benchmarks/real-data/gatk-na12878-mito/input.bam`: 14,917 records, 583
 supplementary, 1,848 duplicates, one reference `N`) against Picard 3.4.0 on a
-second host:
+second host, with `STOP_AFTER` of 300, 5,000 and 16,000: 54 comparisons, no
+differences.
 
-| Case on the mitochondrial BAM | Options | Result |
-| --- | --- | --- |
-| default, count-unpaired, coverage-cap-8, no-quality-floor | as above | identical to Picard, both paths |
-| accumulation-cap | `COVERAGE_CAP=4 LOCUS_ACCUMULATION_CAP=6 COUNT_UNPAIRED=true` | identical to Picard, both paths |
-| stop-after | `STOP_AFTER` of 300, 5,000 and 16,000, with and without `COUNT_UNPAIRED=true` | identical to Picard, both paths |
-| intervals | three intervals, `COUNT_UNPAIRED=true` | identical to Picard, both paths |
-| intervals-stop-after | intervals with `STOP_AFTER` of 100, 1,040 and 3,240 | identical to Picard, both paths |
+Not checked: the 15x and 30x genomes have no Picard output to compare with, and
+no CRAM, RNA or long-read input was compared at genome scale.
 
-That is 54 comparisons with no differences. The whole 4x, 15x and 30x genomes
-have not been rerun with the final collector.
-
-`tools/compare_wgs_metrics_real_data.sh` reruns every case against a BAM or
-CRAM of your own:
+`tools/compare_wgs_metrics_real_data.sh` reruns the cases against a BAM or CRAM
+of your own:
 
 ```bash
 TURBO_PICARD_BIN=./target/release/turbo-picard \
@@ -81,7 +80,24 @@ with Picard by the parity gate with the same exact comparator.
 
 ## Timing
 
-Timings for the Picard-exact collector have not been recorded yet. The
-31 October 2026 run measured Picard 3.5.0 at 1,033.8 s and turbo-picard 0.1.18
-at 166.5 s on the 4x genome; the 0.1.18 figure is for the output that did not
-match Picard and should not be quoted as a like-for-like speedup.
+One host, local disk, one run per row unless a range is given, input page cache
+dropped between runs. `riker wgs` 0.5.0 is included as the nearest native tool;
+its metrics differ from Picard's by design, so it is not a like-for-like
+replacement.
+
+| Input | Tool | Threads | Wall seconds | Peak RSS |
+| --- | --- | ---: | ---: | ---: |
+| 4x | Picard 3.5.0 (31 October run) | 1 | 1,033.8 | 1,468 MB |
+| 4x | turbo-picard, single pass | 1 | 76.1 | 50 MB |
+| 4x | turbo-picard, region workers | 6 | 21.8 to 22.6 | 125 MB |
+| 4x | riker wgs | 6 | 29.7 | 504 MB |
+| 15x | turbo-picard, region workers | 6 | 65.4 to 82.6 | 274 MB |
+| 15x | riker wgs | 6 | 78.2 to 79.7 | 518 MB |
+| 30x | turbo-picard, region workers | 6 | 193.5 | 412 MB |
+| 30x | riker wgs | 6 | 147.4 | 510 MB |
+
+On the 4x genome the output is identical to Picard's in about one forty-sixth
+of the time. At 30x turbo-picard is slower than riker: this sample has a contig
+whose pileup reaches the default `LOCUS_ACCUMULATION_CAP` of 100,000 reads, and
+that contig is reprocessed in a single pass to keep Picard's result. Picard was
+not timed at 15x or 30x.

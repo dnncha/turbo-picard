@@ -16,7 +16,8 @@
   as Picard does, detects overlap by read name at each locus, applies
   `LOCUS_ACCUMULATION_CAP` and `STOP_AFTER` as the locus iterator does, and
   computes theoretical het sensitivity from the unfiltered depth and base
-  quality histograms.
+  quality histograms. On the whole 4x genome and on nine option sets on a
+  139 Mb slice the output now equals Picard 3.5.0 field for field.
 - The parity comparator now requires every WgsMetrics field and every histogram
   row to equal Picard's. It previously allowed a territory difference of one
   and overlap differences of 0.05.
@@ -26,6 +27,10 @@
 - `CollectWgsMetrics` on an indexed BAM or CRAM reads the genome as independent
   regions on several threads. `TURBO_PICARD_REGION_WORKERS` sets the worker
   count; `1` selects the single pass.
+  On one host the whole 4x HG02675 genome took 22 s with six workers and gave
+  the same file as Picard 3.5.0, which took 1,034 s. The 30x genome took 194 s;
+  `riker wgs` took 147 s there. Details and limits are in
+  `benchmarks/wgs-coverage-2026-11-13/README.md`.
 
 ### Options beyond Picard
 

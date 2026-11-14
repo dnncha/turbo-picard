@@ -372,10 +372,6 @@ struct NameWindow {
 }
 
 impl NameWindow {
-    fn len(&self) -> usize {
-        self.arrival.len()
-    }
-
     fn clear(&mut self) {
         for slot in self.arrival.drain(..) {
             self.entries[slot].serial = 0;
@@ -503,6 +499,38 @@ fn cigar_extent(cigar: &[u32]) -> (u64, usize) {
         }
     }
     (aligned_bases, reference_span)
+}
+
+#[derive(Debug, Default)]
+pub(crate) struct WgsCounts {
+    excluded: [u64; 7],
+    covered: [u64; 2],
+    high_quality: Vec<u64>,
+    unfiltered: Vec<u64>,
+    base_quality: Vec<u64>,
+}
+
+impl WgsCounts {
+    pub(crate) fn merge(&mut self, other: &Self) {
+        for (total, part) in self.excluded.iter_mut().zip(other.excluded) {
+            *total += part;
+        }
+        for (total, part) in self.covered.iter_mut().zip(other.covered) {
+            *total += part;
+        }
+        add_bins(&mut self.high_quality, &other.high_quality);
+        add_bins(&mut self.unfiltered, &other.unfiltered);
+        add_bins(&mut self.base_quality, &other.base_quality);
+    }
+}
+
+fn add_bins(total: &mut Vec<u64>, part: &[u64]) {
+    if total.len() < part.len() {
+        total.resize(part.len(), 0);
+    }
+    for (total, part) in total.iter_mut().zip(part) {
+        *total += part;
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -677,32 +705,47 @@ impl WgsCollector {
         self.reference.has_intervals
     }
 
-    pub(crate) fn absorb(&mut self, mut worker: Self) {
-        worker.finish();
-        self.excluded_adapter += worker.excluded_adapter;
-        self.excluded_mapq += worker.excluded_mapq;
-        self.excluded_duplicate += worker.excluded_duplicate;
-        self.excluded_unpaired += worker.excluded_unpaired;
-        self.excluded_baseq += worker.excluded_baseq;
-        self.excluded_overlap += worker.excluded_overlap;
-        self.excluded_capped += worker.excluded_capped;
-        self.high_quality_covered += worker.high_quality_covered;
-        self.unfiltered_covered += worker.unfiltered_covered;
-        for (total, part) in [
-            (
-                &mut self.high_quality_histogram,
-                &worker.high_quality_histogram,
-            ),
-            (&mut self.unfiltered_histogram, &worker.unfiltered_histogram),
-            (
-                &mut self.base_quality_histogram,
-                &worker.base_quality_histogram,
-            ),
-        ] {
-            for (total, part) in total.iter_mut().zip(part) {
-                *total += part;
-            }
+    pub(crate) fn drain_counts(&mut self) -> WgsCounts {
+        self.finish();
+        let bins = self.high_quality_histogram.len();
+        WgsCounts {
+            excluded: [
+                std::mem::take(&mut self.excluded_adapter),
+                std::mem::take(&mut self.excluded_mapq),
+                std::mem::take(&mut self.excluded_duplicate),
+                std::mem::take(&mut self.excluded_unpaired),
+                std::mem::take(&mut self.excluded_baseq),
+                std::mem::take(&mut self.excluded_overlap),
+                std::mem::take(&mut self.excluded_capped),
+            ],
+            covered: [
+                std::mem::take(&mut self.high_quality_covered),
+                std::mem::take(&mut self.unfiltered_covered),
+            ],
+            high_quality: std::mem::replace(&mut self.high_quality_histogram, vec![0; bins]),
+            unfiltered: std::mem::replace(&mut self.unfiltered_histogram, vec![0; bins]),
+            base_quality: std::mem::replace(&mut self.base_quality_histogram, vec![0; 256]),
         }
+    }
+
+    pub(crate) fn absorb_counts(&mut self, counts: &WgsCounts) {
+        let [adapter, mapq, duplicate, unpaired, baseq, overlap, capped] = counts.excluded;
+        self.excluded_adapter += adapter;
+        self.excluded_mapq += mapq;
+        self.excluded_duplicate += duplicate;
+        self.excluded_unpaired += unpaired;
+        self.excluded_baseq += baseq;
+        self.excluded_overlap += overlap;
+        self.excluded_capped += capped;
+        self.high_quality_covered += counts.covered[0];
+        self.unfiltered_covered += counts.covered[1];
+        add_bins(&mut self.high_quality_histogram, &counts.high_quality);
+        add_bins(&mut self.unfiltered_histogram, &counts.unfiltered);
+        add_bins(&mut self.base_quality_histogram, &counts.base_quality);
+    }
+
+    pub(crate) fn take_accumulation_cap_reached(&mut self) -> bool {
+        std::mem::take(&mut self.accumulation_cap_reached)
     }
 
     pub(crate) fn finish(&mut self) {
@@ -960,12 +1003,8 @@ impl WgsCollector {
         if reference_span == 0 {
             return Ok(());
         }
-        if self.simulate_accumulation {
-            if self.accumulation_surpassed(start) {
-                return Ok(());
-            }
-        } else if self.names.len() >= self.options.locus_accumulation_cap as usize {
-            self.accumulation_cap_reached = true;
+        if self.simulate_accumulation && self.accumulation_surpassed(start) {
+            return Ok(());
         }
         let end = start + reference_span;
         let reference = Arc::clone(&self.reference);
@@ -1008,11 +1047,15 @@ impl WgsCollector {
             let length = (raw >> 4) as usize;
             match raw & 0xf {
                 0 | 7 | 8 => {
-                    if self.simulate_accumulation {
-                        let from = self.window_offset + reference_offset - self.window_base;
-                        for depth in &mut self.raw[from..from + length] {
-                            *depth += 1;
-                        }
+                    let from = self.window_offset + reference_offset - self.window_base;
+                    let mut deepest = 0;
+                    for depth in &mut self.raw[from..from + length] {
+                        *depth += 1;
+                        deepest = deepest.max(*depth);
+                    }
+                    if !self.simulate_accumulation && deepest >= self.options.locus_accumulation_cap
+                    {
+                        self.accumulation_cap_reached = true;
                     }
                     let lo = reference_offset.max(window_lo);
                     let hi = (reference_offset + length).min(window_hi);

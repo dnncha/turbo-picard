@@ -1,7 +1,9 @@
-use super::wgs_metrics::WgsCollector;
+use super::wgs_metrics::{WgsCollector, WgsCounts};
 use rust_htslib::bam::{self, Read};
 use rust_htslib::htslib;
+use rustc_hash::FxHashMap;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::thread;
 use turbo_picard_core::bgzf_threads::{HtsThreadRole, bgzf_threads_for};
@@ -54,8 +56,14 @@ fn collect_by_region_with(
         .map(|name| String::from_utf8_lossy(name).to_string())
         .collect::<Vec<_>>();
     let regions = regions_for(&header, region_span);
-    let next_region = AtomicUsize::new(0);
-    let failed = AtomicBool::new(false);
+    let shared = SharedProgress {
+        next_region: AtomicUsize::new(0),
+        failed: AtomicBool::new(false),
+        needs_one_pass: (0..header.target_count())
+            .map(|_| AtomicBool::new(false))
+            .collect(),
+        by_contig: Mutex::new(FxHashMap::default()),
+    };
     let worker_summaries = (0..workers.min(regions.len().max(1)))
         .map(|_| summary.region_worker())
         .collect::<Vec<_>>();
@@ -66,8 +74,7 @@ fn collect_by_region_with(
             .map(|mut worker| {
                 let regions = regions.as_slice();
                 let target_names = target_names.as_slice();
-                let next_region = &next_region;
-                let failed = &failed;
+                let shared = &shared;
                 let index = index.as_path();
                 scope.spawn(move || {
                     let outcome = run_worker(
@@ -76,14 +83,13 @@ fn collect_by_region_with(
                         reference,
                         regions,
                         target_names,
-                        next_region,
-                        failed,
+                        shared,
                         &mut worker,
                     );
                     if outcome.is_err() {
-                        failed.store(true, Ordering::Relaxed);
+                        shared.failed.store(true, Ordering::Relaxed);
                     }
-                    outcome.map(|()| worker)
+                    outcome
                 })
             })
             .collect::<Vec<_>>();
@@ -100,58 +106,79 @@ fn collect_by_region_with(
             .collect::<Vec<_>>()
     });
 
-    let mut first_failure: Option<(usize, String)> = None;
-    let mut finished = Vec::new();
-    for outcome in outcomes {
-        match outcome {
-            Ok(worker) => finished.push(worker),
-            Err(failure) => {
-                if first_failure
-                    .as_ref()
-                    .is_none_or(|current| failure.0 < current.0)
-                {
-                    first_failure = Some(failure);
-                }
-            }
-        }
-    }
-    if let Some((_, message)) = first_failure {
+    if let Some((_, message)) = outcomes
+        .into_iter()
+        .filter_map(Result::err)
+        .min_by_key(|failure| failure.0)
+    {
         return Err(message);
     }
-    if finished.iter().any(WgsCollector::accumulation_cap_reached) {
-        return Ok(false);
-    }
-    for worker in finished {
-        summary.absorb(worker);
+    let by_contig = shared
+        .by_contig
+        .into_inner()
+        .map_err(|_| "CollectWgsMetrics region totals lock poisoned".to_string())?;
+    let mut one_pass_reader: Option<bam::IndexedReader> = None;
+    let mut record = bam::Record::new();
+    for (tid, needs_one_pass) in (0_u32..).zip(&shared.needs_one_pass) {
+        if !needs_one_pass.load(Ordering::Relaxed) {
+            if let Some(counts) = by_contig.get(&tid) {
+                summary.absorb_counts(counts);
+            }
+            continue;
+        }
+        if one_pass_reader.is_none() {
+            let mut reader =
+                open_indexed(input, &index, reference).map_err(|error| error.to_string())?;
+            if let Some(threads) = bgzf_threads_for(HtsThreadRole::Reader) {
+                reader
+                    .set_threads(threads)
+                    .map_err(|error| error.to_string())?;
+            }
+            one_pass_reader = Some(reader);
+        }
+        let Some(reader) = one_pass_reader.as_mut() else {
+            continue;
+        };
+        reader.fetch(tid).map_err(|error| error.to_string())?;
+        while let Some(result) = reader.read(&mut record) {
+            result.map_err(|error| error.to_string())?;
+            summary.observe(&record, &target_names)?;
+        }
     }
     Ok(true)
 }
 
-#[expect(
-    clippy::too_many_arguments,
-    reason = "one borrowed handle per piece of shared worker state"
-)]
+struct SharedProgress {
+    next_region: AtomicUsize,
+    failed: AtomicBool,
+    needs_one_pass: Vec<AtomicBool>,
+    by_contig: Mutex<FxHashMap<u32, WgsCounts>>,
+}
+
 fn run_worker(
     input: &str,
     index: &Path,
     reference: &str,
     regions: &[Region],
     target_names: &[String],
-    next_region: &AtomicUsize,
-    failed: &AtomicBool,
+    shared: &SharedProgress,
     worker: &mut WgsCollector,
 ) -> Result<(), (usize, String)> {
     let mut reader =
         open_indexed(input, index, reference).map_err(|error| (0, error.to_string()))?;
     let mut record = bam::Record::new();
     loop {
-        let position = next_region.fetch_add(1, Ordering::Relaxed);
-        if failed.load(Ordering::Relaxed) {
+        let position = shared.next_region.fetch_add(1, Ordering::Relaxed);
+        if shared.failed.load(Ordering::Relaxed) {
             return Ok(());
         }
         let Some(region) = regions.get(position) else {
             return Ok(());
         };
+        let needs_one_pass = &shared.needs_one_pass[region.tid as usize];
+        if needs_one_pass.load(Ordering::Relaxed) {
+            continue;
+        }
         worker.begin_region(region.start, region.end);
         reader
             .fetch((
@@ -166,10 +193,23 @@ fn run_worker(
                 .observe(&record, target_names)
                 .map_err(|error| (position, error))?;
         }
-        if worker.accumulation_cap_reached() {
-            failed.store(true, Ordering::Relaxed);
-            return Ok(());
+        let counts = worker.drain_counts();
+        if worker.take_accumulation_cap_reached() {
+            needs_one_pass.store(true, Ordering::Relaxed);
+            continue;
         }
+        shared
+            .by_contig
+            .lock()
+            .map_err(|_| {
+                (
+                    position,
+                    "CollectWgsMetrics region totals lock poisoned".to_string(),
+                )
+            })?
+            .entry(region.tid)
+            .or_default()
+            .merge(&counts);
     }
 }
 
@@ -331,19 +371,42 @@ mod tests {
     }
 
     #[test]
-    fn regional_collection_declines_when_one_pass_is_required() {
+    fn contigs_that_reach_the_accumulation_cap_are_redone_in_one_pass() {
         let dir = tempfile::tempdir().expect("tempdir exists");
         let (input, reference) = write_fixture(dir.path(), 2, 40);
-        let collect = |options: WgsOptions, workers: usize| {
+        for capped in [options(2, 3), options(4, 9), options(250, 30)] {
+            let expected = one_pass_text(&input, &reference, capped);
+            for region_span in [50, 700, 100_000] {
+                let mut collector =
+                    WgsCollector::for_run(&reference, None, capped, None).expect("reference loads");
+                assert!(
+                    collect_by_region_with(&input, &reference, &mut collector, 4, region_span)
+                        .expect("regional collection succeeds")
+                );
+                collector.finish();
+                assert_eq!(
+                    collector.to_picard_text(10_000, true),
+                    expected,
+                    "options {capped:?} span {region_span}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn regional_collection_declines_without_workers_or_a_current_index() {
+        let dir = tempfile::tempdir().expect("tempdir exists");
+        let (input, reference) = write_fixture(dir.path(), 2, 6);
+        let collect = |workers: usize| {
             let mut collector =
-                WgsCollector::for_run(&reference, None, options, None).expect("reference loads");
+                WgsCollector::for_run(&reference, None, options(250, 100_000), None)
+                    .expect("reference loads");
             collect_by_region_with(&input, &reference, &mut collector, workers, 1_000)
                 .expect("regional collection reports its decision")
         };
-        assert!(collect(options(250, 100_000), 4));
-        assert!(!collect(options(250, 100_000), 1));
-        assert!(!collect(options(2, 3), 4));
+        assert!(collect(4));
+        assert!(!collect(1));
         std::fs::remove_file(format!("{input}.bai")).expect("index fixture is removable");
-        assert!(!collect(options(250, 100_000), 4));
+        assert!(!collect(4));
     }
 }
