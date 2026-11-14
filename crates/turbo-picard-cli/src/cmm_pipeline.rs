@@ -17,8 +17,6 @@ pub enum CmmPipelineError {
     Channel(String),
     #[error("CMM batch handler panicked: {0}")]
     HandlerPanicked(String),
-    #[error("CMM consumer panicked: {0}")]
-    ConsumerPanicked(String),
     #[error("CMM worker failed")]
     WorkerFailed,
     #[error("CMM worker pool is shutting down")]
@@ -27,8 +25,6 @@ pub enum CmmPipelineError {
     NoHandlers,
     #[error("CMM reader thread panicked")]
     ReaderPanicked,
-    #[error("BAM reader thread panicked")]
-    BamReaderPanicked,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -156,7 +152,7 @@ impl CmmRecordGates {
                 && (!secondary || yield_scope.include_secondary)
                 && (!supplementary || yield_scope.include_supplemental),
             gc_bias: plan.gc_bias && !secondary && !supplementary && !unmapped,
-            wgs: plan.wgs && !unmapped && !secondary && !supplementary,
+            wgs: plan.wgs && !unmapped && !secondary,
         }
     }
 
@@ -479,93 +475,9 @@ impl Drop for CmmWorkerPool {
     }
 }
 
-pub fn pipeline_bam_records<F>(
-    mut reader: bam::Reader,
-    stop_after: u32,
-    channel_depth: usize,
-    mut consumer: F,
-) -> Result<(), CmmPipelineError>
-where
-    F: FnMut(bam::Record) -> Result<(), String>,
-{
-    let (record_tx, record_rx) = bounded::<Result<bam::Record, CmmPipelineError>>(channel_depth);
-    let (error_tx, error_rx) = bounded::<CmmPipelineError>(1);
-    let (stop_tx, stop_rx) = bounded::<()>(1);
-
-    let mut consumer_error: Option<CmmPipelineError> = None;
-
-    let reader_handle = thread::spawn(move || {
-        let result = (|| -> Result<(), CmmPipelineError> {
-            let mut seen = 0usize;
-            for record in reader.records() {
-                if stop_after > 0 {
-                    if seen >= stop_after as usize {
-                        break;
-                    }
-                    seen += 1;
-                }
-                let record = record.map_err(|error| CmmPipelineError::Bam(error.to_string()))?;
-                crossbeam_channel::select! {
-                    recv(stop_rx) -> _ => return Ok(()),
-                    send(record_tx, Ok(record)) -> result => {
-                        result.map_err(|error| CmmPipelineError::Channel(error.to_string()))?;
-                    }
-                }
-            }
-            Ok(())
-        })();
-        if let Err(error) = result {
-            let _ = error_tx.send(error);
-        }
-    });
-
-    while let Ok(record) = record_rx.recv() {
-        let record = match record {
-            Ok(record) => record,
-            Err(error) => {
-                consumer_error = Some(error);
-                break;
-            }
-        };
-
-        let consumer_result = panic::catch_unwind(AssertUnwindSafe(|| consumer(record)));
-        match consumer_result {
-            Ok(Ok(())) => {}
-            Ok(Err(error)) => {
-                consumer_error = Some(CmmPipelineError::Handler(error));
-                break;
-            }
-            Err(panic) => {
-                consumer_error = Some(CmmPipelineError::ConsumerPanicked(panic_message(&*panic)));
-                break;
-            }
-        }
-        if let Ok(error) = error_rx.try_recv() {
-            if consumer_error.is_none() {
-                consumer_error = Some(error);
-            }
-            break;
-        }
-    }
-
-    let _ = stop_tx.send(());
-
-    reader_handle
-        .join()
-        .map_err(|_| CmmPipelineError::BamReaderPanicked)?;
-    if let Some(error) = consumer_error {
-        return Err(error);
-    }
-    if let Ok(error) = error_rx.try_recv() {
-        return Err(error);
-    }
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::fmt::Write as _;
     use std::fs;
     use tempfile::tempdir;
 
@@ -791,119 +703,6 @@ mod tests {
     }
 
     #[test]
-    fn pipeline_bam_records_forwards_consumer_error_after_joining_reader() {
-        use std::sync::Arc;
-        use std::sync::atomic::{AtomicUsize, Ordering};
-
-        let tempdir = tempdir().expect("tempdir exists");
-        let input = tempdir.path().join("input.sam");
-        write_basic_sam(
-            &input,
-            "mapped\t0\tchr1\t1\t60\t4M\t*\t0\t0\tACGT\tFFFF\nmapped2\t0\tchr1\t2\t60\t4M\t*\t0\t0\tACGT\tFFFF\n",
-        );
-        let reader = bam::Reader::from_path(&input).expect("sam input opens");
-
-        let calls = Arc::new(AtomicUsize::new(0));
-        let calls_ref = Arc::clone(&calls);
-
-        let result = pipeline_bam_records(reader, 0, 1, move |_record| {
-            let call = calls_ref.fetch_add(1, Ordering::Relaxed) + 1;
-            if call == 1 {
-                return Err("consumer failed".to_string());
-            }
-            Ok(())
-        });
-
-        let error = result.expect_err("expected consumer error");
-        assert_eq!(error.to_string(), "consumer failed");
-        assert_eq!(calls.load(Ordering::Relaxed), 1);
-    }
-
-    #[test]
-    fn pipeline_bam_records_terminates_when_consumer_fails_with_small_channel() {
-        use std::sync::Arc;
-        use std::sync::atomic::{AtomicUsize, Ordering};
-
-        let tempdir = tempdir().expect("tempdir exists");
-        let input = tempdir.path().join("input.sam");
-        let mut lines = String::new();
-        for index in 0..500 {
-            writeln!(
-                lines,
-                "mapped_{index}\t0\tchr1\t1\t60\t4M\t*\t0\t0\tACGT\tFFFF"
-            )
-            .unwrap();
-        }
-        write_basic_sam(&input, &lines);
-
-        let reader = bam::Reader::from_path(&input).expect("sam input opens");
-        let calls = Arc::new(AtomicUsize::new(0));
-        let calls_ref = Arc::clone(&calls);
-
-        let result = pipeline_bam_records(reader, 0, 1, move |_record| {
-            let call = calls_ref.fetch_add(1, Ordering::Relaxed) + 1;
-            if call == 1 {
-                return Err("consumer failed".to_string());
-            }
-            Ok(())
-        });
-
-        let error = result.expect_err("expected consumer error");
-        assert_eq!(error.to_string(), "consumer failed");
-        assert_eq!(calls.load(Ordering::Relaxed), 1);
-    }
-
-    #[test]
-    fn pipeline_bam_records_forwards_consumer_panic_as_error() {
-        use std::path::Path;
-
-        let tempdir = tempdir().expect("tempdir exists");
-        let input = tempdir.path().join("input.sam");
-        let path = Path::new(&input);
-        write_basic_sam(path, "mapped\t0\tchr1\t1\t60\t4M\t*\t0\t0\tACGT\tFFFF\n");
-        let reader = bam::Reader::from_path(path).expect("sam input opens");
-
-        let result = pipeline_bam_records(reader, 0, 1, |_record| -> Result<(), String> {
-            panic!("consumer panic");
-        });
-
-        let error = result.expect_err("expected consumer panic error");
-        assert!(error.to_string().contains("CMM consumer panicked"));
-    }
-
-    #[test]
-    fn pipeline_bam_records_obeys_stop_after_limit() {
-        use std::path::Path;
-        use std::sync::Arc;
-        use std::sync::atomic::{AtomicUsize, Ordering};
-
-        let tempdir = tempdir().expect("tempdir exists");
-        let input = tempdir.path().join("input.sam");
-        let mut lines = String::new();
-        for index in 0..10 {
-            writeln!(
-                lines,
-                "mapped_{index}\t0\tchr1\t{}\t60\t4M\t*\t0\t0\tACGT\tFFFF",
-                index + 1
-            )
-            .unwrap();
-        }
-        write_basic_sam(&input, &lines);
-        let reader = bam::Reader::from_path(Path::new(&input)).expect("sam input opens");
-
-        let calls = Arc::new(AtomicUsize::new(0));
-        let calls_ref = Arc::clone(&calls);
-
-        pipeline_bam_records(reader, 3, 2, move |_record| {
-            calls_ref.fetch_add(1, Ordering::Relaxed);
-            Ok(())
-        })
-        .expect("pipeline stops cleanly");
-
-        assert_eq!(calls.load(Ordering::Relaxed), 3);
-    }
-
-    #[test]
     fn cmm_worker_pool_requires_at_least_one_handler() {
         let pool = CmmWorkerPool::new(vec![]);
         let tempdir = tempdir().expect("tempdir exists");
@@ -919,19 +718,5 @@ mod tests {
             .run_parallel_bam_pass(reader, 0, false, false, false, false)
             .expect_err("expected no-handler error");
         assert_eq!(err, CmmPipelineError::NoHandlers);
-    }
-
-    #[test]
-    fn pipeline_bam_records_propagates_reader_record_error() {
-        let tempdir = tempdir().expect("tempdir exists");
-        let input = tempdir.path().join("invalid.sam");
-        write_basic_sam(
-            &input,
-            "mapped\t0\tchr1\t1\t60\tINVALID_CIGAR\t*\t0\t0\tACGT\tFFFF\n",
-        );
-        let reader = bam::Reader::from_path(&input).expect("sam input opens");
-
-        let result = pipeline_bam_records(reader, 0, 2, |_record| Ok(()));
-        assert!(result.is_err());
     }
 }

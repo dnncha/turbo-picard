@@ -178,6 +178,10 @@ pipeline thread for the same CPU budget. Set
 ``TURBO_PICARD_PIPELINE_READER_THREADS`` only when profiling shows that this
 specialized path needs a different value from ``TURBO_PICARD_READER_THREADS``.
 
+``TURBO_PICARD_REGION_WORKERS`` sets the number of indexed region workers used
+by ``CollectWgsMetrics``. Its automatic default uses the available CPUs up to
+``TURBO_PICARD_MAX_THREADS``.
+
 These worker counts apply per HTSlib handle, not to the total process. Concurrent
 readers, writers and application threads add to them. Use explicit role counts
 when controlling CPU use; ``TURBO_PICARD_MAX_THREADS`` caps automatic defaults
@@ -211,14 +215,31 @@ scan optional tags in one pass instead of allocating a per-line tag vector. Thes
 choices keep parity with Picard output while avoiding repeated vector growth on
 long reads.
 
-``CollectWgsMetrics`` keeps only the live coordinate window that future
-coordinate-sorted records can still overlap. Finalized loci are folded into the
-coverage histogram and discarded, so depth state is independent of chromosome
-length. The collector loads reference lengths from ``.fai`` when present (no
-full-genome FASTA load), applies Picard-style mate overlap exclusion with
-``FxHashMap`` mate pairing and packed overlap bitmaps, and overlaps BGZF decode
-with pileup on BAM/CRAM inputs via a dedicated reader thread. These paths retain
-Picard-identical summary and histogram output for the validated option scope.
+``CollectWgsMetrics`` reproduces Picard's locus pileup without building one. It
+keeps a depth window only over the loci that later coordinate-sorted records
+can still reach, adds each locus to the coverage histograms once when the
+window moves past it, and counts aligned blocks in one pass over the base
+qualities. Reads that share a name are compared base by base only where they
+overlap. Reference ``N`` bases are found by one scan of the FASTA and are
+excluded from the territory, as Picard excludes them.
+
+When the BAM or CRAM has an index that is at least as new as the alignment file
+and ``STOP_AFTER`` is not set, ``CollectWgsMetrics`` reads the genome as
+independent 4 Mb regions on several worker threads, each with its own indexed
+reader, and sums the per-region counts. A read that spans a region boundary is
+seen by both regions and each counts only the loci it owns, so depth caps and
+overlap exclusion see the same reads in the same order as a single pass. A unit
+test checks that the two paths write the same file for region sizes from one
+base upward. Set ``TURBO_PICARD_REGION_WORKERS=N`` to choose the worker count,
+or ``1`` to use the single pass. ``TURBO_PICARD_THREADS`` applies when the role
+variable is unset. Without a current index the command uses the single pass.
+Each CRAM worker opens the reference independently, so budget memory per worker
+for CRAM inputs.
+
+Picard stops accumulating reads at a locus once ``LOCUS_ACCUMULATION_CAP`` reads
+cover it. That rule depends on file order across the whole pileup, so an input
+deep enough to reach the cap is processed in a single pass. With ``INTERVALS``
+such an input is passed to upstream Picard.
 
 ``CollectMultipleMetrics`` on BAM/CRAM inputs runs all selected collectors in
 one HTSlib pass (the same idea as riker's ``multi`` command) instead of
