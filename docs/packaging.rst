@@ -38,8 +38,8 @@ as Python wheel scripts:
 
    python3 -m pip install turbo-picard
 
-Version ``0.1.18`` on PyPI has Linux x86_64, macOS Intel and Apple Silicon
-wheels and a source distribution. Its Linux ARM64 wheel did not build because
+Version ``0.1.19`` targets Linux x86_64, macOS Intel and Apple Silicon wheels
+and a source distribution. Version ``0.1.18`` had no Linux ARM64 wheel because
 the manylinux2014 cross image's GCC 4.8 is too old for libdeflate; on Linux
 ARM64, build from the source distribution or use Bioconda. Publishing workflows validate
 artifacts and run installation smoke tests before uploading. Confirm publication
@@ -141,8 +141,8 @@ on the package index.
 Container image
 ---------------
 
-The versioned ``0.1.18`` container publication target is
-``ghcr.io/dnncha/turbo-picard:0.1.18``. For digest pinning, use the immutable
+The versioned ``0.1.19`` container publication target is
+``ghcr.io/dnncha/turbo-picard:0.1.19``. For digest pinning, use the immutable
 digest reported by the successful container publishing workflow.
 It contains both ``turbo-picard`` and the ``picard`` shim, with
 ``turbo-picard`` as the container entrypoint. Use the release tag or digest for
@@ -151,7 +151,7 @@ without a Conda solve.
 
 .. code-block:: bash
 
-   docker run --rm ghcr.io/dnncha/turbo-picard:0.1.18 --version
+   docker run --rm ghcr.io/dnncha/turbo-picard:0.1.19 --version
 
 The container publication workflow supports manual dispatch for operational
 convenience, but it fails before GHCR login unless the selected ref is the
@@ -211,7 +211,7 @@ the immutable tagged archive:
 
    python3 tools/bioconda_release_preflight.py
    python3 tools/prepare_bioconda_release.py \
-     --archive ~/Downloads/turbo-picard-0.1.18.tar.gz
+     --archive ~/Downloads/turbo-picard-0.1.19.tar.gz
 
 The preflight command summarizes the checks that are already green and calls out
 the expected wait state while the recipes still use ``source.path`` or a source
@@ -225,8 +225,8 @@ version, contains the expected release files, and carries the citation,
 benchmark, and real-data metadata used by the PR body. If the digest was
 computed elsewhere, pass it with ``--sha256`` only when it came from the
 downloaded GitHub source archive. That fallback skips archive filename and
-content validation. For ``0.1.18``, use ``turbo-picard-0.1.18.tar.gz`` or
-GitHub's ``v0.1.18.tar.gz``.
+content validation. For ``0.1.19``, use ``turbo-picard-0.1.19.tar.gz`` or
+GitHub's ``v0.1.19.tar.gz``.
 
 Then run the release checks:
 

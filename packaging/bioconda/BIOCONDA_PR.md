@@ -26,13 +26,13 @@ documented, tested against Picard 3.4.0, and kept explicit.
 
 ## Source
 
-**Preparation only.** Do not submit these source.path recipes. After v0.1.18
+**Preparation only.** Do not submit these source.path recipes. After v0.1.19
 is tagged, fetch its immutable archive and run the release helper to insert the
 measured SHA-256; the release-ready verifier must pass before submission.
 
-- URL: `https://github.com/dnncha/turbo-picard/archive/refs/tags/v0.1.18.tar.gz`
+- URL: `https://github.com/dnncha/turbo-picard/archive/refs/tags/v0.1.19.tar.gz`
 Archive SHA-256:
-`5b087939898760692bc71c3880c7327212768fa56b241521679e26f24e5e71ac`
+`<github-v0.1.19-source-archive-sha256>`
 
 ## Evidence
 
