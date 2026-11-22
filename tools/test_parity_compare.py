@@ -127,6 +127,24 @@ class ParityCompareTests(unittest.TestCase):
             turbo.write_text("METRIC\tVALUE\nHET_SNP_SENSITIVITY\t0.06941\n", encoding="utf-8")
             parity_compare.compare_metrics(picard, turbo, "CollectWgsMetrics")
 
+    def test_compare_metrics_rejects_real_drift_and_names_the_field(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            picard = Path(tempdir) / "picard.txt"
+            turbo = Path(tempdir) / "turbo.txt"
+            picard.write_text("LIBRARY\tPERCENT_DUPLICATION\nlib\t0.069409\n", encoding="utf-8")
+            turbo.write_text("LIBRARY\tPERCENT_DUPLICATION\nlib\t0.069419\n", encoding="utf-8")
+            with pytest.raises(SystemExit, match=r"row 2 PERCENT_DUPLICATION: Picard='0\.069409' turbo='0\.069419'"):
+                parity_compare.compare_metrics(picard, turbo, "MarkDuplicates")
+
+    def test_compare_metrics_rejects_drift_hidden_by_shorter_print(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            picard = Path(tempdir) / "picard.txt"
+            turbo = Path(tempdir) / "turbo.txt"
+            picard.write_text("METRIC\tVALUE\nX\t0.069409\n", encoding="utf-8")
+            turbo.write_text("METRIC\tVALUE\nX\t0.06942\n", encoding="utf-8")
+            with pytest.raises(SystemExit):
+                parity_compare.compare_metrics(picard, turbo, "drift")
+
     def test_compare_wgs_metrics_requires_exact_metrics_and_histogram(self) -> None:
         header = "GENOME_TERRITORY\tMEAN_COVERAGE\tPCT_EXC_OVERLAP\n"
         histogram = "coverage\thigh_quality_coverage_count\n0\t16000\n1\t568\n"

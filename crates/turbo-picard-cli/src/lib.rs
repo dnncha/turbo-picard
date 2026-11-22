@@ -4367,7 +4367,7 @@ fn default_cmm_collector_thread_count(active_collectors: usize) -> usize {
         .ok()
         .map_or(1, |parallelism| parallelism.get().saturating_sub(2))
         .min(active_collectors)
-        .clamp(1, 6)
+        .max(1)
 }
 
 fn run_collectmultiplemetrics_single_pass(
