@@ -71,6 +71,7 @@ pinned docs requirements when documentation changes.
 phone layouts) are the first graphic visitors see
 (README, PyPI, site home, link previews). They are rendered only from evidence:
 the newest `benchmarks/markduplicates-competitors/landscape-YYYY-MM-DD.json`,
+`benchmarks/wgs-coverage-2026-11-13/results.json`,
 `docs/site/assets/benchmark-data.json` and `benchmarks/progress.json`. Never
 edit the SVG or PNG by hand, and never type a number into the renderer.
 

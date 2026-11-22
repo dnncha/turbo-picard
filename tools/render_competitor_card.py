@@ -21,7 +21,7 @@ from typing import Any
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 ASSET_DIR = ROOT / "docs" / "site" / "assets"
 LANDSCAPE_DIR = ROOT / "benchmarks" / "markduplicates-competitors"
-WGS_BENCHMARK_README = ROOT / "benchmarks" / "wgs-coverage-2026-11-13" / "README.md"
+WGS_RESULTS = ROOT / "benchmarks" / "wgs-coverage-2026-11-13" / "results.json"
 SUITE_DATA = ASSET_DIR / "benchmark-data.json"
 PROGRESS = ROOT / "benchmarks" / "progress.json"
 SVG_PATH = ASSET_DIR / "competitor-card.svg"
@@ -102,31 +102,27 @@ def case_results(landscape: dict[str, Any], case: str) -> dict[str, dict[str, An
 
 
 def parse_wgs_4x_comparison() -> dict[str, Any]:
-    """Read 4x GRCh38 WGS CollectWgsMetrics numbers from the checked-in README."""
-    text = WGS_BENCHMARK_README.read_text(encoding="utf-8")
+    runs = json.loads(WGS_RESULTS.read_text(encoding="utf-8"))["runs"]
 
-    def extract_row(tool_prefix: str) -> tuple[float, str, float]:
-        pattern = rf"^\|\s*4x\s*\|\s*{re.escape(tool_prefix)}[^|]*\|\s*\d+\s*\|\s*([^|]+)\|\s*([\d,]+)\s*MB\s*\|"
-        match = re.search(pattern, text, re.MULTILINE)
-        if not match:
-            raise ValueError(f"WGS benchmark table missing 4x row for {tool_prefix!r}")
-        wall_raw = match.group(1).strip()
-        rss_mb = float(match.group(2).replace(",", ""))
-        range_match = re.fullmatch(r"([\d.]+)\s+to\s+([\d.]+)", wall_raw)
-        if range_match:
-            lo, hi = float(range_match.group(1)), float(range_match.group(2))
-            return (lo + hi) / 2.0, f"{lo:.1f}–{hi:.1f} s", rss_mb
-        val = float(wall_raw.replace(",", ""))
-        return val, f"{val:,.1f} s", rss_mb
+    def run_for(tool: str) -> dict[str, Any]:
+        for run in runs:
+            if run["depth"] == "4x" and run["tool"] == tool:
+                return run
+        raise ValueError(f"WGS results have no 4x run for {tool!r}")
 
-    turbo_s, turbo_label, turbo_rss = extract_row("turbo-picard, region workers")
-    riker_s, riker_label, riker_rss = extract_row("riker wgs")
-    picard_s, picard_label, picard_rss = extract_row("Picard 3.5.0")
-    return {
-        "turbo": {"wall": turbo_s, "wall_label": turbo_label, "rss": turbo_rss, "rss_label": f"{int(turbo_rss)} MB"},
-        "riker": {"wall": riker_s, "wall_label": riker_label, "rss": riker_rss, "rss_label": f"{int(riker_rss)} MB"},
-        "picard": {"wall": picard_s, "wall_label": picard_label, "rss": picard_rss, "rss_label": f"{int(picard_rss):,} MB"},
-    }
+    def entry(tool: str) -> dict[str, Any]:
+        run = run_for(tool)
+        walls = [float(v) for v in run["wall_seconds"]]
+        rss = float(run["peak_rss_mb"])
+        if len(walls) == 2:
+            wall, label = sum(walls) / 2.0, f"{walls[0]:.1f}–{walls[1]:.1f} s"
+        elif len(walls) == 1:
+            wall, label = walls[0], f"{walls[0]:,.1f} s"
+        else:
+            raise ValueError(f"WGS run for {tool!r} needs one wall time or a two-value range")
+        return {"wall": wall, "wall_label": label, "rss": rss, "rss_label": f"{int(rss):,} MB"}
+
+    return {"turbo": entry("turbo-picard"), "riker": entry("riker"), "picard": entry("picard")}
 
 
 def headline(results: dict[str, dict[str, Any]]) -> tuple[str, str]:
@@ -833,7 +829,7 @@ _DESCRIPTION = (
     "previews). Every number on it comes from four checked-in files:\n"
     "\n"
     "- the newest ``benchmarks/markduplicates-competitors/landscape-*.json``\n"
-    "- ``benchmarks/wgs-coverage-2026-11-13/README.md`` (4x GRCh38 WGS vs Riker/Picard)\n"
+    "- ``benchmarks/wgs-coverage-2026-11-13/results.json`` (4x GRCh38 WGS vs Riker/Picard)\n"
     "- ``docs/site/assets/benchmark-data.json`` (the parity-checked command suite)\n"
     "- ``benchmarks/progress.json`` (accepted hill-climb results on main)\n"
     "\n"
