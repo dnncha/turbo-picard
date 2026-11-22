@@ -81,7 +81,7 @@ Comparison by workflow
    * - `FastDup <https://github.com/zzhofict/FastDup>`_
      - Multi-threaded duplicate marking on large coordinate-sorted BAM inputs
      - Dedicated FastDup CLI and narrower duplicate-marking scope
-     - Higher memory footprint (~384 MiB on 600k pairs) and representative-read
+     - Higher memory footprint (~384 MiB on 600k reads, about 300k pairs) and representative-read
        differences vs Picard
    * - `riker <https://github.com/fulcrumgenomics/riker>`_
      - New sequencing-QC workflows that prefer Riker's subcommands, TSV outputs,

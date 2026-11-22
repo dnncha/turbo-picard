@@ -4,7 +4,7 @@
 [![PyPI](https://img.shields.io/pypi/v/turbo-picard.svg)](https://pypi.org/project/turbo-picard/)
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.20541927.svg)](https://doi.org/10.5281/zenodo.20541927)
 
-**Native Rust implementations of 39 Picard commands with Picard-checked outputs, `KEY=VALUE` flags, and transparent fallback to upstream Picard for the remaining 88 commands.**
+**Native Rust implementations of 33 Picard commands, plus 6 Turbo Picard utilities, with Picard-checked outputs, `KEY=VALUE` flags, and transparent fallback to upstream Picard for the remaining 88 commands.**
 
 <a href="https://turbo-picard.readthedocs.io/en/latest/evidence/"><picture><source media="(max-width: 700px)" srcset="https://raw.githubusercontent.com/dnncha/turbo-picard/main/docs/site/assets/competitor-card-mobile.png"><img src="https://raw.githubusercontent.com/dnncha/turbo-picard/main/docs/site/assets/competitor-card.png" width="100%" alt="Turbo Picard MarkDuplicates and 4x GRCh38 WGS timings and memory against Picard, Riker, FastDup, and samtools." ></picture></a>
 
@@ -27,12 +27,12 @@ Most bioinformatics pipelines pay a heavy tax in **JVM startup**, **Java heap bl
 | **4x WGS** | **Turbo Picard** (6 workers) | **21.8–22.6 s** | **125 MB** | **~47x faster vs Picard · 1.3x faster & 4.0x less RAM vs Riker** | **✓ Exact** |
 | 4x WGS | `riker wgs` 0.5.0 (6 threads) | 29.7 s | 504 MB | 35x faster vs Picard · 4.0x more RAM than Turbo Picard | ✗ Differs |
 | 4x WGS | Picard 3.5.0 (1 thread) | 1,033.8 s | 1,468 MB | 1.0x reference · 11.7x more RAM than Turbo Picard | ✓ Reference |
-| **15x WGS** | **Turbo Picard** (6 workers) | 65.4–82.6 s | **274 MB** | **Lowest RAM (~1.9x less than Riker)** | **✓ Exact** |
+| **15x WGS** | **Turbo Picard** (6 workers) | 65.4–82.6 s | **274 MB** | **Lowest RAM (~1.9x less than Riker)** | Not compared |
 | 15x WGS | `riker wgs` 0.5.0 (6 threads) | 78.2–79.7 s | 518 MB | Competitive speed · ~1.9x more RAM | ✗ Differs |
-| **30x WGS** | Turbo Picard *(pre-PR #76)* | 193.5 s | **412 MB** | **Lowest RAM (19% less than Riker)** | **✓ Exact** |
+| **30x WGS** | Turbo Picard *(pre-PR #76)* | 193.5 s | **412 MB** | **Lowest RAM (19% less than Riker)** | Not compared |
 | 30x WGS | `riker wgs` 0.5.0 (6 threads) | **147.4 s** | 510 MB | Fastest pre-PR #76 (fallback to 1T on capped contig) | ✗ Differs |
 
-- Turbo Picard matches **every metric field and histogram row** of Picard 3.5.0; `riker wgs` uses simplified TSV output and documented metric differences.
+- On the 4x genome Turbo Picard matches **every metric field and histogram row** of Picard 3.5.0 (the 15x and 30x genomes have no Picard output to compare); `riker wgs` uses simplified TSV output and documented metric differences.
 - On 30x WGS pre-PR #76, hitting `LOCUS_ACCUMULATION_CAP=100,000` forced single-threaded whole-contig reprocessing; PR #76 replaced that with targeted capped-cluster reprocessing (awaiting i7-8700 rerun).
 - On the 2.1 MB `gatk-na12878-mito` smoke check ([`bench_qc_vs_riker.md`](benchmarks/riker-comparison/evidence/bench_qc_vs_riker.md)): Turbo Picard ran `wgs-only` in **0.012 s** (`riker wgs` 0.024 s, **2.10x faster**; Picard 7.302 s, **634x faster**) and `wgs-bundle` in **0.025 s** (`riker multi` 0.053 s, **2.14x faster**; Picard 11.801 s, **477x faster**).
 
@@ -54,7 +54,7 @@ Linux x86_64 · **1 pinned CPU** · BAM compression level 5 ([`benchmarks/markdu
 
 ### 3. Latest `main` core speedups (PR #76, Apple M5 vs prior `main` and Picard 3.4.0)
 
-Paired warm-cache medians (1 warmup + 3 repeats) on Apple M5 comparing [`main`](https://github.com/dnncha/turbo-picard/pull/76) against pre-PR #76 `main` and Picard 3.4.0:
+Paired warm-cache medians (1 warmup + 3 repeats) on Apple M5 comparing [`main`](https://github.com/dnncha/turbo-picard/pull/76) against pre-PR #76 `main` and Picard 3.4.0, as reported in the PR. The raw runs, input hashes and exact options were not retained, so treat these as indicative until a benchmark bundle is checked in:
 
 | Command | Workload | Turbo Picard (`main`) | vs pre-PR #76 `main` | vs Picard 3.4.0 |
 | :--- | :--- | ---: | ---: | ---: |
