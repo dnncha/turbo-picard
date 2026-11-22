@@ -57,6 +57,8 @@ explain
 mcp
 trial
 CollectHsMetrics
+CollectRnaSeqMetrics
+CollectSamErrorMetrics
 IntervalListTools
 LiftoverVcf
 <a href="#adopt">Adoption</a>

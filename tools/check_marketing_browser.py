@@ -185,7 +185,7 @@ def main() -> None:
         expected_accelerated = sum(1 for status in statuses if status != "fallback-only")
         page.set_viewport_size({"width": 1280, "height": 1000})
         visit("commands/")
-        page.locator("#command-search").fill("CollectRnaSeqMetrics")
+        page.locator("#command-search").fill("CollectRrbsMetrics")
         assert page.locator("[data-command]:visible").count() == 1
         assert "Upstream Picard required" in page.locator("[data-command]:visible").inner_text()
         page.locator("#command-filter").select_option("accelerated")

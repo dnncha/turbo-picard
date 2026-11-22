@@ -61,6 +61,8 @@ explain
 mcp
 trial
 CollectHsMetrics
+CollectRnaSeqMetrics
+CollectSamErrorMetrics
 IntervalListTools
 LiftoverVcf
 https://turbo-picard.readthedocs.io/en/latest/adoption.html

@@ -1,8 +1,8 @@
 use super::{
-    JavaRandom, f64_to_u64, fold_base_penalty, format_float, is_adapter_read,
-    mad_f64_from_histogram_u64, mean_from_histogram_u32, median_f64_from_histogram_u64,
-    pct_at_least, read_reference_contigs_for_wgs, sample_standard_deviation_from_histogram_u32,
-    u16_or_max, usize_or_max,
+    f64_to_u64, fold_base_penalty, format_float, het_sensitivity::wgs_het_snp_sensitivity,
+    is_adapter_read, mad_f64_from_histogram_u64, mean_from_histogram_u32,
+    median_f64_from_histogram_u64, pct_at_least, read_reference_contigs_for_wgs,
+    sample_standard_deviation_from_histogram_u32, u16_or_max, usize_or_max,
 };
 use flate2::read::MultiGzDecoder;
 use rust_htslib::bam;
@@ -32,8 +32,6 @@ const FLAG_SUPPLEMENTARY: u16 = 0x800;
 const LOWEST_COUNTED_QUALITY: u8 = 3;
 const PICARD_QUALITY_BINS: usize = 127;
 const REFERENCE_SCAN_SPAN: usize = 16_000_000;
-const HET_SENSITIVITY_MAX_DEPTH: usize = 1000;
-const HET_SENSITIVITY_LOG_ODDS: f64 = 3.0;
 
 type NoCallRuns = Vec<(usize, usize)>;
 
@@ -528,6 +526,10 @@ fn hash_bucket(hash: u64) -> usize {
 }
 
 impl NameWindow {
+    fn is_empty(&self) -> bool {
+        self.newest.is_empty()
+    }
+
     fn clear(&mut self) {
         while let Some(Reverse((_, slot))) = self.expiry.pop() {
             self.entries[slot].serial = 0;
@@ -649,7 +651,7 @@ fn is_no_call_read_base(encoded_bases: &[u8], read_index: usize) -> bool {
         .is_some_and(|byte| (byte >> (4 * (1 - read_index % 2))) & 0xf == 0xf)
 }
 
-fn has_no_call_read_base(encoded_bases: &[u8]) -> bool {
+pub(crate) fn has_no_call_read_base(encoded_bases: &[u8]) -> bool {
     let (chunks, tail) = encoded_bases.as_chunks::<8>();
     for chunk in chunks {
         let word = u64::from_ne_bytes(*chunk);
@@ -1274,12 +1276,17 @@ impl WgsState {
         let qualities = hts_io::base_qualities(record);
         let sequence = record.seq();
         let has_no_call = has_no_call_read_base(sequence.encoded);
+        let is_empty_names = self.names.is_empty();
         let name = record.qname();
         let mut hasher = FxHasher::default();
         hasher.write(name);
         let hash = hasher.finish();
         let mut seen_bits = std::mem::take(&mut self.seen_bits);
-        let guard = self.names.mark_seen(hash, name, start, end, &mut seen_bits);
+        let guard = if is_empty_names {
+            None
+        } else {
+            self.names.mark_seen(hash, name, start, end, &mut seen_bits)
+        };
         let read = AlignedRead {
             start,
             qualities,
@@ -1570,7 +1577,8 @@ impl WgsState {
         };
         let quality_bins = &self.base_quality_histogram[..PICARD_QUALITY_BINS];
         let (het_sensitivity, het_q) = if sample_size > 0 && genome_territory > 0 {
-            let sensitivity = het_snp_sensitivity(&unfiltered, quality_bins, sample_size as usize);
+            let sensitivity =
+                wgs_het_snp_sensitivity(&unfiltered, quality_bins, sample_size as usize);
             (format_float(sensitivity), het_snp_phred(sensitivity))
         } else {
             ("0".to_string(), "0".to_string())
@@ -1653,107 +1661,6 @@ fn het_snp_phred(sensitivity: f64) -> String {
     let low_byte = (scaled + 0.5).floor().rem_euclid(256.0);
     let byte = u8::try_from(f64_to_u64(low_byte)).unwrap_or(0);
     i8::from_ne_bytes([byte]).to_string()
-}
-
-struct QualityWheel {
-    probabilities: Vec<f64>,
-    rejected: u32,
-    rng: JavaRandom,
-}
-
-impl QualityWheel {
-    fn new(weights: &[f64]) -> Self {
-        let heaviest = weights.iter().copied().fold(0.0, f64::max);
-        Self {
-            probabilities: weights.iter().map(|weight| weight / heaviest).collect(),
-            rejected: 0,
-            rng: JavaRandom::new(51),
-        }
-    }
-
-    fn draw(&mut self) -> i32 {
-        loop {
-            let bin = usize_or_max(f64_to_u64(
-                self.probabilities.len() as f64 * self.rng.next_double(),
-            ));
-            self.rejected += 1;
-            if self.rng.next_double() < self.probabilities[bin] {
-                self.rejected = 0;
-                return i32::try_from(bin).unwrap_or(i32::MAX);
-            }
-            if self.rejected >= 600 {
-                self.rejected = 0;
-                return 0;
-            }
-        }
-    }
-}
-
-fn normalized(histogram: &[u64]) -> Vec<f64> {
-    let total = histogram.iter().sum::<u64>() as f64;
-    histogram.iter().map(|bin| *bin as f64 / total).collect()
-}
-
-fn het_snp_sensitivity(
-    unfiltered_depths: &[u64],
-    base_qualities: &[u64],
-    sample_size: usize,
-) -> f64 {
-    if base_qualities.iter().all(|bin| *bin == 0) {
-        return 0.0;
-    }
-    let depth_distribution = normalized(unfiltered_depths);
-    let depths = depth_distribution.len().min(HET_SENSITIVITY_MAX_DEPTH + 1);
-    let mut wheel = QualityWheel::new(&normalized(base_qualities));
-    let mut quality_sums = vec![Vec::with_capacity(sample_size); depths];
-    for _ in 0..sample_size {
-        let mut cumulative = 0_i32;
-        for sums in &mut quality_sums {
-            sums.push(cumulative);
-            cumulative = cumulative.wrapping_add(wheel.draw());
-        }
-    }
-    let log10_of_two = 2.0_f64.log10();
-    let thresholds = (0..depths)
-        .map(|depth| 10.0 * (depth as f64 * log10_of_two + HET_SENSITIVITY_LOG_ODDS))
-        .collect::<Vec<_>>();
-    let exceed = quality_sums
-        .iter_mut()
-        .map(|sums| {
-            sums.sort_unstable();
-            let mut row = vec![0.0; depths];
-            let mut depth = 0;
-            let mut rank = 0;
-            while depth < depths && rank < sums.len() {
-                if thresholds[depth] > f64::from(sums[rank]) {
-                    rank += 1;
-                } else {
-                    row[depth] = (sums.len() - rank) as f64 / sums.len() as f64;
-                    depth += 1;
-                }
-            }
-            row
-        })
-        .collect::<Vec<_>>();
-    let mut alt_depths: Vec<Vec<f64>> = Vec::with_capacity(depths);
-    for depth in 0..depths {
-        let mut row = Vec::with_capacity(depth + 1);
-        row.push(0.5_f64.powi(i32::try_from(depth).unwrap_or(i32::MAX)));
-        for alt in 1..depth {
-            row.push((depth as f64 * 0.5 / alt as f64) * alt_depths[depth - 1][alt - 1]);
-        }
-        if depth > 0 {
-            row.push(row[0]);
-        }
-        alt_depths.push(row);
-    }
-    let mut sensitivity = 0.0;
-    for depth in 0..depths {
-        for alt in 0..=depth {
-            sensitivity += depth_distribution[depth] * alt_depths[depth][alt] * exceed[alt][depth];
-        }
-    }
-    sensitivity
 }
 
 #[cfg(test)]

@@ -58,6 +58,8 @@ test:
     - turbo-picard CollectGcBiasMetrics --help
     - turbo-picard CollectHsMetrics --help
     - turbo-picard CollectQualityYieldMetrics --help
+    - turbo-picard CollectRnaSeqMetrics --help
+    - turbo-picard CollectSamErrorMetrics --help
     - turbo-picard CollectWgsMetrics --help
     - turbo-picard QualityScoreDistribution --help
     - turbo-picard MeanQualityByCycle --help

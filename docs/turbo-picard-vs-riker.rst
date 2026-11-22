@@ -120,6 +120,10 @@ What overlaps
      - ``riker multi``
    * - ``CollectHsMetrics``
      - ``riker hybcap``
+   * - ``CollectRnaSeqMetrics``
+     - ``riker rna``
+   * - ``CollectSamErrorMetrics``
+     - ``riker error``
 
 When to choose each tool
 ------------------------
@@ -139,18 +143,22 @@ Choose ``turbo-picard`` when:
 Choose ``riker`` when:
 
 * You are building a new QC-only pipeline that prefers Riker's subcommands,
-  simplified TSV files, plots, or RNA-seq collector (``CollectRnaSeqMetrics``
-  remains fallback-only in ``turbo-picard``).
+  simplified TSV files, plots, or GTF/GFF3 RNA-seq / BigWig depth options
+  without Picard compatibility constraints.
 
 Current turbo-picard QC limits
 ------------------------------
 
 ``CollectHsMetrics`` supports native ALL_READS metrics, histograms, per-target,
 and per-base outputs (measured **12.8x faster** than Picard 3.4.0 on
-capture-panel intervals in PR #76), while unsupported advanced options delegate
-to upstream Picard. ``CollectSamErrorMetrics`` and ``CollectRnaSeqMetrics``
-remain delegated. Metrics chart sidecars are lightweight PDFs rather than
-Picard-equivalent R plots. See :doc:`fallback` and :doc:`commands`.
+capture-panel intervals in PR #76), ``CollectRnaSeqMetrics`` supports native
+refFlat RNA-seq metrics, multi-level rows, histograms, and chart PDFs, and
+``CollectSamErrorMetrics`` supports native error, indel-error, and
+overlapping-read error calculators across all 26 default stratifiers;
+unsupported advanced options (such as GTF/GFF3 gene models or VCF variant
+filtering) delegate to upstream Picard. Metrics chart sidecars are lightweight
+PDFs rather than Picard-equivalent R plots. See :doc:`fallback` and
+:doc:`commands`.
 
 How to benchmark them fairly
 ----------------------------
