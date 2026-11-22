@@ -3,22 +3,42 @@ Picard alternatives for bioinformatics workflows
 
 .. note::
 
-   Looking for a practical starting point? See `Workflow-focused tool comparison <https://turbo-picard.readthedocs.io/en/latest/compare/>`_.
-
-
+   Looking for a quick side-by-side summary? See `Choose a tool for your workflow <https://turbo-picard.readthedocs.io/en/latest/compare/>`_ and :doc:`turbo-picard-vs-riker`.
 
 .. meta::
-   :keywords: Picard alternatives, bioinformatics, duplicate marking, MarkDuplicates, SAM, BAM, CRAM, sequencing QC
+   :keywords: Picard alternatives, bioinformatics, duplicate marking, MarkDuplicates, samtools, Riker, FastDup, SAM, BAM, CRAM, sequencing QC
 
-The right alternative to Broad Picard depends on the command boundary. Duplicate
-marking, BAM sorting, streaming aligner output and sequencing QC are different
-workloads, and the tools below do not expose interchangeable inputs or outputs.
+The right alternative to Broad Picard depends on what can change in your pipeline
+and which exact outputs downstream tools expect.
 
-``turbo-picard`` is designed for existing Picard-shaped workflows. It retains
-Picard command names and ``KEY=VALUE`` arguments, runs supported commands in
-native Rust, and can delegate commands outside the native scope to upstream
-Picard. This makes it possible to evaluate one existing task without first
-rewriting the surrounding WDL, Nextflow, Snakemake or shell interface.
+``turbo-picard`` is built for existing Picard-shaped workflows: it keeps Picard
+command names and ``KEY=VALUE`` options across **39 native commands**, matches
+Picard outputs verified in CI against Picard 3.4.0 and 3.5.0, and transparently
+delegates the remaining **88 commands** to upstream Picard when configured.
+
+Measured head-to-head results
+-----------------------------
+
+* **Whole-genome WGS QC (``CollectWgsMetrics`` on 1000 Genomes ``HG02675``
+  GRCh38, 6 threads):** On 4x WGS, ``turbo-picard`` finished in **21.8–22.6 s /
+  125 MB RSS** (**~46x faster and 11.7x less RAM than Picard 3.5.0** at
+  1,033.8 s / 1,468 MB, and **1.3x faster with 4.0x less RAM than ``riker wgs``
+  0.5.0** at 29.7 s / 504 MB) while matching Picard on every metric field and
+  histogram row. On 15x WGS, ``turbo-picard`` took **65.4–82.6 s / 274 MB**
+  vs ``riker wgs`` **78.2–79.7 s / 518 MB**. Pre-PR #76 30x WGS ran in
+  193.5 s / 412 MB vs Riker 147.4 s / 510 MB due to whole-contig capped
+  fallback, now replaced by targeted cluster reprocessing in PR #76.
+* **Matched 1-CPU ``MarkDuplicates`` (Linux x86_64, BAM compression level 5):**
+  On ``paired-600k``, ``turbo-picard`` finished in **1.054 s / 94.1 MiB** with
+  full Picard parity—**5.15x faster & 11.2x less RAM** than Picard 3.4.0
+  (5.423 s / 1,052.6 MiB), faster and **4.1x less RAM** than FastDup
+  (1.131 s / 383.8 MiB, differs from Picard), and **1.88x faster** than a
+  ``samtools markdup`` pipeline (1.982 s / 235.7 MiB, differs from Picard). On
+  ``gatk-na12878-mito``, ``turbo-picard`` ran in **0.141 s / 9.5 MiB** vs
+  Picard 2.678 s / 721.3 MiB (**19.0x faster**) and FastDup 0.201 s.
+* **Small-fixture 32-command suite:** Across 32 saved parity-checked fixtures
+  against Picard 3.4.0, ``turbo-picard`` records **22.88x** to **272.12x**
+  speedups (**84.52x** geometric mean).
 
 Comparison by workflow
 ----------------------
@@ -32,14 +52,13 @@ Comparison by workflow
      - Interface and input contract
      - Important comparison boundary
    * - ``turbo-picard``
-     - Existing Picard preprocessing, QC and file-manipulation tasks
-     - Picard command names and ``KEY=VALUE`` arguments; BAM, CRAM, SAM,
-       FASTQ, VCF and metrics outputs depend on the command
-     - Native coverage is command- and option-specific; check the
-       :doc:`command matrix <commands>` and :doc:`parity evidence <parity>`
+     - Existing Picard preprocessing, QC, sorting, FASTQ, and VCF tasks
+     - Picard command names and ``KEY=VALUE`` arguments across BAM, CRAM, SAM,
+       FASTQ, and VCF
+     - Native coverage is command- and option-specific across 39 native and 88
+       fallback commands; check :doc:`commands` and :doc:`parity`
    * - `samtools <https://www.htslib.org/>`_
-     - Standard SAM/BAM/CRAM manipulation and pipelines already built around
-       HTSlib tools
+     - Standard SAM/BAM/CRAM manipulation and HTSlib pipelines
      - ``samtools markdup`` expects a name-collated or name-sorted ``fixmate -m``
        stage followed by coordinate sorting
      - Duplicate tags and supplementary-read handling are not identical to
@@ -47,110 +66,60 @@ Comparison by workflow
    * - `Sambamba <https://lomereiter.github.io/sambamba/docs/sambamba-markdup.html>`_
      - Parallel BAM processing and duplicate marking on coordinate-sorted BAM
      - Its own subcommands and options rather than Picard-compatible arguments
-     - Validate duplicate flags, metrics and downstream parser expectations
+     - Validate duplicate flags, metrics, and downstream parser expectations
        before changing tools
    * - `SAMBLASTER <https://github.com/GregoryFaust/samblaster>`_
-     - Streaming duplicate marking directly after an aligner, with optional
-       discordant and split-read extraction
+     - Streaming duplicate marking directly after an aligner
      - Read-id-grouped SAM stream, normally before conversion and coordinate
        sorting
-     - It uses a different stage and input contract from a coordinate-sorted
+     - Uses a different stage and input contract from a coordinate-sorted
        Picard ``MarkDuplicates`` task
    * - `dupblaster <https://github.com/fulcrumgenomics/dupblaster>`_
-     - Streaming, library-aware duplicate marking straight after the aligner,
-       before any coordinate sort
-     - Its own command line; expects query-grouped (read-name-grouped) input
-     - Its README recommends Picard when input is not query-grouped;
-       an existing coordinate-sorted ``MarkDuplicates`` task needs a pipeline
-       change, not a command swap
+     - Streaming, library-aware duplicate marking straight after the aligner
+     - Custom CLI; expects query-grouped (read-name-grouped) input
+     - Needs a pipeline change when input is coordinate-sorted
    * - `FastDup <https://github.com/zzhofict/FastDup>`_
      - Multi-threaded duplicate marking on large coordinate-sorted BAM inputs
-     - Dedicated FastDup command line and a narrower duplicate-marking scope
-     - Its authors report Picard-compatible duplicate marking; reproduce that
-       result on the exact library types and options used by the workflow
+     - Dedicated FastDup CLI and narrower duplicate-marking scope
+     - Higher memory footprint (~384 MiB on 600k pairs) and representative-read
+       differences vs Picard
    * - `riker <https://github.com/fulcrumgenomics/riker>`_
-     - New sequencing-QC workflows that prefer riker's command model and TSV
-       outputs
-     - QC-specific subcommands such as ``wgs``, ``alignment`` and ``multi``
-     - It does not replace Picard duplicate marking, sorting or general
-       SAM/VCF utility commands
+     - New sequencing-QC workflows that prefer Riker's subcommands, TSV outputs,
+       or RNA-seq metrics
+     - QC-specific subcommands such as ``wgs``, ``alignment``, and ``multi``
+     - No duplicate marking, sorting, or SAM/VCF utility commands; intentional
+       metric differences from Picard and higher RSS on 4x–15x WGS
 
 Specialized preprocessing alternatives
 --------------------------------------
 
-As reviewed on 25 October 2026, `fgumi
-<https://github.com/fulcrumgenomics/fgumi>`_ provides UMI processing and
-consensus workflows alongside FASTQ conversion, sorting and deduplication.
-Its comparison tooling and migration guide describe intentional differences.
-Turbo Picard's explicit barcode-tag grouping is narrower than a complete
-UMI correction or consensus pipeline.
-
-`mako <https://github.com/fg-labs/mako>`_ is a focused SAM/BAM sorter built from
-the fgumi sorting engine. It documents coordinate, queryname and
-template-coordinate orders, external merging and verification. Include it when
-a sorting task can adopt its interface; no direct performance advantage over
-mako is established here.
-
-FastDup's README advertises Picard-compatible duplicate marking while noting
-that sort stability can change which representative is retained. Compare
-duplicate-family agreement, exact record identity and downstream scientific
-impact separately. Familiar output formats alone do not establish equivalence.
+`fgumi <https://github.com/fulcrumgenomics/fgumi>`_ covers UMI extraction,
+grouping, and consensus workflows; Turbo Picard's explicit barcode-tag grouping
+is narrower than a full UMI pipeline. `mako <https://github.com/fg-labs/mako>`_
+provides a standalone SAM/BAM sorter with coordinate, queryname, and
+template-coordinate orders.
 
 Which tool should replace Picard?
 ---------------------------------
 
-For an existing Picard task, start with the output contract:
+* Choose ``turbo-picard`` when retaining Picard CLI flags, checked output
+  formats, lower peak RAM, and one-step-at-a-time pipeline compatibility matters.
+* Choose ``samtools`` or ``Sambamba`` when the workflow is already built around
+  their commands and downstream tag conventions.
+* Choose ``dupblaster`` or ``SAMBLASTER`` when duplicate marking belongs inside
+  the aligner stream before coordinate sorting.
+* Evaluate ``riker`` for greenfield QC-only pipelines that use RNA-seq metrics
+  or prefer Riker's TSV schema.
 
-* Use ``turbo-picard`` when retaining Picard command names, arguments and
-  checked output formats is the primary constraint.
-* Use ``samtools`` or ``Sambamba`` when the workflow already follows their BAM
-  preparation and command contracts.
-* Use ``dupblaster`` or ``SAMBLASTER`` when duplicate marking belongs in the
-  streaming alignment pipeline rather than in a later coordinate-sorted BAM
-  task.
-* Evaluate ``FastDup`` when a dedicated, multi-threaded duplicate-marking stage
-  matches the required library and output semantics.
-* Evaluate ``riker`` for a new QC-only workflow where Picard-compatible task
-  interfaces are not required.
-
-No timing result transfers automatically between these shapes. A fair test uses
-the same biological input, includes every required preparation stage, records
-threads and tool versions, measures peak memory and temporary disk as well as
-wall time, and compares the outputs consumed downstream.
-
-Measured turbo-picard evidence
-------------------------------
-
-The saved public suite compares 32 native ``turbo-picard`` commands with Picard
-3.4.0 and requires each documented parity check to pass before reporting time.
-The current saved results range from ``22.88x`` to ``272.12x`` faster on those
-fixtures, with an ``84.52x`` geometric mean. These are fixture-specific results,
-not a claim that every dataset or option has the same speedup.
-
-For direct QC overlap with riker, the repository retains two historical smoke
-profiles on a 2,097,008-byte mitochondrial BAM. Those timing records omit peak
-RSS and do not establish cross-tool output agreement or WGS performance. See
-:doc:`turbo-picard-vs-riker` for the contract differences and the work needed
-before drawing a workflow conclusion.
-
-For duplicate marking, ``tools/bench_markduplicates_competitors.py`` records
-commands, versions, executable digests, wall and CPU time, peak RSS, temporary
-disk and streaming record parity for ``turbo-picard``, Picard, samtools,
-Sambamba and FastDup. SAMBLASTER requires a separate end-to-end streaming
-pipeline comparison because its input contract is different.
-
-See :doc:`benchmarks`, :doc:`performance`,
-:doc:`picard-vs-turbo-picard` and :doc:`turbo-picard-vs-riker` for the saved
-results, reproduction commands and limitations.
+See :doc:`benchmarks`, :doc:`performance`, :doc:`picard-vs-turbo-picard`, and
+:doc:`turbo-picard-vs-riker` for reproduction commands and full logs.
 
 Primary references
 ------------------
 
 * `Broad Picard <https://github.com/broadinstitute/picard>`_
-* `samtools duplicate-marking workflow
-  <https://www.htslib.org/algorithms/duplicate.html>`_
-* `Sambamba markdup documentation
-  <https://lomereiter.github.io/sambamba/docs/sambamba-markdup.html>`_
+* `samtools duplicate-marking workflow <https://www.htslib.org/algorithms/duplicate.html>`_
+* `Sambamba markdup documentation <https://lomereiter.github.io/sambamba/docs/sambamba-markdup.html>`_
 * `SAMBLASTER paper <https://doi.org/10.1093/bioinformatics/btu314>`_
 * `FastDup paper <https://doi.org/10.1093/bioinformatics/btaf633>`_
 * `riker repository <https://github.com/fulcrumgenomics/riker>`_

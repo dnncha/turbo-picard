@@ -1,23 +1,29 @@
 Native execution and measured performance
 =========================================
 
-``turbo-picard`` gets most of its speed from avoiding JVM startup, running common
-Picard operations natively, and keeping BAM/CRAM I/O on mature HTSlib code.
-Those choices matter more for current Picard-style preprocessing than sending
-work to a GPU just because one is present.
+``turbo-picard`` gets its speed and low memory footprint from avoiding JVM
+startup, running common Picard algorithms in native Rust, reusing record buffers
+and tournament-tree external merges, scaling BAM/CRAM codecs on HTSlib +
+``libdeflate``, and keeping memory bounded with disk-backed two-pass planners.
 
-In the source checkout, BAM BGZF compression and decompression use HTSlib's optional ``libdeflate``
-backend, enabled in the shared ``rust-htslib`` dependency. This applies to
-native commands using the common BAM I/O layer. Compression levels remain
-explicit benchmark settings; compressed bytes may differ between encoder
-builds, so output validation checks decoded alignment semantics.
+In whole-genome GRCh38 benchmarks (``HG02675``), ``CollectWgsMetrics`` with 6
+region workers matched Picard 3.5.0 output while running in **21.8–22.6 s /
+125 MB RSS** on 4x WGS (**~46x faster and 11.7x less RAM than Picard** at
+1,033.8 s / 1,468 MB, and **1.3x faster with 4.0x less RAM than ``riker wgs``**
+0.5.0 at 29.7 s / 504 MB). In matched 1-CPU ``MarkDuplicates`` comparisons,
+``turbo-picard`` finished ``paired-600k`` in **1.054 s / 94.1 MiB** with full
+Picard parity (**5.15x faster** than Picard, **4.1x less RAM** than FastDup, and
+**1.88x faster** than ``samtools markdup``). Across the saved 32-command
+small-fixture suite, ``turbo-picard`` records a ``22.88x`` floor, ``84.52x``
+geometric mean, and ``272.12x`` top speedup against Picard 3.4.0.
 
-They also explain the scalability story. Faster wall time matters, but so does
-the ability to fan out many Picard-shaped tasks without paying Picard-scale JVM
-startup and memory costs on every shard. The saved benchmark suite currently
-shows a ``22.88x`` floor speedup, ``84.52x`` geometric mean speedup, and
-``272.12x`` top speedup against Picard 3.4.0. Those are saved-fixture results,
-not whole-genome guarantees.
+PR #76 further improved core throughput on Apple M5 paired runs (reused sort
+buffers, tournament-tree k-way merges, parallel BGZF compression on spill runs,
+targeted ``CollectWgsMetrics`` capped-cluster reprocessing, and direct-stream
+``SamToFastq``), cutting ``MarkDuplicates`` 1.2M paired runtime by **2.07x**
+and RSS by **37%** (``0.303 s / 73.8 MiB``), ``SortSam`` coordinate by
+**2.35x** (``0.520 s``), ``SortSam`` queryname by **2.64x** (``0.415 s``), and
+``MergeSamFiles`` by **1.74x** (``0.166 s``).
 
 For duplicate marking, a coordinate-ordered BAM or explicit-reference CRAM uses
 an external two-pass plan and replays the original alignment files for output.
@@ -237,10 +243,11 @@ Each CRAM worker opens the reference independently, so budget memory per worker
 for CRAM inputs.
 
 Picard stops accumulating reads at a locus once ``LOCUS_ACCUMULATION_CAP`` reads
-cover it. That rule depends on file order across the whole pileup, so any contig
-whose pileup reaches the cap is reprocessed in a single pass and the other
-contigs keep their regional result. With ``INTERVALS`` such an input is passed
-to upstream Picard.
+cover it. Because that rule depends on file order across the local overlap
+pileup, PR #76 limits fallback reprocessing to only the overlapping read
+clusters that reach the cap rather than reprocessing an entire contig on one
+thread, while keeping exact regional results elsewhere. With ``INTERVALS``
+such an input is passed to upstream Picard.
 
 ``CollectMultipleMetrics`` on BAM/CRAM inputs runs all selected collectors in
 one HTSlib pass (the same idea as riker's ``multi`` command) instead of

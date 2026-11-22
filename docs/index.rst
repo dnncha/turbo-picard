@@ -1,37 +1,36 @@
 Turbo Picard
 ============
 
-Rust implementations of selected Picard commands.
-
-Run selected Picard tools in Rust without redesigning the surrounding pipeline.
-Keep familiar command names, ``KEY=VALUE`` arguments, and the metrics and output
-contracts covered by the documented native scope.
+Native Rust implementations of **39 Picard commands** with familiar CLI names,
+``KEY=VALUE`` options, and Picard-checked outputs—plus transparent upstream
+Picard fallback for the remaining 88 commands.
 
 .. code-block:: bash
 
    turbo-picard MarkDuplicates I=input.bam O=marked.bam M=metrics.txt
 
-Start with the slow step you already have. Compare it on your data, retain the
-results, and switch only when the required outputs agree. Unsupported commands
-or options can use upstream Picard when fallback is configured; delegation is
-not native acceleration.
+Measured comparisons show **~46x faster and 11.7x less RAM than Picard 3.5.0**
+(and **1.3x faster with 4.0x less RAM than Riker 0.5.0**) on 4x GRCh38 whole-genome
+``CollectWgsMetrics``, and **5.15x–19.0x faster with 11x–76x less RAM than
+Picard 3.4.0** on matched 1-CPU ``MarkDuplicates`` runs (faster and ~4x less RAM
+than FastDup, and 1.88x faster than a ``samtools markdup`` pipeline). Start with
+one slow command, verify outputs on a representative input, and switch only when
+required outputs agree.
 
-The saved benchmark suite records ``32/32`` parity-checked command runs, a
-``22.88x`` floor speedup, ``84.52x`` geometric mean speedup, and ``272.12x`` top
-speedup on its documented fixtures. Those results describe the saved commands,
-options, inputs, and machine profile; they are not a prediction for another
-workflow. See :doc:`benchmarks` and :doc:`parity` before using them in an
-evaluation.
+The saved small-fixture benchmark suite also records ``32/32`` parity-checked
+command runs with a ``22.88x`` floor speedup, ``84.52x`` geometric mean
+speedup, and ``272.12x`` top speedup on its documented fixtures. Because JVM
+startup contributes heavily on small inputs, consult :doc:`benchmarks`,
+:doc:`turbo-picard-vs-riker`, and :doc:`parity` alongside whole-genome
+measurements before sizing production pipelines.
 
 Research and evidence
 ---------------------
 
 `Cheerful Duck Research <https://cheerfulduck.com/research>`_ publishes our
 bioinformatics software investigations, reproduction material, and corrections.
-For this tool, begin with :doc:`compatibility-contract` to define the outputs
-that matter to your workflow, then use :doc:`real-data-evaluation` to compare
-them. A matching fixture establishes agreement for that fixture and comparison
-contract; broader use needs representative inputs.
+Begin with :doc:`compatibility-contract` to define the outputs that matter to
+your workflow, then use :doc:`real-data-evaluation` to compare them.
 
 Start here
 ----------
@@ -56,6 +55,12 @@ Start here
       :link-type: doc
 
       Check native support, partial support, and the boundary with upstream Picard.
+
+   .. grid-item-card:: Compare alternatives
+      :link: turbo-picard-vs-riker
+      :link-type: doc
+
+      Review real-genome timings and contracts against Riker, FastDup, and samtools.
 
    .. grid-item-card:: Coding agent
       :link: agentic-coders
