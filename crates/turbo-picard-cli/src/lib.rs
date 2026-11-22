@@ -20052,10 +20052,24 @@ fn fallback_status(fallback_command: &str, args: &[String]) -> Result<i32, Strin
 
     let status = command
         .env_remove("TURBO_PICARD_FALLBACK_COMMAND")
+        .env(
+            "JDK_JAVA_OPTIONS",
+            jvm_options_with_logs_on_stderr(env::var("JDK_JAVA_OPTIONS").ok().as_deref()),
+        )
         .status()
         .map_err(|error| format!("failed to run Picard fallback command: {error}"))?;
 
     Ok(status.code().unwrap_or(1))
+}
+
+const JVM_LOGS_TO_STDERR: &str = "-Xlog:disable -Xlog:all=warning:stderr";
+
+fn jvm_options_with_logs_on_stderr(existing: Option<&str>) -> String {
+    match existing.map(str::trim) {
+        Some(options) if options.contains("-Xlog") => options.to_string(),
+        Some(options) if !options.is_empty() => format!("{options} {JVM_LOGS_TO_STDERR}"),
+        _ => JVM_LOGS_TO_STDERR.to_string(),
+    }
 }
 
 fn split_fallback_command(command: &str) -> Result<Vec<String>, String> {
@@ -20723,6 +20737,20 @@ mod tests {
                 "-jar".to_string(),
                 "input.jar".to_string()
             ]
+        );
+    }
+
+    #[test]
+    fn fallback_jvm_logs_never_reach_stdout() {
+        assert_eq!(jvm_options_with_logs_on_stderr(None), JVM_LOGS_TO_STDERR);
+        assert_eq!(jvm_options_with_logs_on_stderr(Some("  ")), JVM_LOGS_TO_STDERR);
+        assert_eq!(
+            jvm_options_with_logs_on_stderr(Some("-Xmx8g")),
+            format!("-Xmx8g {JVM_LOGS_TO_STDERR}")
+        );
+        assert_eq!(
+            jvm_options_with_logs_on_stderr(Some("-Xlog:gc:file=gc.log")),
+            "-Xlog:gc:file=gc.log"
         );
     }
 
