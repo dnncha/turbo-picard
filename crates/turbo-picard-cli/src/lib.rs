@@ -5326,6 +5326,79 @@ fn run_collectmultiplemetrics_single_pass(
     Ok(())
 }
 
+const PARALLEL_WGS_MIN_CORES: usize = 4;
+
+fn collectmultiplemetrics_parallel_wgs_split(
+    args: &PicardArgs,
+    programs: &[String],
+) -> Result<Option<Vec<String>>, CommandError> {
+    let cores = std::thread::available_parallelism().map_or(1, std::num::NonZero::get);
+    Ok(parallel_wgs_split_for(
+        programs,
+        optional_scalar(args, "STOP_AFTER")?.is_some(),
+        cores,
+    ))
+}
+
+fn parallel_wgs_split_for(
+    programs: &[String],
+    stop_after: bool,
+    cores: usize,
+) -> Option<Vec<String>> {
+    if stop_after || cores < PARALLEL_WGS_MIN_CORES {
+        return None;
+    }
+    if !programs
+        .iter()
+        .any(|program| program == "CollectWgsMetrics")
+    {
+        return None;
+    }
+    let shared_pass = programs
+        .iter()
+        .filter(|program| program.as_str() != "CollectWgsMetrics")
+        .cloned()
+        .collect::<Vec<_>>();
+    (shared_pass.len() >= 2).then_some(shared_pass)
+}
+
+fn collectmultiplemetrics_wgs_child_args(
+    args: &PicardArgs,
+    input: &str,
+    output: &str,
+    file_extension: &str,
+    stop_after_arg: &[String],
+) -> Result<Vec<String>, CommandError> {
+    let reference = optional_scalar(args, "REFERENCE_SEQUENCE")?.ok_or_else(|| {
+        "missing required CollectMultipleMetrics argument for CollectWgsMetrics: REFERENCE_SEQUENCE"
+            .to_string()
+    })?;
+    let use_fast_algorithm =
+        if let Some(use_fast_algorithm) = optional_bool(args, "USE_FAST_ALGORITHM")? {
+            use_fast_algorithm
+        } else {
+            env_bool("TURBO_PICARD_WGS_FAST_DEFAULT")?.unwrap_or(false)
+        };
+    let sample_size =
+        optional_u32(args, "SAMPLE_SIZE")?.unwrap_or(if use_fast_algorithm { 0 } else { 10_000 });
+    let include_bq_histogram = optional_bool(args, "INCLUDE_BQ_HISTOGRAM")?.unwrap_or(false);
+    let mut child_args = vec![
+        format!("I={input}"),
+        format!(
+            "O={}",
+            collectmultiplemetrics_metric_path(output, ".wgs_metrics", file_extension)
+        ),
+        format!("R={reference}"),
+        "COUNT_UNPAIRED=true".to_string(),
+        format!("SAMPLE_SIZE={sample_size}"),
+        format!("INCLUDE_BQ_HISTOGRAM={include_bq_histogram}"),
+        "VALIDATION_STRINGENCY=SILENT".to_string(),
+        "QUIET=true".to_string(),
+    ];
+    child_args.extend(stop_after_arg.iter().cloned());
+    Ok(child_args)
+}
+
 fn run_collectmultiplemetrics(args: &[String]) -> Result<(), CommandError> {
     let args = normalize_picard_args_for_command("CollectMultipleMetrics", args)
         .map_err(|error| error.to_string())?;
@@ -5335,6 +5408,29 @@ fn run_collectmultiplemetrics(args: &[String]) -> Result<(), CommandError> {
     let file_extension = optional_scalar(&args, "FILE_EXTENSION")?.unwrap_or_default();
     let programs = collectmultiplemetrics_programs(&args)?;
     if collectmultiplemetrics_can_single_pass(&input, &programs) {
+        if let Some(shared_pass) = collectmultiplemetrics_parallel_wgs_split(&args, &programs)? {
+            let wgs_args = collectmultiplemetrics_wgs_child_args(
+                &args,
+                &input,
+                &output,
+                &file_extension,
+                &[],
+            )?;
+            return std::thread::scope(|scope| {
+                let wgs = scope.spawn(|| run_collectwgsmetrics(&wgs_args));
+                let shared = run_collectmultiplemetrics_single_pass(
+                    &args,
+                    &input,
+                    &output,
+                    &file_extension,
+                    &shared_pass,
+                );
+                let wgs = wgs.join().map_err(|_| {
+                    CommandError::from("CollectWgsMetrics worker panicked".to_string())
+                })?;
+                shared.and(wgs)
+            });
+        }
         return run_collectmultiplemetrics_single_pass(
             &args,
             &input,
@@ -5556,38 +5652,13 @@ fn run_collectmultiplemetrics(args: &[String]) -> Result<(), CommandError> {
                 run_collectqualityyieldmetrics(&child_args)?;
             }
             "CollectWgsMetrics" => {
-                let reference = optional_scalar(&args, "REFERENCE_SEQUENCE")?.ok_or_else(|| {
-                    "missing required CollectMultipleMetrics argument for CollectWgsMetrics: REFERENCE_SEQUENCE"
-                        .to_string()
-                })?;
-                let use_fast_algorithm =
-                    if let Some(use_fast_algorithm) = optional_bool(&args, "USE_FAST_ALGORITHM")? {
-                        use_fast_algorithm
-                    } else {
-                        env_bool("TURBO_PICARD_WGS_FAST_DEFAULT")?.unwrap_or(false)
-                    };
-                let sample_size = optional_u32(&args, "SAMPLE_SIZE")?
-                    .unwrap_or(if use_fast_algorithm { 0 } else { 10_000 });
-                let include_bq_histogram =
-                    optional_bool(&args, "INCLUDE_BQ_HISTOGRAM")?.unwrap_or(false);
-                let mut child_args = vec![
-                    format!("I={input}"),
-                    format!(
-                        "O={}",
-                        collectmultiplemetrics_metric_path(
-                            &output,
-                            ".wgs_metrics",
-                            &file_extension
-                        )
-                    ),
-                    format!("R={reference}"),
-                    "COUNT_UNPAIRED=true".to_string(),
-                    format!("SAMPLE_SIZE={sample_size}"),
-                    format!("INCLUDE_BQ_HISTOGRAM={include_bq_histogram}"),
-                    "VALIDATION_STRINGENCY=SILENT".to_string(),
-                    "QUIET=true".to_string(),
-                ];
-                child_args.extend(stop_after_arg.clone());
+                let child_args = collectmultiplemetrics_wgs_child_args(
+                    &args,
+                    &input,
+                    &output,
+                    &file_extension,
+                    &stop_after_arg,
+                )?;
                 run_collectwgsmetrics(&child_args)?;
             }
             _ => {
@@ -20741,9 +20812,33 @@ mod tests {
     }
 
     #[test]
+    fn collectmultiplemetrics_runs_wgs_beside_the_shared_pass() {
+        let programs = [
+            "CollectAlignmentSummaryMetrics",
+            "CollectInsertSizeMetrics",
+            "CollectWgsMetrics",
+        ]
+        .map(String::from);
+        assert_eq!(
+            parallel_wgs_split_for(&programs, false, 8),
+            Some(vec![
+                "CollectAlignmentSummaryMetrics".to_string(),
+                "CollectInsertSizeMetrics".to_string()
+            ])
+        );
+        assert_eq!(parallel_wgs_split_for(&programs, true, 8), None);
+        assert_eq!(parallel_wgs_split_for(&programs, false, 2), None);
+        assert_eq!(parallel_wgs_split_for(&programs[1..], false, 8), None);
+        assert_eq!(parallel_wgs_split_for(&programs[..2], false, 8), None);
+    }
+
+    #[test]
     fn fallback_jvm_logs_never_reach_stdout() {
         assert_eq!(jvm_options_with_logs_on_stderr(None), JVM_LOGS_TO_STDERR);
-        assert_eq!(jvm_options_with_logs_on_stderr(Some("  ")), JVM_LOGS_TO_STDERR);
+        assert_eq!(
+            jvm_options_with_logs_on_stderr(Some("  ")),
+            JVM_LOGS_TO_STDERR
+        );
         assert_eq!(
             jvm_options_with_logs_on_stderr(Some("-Xmx8g")),
             format!("-Xmx8g {JVM_LOGS_TO_STDERR}")
