@@ -11,8 +11,16 @@ case "$cmd" in
     gpu=(); [ -n "${COLAB_GPU:-}" ] && gpu=(--gpu "$COLAB_GPU")
     colab --config "$cfg" sessions | grep -q "\[$session\]" || colab --config "$cfg" new -s "$session" --high-mem "${gpu[@]}"
     colab --config "$cfg" upload -s "$session" "$repo/tools/duel_vm.sh" /content/duel_vm.sh
-    envs=""; for kv in "$@"; do envs+=" $(printf %q "$kv")"; done
-    colab --config "$cfg" ssh -s "$session" -- "rm -f /content/duel/out/DONE; env$envs setsid nohup bash /content/duel_vm.sh > /content/duel_vm.out 2>&1 < /dev/null & disown; echo started"
+    env_json=$(python3 -c 'import json, sys; print(json.dumps(dict(a.split("=", 1) for a in sys.argv[1:])))' "$@")
+    colab --config "$cfg" exec -s "$session" <<PY
+import json, os, pathlib, subprocess
+pathlib.Path("/content/duel/out/DONE").unlink(missing_ok=True)
+subprocess.run(["pkill", "-f", "duel_vm.sh"], check=False)
+env = {**os.environ, **json.loads('$env_json')}
+with open("/content/duel_vm.out", "ab") as log:
+    proc = subprocess.Popen(["bash", "/content/duel_vm.sh"], env=env, stdout=log, stderr=log, stdin=subprocess.DEVNULL, start_new_session=True)
+print("started", proc.pid)
+PY
     ;;
   sync)
     mkdir -p "$local_dir"
