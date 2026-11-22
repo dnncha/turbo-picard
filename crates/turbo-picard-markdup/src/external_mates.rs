@@ -1,14 +1,377 @@
 use crate::fragment_taint::bloom_positions;
 use crate::{
-    ExternalPlanError, ExternalPlanRecord, ExternalSorter, FragmentStage, HashMap,
-    decode_external_plan_record, duplicate_candidate_is_pair, encode_external_pair,
-    encode_external_plan_record, external_pair_key,
+    ExternalBarcodeValues, ExternalPlanError, ExternalSorter, FragmentStage, HashMap, LibraryId,
+    MarkDuplicatesConfig, ReadGroupRegistry, append_compact_pair, compact_pair_key_into,
+    decode_pending_mate_into, encode_pending_mate_into, external_barcode_values,
 };
+#[cfg(test)]
+use crate::{
+    ExternalPlanRecord, decode_external_plan_record, duplicate_candidate_is_pair,
+    encode_external_pair, encode_external_plan_record, external_pair_key,
+};
+use rust_htslib::bam;
 
-const MAX_PENDING_MATES: usize = 4096;
-const MAX_PENDING_BUFFER_BYTES: usize = 4 * 1024 * 1024;
+const MAX_PENDING_MATES: usize = 32_768;
+const MAX_PENDING_BUFFER_BYTES: usize = 16 * 1024 * 1024;
 const SPILL_FILTER_WORDS: usize = 1 << 17;
+const DISTANT_MATE_WINDOW_BP: i64 = 20_000;
 
+#[derive(Debug, Default)]
+struct SpillFilter {
+    words: Vec<u64>,
+}
+
+impl SpillFilter {
+    fn filter_bits(&self, key: &[u8]) -> [usize; 3] {
+        bloom_positions(key, self.words.len() * 64 - 1)
+    }
+
+    fn was_spilled(&self, key: &[u8]) -> bool {
+        if self.words.is_empty() {
+            return false;
+        }
+        self.filter_bits(key)
+            .iter()
+            .all(|bit| self.words[bit / 64] & (1_u64 << (bit % 64)) != 0)
+    }
+
+    fn mark_spilled(&mut self, key: &[u8]) {
+        if self.words.is_empty() {
+            self.words.resize(SPILL_FILTER_WORDS, 0);
+        }
+        for bit in self.filter_bits(key) {
+            self.words[bit / 64] |= 1_u64 << (bit % 64);
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub(super) struct PendingMate {
+    pub ordinal: u64,
+    pub library_id: LibraryId,
+    pub rg_id: u32,
+    pub flags: u16,
+    pub reference_id: i32,
+    pub position: i64,
+    pub mate_reference_id: i32,
+    pub unclipped_position: i64,
+    pub quality_score: u64,
+    pub barcode: ExternalBarcodeValues,
+}
+
+impl PendingMate {
+    pub(super) fn empty() -> Self {
+        Self {
+            ordinal: 0,
+            library_id: 0,
+            rg_id: 0,
+            flags: 0,
+            reference_id: -1,
+            position: -1,
+            mate_reference_id: -1,
+            unclipped_position: -1,
+            quality_score: 0,
+            barcode: ExternalBarcodeValues::empty(),
+        }
+    }
+}
+
+pub(super) struct CompactMateCache {
+    pending: HashMap<Vec<u8>, PendingMate>,
+    buffer_bytes: usize,
+    spilled: SpillFilter,
+    max_pending: usize,
+    max_buffer_bytes: usize,
+    key_scratch: Vec<u8>,
+    pair_key_scratch: Vec<u8>,
+    payload_scratch: Vec<u8>,
+    barcodes_enabled: bool,
+}
+
+impl CompactMateCache {
+    pub(super) fn new(barcodes_enabled: bool) -> Self {
+        Self {
+            pending: HashMap::default(),
+            buffer_bytes: 0,
+            spilled: SpillFilter::default(),
+            max_pending: MAX_PENDING_MATES,
+            max_buffer_bytes: MAX_PENDING_BUFFER_BYTES,
+            key_scratch: Vec::with_capacity(64),
+            pair_key_scratch: Vec::with_capacity(64),
+            payload_scratch: Vec::with_capacity(128),
+            barcodes_enabled,
+        }
+    }
+
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "hot-path mate cache avoids constructing an owned intermediate record"
+    )]
+    pub(super) fn push_record(
+        &mut self,
+        record: &bam::Record,
+        ordinal: u64,
+        library_id: LibraryId,
+        rg_id: u32,
+        unclipped_position: i64,
+        quality_score: u64,
+        config: &MarkDuplicatesConfig,
+        qnames: &mut ExternalSorter,
+        pairs: &mut ExternalSorter,
+    ) -> Result<(), ExternalPlanError> {
+        let qname = record.qname();
+        self.key_scratch.clear();
+        self.key_scratch.extend_from_slice(&rg_id.to_le_bytes());
+        self.key_scratch.extend_from_slice(qname);
+
+        let flags = record.flags();
+        let reference_id = record.tid();
+        let position = record.pos();
+        let mate_reference_id = record.mtid();
+        let barcode = if self.barcodes_enabled {
+            external_barcode_values(record, config)
+        } else {
+            ExternalBarcodeValues::empty()
+        };
+
+        if self.spilled.was_spilled(&self.key_scratch) {
+            if let Some((old_key, first)) = self.pending.remove_entry(self.key_scratch.as_slice()) {
+                self.buffer_bytes -= pending_mate_bytes(&old_key, &first);
+                encode_pending_mate_into(&mut self.payload_scratch, &first, self.barcodes_enabled);
+                qnames.push_slice(&old_key, &self.payload_scratch)?;
+            }
+            let incoming = PendingMate {
+                ordinal,
+                library_id,
+                rg_id,
+                flags,
+                reference_id,
+                position,
+                mate_reference_id,
+                unclipped_position,
+                quality_score,
+                barcode,
+            };
+            encode_pending_mate_into(&mut self.payload_scratch, &incoming, self.barcodes_enabled);
+            return qnames
+                .push_slice(&self.key_scratch, &self.payload_scratch)
+                .map_err(ExternalPlanError::Sort);
+        }
+
+        if let Some((old_key, first)) = self.pending.remove_entry(self.key_scratch.as_slice()) {
+            self.buffer_bytes -= pending_mate_bytes(&old_key, &first);
+            let second = PendingMate {
+                ordinal,
+                library_id,
+                rg_id,
+                flags,
+                reference_id,
+                position,
+                mate_reference_id,
+                unclipped_position,
+                quality_score,
+                barcode,
+            };
+            return push_compact_pair(
+                &first,
+                &second,
+                qname,
+                self.barcodes_enabled,
+                pairs,
+                &mut self.pair_key_scratch,
+                &mut self.payload_scratch,
+            );
+        }
+
+        let mate = PendingMate {
+            ordinal,
+            library_id,
+            rg_id,
+            flags,
+            reference_id,
+            position,
+            mate_reference_id,
+            unclipped_position,
+            quality_score,
+            barcode,
+        };
+        let bytes = pending_mate_bytes(&self.key_scratch, &mate);
+        if bytes > self.max_buffer_bytes {
+            self.spilled.mark_spilled(&self.key_scratch);
+            encode_pending_mate_into(&mut self.payload_scratch, &mate, self.barcodes_enabled);
+            return qnames
+                .push_slice(&self.key_scratch, &self.payload_scratch)
+                .map_err(ExternalPlanError::Sort);
+        }
+        if self.pending.len() >= self.max_pending
+            || self.buffer_bytes.saturating_add(bytes) > self.max_buffer_bytes
+        {
+            self.evict_distant_or_flush(reference_id, position, qnames)?;
+            if self.spilled.was_spilled(&self.key_scratch) {
+                encode_pending_mate_into(&mut self.payload_scratch, &mate, self.barcodes_enabled);
+                return qnames
+                    .push_slice(&self.key_scratch, &self.payload_scratch)
+                    .map_err(ExternalPlanError::Sort);
+            }
+        }
+        self.buffer_bytes += bytes;
+        self.pending.insert(self.key_scratch.clone(), mate);
+        Ok(())
+    }
+
+    fn evict_distant_or_flush(
+        &mut self,
+        current_tid: i32,
+        current_pos: i64,
+        qnames: &mut ExternalSorter,
+    ) -> Result<(), ExternalPlanError> {
+        let before_len = self.pending.len();
+        let mut kept = HashMap::default();
+        let mut kept_bytes = 0_usize;
+        for (key, mate) in std::mem::take(&mut self.pending) {
+            let distant = mate.reference_id != current_tid
+                || mate.mate_reference_id != current_tid
+                || mate.position.saturating_add(DISTANT_MATE_WINDOW_BP) < current_pos;
+            if distant {
+                self.spilled.mark_spilled(&key);
+                encode_pending_mate_into(&mut self.payload_scratch, &mate, self.barcodes_enabled);
+                qnames.push_slice(&key, &self.payload_scratch)?;
+            } else {
+                kept_bytes += pending_mate_bytes(&key, &mate);
+                kept.insert(key, mate);
+            }
+        }
+        let evicted = before_len - kept.len();
+        if evicted * 4 < before_len || kept_bytes * 4 >= self.max_buffer_bytes * 3 {
+            for (key, mate) in kept {
+                self.spilled.mark_spilled(&key);
+                encode_pending_mate_into(&mut self.payload_scratch, &mate, self.barcodes_enabled);
+                qnames.push_slice(&key, &self.payload_scratch)?;
+            }
+            self.buffer_bytes = 0;
+        } else {
+            self.pending = kept;
+            self.buffer_bytes = kept_bytes;
+        }
+        Ok(())
+    }
+
+    pub(super) fn flush(&mut self, qnames: &mut ExternalSorter) -> Result<(), ExternalPlanError> {
+        for (key, mate) in std::mem::take(&mut self.pending) {
+            self.spilled.mark_spilled(&key);
+            encode_pending_mate_into(&mut self.payload_scratch, &mate, self.barcodes_enabled);
+            qnames.push_slice(&key, &self.payload_scratch)?;
+        }
+        self.buffer_bytes = 0;
+        Ok(())
+    }
+}
+
+fn pending_mate_bytes(key: &[u8], mate: &PendingMate) -> usize {
+    size_of::<PendingMate>()
+        .saturating_add(key.len())
+        .saturating_add(mate.barcode.primary.as_ref().map_or(0, Vec::capacity))
+        .saturating_add(mate.barcode.read_one.as_ref().map_or(0, Vec::capacity))
+        .saturating_add(mate.barcode.read_two.as_ref().map_or(0, Vec::capacity))
+}
+
+fn push_compact_pair(
+    first: &PendingMate,
+    second: &PendingMate,
+    qname: &[u8],
+    barcodes_enabled: bool,
+    pairs: &mut ExternalSorter,
+    key_buf: &mut Vec<u8>,
+    payload_buf: &mut Vec<u8>,
+) -> Result<(), ExternalPlanError> {
+    if !matches!(
+        (first.flags & 0xc0, second.flags & 0xc0),
+        (0x40, 0x80) | (0x80, 0x40)
+    ) {
+        return Err(ExternalPlanError::MatesNotComplementary);
+    }
+    let first_is_left = compact_pair_key_into(key_buf, first, second, barcodes_enabled);
+    append_compact_pair(
+        payload_buf,
+        first,
+        second,
+        qname,
+        first_is_left,
+        barcodes_enabled,
+    );
+    pairs
+        .push_slice(key_buf, payload_buf)
+        .map_err(ExternalPlanError::Sort)
+}
+
+pub(super) fn finish_spilled_compact(
+    qnames: ExternalSorter,
+    pairs: &mut ExternalSorter,
+    mut fragments: Option<&mut FragmentStage>,
+    rg_registry: &ReadGroupRegistry,
+    barcodes_enabled: bool,
+) -> Result<(), ExternalPlanError> {
+    let mut pending_key = Vec::<u8>::new();
+    let mut pending_mate = None::<PendingMate>;
+    let mut scratch_mate = PendingMate::empty();
+    let mut pair_key_buf = Vec::with_capacity(64);
+    let mut pair_payload_buf = Vec::with_capacity(128);
+
+    qnames.finish_slices(|key, payload| {
+        if pending_mate.is_some()
+            && pending_key.as_slice() != key
+            && let Some(pending) = pending_mate.take()
+            && let Some(stage) = fragments.as_deref_mut()
+            && pending_key.len() >= 4
+        {
+            let rg_id = u32::from_le_bytes([
+                pending_key[0],
+                pending_key[1],
+                pending_key[2],
+                pending_key[3],
+            ]);
+            stage.push_required_mate(&pending, &pending_key[4..], rg_registry.get(rg_id))?;
+        }
+        decode_pending_mate_into(payload, barcodes_enabled, &mut scratch_mate)?;
+        if let Some(first) = pending_mate.take() {
+            if pending_key.as_slice() == key {
+                push_compact_pair(
+                    &first,
+                    &scratch_mate,
+                    &key[4..],
+                    barcodes_enabled,
+                    pairs,
+                    &mut pair_key_buf,
+                    &mut pair_payload_buf,
+                )?;
+            } else {
+                pending_key.clear();
+                pending_key.extend_from_slice(key);
+                pending_mate = Some(scratch_mate.clone());
+            }
+        } else {
+            pending_key.clear();
+            pending_key.extend_from_slice(key);
+            pending_mate = Some(scratch_mate.clone());
+        }
+        Ok(())
+    })?;
+
+    if let (Some(pending), Some(stage)) = (pending_mate, fragments)
+        && pending_key.len() >= 4
+    {
+        let rg_id = u32::from_le_bytes([
+            pending_key[0],
+            pending_key[1],
+            pending_key[2],
+            pending_key[3],
+        ]);
+        stage.push_required_mate(&pending, &pending_key[4..], rg_registry.get(rg_id))?;
+    }
+    Ok(())
+}
+
+#[cfg(test)]
 pub(super) struct ExternalMateCache {
     pending: HashMap<Vec<u8>, ExternalPlanRecord>,
     buffer_bytes: usize,
@@ -17,6 +380,7 @@ pub(super) struct ExternalMateCache {
     max_buffer_bytes: usize,
 }
 
+#[cfg(test)]
 impl ExternalMateCache {
     pub(super) fn new() -> Self {
         Self {
@@ -95,6 +459,7 @@ impl ExternalMateCache {
     }
 }
 
+#[cfg(test)]
 fn record_buffer_bytes(record: &ExternalPlanRecord) -> usize {
     [
         record.template_key.len(),
@@ -109,6 +474,7 @@ fn record_buffer_bytes(record: &ExternalPlanRecord) -> usize {
     .fold(0, usize::saturating_add)
 }
 
+#[cfg(test)]
 fn spill_record(
     record: ExternalPlanRecord,
     qnames: &mut ExternalSorter,
@@ -119,6 +485,7 @@ fn spill_record(
         .map_err(ExternalPlanError::Sort)
 }
 
+#[cfg(test)]
 pub(super) fn push_pair(
     first: &ExternalPlanRecord,
     second: &ExternalPlanRecord,
@@ -136,6 +503,7 @@ pub(super) fn push_pair(
         .map_err(ExternalPlanError::Sort)
 }
 
+#[cfg(test)]
 pub(super) fn finish_spilled(
     qnames: ExternalSorter,
     pairs: &mut ExternalSorter,
@@ -463,5 +831,106 @@ mod tests {
                 assert_eq!(actual, expected, "spill={spill}, cache={max_pending}");
             }
         }
+    }
+
+    #[test]
+    fn compact_mate_cache_evicts_distant_mates_while_pairing_local_mates() {
+        let make_rec = |qname: &[u8], flags: u16, tid: i32, pos: i64, mtid: i32, mpos: i64| {
+            let mut rec = bam::Record::new();
+            rec.set(qname, None, b"ACGT", b"FFFF");
+            rec.set_flags(flags);
+            rec.set_tid(tid);
+            rec.set_pos(pos);
+            rec.set_mtid(mtid);
+            rec.set_mpos(mpos);
+            rec
+        };
+        let config = MarkDuplicatesConfig {
+            input: String::new(),
+            inputs: Vec::new(),
+            output: String::new(),
+            metrics_file: String::new(),
+            remove_duplicates: false,
+            remove_sequencing_duplicates: false,
+            assume_sorted: true,
+            assume_sort_order: None,
+            validation_stringency: None,
+            quiet: true,
+            create_index: false,
+            create_md5_file: false,
+            add_pg_tag_to_reads: false,
+            tag_duplicate_set_members: false,
+            duplicate_scoring_strategy: None,
+            read_name_regex: None,
+            tagging_policy: None,
+            barcode_tag: None,
+            read_one_barcode_tag: None,
+            read_two_barcode_tag: None,
+            clear_dt: false,
+            optical_duplicate_pixel_distance: None,
+            compression_level: None,
+            reference_sequence: None,
+            tmp_dir: None,
+        };
+        let tmp = tempdir().unwrap();
+        let mut qnames = ExternalSorter::new(ExternalSortConfig::new(tmp.path())).unwrap();
+        let mut pairs = ExternalSorter::new(ExternalSortConfig::new(tmp.path())).unwrap();
+        let mut fragments =
+            FragmentStage::new(ExternalSorter::new(ExternalSortConfig::new(tmp.path())).unwrap());
+        let rg_registry = ReadGroupRegistry::default();
+        let mut cache = CompactMateCache::new(false);
+        cache.max_pending = 3;
+
+        let r_dist_1 = make_rec(b"distant", 99, 0, 100, 0, 2_000_000);
+        let r_local_a1 = make_rec(b"local_a", 99, 0, 1_900_100, 0, 1_900_200);
+        let r_local_b1 = make_rec(b"local_b", 99, 0, 1_900_150, 0, 1_900_250);
+        let r_trigger = make_rec(b"local_c", 99, 0, 1_900_180, 0, 1_900_280);
+        let r_local_a2 = make_rec(b"local_a", 147, 0, 1_900_200, 0, 1_900_100);
+        let r_local_b2 = make_rec(b"local_b", 147, 0, 1_900_250, 0, 1_900_150);
+        let r_local_c2 = make_rec(b"local_c", 147, 0, 1_900_280, 0, 1_900_180);
+        let r_dist_2 = make_rec(b"distant", 147, 0, 2_000_000, 0, 100);
+
+        for (ord, rec) in [
+            (0_u64, &r_dist_1),
+            (1, &r_local_a1),
+            (2, &r_local_b1),
+            (3, &r_trigger),
+            (4, &r_local_a2),
+            (5, &r_local_b2),
+            (6, &r_local_c2),
+            (7, &r_dist_2),
+        ] {
+            cache
+                .push_record(
+                    rec,
+                    ord,
+                    0,
+                    0,
+                    rec.pos(),
+                    100,
+                    &config,
+                    &mut qnames,
+                    &mut pairs,
+                )
+                .unwrap();
+        }
+        cache.flush(&mut qnames).unwrap();
+        finish_spilled_compact(
+            qnames,
+            &mut pairs,
+            Some(&mut fragments),
+            &rg_registry,
+            false,
+        )
+        .unwrap();
+
+        let mut pair_count = 0_usize;
+        pairs
+            .finish_slices(|_, _| {
+                pair_count += 1;
+                Ok(())
+            })
+            .unwrap();
+        assert_eq!(pair_count, 4);
     }
 }

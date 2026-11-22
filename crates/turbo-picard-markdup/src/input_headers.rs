@@ -138,8 +138,9 @@ pub(super) fn prepare(
             None,
             Some(0),
         )?;
-        for record in reader.records() {
-            let mut record = record?;
+        let mut record = bam::Record::new();
+        while let Some(result) = reader.read(&mut record) {
+            result?;
             if let Ok(Aux::String(old)) = record.aux(b"RG")
                 && let Some(new) = renames.get(old)
             {

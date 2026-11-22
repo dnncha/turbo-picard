@@ -2,13 +2,13 @@ use std::cmp::Ordering;
 
 const EMPTY: usize = usize::MAX;
 
-pub(crate) struct MergeTree {
+pub struct MergeTree {
     leaf_count: usize,
     winners: Vec<usize>,
 }
 
 impl MergeTree {
-    pub(crate) fn new<T>(heads: &[Option<T>], compare: impl Fn(&T, &T) -> Ordering) -> Self {
+    pub fn new<T>(heads: &[Option<T>], compare: impl Fn(&T, &T) -> Ordering) -> Self {
         let leaf_count = heads.len().max(1).next_power_of_two();
         let mut tree = Self {
             leaf_count,
@@ -25,11 +25,11 @@ impl MergeTree {
         tree
     }
 
-    pub(crate) fn winner(&self) -> Option<usize> {
+    pub fn winner(&self) -> Option<usize> {
         (self.winners[1] != EMPTY).then_some(self.winners[1])
     }
 
-    pub(crate) fn update<T>(
+    pub fn update<T>(
         &mut self,
         index: usize,
         heads: &[Option<T>],

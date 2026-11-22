@@ -16,6 +16,7 @@ static SORTER_ID: AtomicU64 = AtomicU64::new(0);
 const DEFAULT_MAX_RECORDS: usize = 500_000;
 const DEFAULT_MAX_BYTES: usize = 256 * 1024 * 1024;
 const DEFAULT_MERGE_FAN_IN: usize = 32;
+const PARALLEL_BAM_SORT_THRESHOLD: usize = 8_192;
 
 pub type RecordCompare = fn(&bam::Record, &bam::Record) -> Ordering;
 
@@ -25,6 +26,7 @@ pub struct BamExternalSortConfig {
     pub max_records_in_ram: usize,
     pub max_bytes_in_ram: usize,
     pub merge_fan_in: usize,
+    pub threads: usize,
     pub prefix: String,
 }
 
@@ -35,6 +37,7 @@ impl BamExternalSortConfig {
             max_records_in_ram: DEFAULT_MAX_RECORDS,
             max_bytes_in_ram: DEFAULT_MAX_BYTES,
             merge_fan_in: DEFAULT_MERGE_FAN_IN,
+            threads: 1,
             prefix: "turbo-picard-bam-sort".to_string(),
         }
     }
@@ -52,6 +55,7 @@ pub struct BamExternalSorter {
     config: BamExternalSortConfig,
     header: bam::Header,
     records: Vec<bam::Record>,
+    already_sorted: bool,
     resident_record_bytes: usize,
     runs: Vec<PathBuf>,
     owned_runs: OwnedRuns,
@@ -67,6 +71,7 @@ impl BamExternalSorter {
             config,
             header,
             records: Vec::new(),
+            already_sorted: true,
             resident_record_bytes: 0,
             runs: Vec::new(),
             owned_runs: OwnedRuns::default(),
@@ -96,6 +101,12 @@ impl BamExternalSorter {
             self.config.max_bytes_in_ram,
             self.config.max_records_in_ram,
         )?;
+        if self.already_sorted
+            && let Some(last) = self.records.last()
+            && compare(last, &record) == Ordering::Greater
+        {
+            self.already_sorted = false;
+        }
         self.resident_record_bytes = self.resident_record_bytes.saturating_add(record_bytes);
         self.records.push(record);
         let estimated_bytes = self.resident_record_bytes.saturating_add(
@@ -114,13 +125,45 @@ impl BamExternalSorter {
         Ok(())
     }
 
+    pub fn finish_ref(
+        mut self,
+        compare: RecordCompare,
+        mut emit: impl FnMut(&bam::Record) -> Result<(), SortError>,
+    ) -> Result<BamExternalSortMetrics, SortError> {
+        if self.runs.is_empty() {
+            if !self.already_sorted {
+                sort_bam_records(&mut self.records, compare, self.config.threads);
+            }
+            self.metrics.run_count = usize::from(!self.records.is_empty());
+            for record in &self.records {
+                emit(record)?;
+            }
+            return Ok(self.metrics);
+        }
+
+        self.spill_current_run(compare)?;
+        self.records = Vec::new();
+        let mut runs = std::mem::take(&mut self.runs);
+        while runs.len() > self.config.merge_fan_in.max(2) {
+            runs = self.merge_pass(&runs, compare)?;
+        }
+        let result = merge_runs_ref(&runs, compare, self.config.threads, emit);
+        for run in runs {
+            let _ = self.owned_runs.remove(&run);
+        }
+        result?;
+        Ok(self.metrics)
+    }
+
     pub fn finish_into(
         mut self,
         compare: RecordCompare,
         mut emit: impl FnMut(bam::Record) -> Result<(), SortError>,
     ) -> Result<BamExternalSortMetrics, SortError> {
         if self.runs.is_empty() {
-            self.records.sort_unstable_by(compare);
+            if !self.already_sorted {
+                sort_bam_records(&mut self.records, compare, self.config.threads);
+            }
             self.metrics.run_count = usize::from(!self.records.is_empty());
             for record in self.records.drain(..) {
                 emit(record)?;
@@ -134,7 +177,7 @@ impl BamExternalSorter {
         while runs.len() > self.config.merge_fan_in.max(2) {
             runs = self.merge_pass(&runs, compare)?;
         }
-        let result = merge_runs(&runs, compare, emit);
+        let result = merge_runs_owned(&runs, compare, self.config.threads, emit);
         for run in runs {
             let _ = self.owned_runs.remove(&run);
         }
@@ -146,13 +189,16 @@ impl BamExternalSorter {
         if self.records.is_empty() {
             return Ok(());
         }
-        self.records.sort_unstable_by(compare);
+        if !self.already_sorted {
+            sort_bam_records(&mut self.records, compare, self.config.threads);
+        }
         let path = self.create_run_path()?;
-        write_run(&path, &self.header, &self.records)?;
+        write_run(&path, &self.header, &self.records, self.config.threads)?;
         self.metrics.spills += 1;
         self.metrics.run_count += 1;
         self.runs.push(path);
         self.records.clear();
+        self.already_sorted = true;
         self.resident_record_bytes = 0;
         Ok(())
     }
@@ -170,7 +216,7 @@ impl BamExternalSorter {
                 continue;
             }
             let output = self.create_run_path()?;
-            merge_runs_to_file(chunk, &output, &self.header, compare)?;
+            merge_runs_to_file(chunk, &output, &self.header, compare, self.config.threads)?;
             self.metrics.run_count += 1;
             merged.push(output);
             for run in chunk {
@@ -202,8 +248,61 @@ impl BamExternalSorter {
     }
 }
 
-fn write_run(path: &Path, header: &bam::Header, records: &[bam::Record]) -> Result<(), SortError> {
+fn sort_bam_records(records: &mut Vec<bam::Record>, compare: RecordCompare, threads: usize) {
+    let worker_count = if threads > 1 && records.len() >= PARALLEL_BAM_SORT_THRESHOLD {
+        threads
+            .min(records.len() / (PARALLEL_BAM_SORT_THRESHOLD / 2))
+            .max(1)
+    } else {
+        1
+    };
+    if worker_count <= 1 {
+        records.sort_unstable_by(compare);
+        return;
+    }
+
+    let chunk_len = records.len().div_ceil(worker_count);
+    let mut chunks = Vec::with_capacity(worker_count);
+    while records.len() > chunk_len {
+        let split_at = records.len() - chunk_len;
+        chunks.push(records.split_off(split_at));
+    }
+    if !records.is_empty() {
+        chunks.push(std::mem::take(records));
+    }
+    chunks.reverse();
+
+    std::thread::scope(|scope| {
+        for chunk in &mut chunks {
+            scope.spawn(move || {
+                chunk.sort_unstable_by(compare);
+            });
+        }
+    });
+
+    let mut iters: Vec<_> = chunks.into_iter().map(Vec::into_iter).collect();
+    let mut heads: Vec<Option<bam::Record>> = iters.iter_mut().map(Iterator::next).collect();
+    let mut tree = MergeTree::new(&heads, compare);
+    while let Some(chunk_index) = tree.winner() {
+        if let Some(record) = heads[chunk_index].take() {
+            records.push(record);
+        }
+        heads[chunk_index] = iters[chunk_index].next();
+        tree.update(chunk_index, &heads, compare);
+    }
+}
+
+fn write_run(
+    path: &Path,
+    header: &bam::Header,
+    records: &[bam::Record],
+    threads: usize,
+) -> Result<(), SortError> {
     let mut writer = bam::Writer::from_path(path, header, bam::Format::Bam)?;
+    writer.set_compression_level(bam::CompressionLevel::Level(1))?;
+    if threads > 1 {
+        writer.set_threads(threads.min(8))?;
+    }
     for record in records {
         writer.write(record)?;
     }
@@ -215,32 +314,101 @@ fn merge_runs_to_file(
     output: &Path,
     header: &bam::Header,
     compare: RecordCompare,
+    threads: usize,
 ) -> Result<(), SortError> {
     let mut writer = bam::Writer::from_path(output, header, bam::Format::Bam)?;
-    merge_runs(runs, compare, |record| Ok(writer.write(&record)?))
+    writer.set_compression_level(bam::CompressionLevel::Level(1))?;
+    if threads > 1 {
+        writer.set_threads(threads.min(8))?;
+    }
+    merge_runs_ref(runs, compare, threads, |record| Ok(writer.write(record)?))
 }
 
-fn merge_runs(
+fn open_merge_readers(
     runs: &[PathBuf],
-    compare: RecordCompare,
-    mut emit: impl FnMut(bam::Record) -> Result<(), SortError>,
-) -> Result<(), SortError> {
+    threads: usize,
+) -> Result<(Vec<bam::Reader>, Vec<Option<bam::Record>>), SortError> {
     let mut readers = Vec::with_capacity(runs.len());
     let mut heads = Vec::with_capacity(runs.len());
+    let per_reader_threads = if threads > 1 && runs.len() <= 4 {
+        (threads / runs.len().max(1)).max(1)
+    } else {
+        1
+    };
     for path in runs {
         let mut reader = bam::Reader::from_path(path)?;
-        heads.push(next_record(&mut reader)?);
+        if per_reader_threads > 1 {
+            reader.set_threads(per_reader_threads)?;
+        }
+        let mut record = bam::Record::new();
+        if read_record_into(&mut reader, &mut record)? {
+            heads.push(Some(record));
+        } else {
+            heads.push(None);
+        }
         readers.push(reader);
     }
+    Ok((readers, heads))
+}
+
+fn merge_runs_ref(
+    runs: &[PathBuf],
+    compare: RecordCompare,
+    threads: usize,
+    mut emit: impl FnMut(&bam::Record) -> Result<(), SortError>,
+) -> Result<(), SortError> {
+    let (mut readers, mut heads) = open_merge_readers(runs, threads)?;
+    let mut tree = MergeTree::new(&heads, compare);
+    while let Some(reader_index) = tree.winner() {
+        let mut keep = true;
+        if let Some(record) = heads[reader_index].as_mut() {
+            emit(record)?;
+            keep = read_record_into(&mut readers[reader_index], record)?;
+        }
+        if !keep {
+            heads[reader_index] = None;
+        }
+        tree.update(reader_index, &heads, compare);
+    }
+    Ok(())
+}
+
+fn merge_runs_owned(
+    runs: &[PathBuf],
+    compare: RecordCompare,
+    threads: usize,
+    mut emit: impl FnMut(bam::Record) -> Result<(), SortError>,
+) -> Result<(), SortError> {
+    let (mut readers, mut heads) = open_merge_readers(runs, threads)?;
     let mut tree = MergeTree::new(&heads, compare);
     while let Some(reader_index) = tree.winner() {
         if let Some(record) = heads[reader_index].take() {
             emit(record)?;
         }
-        heads[reader_index] = next_record(&mut readers[reader_index])?;
+        let mut next = bam::Record::new();
+        if read_record_into(&mut readers[reader_index], &mut next)? {
+            heads[reader_index] = Some(next);
+        }
         tree.update(reader_index, &heads, compare);
     }
     Ok(())
+}
+
+#[cfg(test)]
+fn merge_runs(
+    runs: &[PathBuf],
+    compare: RecordCompare,
+    emit: impl FnMut(bam::Record) -> Result<(), SortError>,
+) -> Result<(), SortError> {
+    merge_runs_owned(runs, compare, 1, emit)
+}
+
+fn read_record_into(reader: &mut bam::Reader, record: &mut bam::Record) -> Result<bool, SortError> {
+    match reader.read(record) {
+        Some(Ok(())) => Ok(true),
+        Some(Err(error)) => Err(error.into()),
+        None => Ok(false),
+    }
 }
 
 #[cfg(test)]
@@ -274,15 +442,6 @@ impl PartialEq for HeapRecord {
 
 #[cfg(test)]
 impl Eq for HeapRecord {}
-
-fn next_record(reader: &mut bam::Reader) -> Result<Option<bam::Record>, SortError> {
-    let mut record = bam::Record::new();
-    match reader.read(&mut record) {
-        Some(Ok(())) => Ok(Some(record)),
-        Some(Err(error)) => Err(error.into()),
-        None => Ok(None),
-    }
-}
 
 #[cfg(test)]
 mod tests {
@@ -431,7 +590,7 @@ mod tests {
             let mut record = bam::Record::new();
             record.set(b"same", None, b"A", &[30]);
             record.set_mapq(index);
-            write_run(&path, &bam::Header::new(), &[record.clone(), record]).unwrap();
+            write_run(&path, &bam::Header::new(), &[record.clone(), record], 1).unwrap();
             paths.push(path);
         }
         let mut observed = Vec::new();
@@ -574,5 +733,40 @@ mod tests {
         assert_eq!(error.to_string(), "sink failed");
         assert!(fs::read_dir(&dir).unwrap().next().is_none());
         fs::remove_dir(&dir).unwrap();
+    }
+
+    #[test]
+    fn parallel_bam_sort_and_finish_ref_matches_single_threaded() {
+        for threads in [1, 4] {
+            let dir = std::env::temp_dir()
+                .join(format!("turbo-bam-parallel-{threads}-{}", process::id()));
+            let _ = fs::remove_dir_all(&dir);
+            let mut config = BamExternalSortConfig::new(&dir);
+            config.threads = threads;
+            let mut sorter = BamExternalSorter::new(bam::Header::new(), config).unwrap();
+            let mut state = 1_u64;
+            let mut expected = Vec::with_capacity(10_000);
+            for _ in 0..10_000 {
+                state = state
+                    .wrapping_mul(6_364_136_223_846_793_005)
+                    .wrapping_add(1);
+                let name = format!("r{:08}", state % 5_000);
+                let mut record = bam::Record::new();
+                record.set(name.as_bytes(), None, b"ACGT", &[30; 4]);
+                sorter.push(record, qname_compare).unwrap();
+                expected.push(name);
+            }
+            expected.sort_unstable();
+            let mut observed = Vec::with_capacity(10_000);
+            sorter
+                .finish_ref(qname_compare, |record| {
+                    observed.push(String::from_utf8(record.qname().to_vec()).unwrap());
+                    Ok(())
+                })
+                .unwrap();
+            assert_eq!(observed, expected);
+            assert!(fs::read_dir(&dir).unwrap().next().is_none());
+            fs::remove_dir(&dir).unwrap();
+        }
     }
 }

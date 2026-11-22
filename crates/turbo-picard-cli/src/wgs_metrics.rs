@@ -8,7 +8,8 @@ use flate2::read::MultiGzDecoder;
 use rust_htslib::bam;
 use rust_htslib::faidx;
 use rustc_hash::{FxHashMap, FxHasher};
-use std::collections::{BTreeMap, VecDeque};
+use std::cmp::Reverse;
+use std::collections::{BTreeMap, BinaryHeap};
 use std::fmt::Write as _;
 use std::fs;
 use std::hash::Hasher;
@@ -69,6 +70,15 @@ impl WgsReference {
         scan_threads: usize,
     ) -> Result<Self, String> {
         let lengths = read_reference_contigs_for_wgs(reference)?;
+        Self::load_with_contigs(reference, lengths, interval_masks, scan_threads)
+    }
+
+    pub(crate) fn load_with_contigs(
+        reference: &str,
+        lengths: Vec<(String, usize)>,
+        interval_masks: Option<BTreeMap<String, Vec<bool>>>,
+        scan_threads: usize,
+    ) -> Result<Self, String> {
         let no_call_runs = reference_no_call_runs(reference, &lengths, scan_threads)?;
         Ok(Self::from_parts(lengths, no_call_runs, interval_masks))
     }
@@ -156,7 +166,7 @@ impl WgsReference {
         last_kept
     }
 
-    fn territory(&self) -> u64 {
+    pub(crate) fn territory(&self) -> u64 {
         self.contigs
             .iter()
             .map(|contig| contig.included_loci as u64)
@@ -314,41 +324,129 @@ fn fasta_text_no_call_runs(
     Ok(runs)
 }
 
-#[derive(Debug, Default)]
+const INLINE_NAME_CAP: usize = 64;
+const INLINE_MASK_WORDS: usize = 3;
+const HASH_FILTER_BUCKETS: usize = 1024;
+const HASH_FILTER_MASK: usize = HASH_FILTER_BUCKETS - 1;
+
+#[derive(Debug)]
 struct NameEntry {
     serial: u64,
     hash: u64,
     start: usize,
     end: usize,
-    name: Vec<u8>,
-    cigar: Vec<u32>,
-    qualities: Vec<u8>,
-    encoded_bases: Vec<u8>,
-    previous: Option<(usize, u64)>,
+    name_len: u8,
+    inline_name: [u8; INLINE_NAME_CAP],
+    overflow_name: Vec<u8>,
+    mask_words: usize,
+    inline_mask: [u64; INLINE_MASK_WORDS],
+    overflow_mask: Vec<u64>,
+    prev_same_hash: Option<usize>,
+    next_same_hash: Option<usize>,
+}
+
+impl Default for NameEntry {
+    fn default() -> Self {
+        Self {
+            serial: 0,
+            hash: 0,
+            start: 0,
+            end: 0,
+            name_len: 0,
+            inline_name: [0; INLINE_NAME_CAP],
+            overflow_name: Vec::new(),
+            mask_words: 0,
+            inline_mask: [0; INLINE_MASK_WORDS],
+            overflow_mask: Vec::new(),
+            prev_same_hash: None,
+            next_same_hash: None,
+        }
+    }
 }
 
 impl NameEntry {
-    fn passes_at(&self, read_index: usize, pass_floor: u8) -> bool {
-        self.qualities
-            .get(read_index)
-            .is_some_and(|quality| *quality >= pass_floor)
-            && (self.encoded_bases.is_empty()
-                || !is_no_call_read_base(&self.encoded_bases, read_index))
+    fn set_name(&mut self, name: &[u8]) {
+        if name.len() <= INLINE_NAME_CAP {
+            self.name_len = u8::try_from(name.len()).unwrap_or(0);
+            self.inline_name[..name.len()].copy_from_slice(name);
+        } else {
+            self.name_len = u8::try_from(INLINE_NAME_CAP + 1).unwrap_or(u8::MAX);
+            self.overflow_name.clear();
+            self.overflow_name.extend_from_slice(name);
+        }
     }
 
-    fn mark_passing_loci(&self, start: usize, end: usize, pass_floor: u8, bits: &mut [u64]) {
-        let mut reference_offset = self.start;
+    fn name_eq(&self, name: &[u8]) -> bool {
+        let len = usize::from(self.name_len);
+        if len <= INLINE_NAME_CAP {
+            &self.inline_name[..len] == name
+        } else {
+            self.overflow_name.as_slice() == name
+        }
+    }
+
+    fn set_passing_mask(
+        &mut self,
+        start: usize,
+        end: usize,
+        cigar: &[u32],
+        qualities: &[u8],
+        encoded_bases: &[u8],
+        pass_floor: u8,
+    ) {
+        let words = end.saturating_sub(start).div_ceil(64);
+        self.mask_words = words;
+        let mask: &mut [u64] = if words <= INLINE_MASK_WORDS {
+            self.inline_mask[..words].fill(0);
+            &mut self.inline_mask[..words]
+        } else {
+            self.overflow_mask.clear();
+            self.overflow_mask.resize(words, 0);
+            &mut self.overflow_mask
+        };
+        let mut reference_offset = start;
         let mut read_offset = 0;
-        for raw in &self.cigar {
+        if encoded_bases.is_empty() && !qualities.is_empty() {
+            for raw in cigar {
+                let length = (raw >> 4) as usize;
+                match raw & 0xf {
+                    0 | 7 | 8 => {
+                        let avail = qualities.len().saturating_sub(read_offset).min(length);
+                        let base_bit = reference_offset - start;
+                        for (index, quality) in qualities[read_offset..read_offset + avail]
+                            .iter()
+                            .enumerate()
+                        {
+                            if *quality >= pass_floor {
+                                let bit = base_bit + index;
+                                mask[bit / 64] |= 1_u64 << (bit % 64);
+                            }
+                        }
+                        reference_offset += length;
+                        read_offset += length;
+                    }
+                    1 | 4 => read_offset += length,
+                    2 | 3 => reference_offset += length,
+                    _ => {}
+                }
+            }
+            return;
+        }
+        for raw in cigar {
             let length = (raw >> 4) as usize;
             match raw & 0xf {
                 0 | 7 | 8 => {
-                    let lo = reference_offset.max(start);
-                    let hi = (reference_offset + length).min(end);
-                    for locus in lo..hi {
-                        if self.passes_at(read_offset + (locus - reference_offset), pass_floor) {
-                            let bit = locus - start;
-                            bits[bit / 64] |= 1 << (bit % 64);
+                    let base_bit = reference_offset - start;
+                    for index in 0..length {
+                        let read_index = read_offset + index;
+                        if qualities
+                            .get(read_index)
+                            .is_some_and(|quality| *quality >= pass_floor)
+                            && (encoded_bases.is_empty()
+                                || !is_no_call_read_base(encoded_bases, read_index))
+                        {
+                            let bit = base_bit + index;
+                            mask[bit / 64] |= 1_u64 << (bit % 64);
                         }
                     }
                     reference_offset += length;
@@ -360,35 +458,115 @@ impl NameEntry {
             }
         }
     }
+
+    fn mark_passing_loci(&self, start: usize, end: usize, bits: &mut [u64]) {
+        let ov_lo = self.start.max(start);
+        let ov_hi = self.end.min(end);
+        if ov_lo >= ov_hi {
+            return;
+        }
+        let src = if self.mask_words <= INLINE_MASK_WORDS {
+            &self.inline_mask[..self.mask_words]
+        } else {
+            &self.overflow_mask[..self.mask_words]
+        };
+        or_shifted_bits(bits, ov_lo - start, src, ov_lo - self.start, ov_hi - ov_lo);
+    }
 }
 
-#[derive(Debug, Default)]
+fn or_shifted_bits(
+    dst: &mut [u64],
+    mut dst_bit: usize,
+    src: &[u64],
+    mut src_bit: usize,
+    mut rem: usize,
+) {
+    while rem > 0 {
+        let src_word = src_bit / 64;
+        let src_sh = src_bit % 64;
+        let dst_word = dst_bit / 64;
+        let dst_sh = dst_bit % 64;
+        let take = rem.min(64 - src_sh).min(64 - dst_sh);
+        let mask = if take == 64 {
+            u64::MAX
+        } else {
+            (1_u64 << take) - 1
+        };
+        let chunk = (src[src_word] >> src_sh) & mask;
+        dst[dst_word] |= chunk << dst_sh;
+        src_bit += take;
+        dst_bit += take;
+        rem -= take;
+    }
+}
+
+#[derive(Debug)]
 struct NameWindow {
     entries: Vec<NameEntry>,
     free: Vec<usize>,
-    arrival: VecDeque<usize>,
+    expiry: BinaryHeap<Reverse<(usize, usize)>>,
     newest: FxHashMap<u64, usize>,
+    bucket_counts: Box<[u32; HASH_FILTER_BUCKETS]>,
     serial: u64,
+}
+
+impl Default for NameWindow {
+    fn default() -> Self {
+        Self {
+            entries: Vec::new(),
+            free: Vec::new(),
+            expiry: BinaryHeap::new(),
+            newest: FxHashMap::default(),
+            bucket_counts: Box::new([0; HASH_FILTER_BUCKETS]),
+            serial: 0,
+        }
+    }
+}
+
+fn hash_bucket(hash: u64) -> usize {
+    usize::try_from(hash & (HASH_FILTER_MASK as u64)).unwrap_or(0)
 }
 
 impl NameWindow {
     fn clear(&mut self) {
-        for slot in self.arrival.drain(..) {
+        while let Some(Reverse((_, slot))) = self.expiry.pop() {
             self.entries[slot].serial = 0;
+            self.entries[slot].prev_same_hash = None;
+            self.entries[slot].next_same_hash = None;
             self.free.push(slot);
         }
         self.newest.clear();
+        self.bucket_counts.fill(0);
+    }
+
+    fn unlink_slot(&mut self, slot: usize) {
+        let hash = self.entries[slot].hash;
+        let prev = self.entries[slot].prev_same_hash.take();
+        let next = self.entries[slot].next_same_hash.take();
+        if let Some(prev_slot) = prev {
+            self.entries[prev_slot].next_same_hash = next;
+        } else if let Some(next_slot) = next {
+            self.newest.insert(hash, next_slot);
+        } else {
+            self.newest.remove(&hash);
+        }
+        if let Some(next_slot) = next {
+            self.entries[next_slot].prev_same_hash = prev;
+        }
+        let bucket = hash_bucket(hash);
+        self.bucket_counts[bucket] = self.bucket_counts[bucket].saturating_sub(1);
     }
 
     fn expire(&mut self, before: usize) {
-        while let Some(slot) = self.arrival.front().copied() {
-            if self.entries[slot].end > before {
+        while let Some(&Reverse((end, slot))) = self.expiry.peek() {
+            if end > before {
                 break;
             }
-            self.arrival.pop_front();
-            if self.newest.get(&self.entries[slot].hash) == Some(&slot) {
-                self.newest.remove(&self.entries[slot].hash);
+            self.expiry.pop();
+            if self.entries[slot].serial == 0 {
+                continue;
             }
+            self.unlink_slot(slot);
             self.entries[slot].serial = 0;
             self.free.push(slot);
         }
@@ -400,32 +578,28 @@ impl NameWindow {
         name: &[u8],
         start: usize,
         end: usize,
-        pass_floor: u8,
         bits: &mut Vec<u64>,
     ) -> Option<(usize, usize)> {
-        let mut cursor = self
-            .newest
-            .get(&hash)
-            .map(|slot| (*slot, self.entries[*slot].serial));
+        if self.bucket_counts[hash_bucket(hash)] == 0 {
+            return None;
+        }
+        let mut cursor = self.newest.get(&hash).copied();
         let mut hull: Option<(usize, usize)> = None;
-        while let Some((slot, serial)) = cursor {
+        while let Some(slot) = cursor {
             let entry = &self.entries[slot];
-            if entry.serial != serial {
-                break;
-            }
-            if entry.end > start && entry.start < end && entry.name == name {
+            if entry.end > start && entry.start < end && entry.name_eq(name) {
                 if hull.is_none() {
                     bits.clear();
                     bits.resize((end - start).div_ceil(64), 0);
                 }
-                entry.mark_passing_loci(start, end, pass_floor, bits);
+                entry.mark_passing_loci(start, end, bits);
                 let lo = entry.start.max(start);
                 let hi = entry.end.min(end);
                 hull = Some(hull.map_or((lo, hi), |(seen_lo, seen_hi)| {
                     (seen_lo.min(lo), seen_hi.max(hi))
                 }));
             }
-            cursor = entry.previous;
+            cursor = entry.next_same_hash;
         }
         hull
     }
@@ -443,32 +617,29 @@ impl NameWindow {
         cigar: &[u32],
         qualities: &[u8],
         encoded_bases: &[u8],
+        pass_floor: u8,
     ) {
         let slot = self.free.pop().unwrap_or_else(|| {
             self.entries.push(NameEntry::default());
             self.entries.len() - 1
         });
         self.serial += 1;
-        let previous = self
-            .newest
-            .insert(hash, slot)
-            .filter(|older| *older != slot)
-            .map(|older| (older, self.entries[older].serial));
+        let old_head = self.newest.insert(hash, slot);
+        if let Some(older) = old_head {
+            self.entries[older].prev_same_hash = Some(slot);
+        }
+        let bucket = hash_bucket(hash);
+        self.bucket_counts[bucket] += 1;
         let entry = &mut self.entries[slot];
         entry.serial = self.serial;
         entry.hash = hash;
         entry.start = start;
         entry.end = end;
-        entry.name.clear();
-        entry.name.extend_from_slice(name);
-        entry.cigar.clear();
-        entry.cigar.extend_from_slice(cigar);
-        entry.qualities.clear();
-        entry.qualities.extend_from_slice(qualities);
-        entry.encoded_bases.clear();
-        entry.encoded_bases.extend_from_slice(encoded_bases);
-        entry.previous = previous;
-        self.arrival.push_back(slot);
+        entry.set_name(name);
+        entry.set_passing_mask(start, end, cigar, qualities, encoded_bases, pass_floor);
+        entry.prev_same_hash = None;
+        entry.next_same_hash = old_head;
+        self.expiry.push(Reverse((end, slot)));
     }
 }
 
@@ -479,8 +650,15 @@ fn is_no_call_read_base(encoded_bases: &[u8], read_index: usize) -> bool {
 }
 
 fn has_no_call_read_base(encoded_bases: &[u8]) -> bool {
-    encoded_bases
-        .iter()
+    let (chunks, tail) = encoded_bases.as_chunks::<8>();
+    for chunk in chunks {
+        let word = u64::from_ne_bytes(*chunk);
+        let pairs = word & (word >> 1);
+        if (pairs & (pairs >> 2) & 0x1111_1111_1111_1111_u64) != 0 {
+            return true;
+        }
+    }
+    tail.iter()
         .any(|byte| byte & 0xf0 == 0xf0 || byte & 0x0f == 0x0f)
 }
 
@@ -510,20 +688,6 @@ pub(crate) struct WgsCounts {
     base_quality: Vec<u64>,
 }
 
-impl WgsCounts {
-    pub(crate) fn merge(&mut self, other: &Self) {
-        for (total, part) in self.excluded.iter_mut().zip(other.excluded) {
-            *total += part;
-        }
-        for (total, part) in self.covered.iter_mut().zip(other.covered) {
-            *total += part;
-        }
-        add_bins(&mut self.high_quality, &other.high_quality);
-        add_bins(&mut self.unfiltered, &other.unfiltered);
-        add_bins(&mut self.base_quality, &other.base_quality);
-    }
-}
-
 fn add_bins(total: &mut Vec<u64>, part: &[u64]) {
     if total.len() < part.len() {
         total.resize(part.len(), 0);
@@ -544,6 +708,11 @@ enum ReadExclusion {
 #[derive(Debug)]
 pub(crate) struct WgsCollector {
     reference: Arc<WgsReference>,
+    state: WgsState,
+}
+
+#[derive(Debug)]
+struct WgsState {
     options: WgsOptions,
     depth_limit: u16,
     pass_floor: u8,
@@ -562,12 +731,14 @@ pub(crate) struct WgsCollector {
     quality_lanes: Box<[[u64; 256]; 4]>,
     active_tid: Option<i32>,
     active_contig: usize,
+    tid_to_contig: Vec<Option<usize>>,
     visited: Vec<bool>,
     high_quality: Vec<u16>,
     unfiltered: Vec<u16>,
     raw: Vec<u32>,
     window_base: usize,
     window_offset: usize,
+    window_max_unfiltered: u16,
     last_start: Option<usize>,
     no_call_cursor: usize,
     names: NameWindow,
@@ -577,6 +748,7 @@ pub(crate) struct WgsCollector {
     accumulator_head: Option<usize>,
     accumulator_end: usize,
     accumulation_cap_reached: bool,
+    max_dropped_end: usize,
     locus_window: Option<(usize, usize)>,
     stop_target: Option<(usize, usize)>,
     last_settled_covered: Option<usize>,
@@ -600,50 +772,64 @@ struct AlignedRead<'a> {
 
 impl WgsCollector {
     pub(crate) fn new(reference: Arc<WgsReference>, options: WgsOptions) -> Self {
+        Self::for_reference(reference, options, None)
+    }
+
+    pub(crate) fn for_reference(
+        reference: Arc<WgsReference>,
+        options: WgsOptions,
+        stop_target: Option<(usize, usize)>,
+    ) -> Self {
         let options = WgsOptions {
             locus_accumulation_cap: options.locus_accumulation_cap.max(options.coverage_cap),
             ..options
         };
         let bins = options.coverage_cap as usize + 1;
+        let contigs_len = reference.contigs.len();
         Self {
-            visited: vec![false; reference.contigs.len()],
             reference,
-            options,
-            depth_limit: u16_or_max(options.coverage_cap),
-            pass_floor: options.minimum_base_quality.max(LOWEST_COUNTED_QUALITY),
-            excluded_adapter: 0,
-            excluded_mapq: 0,
-            excluded_duplicate: 0,
-            excluded_unpaired: 0,
-            excluded_baseq: 0,
-            excluded_overlap: 0,
-            excluded_capped: 0,
-            high_quality_histogram: vec![0; bins],
-            unfiltered_histogram: vec![0; bins],
-            high_quality_covered: 0,
-            unfiltered_covered: 0,
-            base_quality_histogram: vec![0; 256],
-            quality_lanes: Box::new([[0; 256]; 4]),
-            active_tid: None,
-            active_contig: 0,
-            high_quality: Vec::new(),
-            unfiltered: Vec::new(),
-            raw: Vec::new(),
-            window_base: 0,
-            window_offset: 0,
-            last_start: None,
-            no_call_cursor: 0,
-            names: NameWindow::default(),
-            seen_bits: Vec::new(),
-            read_bases: Vec::new(),
-            simulate_accumulation: true,
-            accumulator_head: None,
-            accumulator_end: 0,
-            accumulation_cap_reached: false,
-            locus_window: None,
-            stop_target: None,
-            last_settled_covered: None,
-            stop: StopState::Running,
+            state: WgsState {
+                options,
+                depth_limit: u16_or_max(options.coverage_cap),
+                pass_floor: options.minimum_base_quality.max(LOWEST_COUNTED_QUALITY),
+                excluded_adapter: 0,
+                excluded_mapq: 0,
+                excluded_duplicate: 0,
+                excluded_unpaired: 0,
+                excluded_baseq: 0,
+                excluded_overlap: 0,
+                excluded_capped: 0,
+                high_quality_histogram: vec![0; bins],
+                unfiltered_histogram: vec![0; bins],
+                high_quality_covered: 0,
+                unfiltered_covered: 0,
+                base_quality_histogram: vec![0; 256],
+                quality_lanes: Box::new([[0; 256]; 4]),
+                active_tid: None,
+                active_contig: 0,
+                tid_to_contig: Vec::new(),
+                visited: vec![false; contigs_len],
+                high_quality: Vec::new(),
+                unfiltered: Vec::new(),
+                raw: Vec::new(),
+                window_base: 0,
+                window_offset: 0,
+                window_max_unfiltered: 0,
+                last_start: None,
+                no_call_cursor: 0,
+                names: NameWindow::default(),
+                seen_bits: Vec::new(),
+                read_bases: Vec::new(),
+                simulate_accumulation: true,
+                accumulator_head: None,
+                accumulator_end: 0,
+                accumulation_cap_reached: false,
+                max_dropped_end: 0,
+                locus_window: None,
+                stop_target,
+                last_settled_covered: None,
+                stop: StopState::Running,
+            },
         }
     }
 
@@ -658,13 +844,146 @@ impl WgsCollector {
         let stop_target = stop_after
             .filter(|limit| (*limit as u64) < reference.territory())
             .and_then(|limit| reference.limit_included_loci(limit));
-        let mut collector = Self::new(Arc::new(reference), options);
-        collector.stop_target = stop_target;
-        Ok(collector)
+        Ok(Self::for_reference(
+            Arc::new(reference),
+            options,
+            stop_target,
+        ))
     }
 
     pub(crate) fn stopped(&self) -> bool {
-        self.stop == StopState::Stopped
+        self.state.stop == StopState::Stopped
+    }
+
+    pub(crate) fn region_worker(&self) -> Self {
+        let mut worker = Self::new(Arc::clone(&self.reference), self.state.options);
+        worker.state.simulate_accumulation = false;
+        worker
+    }
+
+    pub(crate) fn cluster_worker(&self) -> Self {
+        Self::new(Arc::clone(&self.reference), self.state.options)
+    }
+
+    pub(crate) fn begin_region(&mut self, start: usize, end: usize) {
+        self.state.leave_contig();
+        self.state.visited.fill(false);
+        self.state.locus_window = Some((start, end));
+        self.state.max_dropped_end = 0;
+        self.state.accumulation_cap_reached = false;
+    }
+
+    pub(crate) fn accumulation_cap_reached(&self) -> bool {
+        self.state.accumulation_cap_reached
+    }
+
+    pub(crate) fn has_intervals(&self) -> bool {
+        self.reference.has_intervals
+    }
+
+    pub(crate) fn drain_counts(&mut self) -> WgsCounts {
+        self.finish();
+        let bins = self.state.high_quality_histogram.len();
+        WgsCounts {
+            excluded: [
+                std::mem::take(&mut self.state.excluded_adapter),
+                std::mem::take(&mut self.state.excluded_mapq),
+                std::mem::take(&mut self.state.excluded_duplicate),
+                std::mem::take(&mut self.state.excluded_unpaired),
+                std::mem::take(&mut self.state.excluded_baseq),
+                std::mem::take(&mut self.state.excluded_overlap),
+                std::mem::take(&mut self.state.excluded_capped),
+            ],
+            covered: [
+                std::mem::take(&mut self.state.high_quality_covered),
+                std::mem::take(&mut self.state.unfiltered_covered),
+            ],
+            high_quality: std::mem::replace(&mut self.state.high_quality_histogram, vec![0; bins]),
+            unfiltered: std::mem::replace(&mut self.state.unfiltered_histogram, vec![0; bins]),
+            base_quality: std::mem::replace(&mut self.state.base_quality_histogram, vec![0; 256]),
+        }
+    }
+
+    pub(crate) fn absorb_counts(&mut self, counts: &WgsCounts) {
+        let [adapter, mapq, duplicate, unpaired, baseq, overlap, capped] = counts.excluded;
+        self.state.excluded_adapter += adapter;
+        self.state.excluded_mapq += mapq;
+        self.state.excluded_duplicate += duplicate;
+        self.state.excluded_unpaired += unpaired;
+        self.state.excluded_baseq += baseq;
+        self.state.excluded_overlap += overlap;
+        self.state.excluded_capped += capped;
+        self.state.high_quality_covered += counts.covered[0];
+        self.state.unfiltered_covered += counts.covered[1];
+        add_bins(&mut self.state.high_quality_histogram, &counts.high_quality);
+        add_bins(&mut self.state.unfiltered_histogram, &counts.unfiltered);
+        add_bins(&mut self.state.base_quality_histogram, &counts.base_quality);
+    }
+
+    pub(crate) fn take_accumulation_cap_reached(&mut self) -> bool {
+        std::mem::take(&mut self.state.accumulation_cap_reached)
+    }
+
+    pub(crate) fn max_dropped_end(&self) -> usize {
+        self.state.max_dropped_end
+    }
+
+    pub(crate) fn accumulation_cap_active_at(&self, boundary: usize) -> bool {
+        boundary > 0 && self.state.raw_at(boundary - 1) >= self.state.options.locus_accumulation_cap
+    }
+
+    pub(crate) fn note_accumulation_cap_reached(&mut self) {
+        self.state.accumulation_cap_reached = true;
+    }
+
+    pub(crate) fn finish(&mut self) {
+        self.state.leave_contig();
+        for quality in 0..256 {
+            self.state.base_quality_histogram[quality] += self
+                .state
+                .quality_lanes
+                .iter()
+                .map(|lane| lane[quality])
+                .sum::<u64>();
+        }
+        *self.state.quality_lanes = [[0; 256]; 4];
+    }
+
+    pub(crate) fn observe(
+        &mut self,
+        record: &bam::Record,
+        target_names: &[String],
+    ) -> Result<(), String> {
+        self.state.observe(&self.reference, record, target_names)
+    }
+
+    pub(crate) fn to_picard_text(&self, sample_size: u32, include_bq_histogram: bool) -> String {
+        self.state
+            .to_picard_text(&self.reference, sample_size, include_bq_histogram)
+    }
+}
+
+impl WgsState {
+    fn resolve_contig(
+        &mut self,
+        reference: &WgsReference,
+        tid: i32,
+        target_names: &[String],
+    ) -> Result<usize, String> {
+        if self.tid_to_contig.len() != target_names.len() {
+            self.tid_to_contig = target_names
+                .iter()
+                .map(|name| reference.by_name.get(name).copied())
+                .collect();
+        }
+        let tid_idx = usize_or_max(tid);
+        let Some(name) = target_names.get(tid_idx) else {
+            return Err("CollectWgsMetrics record references unknown target".to_string());
+        };
+        let Some(contig) = self.tid_to_contig.get(tid_idx).copied().flatten() else {
+            return Err(format!("CollectWgsMetrics reference missing contig {name}"));
+        };
+        Ok(contig)
     }
 
     fn note_emitted_through(&mut self, bound: usize) {
@@ -683,81 +1002,6 @@ impl WgsCollector {
         {
             self.stop = StopState::AwaitingNextPassingRead;
         }
-    }
-
-    pub(crate) fn region_worker(&self) -> Self {
-        let mut worker = Self::new(Arc::clone(&self.reference), self.options);
-        worker.simulate_accumulation = false;
-        worker
-    }
-
-    pub(crate) fn begin_region(&mut self, start: usize, end: usize) {
-        self.leave_contig();
-        self.visited.fill(false);
-        self.locus_window = Some((start, end));
-    }
-
-    pub(crate) fn accumulation_cap_reached(&self) -> bool {
-        self.accumulation_cap_reached
-    }
-
-    pub(crate) fn has_intervals(&self) -> bool {
-        self.reference.has_intervals
-    }
-
-    pub(crate) fn drain_counts(&mut self) -> WgsCounts {
-        self.finish();
-        let bins = self.high_quality_histogram.len();
-        WgsCounts {
-            excluded: [
-                std::mem::take(&mut self.excluded_adapter),
-                std::mem::take(&mut self.excluded_mapq),
-                std::mem::take(&mut self.excluded_duplicate),
-                std::mem::take(&mut self.excluded_unpaired),
-                std::mem::take(&mut self.excluded_baseq),
-                std::mem::take(&mut self.excluded_overlap),
-                std::mem::take(&mut self.excluded_capped),
-            ],
-            covered: [
-                std::mem::take(&mut self.high_quality_covered),
-                std::mem::take(&mut self.unfiltered_covered),
-            ],
-            high_quality: std::mem::replace(&mut self.high_quality_histogram, vec![0; bins]),
-            unfiltered: std::mem::replace(&mut self.unfiltered_histogram, vec![0; bins]),
-            base_quality: std::mem::replace(&mut self.base_quality_histogram, vec![0; 256]),
-        }
-    }
-
-    pub(crate) fn absorb_counts(&mut self, counts: &WgsCounts) {
-        let [adapter, mapq, duplicate, unpaired, baseq, overlap, capped] = counts.excluded;
-        self.excluded_adapter += adapter;
-        self.excluded_mapq += mapq;
-        self.excluded_duplicate += duplicate;
-        self.excluded_unpaired += unpaired;
-        self.excluded_baseq += baseq;
-        self.excluded_overlap += overlap;
-        self.excluded_capped += capped;
-        self.high_quality_covered += counts.covered[0];
-        self.unfiltered_covered += counts.covered[1];
-        add_bins(&mut self.high_quality_histogram, &counts.high_quality);
-        add_bins(&mut self.unfiltered_histogram, &counts.unfiltered);
-        add_bins(&mut self.base_quality_histogram, &counts.base_quality);
-    }
-
-    pub(crate) fn take_accumulation_cap_reached(&mut self) -> bool {
-        std::mem::take(&mut self.accumulation_cap_reached)
-    }
-
-    pub(crate) fn finish(&mut self) {
-        self.leave_contig();
-        for quality in 0..256 {
-            self.base_quality_histogram[quality] += self
-                .quality_lanes
-                .iter()
-                .map(|lane| lane[quality])
-                .sum::<u64>();
-        }
-        *self.quality_lanes = [[0; 256]; 4];
     }
 
     fn settle(histogram: &mut [u64], covered: &mut u64, depths: &[u16]) {
@@ -795,6 +1039,7 @@ impl WgsCollector {
         self.raw.clear();
         self.window_offset = 0;
         self.window_base = 0;
+        self.window_max_unfiltered = 0;
         if self.active_tid.take().is_some() {
             self.visited[self.active_contig] = true;
         }
@@ -805,18 +1050,19 @@ impl WgsCollector {
         self.accumulator_end = 0;
     }
 
-    fn enter_contig(&mut self, tid: i32, target_names: &[String]) -> Result<(), String> {
+    fn enter_contig(
+        &mut self,
+        reference: &WgsReference,
+        tid: i32,
+        target_names: &[String],
+    ) -> Result<(), String> {
         if self.active_tid == Some(tid) {
             return Ok(());
         }
-        let Some(name) = target_names.get(usize_or_max(tid)) else {
-            return Err("CollectWgsMetrics record references unknown target".to_string());
-        };
-        let Some(contig) = self.reference.by_name.get(name).copied() else {
-            return Err(format!("CollectWgsMetrics reference missing contig {name}"));
-        };
+        let contig = self.resolve_contig(reference, tid, target_names)?;
         self.leave_contig();
         if self.visited[contig] {
+            let name = &target_names[usize_or_max(tid)];
             return Err(format!(
                 "CollectWgsMetrics alignment is not coordinate-sorted: contig {name} was revisited"
             ));
@@ -848,6 +1094,7 @@ impl WgsCollector {
             self.unfiltered.clear();
             self.raw.clear();
             self.window_offset = 0;
+            self.window_max_unfiltered = 0;
         } else if self.window_offset >= COMPACT_AFTER
             && self.window_offset >= self.high_quality.len() / 2
         {
@@ -928,8 +1175,9 @@ impl WgsCollector {
         }
     }
 
-    pub(crate) fn observe(
+    fn observe(
         &mut self,
+        reference: &WgsReference,
         record: &bam::Record,
         target_names: &[String],
     ) -> Result<(), String> {
@@ -944,12 +1192,12 @@ impl WgsCollector {
         let start = usize_or_max(record.pos().max(0));
         let cigar = record.raw_cigar();
         let (aligned_bases, reference_span) = cigar_extent(cigar);
-        if self.reference.has_intervals {
+        if reference.has_intervals {
             let end = start + reference_span.max(1);
-            let overlaps = target_names
-                .get(usize_or_max(tid))
-                .and_then(|name| self.reference.by_name.get(name))
-                .and_then(|contig| self.reference.contigs[*contig].interval_runs.as_deref())
+            let overlaps = self
+                .resolve_contig(reference, tid, target_names)
+                .ok()
+                .and_then(|contig| reference.contigs[contig].interval_runs.as_deref())
                 .is_some_and(|runs| {
                     let first = runs.partition_point(|run| run.1 <= start);
                     runs.get(first).is_some_and(|run| run.0 < end)
@@ -979,12 +1227,14 @@ impl WgsCollector {
         if flags & (FLAG_UNMAPPED | FLAG_FAILS_VENDOR_QUALITY) != 0 {
             return Ok(());
         }
-        self.enter_contig(tid, target_names)?;
-        self.accumulate(record, start, reference_span)
+        self.enter_contig(reference, tid, target_names)?;
+        let contig = &reference.contigs[self.active_contig];
+        self.accumulate(contig, record, start, reference_span)
     }
 
     fn accumulate(
         &mut self,
+        contig: &WgsContig,
         record: &bam::Record,
         start: usize,
         reference_span: usize,
@@ -1004,11 +1254,10 @@ impl WgsCollector {
             return Ok(());
         }
         if self.simulate_accumulation && self.accumulation_surpassed(start) {
+            self.max_dropped_end = self.max_dropped_end.max(start + reference_span);
             return Ok(());
         }
         let end = start + reference_span;
-        let reference = Arc::clone(&self.reference);
-        let contig = &reference.contigs[self.active_contig];
         if end > contig.length {
             return Err("CollectWgsMetrics alignment extends beyond reference".to_string());
         }
@@ -1030,9 +1279,7 @@ impl WgsCollector {
         hasher.write(name);
         let hash = hasher.finish();
         let mut seen_bits = std::mem::take(&mut self.seen_bits);
-        let guard = self
-            .names
-            .mark_seen(hash, name, start, end, self.pass_floor, &mut seen_bits);
+        let guard = self.names.mark_seen(hash, name, start, end, &mut seen_bits);
         let read = AlignedRead {
             start,
             qualities,
@@ -1086,6 +1333,7 @@ impl WgsCollector {
             cigar,
             qualities,
             if has_no_call { sequence.encoded } else { &[] },
+            self.pass_floor,
         );
         if self.simulate_accumulation {
             if self.accumulator_head.is_none() {
@@ -1185,7 +1433,7 @@ impl WgsCollector {
         let from = self.window_offset + lo - self.window_base;
         let limit = self.depth_limit;
         let unfiltered = &mut self.unfiltered[from..from + bases];
-        if unfiltered.iter().any(|depth| *depth >= limit) {
+        if self.window_max_unfiltered >= limit && unfiltered.iter().any(|depth| *depth >= limit) {
             self.observe_per_base(read, seen_bits, lo, hi, read_offset, None);
             return;
         }
@@ -1194,18 +1442,21 @@ impl WgsCollector {
         let pass_floor = self.pass_floor;
         let mut passed = 0_u32;
         let mut counted = 0_u32;
+        let mut local_max = 0_u16;
         for ((unfiltered, high_quality), quality) in unfiltered
             .iter_mut()
             .zip(high_quality.iter_mut())
             .zip(qualities)
         {
             *unfiltered += u16::from(*quality >= LOWEST_COUNTED_QUALITY);
+            local_max = local_max.max(*unfiltered);
             let pass = *quality >= pass_floor;
             let count = u16::from(pass) & u16::from(*high_quality < limit);
             *high_quality += count;
             passed += u32::from(pass);
             counted += u32::from(count);
         }
+        self.window_max_unfiltered = self.window_max_unfiltered.max(local_max);
         let lanes = &mut *self.quality_lanes;
         let (quads, rest) = qualities.as_chunks::<4>();
         for quad in quads {
@@ -1249,6 +1500,7 @@ impl WgsCollector {
             if self.unfiltered[slot] < limit {
                 self.base_quality_histogram[usize::from(quality)] += 1;
                 self.unfiltered[slot] += 1;
+                self.window_max_unfiltered = self.window_max_unfiltered.max(self.unfiltered[slot]);
             }
             if quality < self.pass_floor || is_no_call_read_base(read.encoded_bases, read_index) {
                 self.excluded_baseq += 1;
@@ -1271,8 +1523,13 @@ impl WgsCollector {
         }
     }
 
-    pub(crate) fn to_picard_text(&self, sample_size: u32, include_bq_histogram: bool) -> String {
-        let territory = self.reference.territory();
+    fn to_picard_text(
+        &self,
+        reference: &WgsReference,
+        sample_size: u32,
+        include_bq_histogram: bool,
+    ) -> String {
+        let territory = reference.territory();
         let mut high_quality = self.high_quality_histogram.clone();
         high_quality[0] += territory.saturating_sub(self.high_quality_covered);
         let mut unfiltered = self.unfiltered_histogram.clone();
@@ -1764,23 +2021,23 @@ pub(crate) mod tests {
 
     fn collector_tally(collector: &WgsCollector) -> Tally {
         let territory = collector.reference.territory();
-        let mut high_quality = collector.high_quality_histogram.clone();
-        high_quality[0] += territory - collector.high_quality_covered;
-        let mut unfiltered = collector.unfiltered_histogram.clone();
-        unfiltered[0] += territory - collector.unfiltered_covered;
+        let mut high_quality = collector.state.high_quality_histogram.clone();
+        high_quality[0] += territory - collector.state.high_quality_covered;
+        let mut unfiltered = collector.state.unfiltered_histogram.clone();
+        unfiltered[0] += territory - collector.state.unfiltered_covered;
         Tally {
             excluded: [
-                collector.excluded_adapter,
-                collector.excluded_mapq,
-                collector.excluded_duplicate,
-                collector.excluded_unpaired,
-                collector.excluded_baseq,
-                collector.excluded_overlap,
-                collector.excluded_capped,
+                collector.state.excluded_adapter,
+                collector.state.excluded_mapq,
+                collector.state.excluded_duplicate,
+                collector.state.excluded_unpaired,
+                collector.state.excluded_baseq,
+                collector.state.excluded_overlap,
+                collector.state.excluded_capped,
             ],
             high_quality,
             unfiltered,
-            base_qualities: collector.base_quality_histogram.clone(),
+            base_qualities: collector.state.base_quality_histogram.clone(),
         }
     }
 

@@ -243,6 +243,7 @@ impl CmmWorkerPool {
                             ));
                         }
                     }
+                    drop(batch);
                     let _ = ack.send(());
                 }
             }));
@@ -257,15 +258,8 @@ impl CmmWorkerPool {
                         let _ = job.ack.recv();
                     }
                     let records = match Arc::try_unwrap(job.batch) {
-                        Ok(mut records) => {
-                            records.clear();
-                            records
-                        }
-                        Err(shared) => {
-                            let mut records = Vec::with_capacity(shared.len());
-                            records.clear();
-                            records
-                        }
+                        Ok(records) => records,
+                        Err(shared) => Vec::with_capacity(shared.len()),
                     };
                     let _ = completion_tx.send(records);
                 }
@@ -303,11 +297,10 @@ impl CmmWorkerPool {
     }
 
     fn drain_one_completion(&self) -> Result<(), CmmPipelineError> {
-        let mut records = self
+        let records = self
             .completion_rx
             .recv()
             .map_err(|error| CmmPipelineError::Channel(error.to_string()))?;
-        records.clear();
         let _ = self.batch_return.try_send(records);
         self.inflight.fetch_sub(1, Ordering::Release);
         Ok(())
@@ -395,33 +388,43 @@ impl CmmWorkerPool {
             let worker_error_tx = pool.error_tx.clone();
             move || {
                 let result = (|| -> Result<(), CmmPipelineError> {
-                    let mut batch = worker_pool.take_batch_vec();
+                    let mut recycled = worker_pool.take_batch_vec();
+                    let mut batch = Vec::with_capacity(super::CMM_BATCH_SIZE);
                     let mut seen = 0usize;
-                    for record in reader.records() {
-                        if poison.load(Ordering::Relaxed) {
+                    let mut slot = recycled
+                        .pop()
+                        .map_or_else(bam::Record::new, |item| item.record);
+                    while !poison.load(Ordering::Relaxed) {
+                        if stop_after > 0 && seen >= stop_after as usize {
                             break;
                         }
+                        let Some(result) = reader.read(&mut slot) else {
+                            break;
+                        };
+                        result.map_err(|error| CmmPipelineError::Bam(error.to_string()))?;
                         if stop_after > 0 {
-                            if seen >= stop_after as usize {
-                                break;
-                            }
                             seen += 1;
                         }
-                        let record =
-                            record.map_err(|error| CmmPipelineError::Bam(error.to_string()))?;
-                        let gates = CmmRecordGates::for_plan(
-                            &record,
-                            worker_pool.plan,
-                            filter,
-                            yield_scope,
-                        );
+                        let gates =
+                            CmmRecordGates::for_plan(&slot, worker_pool.plan, filter, yield_scope);
                         if gates.has_any() {
-                            batch.push(CmmBatchRecord { record, gates });
-                        }
-                        if batch.len() >= super::CMM_BATCH_SIZE {
-                            let full_batch =
-                                std::mem::replace(&mut batch, worker_pool.take_batch_vec());
-                            worker_pool.dispatch_batch_async(full_batch)?;
+                            batch.push(CmmBatchRecord {
+                                record: slot,
+                                gates,
+                            });
+                            if batch.len() >= super::CMM_BATCH_SIZE {
+                                let full_batch = std::mem::replace(
+                                    &mut batch,
+                                    Vec::with_capacity(super::CMM_BATCH_SIZE),
+                                );
+                                worker_pool.dispatch_batch_async(full_batch)?;
+                            }
+                            if recycled.is_empty() {
+                                recycled = worker_pool.take_batch_vec();
+                            }
+                            slot = recycled
+                                .pop()
+                                .map_or_else(bam::Record::new, |item| item.record);
                         }
                     }
                     if !batch.is_empty() && !poison.load(Ordering::Relaxed) {
