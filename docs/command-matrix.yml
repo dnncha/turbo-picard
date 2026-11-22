@@ -172,7 +172,7 @@ commands:
   - name: CollectRnaSeqMetrics
     status: partial-native
     parity_script: tools/verify_basic_collectrnaseqmetrics_parity.sh
-    native_scope: "Core RNA-seq metrics, multi-level ALL_READS/SAMPLE/LIBRARY/READ_GROUP accumulation, ribosomal interval counting, strand specificity (NONE/FIRST/SECOND_READ_TRANSCRIPTION_STRAND), 5'/3' normalized transcript coverage histogram, and lightweight chart PDF for coordinate-sorted SAM/BAM/CRAM inputs with UCSC refFlat models."
+    native_scope: "Core RNA-seq metrics, multi-level ALL_READS/SAMPLE/LIBRARY/READ_GROUP accumulation, ribosomal interval counting, strand specificity (NONE/FIRST/SECOND_READ_TRANSCRIPTION_STRAND), 5'/3' normalized transcript coverage histogram, and lightweight chart PDF for coordinate-sorted BAM/CRAM inputs with UCSC refFlat models."
     fallback_scope: "Text SAM inputs, multi-interval-only flags, and unsupported advanced options should use upstream Picard."
   - name: CollectRrbsMetrics
     status: fallback-only
