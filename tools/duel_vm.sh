@@ -43,38 +43,52 @@ TP=$ROOT/src/target/release/turbo-picard
 stamp "data"
 [ -s $DATA/ref.fa ] || { curl -sSfL -o $DATA/ref.fa "$REF_URL" && curl -sSfL -o $DATA/ref.fa.fai "$REF_URL.fai"; }
 [ -s $DATA/ref.dict ] || $BIN/samtools dict $DATA/ref.fa -o $DATA/ref.dict
-if [ ! -s $DATA/30x.bam ]; then
-  curl -sSfL -o $DATA/in.cram "$CRAM_URL" && curl -sSfL -o $DATA/in.cram.crai "$CRAM_URL.crai"
-  $BIN/samtools view -@ "$THREADS" -b -T $DATA/ref.fa -o $DATA/30x.bam $DATA/in.cram && $BIN/samtools index -@ "$THREADS" $DATA/30x.bam && rm -f $DATA/in.cram $DATA/in.cram.crai
-fi
-depth=$($BIN/samtools idxstats $DATA/30x.bam | awk '{m+=$3} END {printf "%.2f", m*151/3.1e9}')
+[ -s $DATA/in.cram.crai ] || { curl -sSfL -o $DATA/in.cram "$CRAM_URL" && curl -sSfL -o $DATA/in.cram.crai "$CRAM_URL.crai"; }
+depth=$($BIN/samtools idxstats $DATA/in.cram | awk '{m+=$3} END {printf "%.2f", m*151/3.1e9}')
 echo "full depth ~${depth}x" > $OUT/depth.txt
-for x in 4 15; do
-  if [ ! -s $DATA/${x}x.bam ]; then
-    frac=$(awk -v x=$x -v d="$depth" 'BEGIN {printf "%.4f", x/d}')
-    $BIN/samtools view -@ "$THREADS" -b -s "42${frac#0}" -o $DATA/${x}x.bam $DATA/30x.bam && $BIN/samtools index $DATA/${x}x.bam
-  fi
-  if [ ! -s $DATA/${x}x.qg.bam ]; then
-    TURBO_PICARD_REQUIRE_NATIVE=1 $TP SortSam I=$DATA/${x}x.bam O=$DATA/${x}x.qg.bam SORT_ORDER=queryname TMP_DIR=$DATA VALIDATION_STRINGENCY=SILENT
-  fi
-done
-df -h /content > $OUT/disk.txt
 
-specs=()
+prepare() {
+  local n=$1 x=${1%x}
+  if [ ! -s $DATA/$n.bam ]; then
+    make_bam "$n" "$x" || return 1
+  fi
+  if [ "$n" != 30x ] && [ ! -s $DATA/$n.qg.bam ]; then
+    TURBO_PICARD_REQUIRE_NATIVE=1 $TP SortSam I=$DATA/$n.bam O=$DATA/$n.qg.bam SORT_ORDER=queryname TMP_DIR=$DATA VALIDATION_STRINGENCY=SILENT
+  fi
+}
+
+make_bam() {
+  local n=$1 x=$2
+  [ "$n" = 4x ] && [ ! -s $DATA/15x.bam ] && make_bam 15x 15 && $BIN/samtools index -@ "$THREADS" $DATA/15x.bam
+  if [ "$n" = 30x ]; then
+    $BIN/samtools view -@ "$THREADS" -b -T $DATA/ref.fa -o $DATA/$n.bam $DATA/in.cram
+  elif [ "$n" = 4x ] && [ -s $DATA/15x.bam ]; then
+    $BIN/samtools view -@ "$THREADS" -b -s "42$(awk 'BEGIN {printf "%.4f", 4/15}' | sed 's/^0//')" -o $DATA/$n.bam $DATA/15x.bam
+  else
+    local frac; frac=$(awk -v x="$x" -v d="$depth" 'BEGIN {printf "%.4f", x/d}')
+    $BIN/samtools view -@ "$THREADS" -b -T $DATA/ref.fa -s "42${frac#0}" -o $DATA/$n.bam $DATA/in.cram
+  fi
+  $BIN/samtools index -@ "$THREADS" $DATA/$n.bam
+}
+
+RUN_ID="${RUN_ID:-$(date -u +%Y%m%dT%H%M%SZ)-$(head -c3 /dev/urandom | od -An -tx1 | tr -d ' \n')}"
+echo "$RUN_ID" > $OUT/run_id
+extra=()
+[ -n "$ONLY_TOOLS" ] && extra+=(--only-tools "$ONLY_TOOLS")
 IFS=, read -r -a names <<< "$DATASETS"
 for n in "${names[@]}"; do
+  stamp "prepare $n"
+  prepare "$n" || { stamp "prepare $n failed"; continue; }
+  df -h /content | tail -1
   picard=false; [[ ",$PICARD_DATASETS," == *",$n,"* ]] && picard=true
   spec="name=$n,coord=$DATA/$n.bam,picard=$picard"
   [ -s $DATA/$n.qg.bam ] && spec="$spec,qgroup=$DATA/$n.qg.bam"
-  if [ "$n" = 30x ]; then spec="$spec,repeats=2,warmup=false"; fi
-  specs+=(--dataset "$spec")
+  [ "$n" = 30x ] && spec="$spec,repeats=2,warmup=false"
+  stamp "duel $n sha=$SHA threads=$THREADS run=$RUN_ID"
+  PATH=$BIN:$PATH python3 $ROOT/src/tools/duel.py run --dataset "$spec" --reference $DATA/ref.fa --threads "$THREADS" \
+    --workdir $ROOT/work --results $OUT/results.jsonl --tasks "$TASKS" --git-sha "$SHA" --repo $ROOT/src --run-id "$RUN_ID" \
+    --turbo "$TP" --picard /usr/local/bin/picard-jar --riker $BIN/riker --dupblaster $BIN/dupblaster \
+    --fastdup $BIN/fastdup --samtools $BIN/samtools "${extra[@]}"
 done
-extra=()
-[ -n "$ONLY_TOOLS" ] && extra+=(--only-tools "$ONLY_TOOLS")
-stamp "duel sha=$SHA threads=$THREADS"
-PATH=$BIN:$PATH python3 $ROOT/src/tools/duel.py run "${specs[@]}" --reference $DATA/ref.fa --threads "$THREADS" \
-  --workdir $ROOT/work --results $OUT/results.jsonl --tasks "$TASKS" --git-sha "$SHA" --repo $ROOT/src \
-  --turbo "$TP" --picard /usr/local/bin/picard-jar --riker $BIN/riker --dupblaster $BIN/dupblaster \
-  --fastdup $BIN/fastdup --samtools $BIN/samtools "${extra[@]}"
 stamp "DONE"
 touch $OUT/DONE
