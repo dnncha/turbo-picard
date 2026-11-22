@@ -180,6 +180,9 @@ def main() -> None:
             visit("")
             if width in (1440, 390):
                 page.screenshot(path=str(args.output / f"home-{width}.png"), full_page=True)
+        statuses = re.findall(r"(?m)^\s+status:\s*(\S+)\s*$", (ROOT / "docs/command-matrix.yml").read_text())
+        expected_total = len(statuses)
+        expected_accelerated = sum(1 for status in statuses if status != "fallback-only")
         page.set_viewport_size({"width": 1280, "height": 1000})
         visit("commands/")
         page.locator("#command-search").fill("CollectRnaSeqMetrics")
@@ -188,7 +191,7 @@ def main() -> None:
         page.locator("#command-filter").select_option("accelerated")
         assert page.locator("#no-commands").is_visible()
         page.locator("#command-search").fill("")
-        assert page.locator("[data-command]:visible").count() == 38
+        assert page.locator("[data-command]:visible").count() == expected_accelerated
         report["checks"].append("catalogue: exact search, fallback boundary, empty state and native filter")
         page.screenshot(path=str(args.output / "commands-desktop.png"), full_page=False)
         visit("evaluate/")
@@ -314,13 +317,13 @@ def main() -> None:
         report["checks"].append("reduced motion: smooth scrolling disabled")
         if args.offline_render:
             visit("commands/", js=False)
-            assert page.locator("[data-command]").count() == 126
+            assert page.locator("[data-command]").count() == expected_total
         else:
             assert server is not None
             context = browser.new_context(java_script_enabled=False, viewport={"width": 390, "height": 844})
             nojs = context.new_page()
             nojs.goto(f"http://127.0.0.1:{server.server_port}/commands/")
-            assert nojs.locator("[data-command]").count() == 126
+            assert nojs.locator("[data-command]").count() == expected_total
             nojs.goto(f"http://127.0.0.1:{server.server_port}/evaluate/")
             assert nojs.locator("#generate-trial").is_disabled()
             assert nojs.locator("[data-copy]").is_disabled()

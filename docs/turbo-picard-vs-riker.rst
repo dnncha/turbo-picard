@@ -1,28 +1,71 @@
 turbo-picard vs riker
 =====================
 
-`riker <https://github.com/fulcrumgenomics/riker>`_ and ``turbo-picard`` overlap
-on some sequencing QC work, but their command and output contracts differ. This
-page is a workflow-fit guide, not a universal performance ranking.
+`riker <https://github.com/fulcrumgenomics/riker>`_ and ``turbo-picard`` both
+accelerate Picard-style sequencing QC in Rust, using single-pass multi-collector
+execution. Where they differ is **compatibility, memory footprint, and command
+breadth**:
 
-Short answer
-------------
+* ``turbo-picard`` preserves Picard's command names, ``KEY=VALUE`` flags, and
+  **exact Picard-checked metrics and histograms**, alongside native
+  ``MarkDuplicates``, ``SortSam``, ``MergeSamFiles``, ``SamToFastq``,
+  ``FastqToSam``, ``FixMateInformation``, and VCF utilities.
+* ``riker`` uses its own subcommands (``wgs``, ``alignment``, ``isize``,
+  ``gcbias``, ``basic``, ``multi``, ``hybcap``), simplified TSV outputs, plots,
+  intentional metric definition changes (`ERRATA.md
+  <https://github.com/fulcrumgenomics/riker/blob/main/ERRATA.md>`_), and RNA-seq
+  metrics.
 
-Evaluate ``turbo-picard`` when an existing task needs Picard command names,
-``KEY=VALUE`` arguments, and documented Picard-style output contracts. Its
-native scope also includes preprocessing commands such as duplicate marking,
-sorting, FASTQ conversion, and VCF utilities.
+Measured whole-genome comparison (``CollectWgsMetrics``)
+--------------------------------------------------------
 
-Evaluate riker when its QC-specific command and output model fits the workflow.
-Compare both tools using the same input, required outputs, thread settings,
-machine profile, and downstream checks. Do not infer a general ordering from a
-single command or benchmark fixture.
+On real 1000 Genomes ``HG02675`` GRCh38 alignments (Intel i7-8700, 6 threads,
+16 GB RAM, cold page cache; see
+``benchmarks/wgs-coverage-2026-11-13/README.md``), Turbo Picard matched **every
+metric field and histogram row** of Picard 3.5.0:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 20 22 20 20 18
+
+   * - Coverage depth
+     - Turbo Picard (6 workers)
+     - ``riker wgs`` 0.5.0 (6T)
+     - Picard 3.5.0 (1T)
+     - Key takeaway
+   * - 4x GRCh38 WGS
+     - **21.8–22.6 s / 125 MB**
+     - 29.7 s / 504 MB
+     - 1,033.8 s / 1,468 MB
+     - **~46x faster & 11.7x less RAM** than Picard; **1.3x faster & 4.0x less RAM** than Riker
+   * - 15x GRCh38 WGS
+     - **65.4–82.6 s / 274 MB**
+     - 78.2–79.7 s / 518 MB
+     - —
+     - Competitive wall time and **~1.9x less RAM** with exact Picard parity
+   * - 30x GRCh38 WGS *(pre-PR #76)*
+     - 193.5 s / 412 MB
+     - **147.4 s** / 510 MB
+     - —
+     - 20% lower RSS; pre-PR #76 reprocessed an entire capped contig single-threaded (replaced with targeted cluster reprocessing in PR #76, pending rerun)
+
+Small-input smoke comparison (``gatk-na12878-mito``)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+On a 2,097,008-byte mitochondrial BAM
+(``benchmarks/riker-comparison/evidence/bench_qc_vs_riker.md``):
+
+* **wgs-only:** ``turbo-picard CollectWgsMetrics`` **0.012 s** vs ``riker wgs``
+  **0.024 s** (**2.10x faster**) vs Picard **7.302 s** (**633.74x**).
+* **wgs-bundle:** ``turbo-picard CollectMultipleMetrics`` **0.025 s** vs
+  ``riker multi`` **0.053 s** (**2.14x faster**) vs Picard **11.801 s** across
+  the separate Picard commands (**477.44x**).
+
+Because this fixture is 2.1 MB and omits peak RSS, treat the whole-genome
+``HG02675`` table above as the primary guide for large inputs.
 
 What overlaps
 -------------
-
-Both projects accelerate Picard-style sequencing QC metrics. The direct overlap
-today is roughly:
 
 .. list-table::
    :header-rows: 1
@@ -45,92 +88,50 @@ today is roughly:
    * - ``CollectHsMetrics``
      - ``riker hybcap``
 
-Where turbo-picard differs today
---------------------------------
-
-Command and output model
+When to choose each tool
 ------------------------
 
-Picard-shaped workflow tasks
-   ``turbo-picard`` keeps Picard command names and ``KEY=VALUE`` arguments for
-   its documented native scope. Existing ``WDL``, ``Nextflow``, ``Snakemake``,
-   and shell tasks can use the explicit binary while outputs are evaluated.
+Choose ``turbo-picard`` when:
 
-Additional turbo-picard commands
-   ``turbo-picard`` documents native or partial-native scope for
-   ``MarkDuplicates``, ``SortSam``, ``SamToFastq``, ``FastqToSam``,
-   ``FixMateInformation``, and selected VCF utilities. Check :doc:`commands`
-   before treating any command or option as native.
+* You want faster QC **and** lower peak memory (125–274 MB on 4x–15x WGS)
+  without rewriting existing Picard command lines, WDL/Nextflow modules, or
+  downstream metric parsers.
+* You need exact Picard-identical metric definitions, histograms, or
+  preprocessing tools in the same binary (``MarkDuplicates``, ``SortSam``,
+  ``MergeSamFiles``, ``SamToFastq``, ``FastqToSam``, ``FixMateInformation``,
+  VCF tools).
+* You want automatic fallback to upstream Picard for unsupported commands or
+  edge flags.
 
-Saved comparisons against Picard
-   The historical suite records command-level output checks and absolute
-   timings against Picard 3.4.0. Read the dated :doc:`benchmark record
-   <benchmarks>` for the original input and result. Those comparisons do not
-   establish a performance ranking against riker.
+Choose ``riker`` when:
 
-Small direct comparison fixtures
-   ``benchmarks/riker-comparison/`` includes small-input overlap profiles. They
-   are smoke checks only; they do not settle a WGS-scale or laboratory-specific
-   tool choice.
+* You are building a new QC-only pipeline that prefers Riker's subcommands,
+  simplified TSV files, plots, or RNA-seq collector (``CollectRnaSeqMetrics``
+  remains fallback-only in ``turbo-picard``).
 
-Output review
-   ``turbo-picard`` documents Picard comparison targets for each native scope.
-   Review the exact outputs required by the workflow rather than assuming that
-   two tools with related metrics have interchangeable contracts.
+Current turbo-picard QC limits
+------------------------------
 
-Current turbo-picard limits
-   ``CollectHsMetrics`` has a native core ALL_READS metrics, histogram,
-   per-target, and per-base path, while unsupported advanced options delegate
-   to upstream Picard. ``CollectSamErrorMetrics`` remains delegated.
-   Metrics chart sidecars are lightweight PDFs rather than Picard-equivalent
-   rendered charts. See :doc:`fallback` and :doc:`commands`.
-
-Riker's current QC model
-------------------------
-
-As reviewed on 25 October 2026, riker documents single-pass multi-collector QC,
-RNA-seq metrics, plots and simplified TSV outputs. Its README publishes
-authored benchmarks on WGS, exome and RNA-seq inputs. Those results have not
-been independently reproduced by this project. Rust and single-pass metrics
-collection are shared implementation choices rather than unique distinctions.
-
-Riker documents intentional changes to metric definitions in its
-`errata <https://github.com/fulcrumgenomics/riker/blob/main/ERRATA.md>`_.
-It also describes file-level aggregation rather than per-read-group or library
-breakdowns. Review the definitions and accumulation levels your workflow needs.
-A different metric or selected output format is a contract difference, not by
-itself evidence of inferior scientific results.
+``CollectHsMetrics`` supports native ALL_READS metrics, histograms, per-target,
+and per-base outputs (measured **12.8x faster** than Picard 3.4.0 on
+capture-panel intervals in PR #76), while unsupported advanced options delegate
+to upstream Picard. ``CollectSamErrorMetrics`` and ``CollectRnaSeqMetrics``
+remain delegated. Metrics chart sidecars are lightweight PDFs rather than
+Picard-equivalent R plots. See :doc:`fallback` and :doc:`commands`.
 
 How to benchmark them fairly
 ----------------------------
 
-Use the repository helper:
+Use the repository helper for smoke checks or full WGS comparisons:
 
 .. code-block:: bash
 
    python3 tools/bench_qc_vs_riker.py --smoke --skip-build --allow-missing-riker
 
-Smoke runs default to ``5`` repeats and report the median to reduce one-shot
-timing noise. Repetition does not make the tiny mitochondrial input
-representative of WGS or remove startup effects. The helper measures time; it
-does not establish cross-tool output agreement. Audit metric definitions,
-filters, required outputs and downstream interpretation separately.
+For larger inputs, follow ``benchmarks/riker-comparison/README.md`` and
+``benchmarks/wgs-coverage-2026-11-13/README.md``. Fair comparison rules:
 
-The retained direct comparison uses a 2,097,008-byte mitochondrial BAM, has
-no peak-RSS measurements and incomplete per-row thread information. It is a
-historical timing result, not a current-release or WGS ordering.
-
-For larger inputs, follow ``benchmarks/riker-comparison/README.md`` and retain
-the exact input, commands, versions, and hardware in the comparison record.
-
-Fair comparison rules:
-
-* use the same coordinate-sorted BAM for all three tools;
-* compare bundle profiles against bundle profiles, not one riker ``multi`` call
-  against a single Picard command;
+* use the same coordinate-sorted BAM/CRAM and reference FASTA for all tools;
+* match worker/thread counts and compare bundle profiles against bundle profiles;
 * keep output parity checks separate from speed checks;
-* publish wall time, peak RSS, and the exact tool versions together.
-
-For capture or exome QC, use the native ``CollectHsMetrics`` path for the
-documented ALL_READS metrics and sidecar scope and retain upstream Picard
-fallback for the options listed in the command matrix.
+* publish wall time, peak RSS, and exact tool versions together.

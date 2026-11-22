@@ -22,7 +22,7 @@ jobs:
           python-version: '3.13'
       - name: Install pinned documentation and browser tools
         run: |
-          python3 -m pip install -r docs/requirements.txt playwright==1.55.0
+          python3 -m pip install -r docs/requirements.txt playwright==1.55.0 pytest
           python3 -m playwright install --with-deps chromium
       - name: Verify source, planner and generated site
         run: |

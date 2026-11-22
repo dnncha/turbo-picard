@@ -4,7 +4,7 @@ on:
   pull_request:
     paths:
       - 'crates/turbo-picard-core/src/**'
-      - 'tools/bench_external_sort.rs'
+      - 'crates/turbo-picard-core/examples/bench_external_sort.rs'
       - '.github/workflows/external-sort-performance.yml'
 
 permissions:
@@ -21,7 +21,7 @@ concurrency:
 jobs:
   compare:
     name: Exact-output external sort comparison
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     env:
       BASE_SHA: ${{ github.event.pull_request.base.sha }}
@@ -38,6 +38,10 @@ jobs:
           path: baseline
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@stable
+      - name: Install native dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang libclang-dev make pkg-config
       - name: Capture provenance
         run: |
           mkdir evidence
@@ -46,19 +50,19 @@ jobs:
           lscpu >> evidence/host.txt
           df -T . >> evidence/host.txt
           printf 'base=%s\nhead=%s\n' "$BASE_SHA" "$HEAD_SHA" > evidence/source.txt
-          sha256sum candidate/tools/bench_external_sort.rs candidate/crates/turbo-picard-core/src/{external_sort,bam_external_sort,merge_tree,temp_runs}.rs > evidence/source-sha256.txt
+          sha256sum candidate/crates/turbo-picard-core/examples/bench_external_sort.rs candidate/crates/turbo-picard-core/src/{external_sort,bam_external_sort,merge_tree,temp_runs}.rs > evidence/source-sha256.txt
       - name: Test actual standard-library sorter and tournament modules
         run: |
-          rustc --edition=2024 --test -A dead_code candidate/tools/bench_external_sort.rs -o evidence/sort-tests
-          evidence/sort-tests --nocapture 2>&1 | tee evidence/tests.txt
+          cargo test --manifest-path candidate/Cargo.toml --locked -p turbo-picard-core --lib external_sort 2>&1 | tee evidence/tests.txt
+          cargo test --manifest-path candidate/Cargo.toml --locked -p turbo-picard-core --lib merge_tree 2>&1 | tee -a evidence/tests.txt
       - name: Build identical harness against both revisions
         run: |
-          cp candidate/tools/bench_external_sort.rs baseline/tools/bench_external_sort.rs
-          # The baseline sorter does not import this module. The identical
-          # harness declares it so both builds have the same benchmark source.
-          cp candidate/crates/turbo-picard-core/src/merge_tree.rs baseline/crates/turbo-picard-core/src/merge_tree.rs
-          rustc --edition=2024 -C opt-level=3 -C codegen-units=1 -A dead_code baseline/tools/bench_external_sort.rs -o evidence/baseline
-          rustc --edition=2024 -C opt-level=3 -C codegen-units=1 -A dead_code candidate/tools/bench_external_sort.rs -o evidence/candidate
+          mkdir -p baseline/crates/turbo-picard-core/examples
+          cp candidate/crates/turbo-picard-core/examples/bench_external_sort.rs baseline/crates/turbo-picard-core/examples/bench_external_sort.rs
+          cargo build --manifest-path baseline/Cargo.toml --release --locked -p turbo-picard-core --example bench_external_sort --target-dir evidence/target-baseline
+          cargo build --manifest-path candidate/Cargo.toml --release --locked -p turbo-picard-core --example bench_external_sort --target-dir evidence/target-candidate
+          cp evidence/target-baseline/release/examples/bench_external_sort evidence/baseline
+          cp evidence/target-candidate/release/examples/bench_external_sort evidence/candidate
           sha256sum evidence/baseline evidence/candidate > evidence/binary-sha256.txt
       - name: Alternate seven measured repeats with exact output verification
         run: |
@@ -158,9 +162,9 @@ jobs:
         if: always()
         run: |
           cd candidate
-          rustfmt --edition=2024 crates/turbo-picard-core/src/{merge_tree,external_sort,bam_external_sort}.rs tools/bench_external_sort.rs
-          git diff -- crates/turbo-picard-core/src tools/bench_external_sort.rs > ../evidence/rustfmt.patch
-          git diff --exit-code -- crates/turbo-picard-core/src tools/bench_external_sort.rs
+          rustfmt --edition=2024 crates/turbo-picard-core/src/{merge_tree,external_sort,bam_external_sort}.rs crates/turbo-picard-core/examples/bench_external_sort.rs
+          git diff -- crates/turbo-picard-core/src crates/turbo-picard-core/examples/bench_external_sort.rs > ../evidence/rustfmt.patch
+          git diff --exit-code -- crates/turbo-picard-core/src crates/turbo-picard-core/examples/bench_external_sort.rs
       - uses: actions/upload-artifact@v4
         if: always()
         with:
