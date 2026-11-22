@@ -21,6 +21,7 @@ from typing import Any
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 ASSET_DIR = ROOT / "docs" / "site" / "assets"
 LANDSCAPE_DIR = ROOT / "benchmarks" / "markduplicates-competitors"
+WGS_BENCHMARK_README = ROOT / "benchmarks" / "wgs-coverage-2026-11-13" / "README.md"
 SUITE_DATA = ASSET_DIR / "benchmark-data.json"
 PROGRESS = ROOT / "benchmarks" / "progress.json"
 SVG_PATH = ASSET_DIR / "competitor-card.svg"
@@ -31,6 +32,7 @@ PNG_HASH_KEY = b"turbo-picard-svg-sha256"
 
 WIDTH = 1280
 HEIGHT = 640
+PNG_SCALE = 2
 MOBILE_WIDTH = 420
 MOBILE_PNG_SCALE = 2
 PRIMARY_CASES = ("paired-600k", "paired-primary-600k")
@@ -49,6 +51,7 @@ CASE_LABELS = {
     "gatk-na12878-mito": "real NA12878 chrM",
 }
 FONT = 'ui-sans-serif, system-ui, -apple-system, "Segoe UI", "Helvetica Neue", Arial, sans-serif'
+MONO = 'ui-monospace, "SF Mono", Menlo, Consolas, "DejaVu Sans Mono", monospace'
 
 
 def landscape_date(path: pathlib.Path) -> str:
@@ -98,6 +101,34 @@ def case_results(landscape: dict[str, Any], case: str) -> dict[str, dict[str, An
     raise ValueError(f"landscape has no case {case!r}")
 
 
+def parse_wgs_4x_comparison() -> dict[str, Any]:
+    """Read 4x GRCh38 WGS CollectWgsMetrics numbers from the checked-in README."""
+    text = WGS_BENCHMARK_README.read_text(encoding="utf-8")
+
+    def extract_row(tool_prefix: str) -> tuple[float, str, float]:
+        pattern = rf"^\|\s*4x\s*\|\s*{re.escape(tool_prefix)}[^|]*\|\s*\d+\s*\|\s*([^|]+)\|\s*([\d,]+)\s*MB\s*\|"
+        match = re.search(pattern, text, re.MULTILINE)
+        if not match:
+            raise ValueError(f"WGS benchmark table missing 4x row for {tool_prefix!r}")
+        wall_raw = match.group(1).strip()
+        rss_mb = float(match.group(2).replace(",", ""))
+        range_match = re.fullmatch(r"([\d.]+)\s+to\s+([\d.]+)", wall_raw)
+        if range_match:
+            lo, hi = float(range_match.group(1)), float(range_match.group(2))
+            return (lo + hi) / 2.0, f"{lo:.1f}–{hi:.1f} s", rss_mb
+        val = float(wall_raw.replace(",", ""))
+        return val, f"{val:,.1f} s", rss_mb
+
+    turbo_s, turbo_label, turbo_rss = extract_row("turbo-picard, region workers")
+    riker_s, riker_label, riker_rss = extract_row("riker wgs")
+    picard_s, picard_label, picard_rss = extract_row("Picard 3.5.0")
+    return {
+        "turbo": {"wall": turbo_s, "wall_label": turbo_label, "rss": turbo_rss, "rss_label": f"{int(turbo_rss)} MB"},
+        "riker": {"wall": riker_s, "wall_label": riker_label, "rss": riker_rss, "rss_label": f"{int(riker_rss)} MB"},
+        "picard": {"wall": picard_s, "wall_label": picard_label, "rss": picard_rss, "rss_label": f"{int(picard_rss):,} MB"},
+    }
+
+
 def headline(results: dict[str, dict[str, Any]]) -> tuple[str, str]:
     if TURBO not in results or REFERENCE not in results:
         raise ValueError("card needs successful Turbo Picard and Picard runs")
@@ -136,6 +167,13 @@ def fmt_ratio(value: float) -> str:
     return f"{value:.1f}x" if value < 100 else f"{value:.0f}x"
 
 
+def fmt_rss(rss_bytes: float) -> str:
+    mib = rss_bytes / (1024 * 1024)
+    if mib >= 1024:
+        return f"{mib / 1024:.2f} GiB"
+    return f"{mib:.0f} MiB"
+
+
 def wrap(text: str, max_chars: int) -> list[str]:
     lines: list[str] = []
     for word in text.split():
@@ -152,14 +190,23 @@ def text_lines(lines: list[str], x: int, y: int, leading: int, cls: str) -> str:
     )
 
 
-def render_bars(
+def pill(x: int, y: int, label: str, *, bg: str, fg: str, border: str = "none", width: int | None = None) -> tuple[str, int]:
+    w = width if width is not None else max(34, int(len(label) * 6.5 + 14))
+    svg = (
+        f'<rect x="{x}" y="{y}" width="{w}" height="18" rx="9" fill="{bg}" stroke="{border}"/>'
+        f'<text x="{x + w / 2:.1f}" y="{y + 12.5}" text-anchor="middle" font-size="9.5" font-weight="800" '
+        f'letter-spacing="0.6" fill="{fg}">{html.escape(label)}</text>'
+    )
+    return svg, w
+
+
+def render_markdup_panel(
     results: dict[str, dict[str, Any]],
     names: dict[str, str],
     x: int,
     y: int,
     *,
-    label_w: int,
-    plot_w: int,
+    width: int,
     stacked: bool = False,
 ) -> tuple[str, int]:
     exact = sorted(
@@ -171,102 +218,302 @@ def render_bars(
         key=lambda t: results[t]["median_wall_seconds"],
     )
     slowest = max(r["median_wall_seconds"] for r in results.values())
-    row_h = 58 if stacked else 46
+    pad = 16 if stacked else 22
+    panel_h = 354 if stacked else 304
     parts: list[str] = []
-    cursor = y
 
-    def group(title: str, tools: list[str], highlight: bool) -> None:
+    if not stacked:
+        parts.append(f'<rect x="{x}" y="{y}" width="{width}" height="{panel_h}" rx="14" class="panel"/>')
+        parts.append(
+            f'<text x="{x + pad}" y="{y + 26}" class="panelHead">MARKDUPLICATES · 600K PAIRED · 1 CPU</text>'
+            f'<text x="{x + width - pad}" y="{y + 26}" text-anchor="end" class="panelMeta">LOWER IS BETTER</text>'
+            f'<line x1="{x + pad}" y1="{y + 38}" x2="{x + width - pad}" y2="{y + 38}" class="rule"/>'
+        )
+        cursor = y + 58
+        label_w = 152
+        val_col_w = 128
+        plot_x = x + pad + label_w
+        plot_w = width - 2 * pad - label_w - val_col_w
+        for frac in (0.25, 0.5, 0.75, 1.0):
+            gx = plot_x + frac * plot_w
+            parts.append(
+                f'<line x1="{gx:.1f}" y1="{y + 66}" x2="{gx:.1f}" y2="{y + panel_h - 32}" class="gridLine"/>'
+            )
+    else:
+        total_rows = len(exact) + len(differs)
+        panel_h = 96 + total_rows * 54 + (24 if differs else 0)
+        parts.append(f'<rect x="{x}" y="{y}" width="{width}" height="{panel_h}" rx="14" class="panel"/>')
+        parts.append(
+            f'<text x="{x + pad}" y="{y + 25}" class="panelHead">MARKDUPLICATES · 600K PAIRED · 1 CPU</text>'
+            f'<line x1="{x + pad}" y1="{y + 36}" x2="{x + width - pad}" y2="{y + 36}" class="rule"/>'
+        )
+        cursor = y + 55
+        plot_x = x + pad
+        plot_w = width - 2 * pad - 118
+
+    def render_group(title: str, tools: list[str], highlight: bool) -> None:
         nonlocal cursor
         if not tools:
             return
         tone = "groupOn" if highlight else "groupOff"
-        parts.append(f'<text x="{x}" y="{cursor}" class="{tone}">{html.escape(title)}</text>')
-        cursor += 14
+        parts.append(f'<text x="{x + pad}" y="{cursor}" class="{tone}">{html.escape(title)}</text>')
+        cursor += 12
         for tool in tools:
-            seconds = results[tool]["median_wall_seconds"]
-            width = max(4.0, seconds / slowest * plot_w)
-            if tool == TURBO:
-                fill, label_cls, value_cls = "url(#turbo)", "toolOn", "valueOn"
-            elif highlight:
-                fill, label_cls, value_cls = "#3a5a63", "tool", "value"
-            else:
-                fill, label_cls, value_cls = "#2a3a40", "toolOff", "valueOff"
+            res = results[tool]
+            seconds = res["median_wall_seconds"]
+            rss_str = fmt_rss(res["median_peak_rss_bytes"]) if res.get("median_peak_rss_bytes") else ""
+            bar_w = max(8.0, seconds / slowest * plot_w)
+            is_winner = tool == TURBO
             name = names.get(tool, tool)
+            val_text = f"{seconds:.2f} s" + (f" · {rss_str}" if rss_str else "")
             if stacked:
-                label_y, bar_x, bar_y = cursor + 20, x, cursor + 28
+                row_h = 48
+                if is_winner:
+                    parts.append(
+                        f'<rect x="{x + 10}" y="{cursor}" width="{width - 20}" height="{row_h}" rx="9" class="winRow"/>'
+                        f'<rect x="{x + 10}" y="{cursor}" width="3.5" height="{row_h}" rx="2" fill="#34d399"/>'
+                    )
+                label_cls = "toolOn" if is_winner else ("tool" if highlight else "toolOff")
+                val_cls = "valueOn" if is_winner else ("value" if highlight else "valueOff")
+                fill = "url(#turbo)" if is_winner else ("#4c6472" if highlight else "#263340")
+                parts.append(f'<text x="{x + pad}" y="{cursor + 18}" class="{label_cls}">{html.escape(name)}</text>')
+                if is_winner:
+                    badge_svg, _ = pill(x + pad + 110, cursor + 4, "#1 FASTEST", bg="#10b981", fg="#031a12")
+                    parts.append(badge_svg)
+                parts.append(
+                    f'<rect x="{plot_x}" y="{cursor + 25}" width="{plot_w}" height="15" rx="4" class="track"/>'
+                    f'<rect x="{plot_x}" y="{cursor + 25}" width="{bar_w:.1f}" height="15" rx="4" fill="{fill}"/>'
+                    f'<text x="{plot_x + plot_w + 10}" y="{cursor + 37}" class="{val_cls}">{html.escape(val_text)}</text>'
+                )
+                cursor += 54
             else:
-                label_y, bar_x, bar_y = cursor + 26, x + label_w, cursor + 6
+                row_h = 36
+                if is_winner:
+                    parts.append(
+                        f'<rect x="{x + 10}" y="{cursor}" width="{width - 20}" height="{row_h}" rx="8" class="winRow"/>'
+                        f'<rect x="{x + 10}" y="{cursor}" width="4" height="{row_h}" rx="2" fill="#34d399"/>'
+                    )
+                label_cls = "toolOn" if is_winner else ("tool" if highlight else "toolOff")
+                val_cls = "valueOn" if is_winner else ("value" if highlight else "valueOff")
+                fill = "url(#turbo)" if is_winner else ("#4c6472" if highlight else "#263340")
+                parts.append(f'<text x="{x + pad}" y="{cursor + 23}" class="{label_cls}">{html.escape(name)}</text>')
+                if is_winner:
+                    badge_svg, _ = pill(x + pad + 108, cursor + 9, "#1", bg="#10b981", fg="#031a12", width=28)
+                    parts.append(badge_svg)
+                parts.append(
+                    f'<rect x="{plot_x}" y="{cursor + 9}" width="{plot_w}" height="18" rx="5" class="track"/>'
+                    f'<rect x="{plot_x}" y="{cursor + 9}" width="{bar_w:.1f}" height="18" rx="5" fill="{fill}"/>'
+                    f'<text x="{x + width - pad}" y="{cursor + 23}" text-anchor="end" class="{val_cls}">{html.escape(val_text)}</text>'
+                )
+                cursor += 42
+        cursor += 16
+
+    render_group("PICARD-IDENTICAL OUTPUT", exact, True)
+    render_group("OUTPUT DIFFERS FROM PICARD", differs, False)
+
+    if not stacked:
+        parts.append(
+            f'<text x="{x + pad}" y="{y + panel_h - 14}" class="panelFoot">Same coordinate BAM &amp; compression level 5 · Only Turbo Picard passes 100% Picard parity</text>'
+        )
+    else:
+        parts.append(
+            f'<text x="{x + pad}" y="{y + panel_h - 12}" class="panelFoot">BAM level 5 · Only Turbo Picard matches Picard</text>'
+        )
+    return "".join(parts), y + panel_h
+
+
+def render_wgs_panel(
+    wgs: dict[str, Any],
+    x: int,
+    y: int,
+    *,
+    width: int,
+    stacked: bool = False,
+) -> tuple[str, int]:
+    t = wgs["turbo"]
+    r = wgs["riker"]
+    p = wgs["picard"]
+    wall_ratio_picard = p["wall"] / t["wall"]
+    ram_ratio_riker = r["rss"] / t["rss"]
+    ram_ratio_picard = p["rss"] / t["rss"]
+
+    pad = 16 if stacked else 22
+    parts: list[str] = []
+
+    if not stacked:
+        panel_h = 304
+        parts.append(f'<rect x="{x}" y="{y}" width="{width}" height="{panel_h}" rx="14" class="panel"/>')
+        parts.append(
+            f'<text x="{x + pad}" y="{y + 26}" class="panelHead">COLLECTWGSMETRICS · 4X GRCH38 WGS · 6T</text>'
+            f'<text x="{x + width - pad}" y="{y + 26}" text-anchor="end" class="panelMeta">VS RIKER &amp; PICARD</text>'
+            f'<line x1="{x + pad}" y1="{y + 38}" x2="{x + width - pad}" y2="{y + 38}" class="rule"/>'
+        )
+        label_w = 136
+        val_w = 162
+        plot_x = x + pad + label_w
+        plot_w = width - 2 * pad - label_w - val_w
+    else:
+        panel_h = 338
+        parts.append(f'<rect x="{x}" y="{y}" width="{width}" height="{panel_h}" rx="14" class="panel"/>')
+        parts.append(
+            f'<text x="{x + pad}" y="{y + 25}" class="panelHead">4X GRCH38 WGS · VS RIKER &amp; PICARD</text>'
+            f'<line x1="{x + pad}" y1="{y + 36}" x2="{x + width - pad}" y2="{y + 36}" class="rule"/>'
+        )
+        plot_x = x + pad
+        plot_w = width - 2 * pad - 126
+
+    def metric_block(title: str, top_y: int, turbo_v: float, turbo_lbl: str, riker_v: float, riker_lbl: str, badge_txt: str) -> int:
+        max_v = max(turbo_v, riker_v)
+        tw = max(12.0, turbo_v / max_v * plot_w)
+        rw = max(12.0, riker_v / max_v * plot_w)
+        cur = top_y
+        parts.append(f'<text x="{x + pad}" y="{cur}" class="groupOn">{html.escape(title)}</text>')
+        cur += 10
+        if stacked:
             parts.append(
-                f'<text x="{x}" y="{label_y}" class="{label_cls}">{html.escape(name)}</text>'
-                f'<rect x="{bar_x}" y="{bar_y}" width="{plot_w}" height="{22 if stacked else 28}" rx="7" class="track"/>'
-                f'<rect x="{bar_x}" y="{bar_y}" width="{width:.1f}" height="{22 if stacked else 28}" rx="7" fill="{fill}"'
-                + (' filter="url(#glow)"' if tool == TURBO else "")
-                + "/>"
-                f'<text x="{bar_x + width + 10:.1f}" y="{bar_y + (16 if stacked else 20)}" class="{value_cls}">{seconds:.2f} s</text>'
+                f'<rect x="{x + 10}" y="{cur}" width="{width - 20}" height="44" rx="8" class="winRow"/>'
+                f'<rect x="{x + 10}" y="{cur}" width="3.5" height="44" rx="2" fill="#34d399"/>'
+                f'<text x="{x + pad}" y="{cur + 17}" class="toolOn">Turbo Picard</text>'
             )
-            cursor += row_h
-        cursor += 20
+            badge_svg, _ = pill(x + pad + 104, cur + 3, badge_txt, bg="#10b981", fg="#031a12")
+            parts.append(
+                badge_svg
+                + f'<rect x="{plot_x}" y="{cur + 23}" width="{plot_w}" height="14" rx="4" class="track"/>'
+                f'<rect x="{plot_x}" y="{cur + 23}" width="{tw:.1f}" height="14" rx="4" fill="url(#turbo)"/>'
+                f'<text x="{x + width - pad}" y="{cur + 35}" text-anchor="end" class="valueOn">{html.escape(turbo_lbl)}</text>'
+            )
+            cur += 50
+            parts.append(
+                f'<text x="{x + pad}" y="{cur + 14}" class="toolOff">riker wgs 0.5.0</text>'
+                f'<rect x="{plot_x}" y="{cur + 20}" width="{plot_w}" height="14" rx="4" class="track"/>'
+                f'<rect x="{plot_x}" y="{cur + 20}" width="{rw:.1f}" height="14" rx="4" fill="#263340"/>'
+                f'<text x="{x + width - pad}" y="{cur + 32}" text-anchor="end" class="valueOff">{html.escape(riker_lbl)} (differs)</text>'
+            )
+            return cur + 50
 
-    group("PICARD-IDENTICAL OUTPUT", exact, True)
-    group("OUTPUT DIFFERS FROM PICARD", differs, False)
-    return "".join(parts), cursor
+        # Desktop row 1 (Turbo winner)
+        parts.append(
+            f'<rect x="{x + 10}" y="{cur}" width="{width - 20}" height="34" rx="8" class="winRow"/>'
+            f'<rect x="{x + 10}" y="{cur}" width="4" height="34" rx="2" fill="#34d399"/>'
+            f'<text x="{x + pad}" y="{cur + 22}" class="toolOn">Turbo Picard</text>'
+        )
+        badge_svg, _ = pill(x + pad + 98, cur + 8, "#1", bg="#10b981", fg="#031a12", width=26)
+        parts.append(
+            badge_svg
+            + f'<rect x="{plot_x}" y="{cur + 8}" width="{plot_w}" height="18" rx="5" class="track"/>'
+            f'<rect x="{plot_x}" y="{cur + 8}" width="{tw:.1f}" height="18" rx="5" fill="url(#turbo)"/>'
+            f'<text x="{x + width - pad}" y="{cur + 22}" text-anchor="end" class="valueOn">{html.escape(turbo_lbl)} · {html.escape(badge_txt)}</text>'
+        )
+        cur += 40
+        # Desktop row 2 (Riker)
+        parts.append(
+            f'<text x="{x + pad}" y="{cur + 20}" class="toolOff">riker wgs 0.5.0</text>'
+            f'<rect x="{plot_x}" y="{cur + 7}" width="{plot_w}" height="16" rx="4" class="track"/>'
+            f'<rect x="{plot_x}" y="{cur + 7}" width="{rw:.1f}" height="16" rx="4" fill="#263340"/>'
+            f'<text x="{x + width - pad}" y="{cur + 20}" text-anchor="end" class="valueOff">{html.escape(riker_lbl)} · output differs</text>'
+        )
+        return cur + 40
+
+    next_y = metric_block(
+        "WALL TIME (COLD CACHE)",
+        y + (55 if stacked else 58),
+        t["wall"],
+        t["wall_label"],
+        r["wall"],
+        r["wall_label"],
+        f"{r['wall'] / t['wall']:.1f}x faster",
+    )
+    next_y = metric_block(
+        "PEAK MEMORY (RSS)",
+        next_y + (8 if stacked else 10),
+        t["rss"],
+        t["rss_label"],
+        r["rss"],
+        r["rss_label"],
+        f"{ram_ratio_riker:.1f}x less RAM",
+    )
+
+    callout_h = 46 if stacked else 36
+    callout_y = y + panel_h - callout_h - 14
+    parts.append(
+        f'<rect x="{x + pad}" y="{callout_y}" width="{width - 2 * pad}" height="{callout_h}" rx="8" class="insetBox"/>'
+    )
+    if stacked:
+        parts.append(
+            f'<text x="{x + pad + 10}" y="{callout_y + 18}" class="insetText">'
+            f'Picard 3.5.0 (1T): <tspan fill="#e2e8f0" font-weight="700">{html.escape(p["wall_label"])} · {html.escape(p["rss_label"])}</tspan></text>'
+            f'<text x="{x + pad + 10}" y="{callout_y + 35}" class="insetText">'
+            f'<tspan fill="#6ee7b7" font-weight="700">Turbo Picard: ~{wall_ratio_picard:.0f}x faster &amp; {ram_ratio_picard:.1f}x less RAM (exact)</tspan></text>'
+        )
+    else:
+        parts.append(
+            f'<text x="{x + pad + 12}" y="{callout_y + 22}" class="insetText">'
+            f'Picard 3.5.0 (1T): <tspan fill="#e2e8f0" font-weight="700">{html.escape(p["wall_label"])} · {html.escape(p["rss_label"])}</tspan> '
+            f'<tspan fill="#6ee7b7" font-weight="700">→ ~{wall_ratio_picard:.0f}x faster &amp; {ram_ratio_picard:.1f}x less RAM (exact parity)</tspan></text>'
+        )
+    return "".join(parts), y + panel_h
 
 
-def render_tile(x: int, y: int, tile: tuple[str, str, str, bool], *, width: int, wide: bool = False) -> str:
+def render_tile(x: int, y: int, tile: tuple[str, str, str, bool], *, width: int, height: int = 130, wide: bool = False) -> str:
     big, line1, line2, accent = tile
     cls = "bigOn" if accent else "big"
+    tile_cls = "tileAccent" if accent else "tile"
     if wide:
         return (
-            f'<rect x="{x}" y="{y}" width="{width}" height="68" rx="14" class="tile"/>'
-            f'<text x="{x + 18}" y="{y + 46}" class="{cls}">{html.escape(big)}</text>'
-            f'<text x="{x + 138}" y="{y + 30}" class="tileText">{html.escape(line1)}</text>'
-            f'<text x="{x + 138}" y="{y + 50}" class="tileFine">{html.escape(line2)}</text>'
+            f'<rect x="{x}" y="{y}" width="{width}" height="68" rx="12" class="{tile_cls}"/>'
+            f'<text x="{x + 16}" y="{y + 44}" class="{cls}">{html.escape(big)}</text>'
+            f'<text x="{x + 132}" y="{y + 29}" class="tileText">{html.escape(line1)}</text>'
+            f'<text x="{x + 132}" y="{y + 48}" class="tileFine">{html.escape(line2)}</text>'
         )
     return (
-        f'<rect x="{x}" y="{y}" width="{width}" height="112" rx="14" class="tile"/>'
-        f'<text x="{x + 18}" y="{y + 50}" class="{cls}">{html.escape(big)}</text>'
-        f'<text x="{x + 18}" y="{y + 78}" class="tileText">{html.escape(line1)}</text>'
-        f'<text x="{x + 18}" y="{y + 97}" class="tileFine">{html.escape(line2)}</text>'
+        f'<rect x="{x}" y="{y}" width="{width}" height="{height}" rx="12" class="{tile_cls}"/>'
+        f'<text x="{x + 15}" y="{y + 50}" class="{cls}">{html.escape(big)}</text>'
+        f'<text x="{x + 15}" y="{y + 82}" class="tileText">{html.escape(line1)}</text>'
+        f'<text x="{x + 15}" y="{y + 104}" class="tileFine">{html.escape(line2)}</text>'
     )
 
 
-def render_progress(progress: dict[str, Any], x: int, y: int, *, width: int, spark_w: int) -> tuple[str, int]:
+def render_progress(progress: dict[str, Any], x: int, y: int, *, width: int, spark_w: int, height: int = 130) -> tuple[str, int]:
     rows = [(s, c) for s in progress["series"] if (c := series_change(s))]
     if not rows:
         return "", y
-    height = 44 + 46 * len(rows)
+    box_h = max(height, 44 + 42 * len(rows))
     label_x = x + 18 + spark_w + 16
     parts = [
-        f'<rect x="{x}" y="{y}" width="{width}" height="{height}" rx="14" class="tile"/>',
-        f'<text x="{x + 18}" y="{y + 28}" class="groupOn">GETTING FASTER ON MAIN</text>',
+        f'<rect x="{x}" y="{y}" width="{width}" height="{box_h}" rx="14" class="panel"/>',
+        f'<text x="{x + 18}" y="{y + 26}" class="groupOn">GETTING FASTER ON MAIN</text>',
     ]
     for index, (series, (values, pct)) in enumerate(rows):
-        row_y = y + 58 + index * 46
+        row_y = y + 54 + index * 44
         lo, hi = min(values), max(values)
         span = hi - lo or 1.0
         step = spark_w / (len(values) - 1)
-        points = " ".join(
-            f"{x + 18 + i * step:.1f},{row_y - 2 - (hi - v) / span * 18:.1f}" for i, v in enumerate(values)
-        )
+        coords = [
+            (x + 18 + i * step, row_y - 2 - (hi - v) / span * 18) for i, v in enumerate(values)
+        ]
+        points = " ".join(f"{px:.1f},{py:.1f}" for px, py in coords)
+        area_points = f"{coords[0][0]:.1f},{row_y + 16:.1f} {points} {coords[-1][0]:.1f},{row_y + 16:.1f}"
         label = series.get("short_label", series["label"])
-        span_text = f"{series['baseline']} \u2192 {series['steps'][-1]['version']}"
-        end_x, end_y = points.split()[-1].split(",")
+        span_text = f"{series['baseline']} → {series['steps'][-1]['version']}"
+        end_x, end_y = coords[-1]
         parts.append(
-            f'<polyline points="{points}" fill="none" stroke="#36d7c9" stroke-width="2.5" '
+            f'<polygon points="{area_points}" fill="url(#sparkArea)"/>'
+            f'<polyline points="{points}" fill="none" stroke="#34d399" stroke-width="2.5" '
             'stroke-linecap="round" stroke-linejoin="round"/>'
-            f'<circle cx="{end_x}" cy="{end_y}" r="3.5" fill="#9ef8f1"/>'
+            f'<circle cx="{end_x:.1f}" cy="{end_y:.1f}" r="3.5" fill="#a7f3d0"/>'
             f'<text x="{label_x}" y="{row_y}" class="tileText">{html.escape(label)}</text>'
             f'<text x="{label_x}" y="{row_y + 17}" class="tileFine">{html.escape(span_text)}</text>'
-            f'<text x="{x + width - 18}" y="{row_y}" text-anchor="end" class="valueOn">\u2212{pct:.0f}%</text>'
+            f'<text x="{x + width - 18}" y="{row_y + 2}" text-anchor="end" class="valueOn">−{pct:.0f}%</text>'
         )
-    return "".join(parts), y + height
+    return "".join(parts), y + box_h
 
 
-def install_pill(x: int, y: int, width: int) -> str:
+def install_pill(x: int, y: int, width: int, *, height: int = 38) -> str:
+    text_y = y + height / 2 + 5
     return (
-        f'<rect x="{x}" y="{y}" width="{width}" height="48" rx="12" class="tile"/>'
-        f'<text x="{x + 20}" y="{y + 31}" class="cmd"><tspan class="prompt">$</tspan>'
-        '<tspan dx="12">pip install turbo-picard</tspan></text>'
+        f'<rect x="{x}" y="{y}" width="{width}" height="{height}" rx="10" class="cmdBox"/>'
+        f'<text x="{x + 18}" y="{text_y:.1f}" class="cmd"><tspan class="prompt">$</tspan>'
+        '<tspan dx="10">pip install turbo-picard</tspan></text>'
     )
 
 
@@ -285,6 +532,7 @@ def card_content() -> dict[str, Any]:
     landscape = load_landscape(landscape_path)
     suite = json.loads(SUITE_DATA.read_text(encoding="utf-8"))
     progress = json.loads(PROGRESS.read_text(encoding="utf-8"))
+    wgs = parse_wgs_4x_comparison()
     measured = landscape_date(landscape_path)
 
     case = primary_case(landscape)
@@ -319,12 +567,11 @@ def card_content() -> dict[str, Any]:
 
     version = landscape["executables"][TURBO]["version"].strip().removeprefix("turbo-picard ")
     footer = (
-        f"MarkDuplicates, {CASE_LABELS[case]}, 1 CPU, median of {landscape['repeats']}. "
-        f"Turbo Picard {version} ({source_label(landscape['candidate_source'])}), measured {measured}. "
-        f"Command suite {suite['date']}. Evidence: github.com/dnncha/turbo-picard/tree/main/benchmarks"
+        f"MarkDuplicates ({CASE_LABELS[case]}, 1 CPU, {measured}, {version} {source_label(landscape['candidate_source'])}). "
+        f"WGS: 1000G HG02675 4x GRCh38 (6T, 2026-11-13). Suite: {suite['date']}. Evidence: github.com/dnncha/turbo-picard/tree/main/benchmarks"
     )
     desc = (
-        f"{title} {qualifier} Turbo Picard {turbo['median_wall_seconds']:.2f} s versus Picard "
+        f"{title} {qualifier} MarkDuplicates: Turbo Picard {turbo['median_wall_seconds']:.2f} s vs Picard "
         f"{picard['median_wall_seconds']:.2f} s; "
         + "; ".join(
             f"{names.get(t, t)} {r['median_wall_seconds']:.2f} s"
@@ -332,15 +579,17 @@ def card_content() -> dict[str, Any]:
             for t, r in sorted(primary.items(), key=lambda kv: kv[1]["median_wall_seconds"])
             if t not in {TURBO, REFERENCE}
         )
-        + "."
+        + f". 4x GRCh38 WGS CollectWgsMetrics: Turbo Picard {wgs['turbo']['wall_label']} / {wgs['turbo']['rss_label']} vs "
+        f"riker wgs {wgs['riker']['wall_label']} / {wgs['riker']['rss_label']} vs Picard {wgs['picard']['wall_label']}."
     )
     return {
         "title": title,
         "qualifier": qualifier,
-        "subtitle": f"{qualifier} Same commands, same arguments, no JVM.",
+        "subtitle": f"{qualifier} Native Rust across 39 commands; zero JVM.",
         "desc": desc,
         "primary": primary,
         "names": names,
+        "wgs": wgs,
         "tiles": tiles,
         "progress": progress,
         "footer": footer,
@@ -354,43 +603,60 @@ def svg_document(content: dict[str, Any], width: int, height: int, body: str, si
   <desc id="desc">{html.escape(content["desc"])}</desc>
   <defs>
     <linearGradient id="bg" x1="0" x2="1" y1="0" y2="1">
-      <stop offset="0" stop-color="#071013"/>
-      <stop offset="0.55" stop-color="#10212a"/>
-      <stop offset="1" stop-color="#0b1117"/>
+      <stop offset="0" stop-color="#060a0e"/>
+      <stop offset="0.55" stop-color="#0b131a"/>
+      <stop offset="1" stop-color="#070b10"/>
     </linearGradient>
+    <radialGradient id="atmo" cx="0.22" cy="0.08" r="0.65">
+      <stop offset="0" stop-color="#10b981" stop-opacity="0.16"/>
+      <stop offset="1" stop-color="#10b981" stop-opacity="0"/>
+    </radialGradient>
     <linearGradient id="turbo" x1="0" x2="1">
-      <stop offset="0" stop-color="#2fcfc2"/>
-      <stop offset="1" stop-color="#9ef8f1"/>
+      <stop offset="0" stop-color="#10b981"/>
+      <stop offset="1" stop-color="#6ee7b7"/>
     </linearGradient>
-    <filter id="glow" x="-10%" y="-60%" width="120%" height="220%">
-      <feGaussianBlur stdDeviation="6" result="blur"/>
-      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
-    </filter>
+    <linearGradient id="sparkArea" x1="0" x2="0" y1="0" y2="1">
+      <stop offset="0" stop-color="#34d399" stop-opacity="0.28"/>
+      <stop offset="1" stop-color="#34d399" stop-opacity="0"/>
+    </linearGradient>
   </defs>
   <style>
     text {{ font-family: {FONT}; }}
-    .brand {{ font-weight: 700; font-size: {s["brand"]}px; letter-spacing: 2px; fill: #36d7c9; }}
-    .title {{ font-weight: 800; font-size: {s["title"]}px; fill: #f4fbfb; }}
-    .sub {{ font-weight: 500; font-size: {s["sub"]}px; fill: #b7c9cf; }}
-    .groupOn {{ font-weight: 700; font-size: 12px; letter-spacing: 1.5px; fill: #36d7c9; }}
-    .groupOff {{ font-weight: 700; font-size: 12px; letter-spacing: 1.5px; fill: #6d8189; }}
-    .toolOn {{ font-weight: 800; font-size: 17px; fill: #f4fbfb; }}
-    .tool {{ font-weight: 600; font-size: 16px; fill: #d9e7ea; }}
-    .toolOff {{ font-weight: 600; font-size: 16px; fill: #7d9098; }}
-    .valueOn {{ font-weight: 800; font-size: 16px; fill: #9ef8f1; }}
-    .value {{ font-weight: 700; font-size: 15px; fill: #d9e7ea; }}
-    .valueOff {{ font-weight: 600; font-size: 15px; fill: #7d9098; }}
+    .brand {{ font-weight: 800; font-size: {s["brand"]}px; letter-spacing: 2px; fill: #34d399; }}
+    .brandMeta {{ font-weight: 600; font-size: {s["brandMeta"]}px; letter-spacing: 1.4px; fill: #7e95a3; }}
+    .title {{ font-weight: 800; font-size: {s["title"]}px; fill: #f8fafc; letter-spacing: -0.6px; }}
+    .sub {{ font-weight: 500; font-size: {s["sub"]}px; fill: #9fb4bf; }}
+    .panel {{ fill: #0e161d; stroke: rgba(148,163,184,0.16); }}
+    .panelHead {{ font-weight: 800; font-size: 11px; letter-spacing: 1.4px; fill: #cbd5e1; }}
+    .panelMeta {{ font-weight: 700; font-size: 10px; letter-spacing: 1.2px; fill: #64748b; }}
+    .panelFoot {{ font-weight: 500; font-size: 11px; fill: #64748b; }}
+    .rule {{ stroke: rgba(148,163,184,0.12); stroke-width: 1; }}
+    .gridLine {{ stroke: rgba(148,163,184,0.07); stroke-dasharray: 2 3; }}
+    .winRow {{ fill: rgba(16,185,129,0.10); stroke: rgba(52,211,153,0.34); }}
+    .insetBox {{ fill: rgba(255,255,255,0.03); stroke: rgba(148,163,184,0.12); }}
+    .insetText {{ font-weight: 500; font-size: 11px; fill: #94a3b8; }}
+    .groupOn {{ font-weight: 800; font-size: 10.5px; letter-spacing: 1.4px; fill: #34d399; }}
+    .groupOff {{ font-weight: 700; font-size: 10.5px; letter-spacing: 1.4px; fill: #64748b; }}
+    .toolOn {{ font-weight: 800; font-size: 14.5px; fill: #ffffff; }}
+    .tool {{ font-weight: 600; font-size: 13.5px; fill: #cbd5e1; }}
+    .toolOff {{ font-weight: 600; font-size: 13.5px; fill: #8496a3; }}
+    .valueOn {{ font-weight: 800; font-size: 13px; fill: #6ee7b7; }}
+    .value {{ font-weight: 700; font-size: 12.5px; fill: #cbd5e1; }}
+    .valueOff {{ font-weight: 600; font-size: 12.5px; fill: #7f919e; }}
     .track {{ fill: rgba(255,255,255,0.05); }}
-    .tile {{ fill: rgba(255,255,255,0.045); stroke: rgba(158,248,241,0.14); }}
-    .bigOn {{ font-weight: 800; font-size: {s["big"]}px; fill: #9ef8f1; }}
-    .big {{ font-weight: 800; font-size: {s["big"]}px; fill: #f4fbfb; }}
-    .tileText {{ font-weight: 600; font-size: 15px; fill: #d9e7ea; }}
-    .tileFine {{ font-weight: 500; font-size: 13px; fill: #8ba4ad; }}
-    .foot {{ font-weight: 500; font-size: {s["foot"]}px; fill: #6d8189; }}
-    .cmd {{ font-family: ui-monospace, "SF Mono", Menlo, Consolas, "DejaVu Sans Mono", monospace; font-weight: 600; font-size: {s["cmd"]}px; fill: #f4fbfb; }}
-    .prompt {{ fill: #36d7c9; }}
+    .tile {{ fill: #0e161d; stroke: rgba(148,163,184,0.16); }}
+    .tileAccent {{ fill: rgba(16,185,129,0.08); stroke: rgba(52,211,153,0.30); }}
+    .bigOn {{ font-weight: 800; font-size: {s["big"]}px; fill: #6ee7b7; letter-spacing: -0.6px; }}
+    .big {{ font-weight: 800; font-size: {s["big"]}px; fill: #f8fafc; letter-spacing: -0.6px; }}
+    .tileText {{ font-weight: 700; font-size: 12px; fill: #e2e8f0; }}
+    .tileFine {{ font-weight: 500; font-size: 10.8px; fill: #8ba0ad; }}
+    .foot {{ font-weight: 500; font-size: {s["foot"]}px; fill: #64748b; }}
+    .cmdBox {{ fill: #0f1820; stroke: rgba(52,211,153,0.32); }}
+    .cmd {{ font-family: {MONO}; font-weight: 600; font-size: {s["cmd"]}px; fill: #f8fafc; }}
+    .prompt {{ fill: #34d399; }}
   </style>
   <rect width="{width}" height="{height}" fill="url(#bg)"/>
+  <rect width="{width}" height="{height}" fill="url(#atmo)"/>
 {body}
 </svg>
 """
@@ -398,50 +664,73 @@ def svg_document(content: dict[str, Any], width: int, height: int, body: str, si
 
 def build_card(content: dict[str, Any] | None = None) -> str:
     c = content or card_content()
-    bars, _ = render_bars(c["primary"], c["names"], 56, 182, label_w=168, plot_w=404)
+    markdup_panel, _ = render_markdup_panel(c["primary"], c["names"], 40, 134, width=606)
+    wgs_panel, _ = render_wgs_panel(c["wgs"], 666, 134, width=574)
+    tile_w = 180
+    tile_gap = 14
     tiles = "".join(
-        render_tile(800 + (i % 2) * 220, 140 + (i // 2) * 128, tile, width=204) for i, tile in enumerate(c["tiles"])
+        render_tile(40 + i * (tile_w + tile_gap), 454, tile, width=tile_w, height=130)
+        for i, tile in enumerate(c["tiles"])
     )
-    progress, _ = render_progress(c["progress"], 800, 400, width=424, spark_w=88)
+    progress, _ = render_progress(c["progress"], 818, 454, width=422, spark_w=78, height=130)
     body = (
-        '  <text x="56" y="52" class="brand">TURBO PICARD</text>\n'
-        f'  <text x="56" y="98" class="title">{html.escape(c["title"])}</text>\n'
-        f'  <text x="56" y="128" class="sub">{html.escape(c["subtitle"])}</text>\n'
-        f"  {bars}\n  {tiles}\n  {progress}\n  {install_pill(56, 490, 372)}\n"
-        f'  <text x="56" y="{HEIGHT - 26}" class="foot">{html.escape(c["footer"])}</text>'
+        '  <circle cx="46" cy="40" r="4" fill="#34d399"/>\n'
+        '  <text x="58" y="44" class="brand">TURBO PICARD</text>\n'
+        '  <text x="204" y="44" class="brandMeta">· NO JVM · PICARD-IDENTICAL BENCHMARKS</text>\n'
+        f'  {install_pill(908, 22, 332, height=38)}\n'
+        f'  <text x="40" y="84" class="title">{html.escape(c["title"])}</text>\n'
+        f'  <text x="40" y="110" class="sub">{html.escape(c["subtitle"])}</text>\n'
+        f"  {markdup_panel}\n  {wgs_panel}\n  {tiles}\n  {progress}\n"
+        f'  <text x="40" y="{HEIGHT - 22}" class="foot">{html.escape(c["footer"])}</text>'
     )
     return svg_document(
-        c, WIDTH, HEIGHT, body, {"brand": 16, "title": 40, "sub": 19, "big": 38, "foot": 12.5, "cmd": 19}
+        c,
+        WIDTH,
+        HEIGHT,
+        body,
+        {"brand": 12.5, "brandMeta": 11, "title": 33, "sub": 16, "big": 32, "foot": 11.5, "cmd": 15.5},
     )
 
 
 def build_mobile_card(content: dict[str, Any] | None = None) -> str:
     c = content or card_content()
-    x, inner = 24, MOBILE_WIDTH - 48
-    parts = ['<text x="24" y="44" class="brand">TURBO PICARD</text>']
-    title = wrap(c["title"], 21)
-    parts.append(text_lines(title, x, 86, 36, "title"))
-    cursor = 86 + 36 * (len(title) - 1) + 30
-    sub = wrap(c["subtitle"], 40)
-    parts.append(text_lines(sub, x, cursor, 21, "sub"))
-    cursor += 21 * (len(sub) - 1) + 44
-    bars, cursor = render_bars(c["primary"], c["names"], x, cursor, label_w=0, plot_w=inner - 64, stacked=True)
-    parts.append(bars)
-    cursor += 4
+    x, inner = 20, MOBILE_WIDTH - 40
+    parts = [
+        '<circle cx="25" cy="36" r="3.5" fill="#34d399"/>',
+        '<text x="35" y="40" class="brand">TURBO PICARD</text>',
+        '<text x="164" y="40" class="brandMeta">· NO JVM</text>',
+    ]
+    title = wrap(c["title"], 23)
+    parts.append(text_lines(title, x, 76, 33, "title"))
+    cursor = 76 + 33 * (len(title) - 1) + 24
+    sub = wrap(c["subtitle"], 42)
+    parts.append(text_lines(sub, x, cursor, 20, "sub"))
+    cursor += 20 * (len(sub) - 1) + 22
+    markdup_panel, cursor = render_markdup_panel(c["primary"], c["names"], x, cursor, width=inner, stacked=True)
+    parts.append(markdup_panel)
+    cursor += 14
+    wgs_panel, cursor = render_wgs_panel(c["wgs"], x, cursor, width=inner, stacked=True)
+    parts.append(wgs_panel)
+    cursor += 14
     for tile in c["tiles"]:
         parts.append(render_tile(x, cursor, tile, width=inner, wide=True))
-        cursor += 80
-    progress, cursor = render_progress(c["progress"], x, cursor + 4, width=inner, spark_w=56)
-    parts.append(progress)
-    cursor += 16
-    parts.append(install_pill(x, cursor, inner))
-    cursor += 48 + 32
+        cursor += 78
+    progress, cursor = render_progress(c["progress"], x, cursor + 4, width=inner, spark_w=54, height=120)
+    if progress:
+        parts.append(progress)
+        cursor += 14
+    parts.append(install_pill(x, cursor, inner, height=44))
+    cursor += 44 + 26
     foot = wrap(c["footer"], 62)
-    parts.append(text_lines(foot, x, cursor, 16, "foot"))
-    height = cursor + 16 * (len(foot) - 1) + 28
+    parts.append(text_lines(foot, x, cursor, 15, "foot"))
+    height = cursor + 15 * (len(foot) - 1) + 22
     body = "  " + "\n  ".join(parts)
     return svg_document(
-        c, MOBILE_WIDTH, height, body, {"brand": 13, "title": 31, "sub": 15.5, "big": 30, "foot": 10.5, "cmd": 17}
+        c,
+        MOBILE_WIDTH,
+        height,
+        body,
+        {"brand": 11.5, "brandMeta": 10.5, "title": 28, "sub": 14.5, "big": 28, "foot": 10, "cmd": 15.5},
     )
 
 
@@ -474,7 +763,7 @@ def png_text(png: bytes, key: bytes) -> str | None:
 def rendered_cards() -> list[tuple[str, pathlib.Path, pathlib.Path, int]]:
     content = card_content()
     return [
-        (build_card(content), SVG_PATH, PNG_PATH, 1),
+        (build_card(content), SVG_PATH, PNG_PATH, PNG_SCALE),
         (build_mobile_card(content), MOBILE_SVG_PATH, MOBILE_PNG_PATH, MOBILE_PNG_SCALE),
     ]
 
@@ -538,12 +827,13 @@ def record_point(args: argparse.Namespace) -> None:
 
 
 _DESCRIPTION = (
-    "Render the MarkDuplicates competitor card from checked-in evidence.\n"
+    "Render the MarkDuplicates and WGS QC competitor card from checked-in evidence.\n"
     "\n"
-    "The card is the first graphic a visitor sees (README, PyPI, site home, link\n"
-    "previews). Every number on it comes from three files:\n"
+    "The card is the first visual a visitor sees (README, PyPI, site home, link\n"
+    "previews). Every number on it comes from four checked-in files:\n"
     "\n"
     "- the newest ``benchmarks/markduplicates-competitors/landscape-*.json``\n"
+    "- ``benchmarks/wgs-coverage-2026-11-13/README.md`` (4x GRCh38 WGS vs Riker/Picard)\n"
     "- ``docs/site/assets/benchmark-data.json`` (the parity-checked command suite)\n"
     "- ``benchmarks/progress.json`` (accepted hill-climb results on main)\n"
     "\n"

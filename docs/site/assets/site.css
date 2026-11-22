@@ -9,3 +9,22 @@
 .proof-card{margin:0 auto 1.5rem;max-width:1280px}
 .proof-card img{display:block;width:100%;height:auto;border-radius:18px;box-shadow:0 24px 60px rgba(4,12,16,.28)}
 .proof-card figcaption{margin-top:.6rem;font-size:.85rem;color:var(--muted,#5b6b70);text-align:center}
+
+/* AI-leaderboard style benchmark tables: highlight winners clearly without clutter. */
+.bench-stack{display:grid;gap:22px;margin-top:24px}
+.bench-label{font:700 11px/1.4 var(--mono);text-transform:uppercase;letter-spacing:1.2px;color:var(--green);margin:0 0 8px}
+.bench-table{min-width:600px;font-size:13.5px}
+.bench-table th,.bench-table td{padding:12px 15px;vertical-align:middle}
+.bench-table thead th{background:#f2f5ed;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.7px;color:#41524a}
+.bench-table .num{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
+.bench-table tr.is-winner{background:#f1fbf5}
+.bench-table tr.is-winner th[scope="row"]{border-left:3.5px solid #15803d;color:#0b2f1f;font-weight:700}
+.bench-table td.win{background:#dcf7e8;color:#0d5232;font-weight:750}
+.bench-table td.leader-other{color:#142b25;font-weight:700}
+.bench-table td.dim{color:#5e6e66}
+.bench-table tr.group-sep td,.bench-table tr.group-sep th{border-top:2px solid #cbd5c5}
+.win-pill{display:inline-block;margin-left:6px;padding:2px 7px;border-radius:999px;background:#15803d;color:#fff;font:700 10px/1.4 var(--mono);letter-spacing:.3px;vertical-align:middle;white-space:nowrap}
+.delta-pill{display:inline-block;margin-left:6px;padding:2px 7px;border-radius:999px;background:#d1fae5;color:#065f46;font:700 10px/1.4 var(--mono);vertical-align:middle;white-space:nowrap}
+.parity-pass{color:#15803d;font-weight:700;white-space:nowrap}
+.parity-ref{color:#41524a;font-weight:600;white-space:nowrap}
+.parity-diff{color:#6d7b74;white-space:nowrap}
