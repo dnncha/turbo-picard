@@ -1,7 +1,7 @@
 use super::wgs_metrics::{WgsCollector, WgsCounts};
 use rust_htslib::bam::{self, Read};
 use rust_htslib::htslib;
-use rustc_hash::FxHashMap;
+use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -59,10 +59,8 @@ fn collect_by_region_with(
     let shared = SharedProgress {
         next_region: AtomicUsize::new(0),
         failed: AtomicBool::new(false),
-        needs_one_pass: (0..header.target_count())
-            .map(|_| AtomicBool::new(false))
-            .collect(),
-        by_contig: Mutex::new(FxHashMap::default()),
+        region_capped: (0..regions.len()).map(|_| AtomicBool::new(false)).collect(),
+        region_counts: Mutex::new((0..regions.len()).map(|_| None).collect()),
     };
     let worker_summaries = (0..workers.min(regions.len().max(1)))
         .map(|_| summary.region_worker())
@@ -113,37 +111,39 @@ fn collect_by_region_with(
     {
         return Err(message);
     }
-    let by_contig = shared
-        .by_contig
+    let mut region_counts = shared
+        .region_counts
         .into_inner()
         .map_err(|_| "CollectWgsMetrics region totals lock poisoned".to_string())?;
-    let mut one_pass_reader: Option<bam::IndexedReader> = None;
-    let mut record = bam::Record::new();
-    for (tid, needs_one_pass) in (0_u32..).zip(&shared.needs_one_pass) {
-        if !needs_one_pass.load(Ordering::Relaxed) {
-            if let Some(counts) = by_contig.get(&tid) {
-                summary.absorb_counts(counts);
+    let capped_contigs = capped_contig_ranges(&regions, &shared.region_capped);
+    if !capped_contigs.is_empty() {
+        let cluster_outcomes = reprocess_capped_contigs(
+            input,
+            &index,
+            reference,
+            summary,
+            &regions,
+            &target_names,
+            &shared.region_capped,
+            &capped_contigs,
+            workers,
+        )?;
+        for outcome in cluster_outcomes {
+            for range in outcome.cleared {
+                for slot in &mut region_counts[range] {
+                    *slot = None;
+                }
             }
-            continue;
-        }
-        if one_pass_reader.is_none() {
-            let mut reader =
-                open_indexed(input, &index, reference).map_err(|error| error.to_string())?;
-            if let Some(threads) = bgzf_threads_for(HtsThreadRole::Reader) {
-                reader
-                    .set_threads(threads)
-                    .map_err(|error| error.to_string())?;
+            for count in outcome.counts {
+                summary.absorb_counts(&count);
             }
-            one_pass_reader = Some(reader);
+            if outcome.any_capped {
+                summary.note_accumulation_cap_reached();
+            }
         }
-        let Some(reader) = one_pass_reader.as_mut() else {
-            continue;
-        };
-        reader.fetch(tid).map_err(|error| error.to_string())?;
-        while let Some(result) = reader.read(&mut record) {
-            result.map_err(|error| error.to_string())?;
-            summary.observe(&record, &target_names)?;
-        }
+    }
+    for counts in region_counts.into_iter().flatten() {
+        summary.absorb_counts(&counts);
     }
     Ok(true)
 }
@@ -151,8 +151,182 @@ fn collect_by_region_with(
 struct SharedProgress {
     next_region: AtomicUsize,
     failed: AtomicBool,
-    needs_one_pass: Vec<AtomicBool>,
-    by_contig: Mutex<FxHashMap<u32, WgsCounts>>,
+    region_capped: Vec<AtomicBool>,
+    region_counts: Mutex<Vec<Option<WgsCounts>>>,
+}
+
+fn capped_contig_ranges(
+    regions: &[Region],
+    region_capped: &[AtomicBool],
+) -> Vec<(u32, Range<usize>)> {
+    let mut contigs = Vec::new();
+    let mut start = 0;
+    while start < regions.len() {
+        let tid = regions[start].tid;
+        let mut end = start + 1;
+        while end < regions.len() && regions[end].tid == tid {
+            end += 1;
+        }
+        if (start..end).any(|idx| region_capped[idx].load(Ordering::Relaxed)) {
+            contigs.push((tid, start..end));
+        }
+        start = end;
+    }
+    contigs
+}
+
+struct CappedContigOutcome {
+    cleared: Vec<Range<usize>>,
+    counts: Vec<WgsCounts>,
+    any_capped: bool,
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "threaded cluster reprocessing borrows shared slices cleanly"
+)]
+fn reprocess_capped_contigs(
+    input: &str,
+    index: &Path,
+    reference: &str,
+    summary: &WgsCollector,
+    regions: &[Region],
+    target_names: &[String],
+    region_capped: &[AtomicBool],
+    capped_contigs: &[(u32, Range<usize>)],
+    workers: usize,
+) -> Result<Vec<CappedContigOutcome>, String> {
+    let next_contig = AtomicUsize::new(0);
+    let cluster_threads = workers.min(capped_contigs.len()).max(1);
+    let results = thread::scope(|scope| {
+        let handles = (0..cluster_threads)
+            .map(|_| {
+                let next_contig = &next_contig;
+                let mut worker = summary.cluster_worker();
+                scope.spawn(move || -> Result<CappedContigOutcome, String> {
+                    let mut reader =
+                        open_indexed(input, index, reference).map_err(|e| e.to_string())?;
+                    if capped_contigs.len() == 1
+                        && let Some(threads) = bgzf_threads_for(HtsThreadRole::Reader)
+                    {
+                        reader.set_threads(threads).map_err(|e| e.to_string())?;
+                    }
+                    let mut record = bam::Record::new();
+                    let mut cleared = Vec::new();
+                    let mut counts = Vec::new();
+                    let mut any_capped = false;
+                    loop {
+                        let pos = next_contig.fetch_add(1, Ordering::Relaxed);
+                        let Some((tid, contig_range)) = capped_contigs.get(pos) else {
+                            return Ok(CappedContigOutcome {
+                                cleared,
+                                counts,
+                                any_capped,
+                            });
+                        };
+                        let local_regions = &regions[contig_range.clone()];
+                        let local_capped = &region_capped[contig_range.clone()];
+                        let mut local_idx = 0;
+                        while local_idx < local_regions.len() {
+                            if !local_capped[local_idx].load(Ordering::Relaxed) {
+                                local_idx += 1;
+                                continue;
+                            }
+                            let local_start = local_idx;
+                            let mut local_end = local_idx;
+                            while local_end + 1 < local_regions.len()
+                                && local_capped[local_end + 1].load(Ordering::Relaxed)
+                            {
+                                local_end += 1;
+                            }
+                            let cluster_counts = reprocess_cluster(
+                                &mut reader,
+                                &mut record,
+                                &mut worker,
+                                *tid,
+                                target_names,
+                                local_regions,
+                                local_capped,
+                                local_start,
+                                &mut local_end,
+                                &mut any_capped,
+                            )?;
+                            cleared.push(
+                                (contig_range.start + local_start)
+                                    ..(contig_range.start + local_end + 1),
+                            );
+                            counts.push(cluster_counts);
+                            local_idx = local_end + 1;
+                        }
+                    }
+                })
+            })
+            .collect::<Vec<_>>();
+        handles
+            .into_iter()
+            .map(|handle| {
+                handle.join().unwrap_or_else(|_| {
+                    Err("CollectWgsMetrics capped-cluster worker panicked".to_string())
+                })
+            })
+            .collect::<Result<Vec<_>, String>>()
+    })?;
+    Ok(results)
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "cluster reprocessing operates directly on borrowed slice state"
+)]
+fn reprocess_cluster(
+    reader: &mut bam::IndexedReader,
+    record: &mut bam::Record,
+    worker: &mut WgsCollector,
+    tid: u32,
+    target_names: &[String],
+    local_regions: &[Region],
+    local_capped: &[AtomicBool],
+    local_start: usize,
+    local_end: &mut usize,
+    any_capped: &mut bool,
+) -> Result<WgsCounts, String> {
+    loop {
+        let fetch_start = local_regions[local_start].start;
+        let fetch_end = local_regions[*local_end].end;
+        worker.begin_region(fetch_start, fetch_end);
+        reader
+            .fetch((
+                tid,
+                i64::try_from(fetch_start).unwrap_or(i64::MAX),
+                i64::try_from(fetch_end).unwrap_or(i64::MAX),
+            ))
+            .map_err(|error| error.to_string())?;
+        while let Some(result) = reader.read(record) {
+            result.map_err(|error| error.to_string())?;
+            worker.observe(record, target_names)?;
+        }
+        let max_dropped = worker.max_dropped_end();
+        let cap_active =
+            *local_end + 1 < local_regions.len() && worker.accumulation_cap_active_at(fetch_end);
+        let cluster_capped = worker.take_accumulation_cap_reached();
+        let counts = worker.drain_counts();
+        if *local_end + 1 < local_regions.len() && (max_dropped > fetch_end || cap_active) {
+            *local_end += 1;
+            while *local_end + 1 < local_regions.len()
+                && local_regions[*local_end + 1].start < max_dropped
+            {
+                *local_end += 1;
+            }
+            while *local_end + 1 < local_regions.len()
+                && local_capped[*local_end + 1].load(Ordering::Relaxed)
+            {
+                *local_end += 1;
+            }
+            continue;
+        }
+        *any_capped |= cluster_capped;
+        return Ok(counts);
+    }
 }
 
 fn run_worker(
@@ -175,10 +349,6 @@ fn run_worker(
         let Some(region) = regions.get(position) else {
             return Ok(());
         };
-        let needs_one_pass = &shared.needs_one_pass[region.tid as usize];
-        if needs_one_pass.load(Ordering::Relaxed) {
-            continue;
-        }
         worker.begin_region(region.start, region.end);
         reader
             .fetch((
@@ -195,21 +365,15 @@ fn run_worker(
         }
         let counts = worker.drain_counts();
         if worker.take_accumulation_cap_reached() {
-            needs_one_pass.store(true, Ordering::Relaxed);
+            shared.region_capped[position].store(true, Ordering::Relaxed);
             continue;
         }
-        shared
-            .by_contig
-            .lock()
-            .map_err(|_| {
-                (
-                    position,
-                    "CollectWgsMetrics region totals lock poisoned".to_string(),
-                )
-            })?
-            .entry(region.tid)
-            .or_default()
-            .merge(&counts);
+        shared.region_counts.lock().map_err(|_| {
+            (
+                position,
+                "CollectWgsMetrics region totals lock poisoned".to_string(),
+            )
+        })?[position] = Some(counts);
     }
 }
 
@@ -408,5 +572,90 @@ mod tests {
         assert!(!collect(1));
         std::fs::remove_file(format!("{input}.bai")).expect("index fixture is removable");
         assert!(!collect(4));
+    }
+
+    #[test]
+    fn localized_capped_cluster_extends_across_region_boundary_matching_one_pass() {
+        let dir = tempfile::tempdir().expect("tempdir exists");
+        let mut header = bam::Header::new();
+        let mut sq = bam::header::HeaderRecord::new(b"SQ");
+        sq.push_tag(b"SN", "chr1");
+        sq.push_tag(b"LN", 400);
+        header.push_record(&sq);
+        let reference = dir.path().join("ref.fa");
+        std::fs::write(&reference, format!(">chr1\n{}\n", "A".repeat(400)))
+            .expect("reference fixture is writable");
+        rust_htslib::faidx::Reader::from_path(&reference).expect("reference fixture is indexable");
+        let bam_path = dir.path().join("hotspot.bam");
+        {
+            let mut writer = bam::Writer::from_path(&bam_path, &header, bam::Format::Bam)
+                .expect("BAM fixture is writable");
+            let mut push_read = |name: &[u8], pos: i64, len: usize| {
+                let mut rec = bam::Record::new();
+                rec.set(
+                    name,
+                    Some(&bam::record::CigarString(vec![bam::record::Cigar::Match(
+                        u32::try_from(len).expect("len fits u32"),
+                    )])),
+                    &vec![b'A'; len],
+                    &vec![30_u8; len],
+                );
+                rec.set_tid(0);
+                rec.set_pos(pos);
+                rec.set_mapq(60);
+                rec.set_flags(0);
+                writer.write(&rec).expect("fixture record is writable");
+            };
+            // Hotspot stacked inside region [0, 100), with one dropped read extending past 100 into [100, 200)
+            for idx in 0..8 {
+                let pos = if idx < 5 { 40 } else { 42 };
+                let len = if idx == 7 { 90 } else { 20 };
+                push_read(format!("hot-{idx}").as_bytes(), pos, len);
+            }
+            // Normal reads in later uncapped regions
+            push_read(b"tail-a", 150, 30);
+            push_read(b"tail-b", 260, 40);
+        }
+        bam::index::build(&bam_path, None, bam::index::Type::Bai, 1)
+            .expect("BAM fixture is indexable");
+        let input = bam_path.to_string_lossy().to_string();
+        let ref_str = reference.to_string_lossy().to_string();
+
+        let opts = WgsOptions {
+            minimum_mapping_quality: 20,
+            minimum_base_quality: 20,
+            coverage_cap: 3,
+            locus_accumulation_cap: 5,
+            count_unpaired: true,
+            exclude_supplementary: false,
+        };
+        let mut expected_collector =
+            WgsCollector::for_run(&ref_str, None, opts, None).expect("reference loads");
+        let target_names = vec!["chr1".to_string()];
+        let mut reader = bam::Reader::from_path(&input).expect("fixture opens");
+        let mut record = bam::Record::new();
+        while let Some(res) = reader.read(&mut record) {
+            res.expect("record decodes");
+            expected_collector
+                .observe(&record, &target_names)
+                .expect("record observed");
+        }
+        expected_collector.finish();
+        let expected = expected_collector.to_picard_text(10_000, true);
+
+        for span in [60, 100, 125] {
+            let mut collector =
+                WgsCollector::for_run(&ref_str, None, opts, None).expect("reference loads");
+            assert!(
+                collect_by_region_with(&input, &ref_str, &mut collector, 2, span)
+                    .expect("regional collection succeeds")
+            );
+            collector.finish();
+            assert_eq!(
+                collector.to_picard_text(10_000, true),
+                expected,
+                "span={span}"
+            );
+        }
     }
 }

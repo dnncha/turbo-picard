@@ -37,7 +37,7 @@ use rust_htslib::bam::{self, Read};
 use rust_htslib::faidx;
 use rustc_hash::FxHashMap;
 use std::cmp::Ordering;
-use std::collections::{BTreeMap, BTreeSet, BinaryHeap};
+use std::collections::{BTreeMap, BTreeSet};
 use std::env;
 use std::fmt::Write as FmtWrite;
 use std::fs;
@@ -47,10 +47,13 @@ use std::process::{self, Command};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 use turbo_picard_core::bam_external_sort::{BamExternalSortConfig, BamExternalSorter};
+use turbo_picard_core::bgzf_threads::{HtsThreadRole, bgzf_threads_for};
 use turbo_picard_core::external_sort::{ExternalSortConfig, ExternalSorter};
 use turbo_picard_core::hts_io;
 use turbo_picard_core::markdup_config::MarkDuplicatesConfig;
+use turbo_picard_core::merge_tree::MergeTree;
 use turbo_picard_core::picard_args::{PicardArgs, SortOrder, normalize_picard_args_for_command};
+use turbo_picard_core::sort_error::SortError;
 
 fn unwrap_collector<T>(worker: Arc<Mutex<T>>, name: &str) -> Result<T, String> {
     Arc::try_unwrap(worker)
@@ -1746,18 +1749,9 @@ fn print_acceleration_status_lines() {
 
 fn print_acceleration_status_lines_for_policy(policy: &str) {
     let workers = turbo_picard_core::bgzf_threads::htslib_worker_threads();
-    let reader_threads = turbo_picard_core::bgzf_threads::bgzf_threads_for(
-        turbo_picard_core::bgzf_threads::HtsThreadRole::Reader,
-    )
-    .unwrap_or(1);
-    let writer_threads = turbo_picard_core::bgzf_threads::bgzf_threads_for(
-        turbo_picard_core::bgzf_threads::HtsThreadRole::Writer,
-    )
-    .unwrap_or(1);
-    let pipeline_reader_threads = turbo_picard_core::bgzf_threads::bgzf_threads_for(
-        turbo_picard_core::bgzf_threads::HtsThreadRole::PipelineReader,
-    )
-    .unwrap_or(1);
+    let reader_threads = bgzf_threads_for(HtsThreadRole::Reader).unwrap_or(1);
+    let writer_threads = bgzf_threads_for(HtsThreadRole::Writer).unwrap_or(1);
+    let pipeline_reader_threads = bgzf_threads_for(HtsThreadRole::PipelineReader).unwrap_or(1);
     let gpu_runtime = detect_gpu_runtime();
 
     println!("backend=cpu");
@@ -2586,8 +2580,9 @@ fn run_sortsam(args: &[String]) -> Result<(), CommandError> {
             reference.as_deref(),
             compression_level,
         )?;
-        for record in reader.records() {
-            let record = record.map_err(|error| error.to_string())?;
+        let mut record = bam::Record::new();
+        while let Some(result) = reader.read(&mut record) {
+            result.map_err(|error| error.to_string())?;
             writer.write(&record).map_err(|error| error.to_string())?;
         }
         drop(writer);
@@ -2600,14 +2595,17 @@ fn run_sortsam(args: &[String]) -> Result<(), CommandError> {
     let mut sort_config = BamExternalSortConfig::new(&tmp_dir);
     sort_config.prefix = "turbo-picard-sortsam-bam".to_string();
     sort_config.max_records_in_ram = max_records_in_ram.max(1);
+    sort_config.threads = bgzf_threads_for(HtsThreadRole::Reader).unwrap_or(1);
     let mut sorter = BamExternalSorter::new(run_header, sort_config)?;
     let comparator = match sort_order {
         SortOrder::Coordinate => compare_coordinate,
         SortOrder::QueryName => compare_queryname,
         SortOrder::Unsorted => unreachable!("SortSam rejects SORT_ORDER=unsorted"),
     };
-    for record in reader.records() {
-        sorter.push(record.map_err(|error| error.to_string())?, comparator)?;
+    let mut record = bam::Record::new();
+    while let Some(result) = reader.read(&mut record) {
+        result.map_err(|error| error.to_string())?;
+        sorter.push(record.clone(), comparator)?;
     }
     let mut writer = bam_writer_for_path_with_reference(
         &output,
@@ -2616,8 +2614,8 @@ fn run_sortsam(args: &[String]) -> Result<(), CommandError> {
         reference.as_deref(),
         compression_level,
     )?;
-    sorter.finish_into(comparator, |record| {
-        writer.write(&record).map_err(Into::into)
+    sorter.finish_ref(comparator, |record| {
+        writer.write(record).map_err(Into::into)
     })?;
     drop(writer);
 
@@ -2698,8 +2696,9 @@ fn run_cleansam(args: &[String]) -> Result<(), CommandError> {
         reference.as_deref(),
         compression_level,
     )?;
-    for record in reader.records() {
-        let mut record = record.map_err(|error| error.to_string())?;
+    let mut record = bam::Record::new();
+    while let Some(result) = reader.read(&mut record) {
+        result.map_err(|error| error.to_string())?;
         clean_sam_record(&mut record, &target_lengths)?;
         writer.write(&record).map_err(|error| error.to_string())?;
     }
@@ -3311,6 +3310,7 @@ fn run_mergesamfiles(args: &[String]) -> Result<(), CommandError> {
         let mut config = BamExternalSortConfig::new(&tmp_dir);
         config.prefix = "turbo-picard-mergesam".to_string();
         config.max_records_in_ram = max_records_in_ram.max(1);
+        config.threads = bgzf_threads_for(HtsThreadRole::Reader).unwrap_or(1);
         let mut sorter =
             BamExternalSorter::new(bam::Header::from_template(run_reader.header()), config)?;
         let comparator = match sort_order {
@@ -3324,8 +3324,8 @@ fn run_mergesamfiles(args: &[String]) -> Result<(), CommandError> {
             interval_filter.as_ref(),
             |record| sorter.push(record, comparator).map_err(Into::into),
         )?;
-        sorter.finish_into(comparator, |record| {
-            writer.write(&record).map_err(Into::into)
+        sorter.finish_ref(comparator, |record| {
+            writer.write(record).map_err(Into::into)
         })?;
     }
     drop(writer);
@@ -3451,24 +3451,7 @@ fn run_samtofastq(args: &[String]) -> Result<(), CommandError> {
         .map_err(|error| error.clone())?;
     let input_is_queryname_sorted =
         header_sort_order(reader.header()).as_deref() == Some("queryname");
-    let staged_input = (!input_is_queryname_sorted && use_bounded_pairing_stage)
-        .then(|| {
-            stage_samtofastq_queryname_input(
-                &mut reader,
-                &tmp_dir,
-                max_records_in_ram,
-                reference.as_deref(),
-            )
-        })
-        .transpose()?;
-    if let Some(staged_input) = staged_input.as_ref() {
-        reader = open_bam_reader_with_reference(
-            staged_input.as_path().to_string_lossy().as_ref(),
-            reference.as_deref(),
-        )
-        .map_err(|error| error.clone())?;
-    }
-    let paired_reads_are_queryname_grouped = input_is_queryname_sorted || staged_input.is_some();
+    let paired_reads_are_queryname_grouped = input_is_queryname_sorted || use_bounded_pairing_stage;
     let mut first_writer = match fastq.as_ref() {
         Some(path) => Some(fastq_writer(path, compression_level)?),
         None => None,
@@ -3491,14 +3474,12 @@ fn run_samtofastq(args: &[String]) -> Result<(), CommandError> {
     };
     let mut first_seen_mates: FxHashMap<Vec<u8>, bam::Record> = FxHashMap::default();
     let mut previous_pair_qname = Vec::new();
-
-    for record in reader.records() {
-        let record = record.map_err(|error| error.to_string())?;
+    let mut emit_record = |record: &bam::Record| -> Result<(), CommandError> {
         if record.is_quality_check_failed() && !include_non_pf_reads {
-            continue;
+            return Ok(());
         }
         if (record.is_secondary() || record.is_supplementary()) && !include_non_primary_alignments {
-            continue;
+            return Ok(());
         }
         if record.is_paired() && !interleave && second_writer.is_none() && per_rg_outputs.is_none()
         {
@@ -3508,20 +3489,20 @@ fn run_samtofastq(args: &[String]) -> Result<(), CommandError> {
             );
         }
         if record.is_paired() {
-            let key = record.qname().to_vec();
+            let qname = record.qname();
             if paired_reads_are_queryname_grouped
                 && !previous_pair_qname.is_empty()
-                && previous_pair_qname != key
+                && previous_pair_qname.as_slice() != qname
             {
                 first_seen_mates.clear();
             }
             previous_pair_qname.clear();
-            previous_pair_qname.extend_from_slice(&key);
-            if let Some(first_record) = first_seen_mates.remove(&key) {
+            previous_pair_qname.extend_from_slice(qname);
+            if let Some(first_record) = first_seen_mates.remove(qname) {
                 let (read1, read2) = if record.is_first_in_template() {
-                    (&record, &first_record)
+                    (record, &first_record)
                 } else {
-                    (&first_record, &record)
+                    (&first_record, record)
                 };
                 if let Some(outputs) = per_rg_outputs.as_mut() {
                     outputs.write_bam_pair(read1, read2, &transform, re_reverse)?;
@@ -3558,12 +3539,12 @@ fn run_samtofastq(args: &[String]) -> Result<(), CommandError> {
                     )?;
                 }
             } else {
-                first_seen_mates.insert(key, record);
+                first_seen_mates.insert(qname.to_vec(), record.clone());
             }
-            continue;
+            return Ok(());
         }
         let writer: &mut dyn Write = if let Some(outputs) = per_rg_outputs.as_mut() {
-            outputs.unpaired_writer_for_bam_record(&record)?
+            outputs.unpaired_writer_for_bam_record(record)?
         } else if !record.is_paired() {
             match unpaired_writer.as_mut() {
                 Some(writer) => writer.as_mut(),
@@ -3582,14 +3563,48 @@ fn run_samtofastq(args: &[String]) -> Result<(), CommandError> {
         };
         write_fastq_record(
             writer,
-            &record,
+            record,
             &transform,
             re_reverse,
-            fastq_name_suffix(&record),
-            transform.trim_for(&record),
+            fastq_name_suffix(record),
+            transform.trim_for(record),
             transform.quality,
-            transform.max_bases_for(&record),
+            transform.max_bases_for(record),
         )?;
+        Ok(())
+    };
+
+    if !input_is_queryname_sorted && use_bounded_pairing_stage {
+        fs::create_dir_all(&tmp_dir).map_err(|error| error.to_string())?;
+        let header = bam::Header::from_template(reader.header());
+        let mut config = BamExternalSortConfig::new(&tmp_dir);
+        config.prefix = "turbo-picard-samtofastq-queryname".to_string();
+        config.max_records_in_ram = max_records_in_ram.max(1);
+        config.threads = bgzf_threads_for(HtsThreadRole::Reader).unwrap_or(1);
+        let mut sorter = BamExternalSorter::new(header, config)?;
+        let mut record = bam::Record::new();
+        while let Some(result) = reader.read(&mut record) {
+            result.map_err(|error| error.to_string())?;
+            sorter.push(record.clone(), compare_queryname)?;
+        }
+        let mut callback_error: Option<CommandError> = None;
+        let sort_result = sorter.finish_ref(compare_queryname, |record| {
+            if let Err(error) = emit_record(record) {
+                callback_error = Some(error);
+                return Err(SortError::Sink("samtofastq callback error".to_string()));
+            }
+            Ok(())
+        });
+        if let Some(error) = callback_error {
+            return Err(error);
+        }
+        sort_result?;
+    } else {
+        let mut record = bam::Record::new();
+        while let Some(result) = reader.read(&mut record) {
+            result.map_err(|error| error.to_string())?;
+            emit_record(&record)?;
+        }
     }
 
     if let Some(writer) = first_writer.as_mut() {
@@ -3620,52 +3635,6 @@ fn run_samtofastq(args: &[String]) -> Result<(), CommandError> {
             create_md5_file,
         )?)
     }
-}
-
-struct ScopedTemporaryPath {
-    path: tempfile::TempPath,
-}
-
-impl ScopedTemporaryPath {
-    fn as_path(&self) -> &Path {
-        self.path.as_ref()
-    }
-}
-
-fn stage_samtofastq_queryname_input(
-    reader: &mut bam::Reader,
-    tmp_dir: &Path,
-    max_records_in_ram: usize,
-    reference: Option<&str>,
-) -> Result<ScopedTemporaryPath, CommandError> {
-    fs::create_dir_all(tmp_dir).map_err(|error| error.to_string())?;
-    let staged = ScopedTemporaryPath {
-        path: tempfile::Builder::new()
-            .prefix("turbo-picard-samtofastq-queryname-")
-            .suffix(".bam")
-            .tempfile_in(tmp_dir)
-            .map_err(|error| error.to_string())?
-            .into_temp_path(),
-    };
-    let header = bam::Header::from_template(reader.header());
-    let mut config = BamExternalSortConfig::new(tmp_dir);
-    config.prefix = "turbo-picard-samtofastq-queryname".to_string();
-    config.max_records_in_ram = max_records_in_ram.max(1);
-    let mut sorter = BamExternalSorter::new(header.clone(), config)?;
-    for record in reader.records() {
-        sorter.push(
-            record.map_err(|error| error.to_string())?,
-            compare_queryname,
-        )?;
-    }
-    let output = staged.as_path().to_string_lossy().to_string();
-    let mut writer =
-        bam_writer_for_path_with_reference(&output, &header, bam::Format::Bam, reference, None)?;
-    sorter.finish_into(compare_queryname, |record| {
-        writer.write(&record).map_err(Into::into)
-    })?;
-    drop(writer);
-    Ok(staged)
 }
 
 fn run_fastqtosam(args: &[String]) -> Result<(), CommandError> {
@@ -3897,8 +3866,9 @@ fn run_addorreplacereadgroups(args: &[String]) -> Result<(), CommandError> {
         compression_level,
     )?;
 
-    for record in reader.records() {
-        let mut record = record.map_err(|error| error.to_string())?;
+    let mut record = bam::Record::new();
+    while let Some(result) = reader.read(&mut record) {
+        result.map_err(|error| error.to_string())?;
         set_record_read_group(&mut record, &read_group.id)?;
         writer.write(&record).map_err(|error| error.to_string())?;
     }
@@ -5673,8 +5643,18 @@ fn run_collectwgsmetrics(args: &[String]) -> Result<(), CommandError> {
 
     let reference_contigs = read_reference_contigs_for_wgs(&reference)?;
     let interval_masks = collectwgs_interval_masks(args.get("INTERVALS"), &reference_contigs)?;
+    let scan_threads = bgzf_threads_for(HtsThreadRole::RegionWorker).unwrap_or(1);
+    let mut wgs_reference = wgs_metrics::WgsReference::load_with_contigs(
+        &reference,
+        reference_contigs,
+        interval_masks,
+        scan_threads,
+    )?;
+    let stop_target = stop_after
+        .filter(|limit| (*limit as u64) < wgs_reference.territory())
+        .and_then(|limit| wgs_reference.limit_included_loci(limit));
     let mut collector =
-        wgs_metrics::WgsCollector::for_run(&reference, interval_masks, options, stop_after)?;
+        wgs_metrics::WgsCollector::for_reference(Arc::new(wgs_reference), options, stop_target);
 
     let by_region = stop_after.is_none()
         && hts_io::is_hts_container_input(&input)
@@ -5830,8 +5810,8 @@ fn run_fixmateinformation(args: &[String]) -> Result<(), CommandError> {
         coordinate_sorter
             .take()
             .ok_or_else(|| "coordinate sorter exists".to_string())?
-            .finish_into(compare_coordinate, |record| {
-                writer.write(&record).map_err(Into::into)
+            .finish_ref(compare_coordinate, |record| {
+                writer.write(record).map_err(Into::into)
             })?;
     } else {
         write_fixed_mate_group(
@@ -5860,9 +5840,11 @@ fn process_fixmate_reader(
     ignore_missing_mates: bool,
 ) -> Result<(), CommandError> {
     let mut coordinate_sorter = coordinate_sorter;
-    for record in reader.records() {
+    let mut record = bam::Record::new();
+    while let Some(result) = reader.read(&mut record) {
+        result.map_err(|error| error.to_string())?;
         process_fixmate_record(
-            record.map_err(|error| error.to_string())?,
+            record.clone(),
             writer,
             pending,
             coordinate_sorter.as_deref_mut(),
@@ -6927,10 +6909,12 @@ fn run_revertsam(args: &[String]) -> Result<(), CommandError> {
         let mut config = BamExternalSortConfig::new(&tmp_dir);
         config.prefix = "turbo-picard-revertsam".to_string();
         config.max_records_in_ram = max_records_in_ram.max(1);
+        config.threads = bgzf_threads_for(HtsThreadRole::Reader).unwrap_or(1);
         let mut sorter =
             BamExternalSorter::new(bam::Header::from_template(reader.header()), config)?;
-        for record in reader.records() {
-            let mut record = record.map_err(|error| error.to_string())?;
+        let mut record = bam::Record::new();
+        while let Some(result) = reader.read(&mut record) {
+            result.map_err(|error| error.to_string())?;
             if record.is_secondary() || record.is_supplementary() {
                 continue;
             }
@@ -6944,14 +6928,15 @@ fn run_revertsam(args: &[String]) -> Result<(), CommandError> {
                 &attributes_to_reverse,
                 &attributes_to_reverse_complement,
             )?;
-            sorter.push(record, compare_queryname)?;
+            sorter.push(record.clone(), compare_queryname)?;
         }
-        sorter.finish_into(compare_queryname, |record| {
-            writer.write(&record).map_err(Into::into)
+        sorter.finish_ref(compare_queryname, |record| {
+            writer.write(record).map_err(Into::into)
         })?;
     } else {
-        for record in reader.records() {
-            let mut record = record.map_err(|error| error.to_string())?;
+        let mut record = bam::Record::new();
+        while let Some(result) = reader.read(&mut record) {
+            result.map_err(|error| error.to_string())?;
             if record.is_secondary() || record.is_supplementary() {
                 continue;
             }
@@ -7023,8 +7008,9 @@ fn try_stream_revertsam(
     let mut last_query_name = Vec::<u8>::new();
     let mut have_last_query_name = false;
 
-    for record in reader.records() {
-        let mut record = record.map_err(|error| error.to_string())?;
+    let mut record = bam::Record::new();
+    while let Some(result) = reader.read(&mut record) {
+        result.map_err(|error| error.to_string())?;
         if record.is_secondary() || record.is_supplementary() {
             continue;
         }
@@ -7102,8 +7088,9 @@ fn run_setnmmdanduqtags(args: &[String]) -> Result<(), CommandError> {
         compression_level,
     )?;
 
-    for record in reader.records() {
-        let mut record = record.map_err(|error| error.to_string())?;
+    let mut record = bam::Record::new();
+    while let Some(result) = reader.read(&mut record) {
+        result.map_err(|error| error.to_string())?;
         set_nm_md_uq_tags(&mut record, &mut reference, set_only_uq)?;
         writer.write(&record).map_err(|error| error.to_string())?;
     }
@@ -7240,14 +7227,15 @@ fn run_viewsam(args: &[String]) -> Result<(), CommandError> {
             reference.as_deref(),
             compression_level,
         )?;
+        let mut record = bam::Record::new();
         if viewsam_has_no_record_filters(&alignment_status, &pf_status, interval_filter.as_ref()) {
-            for record in reader.records() {
-                let record = record.map_err(|error| error.to_string())?;
+            while let Some(result) = reader.read(&mut record) {
+                result.map_err(|error| error.to_string())?;
                 writer.write(&record).map_err(|error| error.to_string())?;
             }
         } else {
-            for record in reader.records() {
-                let record = record.map_err(|error| error.to_string())?;
+            while let Some(result) = reader.read(&mut record) {
+                result.map_err(|error| error.to_string())?;
                 if viewsam_record_matches(
                     &record,
                     &alignment_status,
@@ -7261,14 +7249,15 @@ fn run_viewsam(args: &[String]) -> Result<(), CommandError> {
     } else {
         let mut writer = bam::Writer::from_stdout(&header, bam::Format::Sam)
             .map_err(|error| error.to_string())?;
+        let mut record = bam::Record::new();
         if viewsam_has_no_record_filters(&alignment_status, &pf_status, interval_filter.as_ref()) {
-            for record in reader.records() {
-                let record = record.map_err(|error| error.to_string())?;
+            while let Some(result) = reader.read(&mut record) {
+                result.map_err(|error| error.to_string())?;
                 writer.write(&record).map_err(|error| error.to_string())?;
             }
         } else {
-            for record in reader.records() {
-                let record = record.map_err(|error| error.to_string())?;
+            while let Some(result) = reader.read(&mut record) {
+                result.map_err(|error| error.to_string())?;
                 if viewsam_record_matches(
                     &record,
                     &alignment_status,
@@ -7312,8 +7301,9 @@ fn run_viewsam_records_only(
     {
         let mut writer =
             bam_writer_for_path(&temp_path_text, header, bam::Format::Sam, compression_level)?;
-        for record in reader.records() {
-            let record = record.map_err(|error| error.to_string())?;
+        let mut record = bam::Record::new();
+        while let Some(result) = reader.read(&mut record) {
+            result.map_err(|error| error.to_string())?;
             if viewsam_record_matches(&record, alignment_status, pf_status, interval_filter)? {
                 writer.write(&record).map_err(|error| error.to_string())?;
             }
@@ -7483,8 +7473,9 @@ fn run_replacesamheader(args: &[String]) -> Result<(), CommandError> {
         reference.as_deref(),
         compression_level,
     )?;
-    for record in reader.records() {
-        let mut record = record.map_err(|error| error.to_string())?;
+    let mut record = bam::Record::new();
+    while let Some(result) = reader.read(&mut record) {
+        result.map_err(|error| error.to_string())?;
         if remove_stale_read_groups {
             remove_stale_read_group(&mut record, &replacement_read_groups)?;
         }
@@ -9595,8 +9586,9 @@ fn validate_sam_summary(
     }
 
     let mut record_number = 0_u64;
-    for record in reader.records() {
-        let record = record.map_err(|error| error.to_string())?;
+    let mut record = bam::Record::new();
+    while let Some(result) = reader.read(&mut record) {
+        result.map_err(|error| error.to_string())?;
         record_number += 1;
         let reference = if record.tid() < 0 {
             "*"
@@ -18106,9 +18098,15 @@ fn clean_sam_record(record: &mut bam::Record, target_lengths: &[u64]) -> Result<
             "unsupported CleanSam alignment starting beyond reference end",
         ));
     }
-    let reference_end = start.saturating_add(u64_or_max(
-        record.cigar().end_pos().saturating_sub(record.pos()),
-    ));
+    let reference_span: u64 = record
+        .raw_cigar()
+        .iter()
+        .map(|raw| match raw & 0xf {
+            0 | 2 | 3 | 7 | 8 => u64::from(raw >> 4),
+            _ => 0,
+        })
+        .sum();
+    let reference_end = start.saturating_add(reference_span);
     let read_len = record.seq_len() as u64;
     if reference_end > target_len && read_len > 0 {
         let overhang = reference_end - target_len;
@@ -19465,16 +19463,17 @@ fn stream_merge_records(
     interval_filter: Option<&BTreeMap<i32, Vec<(u64, u64)>>>,
     mut emit: impl FnMut(bam::Record) -> Result<(), CommandError>,
 ) -> Result<(), CommandError> {
+    let mut record = bam::Record::new();
     for input in input_plans {
         let mut reader = open_bam_reader_with_reference(&input.path, reference)
             .map_err(|error| error.clone())?;
-        for record in reader.records() {
-            let mut record = record.map_err(|error| error.to_string())?;
+        while let Some(result) = reader.read(&mut record) {
+            result.map_err(|error| error.to_string())?;
             if !record_overlaps_intervals(&record, interval_filter) {
                 continue;
             }
             rewrite_record_read_group(&mut record, &input.read_group_renames)?;
-            emit(record)?;
+            emit(record.clone())?;
         }
     }
     Ok(())
@@ -19503,16 +19502,18 @@ fn input_reader_is_sorted(reader: &mut bam::Reader, sort_order: SortOrder) -> Re
         return Ok(true);
     }
 
-    let mut previous: Option<bam::Record> = None;
-    for record in reader.records() {
-        let record = record.map_err(|error| error.to_string())?;
-        if let Some(previous) = previous.as_ref() {
-            let ordering = compare_for_sort_order(previous, &record, sort_order);
-            if ordering == Ordering::Greater {
-                return Ok(false);
-            }
+    let mut previous = bam::Record::new();
+    let mut current = bam::Record::new();
+    let mut has_previous = false;
+    while let Some(result) = reader.read(&mut current) {
+        result.map_err(|error| error.to_string())?;
+        if has_previous
+            && compare_for_sort_order(&previous, &current, sort_order) == Ordering::Greater
+        {
+            return Ok(false);
         }
-        previous = Some(record);
+        std::mem::swap(&mut previous, &mut current);
+        has_previous = true;
     }
     Ok(true)
 }
@@ -19530,106 +19531,83 @@ fn write_kway_merged_records(
             open_bam_reader_with_reference(&input.path, reference).map_err(|error| error.clone())
         })
         .collect::<Result<Vec<_>, _>>()?;
-    let mut heap = BinaryHeap::new();
-    let mut serial = 0u64;
+    let mut slots = (0..readers.len())
+        .map(|_| bam::Record::new())
+        .collect::<Vec<_>>();
+    let mut heads = vec![None::<usize>; readers.len()];
+    let mut serials = vec![0_u64; readers.len()];
+    let mut next_serial = 0_u64;
 
     for input_index in 0..readers.len() {
-        if let Some(record) = read_next_merge_record(
+        if read_next_merge_record_into(
             &mut readers[input_index],
+            &mut slots[input_index],
             &input_plans[input_index].read_group_renames,
             interval_filter,
         )? {
-            heap.push(HeapRecord {
-                record,
-                input_index,
-                serial,
-                sort_order,
-            });
-            serial += 1;
+            heads[input_index] = Some(input_index);
+            serials[input_index] = next_serial;
+            next_serial += 1;
         }
     }
 
-    while let Some(item) = heap.pop() {
-        let input_index = item.input_index;
+    let mut tree = MergeTree::new(&heads, |left, right| {
+        compare_for_sort_order(&slots[*left], &slots[*right], sort_order)
+            .then_with(|| serials[*left].cmp(&serials[*right]))
+    });
+
+    while let Some(input_index) = tree.winner() {
         writer
-            .write(&item.record)
+            .write(&slots[input_index])
             .map_err(|error| error.to_string())?;
-        if let Some(record) = read_next_merge_record(
+        if read_next_merge_record_into(
             &mut readers[input_index],
+            &mut slots[input_index],
             &input_plans[input_index].read_group_renames,
             interval_filter,
         )? {
-            heap.push(HeapRecord {
-                record,
-                input_index,
-                serial,
-                sort_order,
-            });
-            serial += 1;
+            serials[input_index] = next_serial;
+            next_serial += 1;
+        } else {
+            heads[input_index] = None;
         }
+        tree.update(input_index, &heads, |left, right| {
+            compare_for_sort_order(&slots[*left], &slots[*right], sort_order)
+                .then_with(|| serials[*left].cmp(&serials[*right]))
+        });
     }
 
     Ok(())
 }
 
-fn read_next_merge_record(
+fn read_next_merge_record_into(
     reader: &mut bam::Reader,
+    record: &mut bam::Record,
     read_group_renames: &BTreeMap<String, String>,
     interval_filter: Option<&BTreeMap<i32, Vec<(u64, u64)>>>,
-) -> Result<Option<bam::Record>, String> {
+) -> Result<bool, String> {
     if read_group_renames.is_empty() && interval_filter.is_none() {
-        let mut record = bam::Record::new();
-        return match reader.read(&mut record) {
-            Some(Ok(())) => Ok(Some(record)),
+        return match reader.read(record) {
+            Some(Ok(())) => Ok(true),
             Some(Err(error)) => Err(error.to_string()),
-            None => Ok(None),
+            None => Ok(false),
         };
     }
 
     loop {
-        let mut record = bam::Record::new();
-        match reader.read(&mut record) {
+        match reader.read(record) {
             Some(Ok(())) => {
-                if !record_overlaps_intervals(&record, interval_filter) {
+                if !record_overlaps_intervals(record, interval_filter) {
                     continue;
                 }
-                rewrite_record_read_group(&mut record, read_group_renames)?;
-                return Ok(Some(record));
+                rewrite_record_read_group(record, read_group_renames)?;
+                return Ok(true);
             }
             Some(Err(error)) => return Err(error.to_string()),
-            None => return Ok(None),
+            None => return Ok(false),
         }
     }
 }
-
-struct HeapRecord {
-    record: bam::Record,
-    input_index: usize,
-    serial: u64,
-    sort_order: SortOrder,
-}
-
-impl Ord for HeapRecord {
-    fn cmp(&self, other: &Self) -> Ordering {
-        compare_for_sort_order(&other.record, &self.record, self.sort_order)
-            .then_with(|| other.serial.cmp(&self.serial))
-    }
-}
-
-impl PartialOrd for HeapRecord {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-impl PartialEq for HeapRecord {
-    fn eq(&self, other: &Self) -> bool {
-        compare_for_sort_order(&self.record, &other.record, self.sort_order) == Ordering::Equal
-            && self.serial == other.serial
-    }
-}
-
-impl Eq for HeapRecord {}
 
 struct MergeHeaderBuilder {
     lines: Vec<String>,

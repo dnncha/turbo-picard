@@ -8,5 +8,5 @@ pub mod markdup_config;
 pub mod picard_args;
 pub mod sort_error;
 
-mod merge_tree;
+pub mod merge_tree;
 mod temp_runs;

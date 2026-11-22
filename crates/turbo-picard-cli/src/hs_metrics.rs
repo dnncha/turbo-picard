@@ -1,4 +1,3 @@
-use rust_htslib::bam::record::Cigar;
 use rust_htslib::bam::{self, Read};
 use rustc_hash::{FxHashMap, FxHashSet};
 use std::collections::BTreeMap;
@@ -103,7 +102,8 @@ struct IndexedSpan {
 
 #[derive(Debug, Default, Clone)]
 struct IntervalIndex {
-    by_contig: BTreeMap<String, Vec<IndexedSpan>>,
+    id_by_name: FxHashMap<String, usize>,
+    by_id: Vec<Vec<IndexedSpan>>,
 }
 
 #[derive(Debug, Default)]
@@ -120,31 +120,42 @@ struct ReadScan<'a> {
 
 impl IntervalIndex {
     fn from_spans(spans: &[Span]) -> Self {
-        let mut by_contig = BTreeMap::<String, Vec<IndexedSpan>>::new();
+        let mut id_by_name = FxHashMap::default();
+        let mut by_id = Vec::<Vec<IndexedSpan>>::new();
         for (index, span) in spans.iter().enumerate() {
-            by_contig
-                .entry(span.contig.clone())
-                .or_default()
-                .push(IndexedSpan {
-                    start: span.start,
-                    end: span.end,
-                    index,
-                });
+            let id = *id_by_name.entry(span.contig.clone()).or_insert_with(|| {
+                let next = by_id.len();
+                by_id.push(Vec::new());
+                next
+            });
+            by_id[id].push(IndexedSpan {
+                start: span.start,
+                end: span.end,
+                index,
+            });
         }
-        Self { by_contig }
+        Self { id_by_name, by_id }
     }
 
-    fn candidates<'a>(
-        &'a self,
-        contig: &str,
+    fn contig_id(&self, contig: &str) -> Option<usize> {
+        self.id_by_name.get(contig).copied()
+    }
+
+    fn spans_by_id(&self, id: Option<usize>) -> &[IndexedSpan] {
+        id.and_then(|id| self.by_id.get(id))
+            .map_or(&[], Vec::as_slice)
+    }
+
+    #[cfg(test)]
+    fn spans_by_name(&self, contig: &str) -> &[IndexedSpan] {
+        self.spans_by_id(self.contig_id(contig))
+    }
+
+    fn candidates_slice(
+        spans: &[IndexedSpan],
         start: u64,
         end: u64,
-    ) -> impl Iterator<Item = &'a IndexedSpan> + 'a {
-        let spans = self
-            .by_contig
-            .get(contig)
-            .map(Vec::as_slice)
-            .unwrap_or_default();
+    ) -> impl Iterator<Item = &IndexedSpan> + '_ {
         let first = first_span_with_end_after(spans, start);
         spans[first..]
             .iter()
@@ -152,20 +163,45 @@ impl IntervalIndex {
             .filter(move |span| span.end > start)
     }
 
-    fn overlaps(&self, contig: &str, start: u64, end: u64) -> bool {
-        self.candidates(contig, start, end).next().is_some()
+    fn overlaps_slice(spans: &[IndexedSpan], start: u64, end: u64) -> bool {
+        Self::candidates_slice(spans, start, end).next().is_some()
     }
 
-    fn overlap_bases(&self, contig: &str, start: u64, end: u64) -> u64 {
-        self.candidates(contig, start, end)
+    fn overlap_bases_slice(spans: &[IndexedSpan], start: u64, end: u64) -> u64 {
+        Self::candidates_slice(spans, start, end)
             .map(|span| span.end.min(end).saturating_sub(span.start.max(start)))
             .sum()
     }
 
-    fn index_at(&self, contig: &str, position: u64) -> Option<usize> {
-        self.candidates(contig, position, position.saturating_add(1))
+    fn index_at_slice(spans: &[IndexedSpan], position: u64) -> Option<usize> {
+        Self::candidates_slice(spans, position, position.saturating_add(1))
             .next()
             .map(|span| span.index)
+    }
+
+    #[cfg(test)]
+    fn candidates<'a>(
+        &'a self,
+        contig: &str,
+        start: u64,
+        end: u64,
+    ) -> impl Iterator<Item = &'a IndexedSpan> + 'a {
+        Self::candidates_slice(self.spans_by_name(contig), start, end)
+    }
+
+    #[cfg(test)]
+    fn overlaps(&self, contig: &str, start: u64, end: u64) -> bool {
+        Self::overlaps_slice(self.spans_by_name(contig), start, end)
+    }
+
+    #[cfg(test)]
+    fn overlap_bases(&self, contig: &str, start: u64, end: u64) -> u64 {
+        Self::overlap_bases_slice(self.spans_by_name(contig), start, end)
+    }
+
+    #[cfg(test)]
+    fn index_at(&self, contig: &str, position: u64) -> Option<usize> {
+        Self::index_at_slice(self.spans_by_name(contig), position)
     }
 }
 
@@ -309,6 +345,11 @@ pub struct HsMetricsCollector {
     baseq_histogram: [u64; 256],
     uncapped_baseq_histogram: [u64; 256],
     mate_buffer: MateBuffer,
+    tid_cache_len: usize,
+    tid_to_bait: Vec<Option<usize>>,
+    tid_to_target: Vec<Option<usize>>,
+    read_bases: Vec<u8>,
+    covered_targets: FxHashSet<usize>,
 }
 
 impl HsMetricsCollector {
@@ -386,7 +427,27 @@ impl HsMetricsCollector {
             baseq_histogram: [0; 256],
             uncapped_baseq_histogram: [0; 256],
             mate_buffer: MateBuffer::default(),
+            tid_cache_len: usize::MAX,
+            tid_to_bait: Vec::new(),
+            tid_to_target: Vec::new(),
+            read_bases: Vec::new(),
+            covered_targets: FxHashSet::default(),
         })
+    }
+
+    fn ensure_tid_cache(&mut self, target_names: &[String]) {
+        if self.tid_cache_len == target_names.len() {
+            return;
+        }
+        self.tid_to_bait = target_names
+            .iter()
+            .map(|name| self.bait_index.contig_id(name))
+            .collect();
+        self.tid_to_target = target_names
+            .iter()
+            .map(|name| self.target_index.contig_id(name))
+            .collect();
+        self.tid_cache_len = target_names.len();
     }
 
     pub fn observe(
@@ -436,20 +497,24 @@ impl HsMetricsCollector {
         }
 
         let tid = record.tid();
-        let contig = target_names
-            .get(usize::try_from(tid).map_err(|_| HsMetricsError::InvalidRecordTarget)?)
-            .ok_or(HsMetricsError::UnknownRecordTarget)?;
+        let tid_idx = usize::try_from(tid).map_err(|_| HsMetricsError::InvalidRecordTarget)?;
+        if tid_idx >= target_names.len() {
+            return Err(HsMetricsError::UnknownRecordTarget);
+        }
+        self.ensure_tid_cache(target_names);
+        let bait_id = self.tid_to_bait[tid_idx];
+        let target_id = self.tid_to_target[tid_idx];
+        let bait_spans = self.bait_index.spans_by_id(bait_id);
         let read_start = record.pos().max(0).cast_unsigned();
         let read_end = read_start.saturating_add(reference_consumed_len(record));
 
         let near_bait = expanded_bait_overlaps(
-            &self.bait_index,
-            contig,
+            bait_spans,
             read_start,
             read_end,
             u64::from(self.config.near_distance),
         );
-        let on_bait = aligned_bases_in_baits(record, &self.bait_index, contig);
+        let on_bait = aligned_bases_in_baits(record, bait_spans);
         if near_bait {
             self.on_bait_bases += on_bait;
             self.near_bait_bases += aligned_bases.saturating_sub(on_bait);
@@ -474,14 +539,13 @@ impl HsMetricsCollector {
             self.excluded_dupe += aligned_bases;
             return Ok(());
         }
-        if super::is_adapter_read(
-            &record.seq().as_bytes(),
-            false,
-            record.mapq(),
-            record.is_reverse(),
-        ) {
-            self.excluded_adapter += aligned_bases;
-            return Ok(());
+        if record.mapq() == 0 {
+            self.read_bases.clear();
+            self.read_bases.extend(record.seq().as_bytes());
+            if super::is_adapter_read(&self.read_bases, false, 0, record.is_reverse()) {
+                self.excluded_adapter += aligned_bases;
+                return Ok(());
+            }
         }
         if record.mapq() < self.config.minimum_mapping_quality {
             self.excluded_mapq += aligned_bases;
@@ -489,12 +553,12 @@ impl HsMetricsCollector {
         }
 
         if !self.config.clip_overlapping_reads {
-            self.observe_cigar_ops(record, contig, mapped_in_pair, None);
+            self.observe_cigar_ops(record, target_id, mapped_in_pair, None);
             return Ok(());
         }
 
         match self.mate_buffer.probe(record) {
-            MateProbe::Alone => self.observe_cigar_ops(record, contig, mapped_in_pair, None),
+            MateProbe::Alone => self.observe_cigar_ops(record, target_id, mapped_in_pair, None),
             MateProbe::WouldBuffer {
                 overlap_start,
                 overlap_len,
@@ -502,7 +566,7 @@ impl HsMetricsCollector {
                 let mut bitmap = OverlapBitmap::with_bit_len(index_from(overlap_len));
                 self.observe_cigar_ops(
                     record,
-                    contig,
+                    target_id,
                     mapped_in_pair,
                     Some(OverlapMode::Buffer {
                         overlap_start,
@@ -519,7 +583,7 @@ impl HsMetricsCollector {
             }
             MateProbe::PairWith(cached) => self.observe_cigar_ops(
                 record,
-                contig,
+                target_id,
                 mapped_in_pair,
                 Some(OverlapMode::Pair(&cached)),
             ),
@@ -530,12 +594,14 @@ impl HsMetricsCollector {
     fn observe_cigar_ops(
         &mut self,
         record: &bam::Record,
-        contig: &str,
+        target_id: Option<usize>,
         mapped_in_pair: bool,
         overlap_mode: Option<OverlapMode<'_>>,
     ) {
+        let mut covered_targets = std::mem::take(&mut self.covered_targets);
+        covered_targets.clear();
         let mut scan = ReadScan {
-            covered_targets: FxHashSet::default(),
+            covered_targets,
             target_cursor: TargetCursor::default(),
             overlap_mode,
         };
@@ -543,24 +609,14 @@ impl HsMetricsCollector {
         let mut reference_offset = record.pos().max(0).cast_unsigned();
         let qualities = super::hts_io::base_qualities(record);
 
-        for cigar in record.cigar().iter().copied() {
-            let (length, op) = match cigar {
-                Cigar::Match(length) | Cigar::Equal(length) | Cigar::Diff(length) => {
-                    (length as usize, CigarOp::Aligned)
-                }
-                Cigar::Ins(length) => (length as usize, CigarOp::Insertion),
-                Cigar::Del(length) => (length as usize, CigarOp::Deletion),
-                Cigar::RefSkip(length) => (length as usize, CigarOp::ReferenceSkip),
-                Cigar::SoftClip(length) => (length as usize, CigarOp::SoftClip),
-                Cigar::HardClip(_) | Cigar::Pad(_) => (0, CigarOp::Other),
-            };
-
-            match op {
-                CigarOp::Aligned => {
+        for raw in record.raw_cigar() {
+            let length = (raw >> 4) as usize;
+            match raw & 0xf {
+                0 | 7 | 8 => {
                     for index in 0..length {
                         let quality = qualities.get(read_offset + index).copied().unwrap_or(0);
-                        self.observe_base(
-                            contig,
+                        self.observe_base_in_id(
+                            target_id,
                             reference_offset + index as u64,
                             quality,
                             mapped_in_pair,
@@ -571,12 +627,12 @@ impl HsMetricsCollector {
                     read_offset += length;
                     reference_offset += length as u64;
                 }
-                CigarOp::Insertion => {
+                1 => {
                     if self.config.include_indels {
                         for index in 0..length {
                             let quality = qualities.get(read_offset + index).copied().unwrap_or(0);
-                            self.observe_base(
-                                contig,
+                            self.observe_base_in_id(
+                                target_id,
                                 reference_offset,
                                 quality,
                                 mapped_in_pair,
@@ -587,12 +643,12 @@ impl HsMetricsCollector {
                     }
                     read_offset += length;
                 }
-                CigarOp::Deletion => {
+                2 => {
                     if self.config.include_indels {
                         for index in 0..length {
                             let quality = qualities.get(read_offset).copied().unwrap_or(0);
-                            self.observe_base(
-                                contig,
+                            self.observe_base_in_id(
+                                target_id,
                                 reference_offset + index as u64,
                                 quality,
                                 mapped_in_pair,
@@ -603,16 +659,38 @@ impl HsMetricsCollector {
                     }
                     reference_offset += length as u64;
                 }
-                CigarOp::ReferenceSkip => reference_offset += length as u64,
-                CigarOp::SoftClip => read_offset += length,
-                CigarOp::Other => {}
+                3 => reference_offset += length as u64,
+                4 => read_offset += length,
+                _ => {}
             }
         }
+        self.covered_targets = scan.covered_targets;
     }
 
+    #[cfg(test)]
     fn observe_base(
         &mut self,
         contig: &str,
+        reference_position: u64,
+        quality: u8,
+        mapped_in_pair: bool,
+        contributes_coverage: bool,
+        scan: &mut ReadScan<'_>,
+    ) {
+        let target_id = self.target_index.contig_id(contig);
+        self.observe_base_in_id(
+            target_id,
+            reference_position,
+            quality,
+            mapped_in_pair,
+            contributes_coverage,
+            scan,
+        );
+    }
+
+    fn observe_base_in_id(
+        &mut self,
+        target_id: Option<usize>,
         reference_position: u64,
         quality: u8,
         mapped_in_pair: bool,
@@ -637,12 +715,12 @@ impl HsMetricsCollector {
         }
 
         if reference_position >= target_cursor.end {
-            target_cursor.index = self.target_index.index_at(contig, reference_position);
+            let target_spans = self.target_index.spans_by_id(target_id);
+            target_cursor.index = IntervalIndex::index_at_slice(target_spans, reference_position);
             target_cursor.end = if let Some(index) = target_cursor.index {
                 self.targets[index].span.end
             } else {
-                self.target_index
-                    .candidates(contig, reference_position, u64::MAX)
+                IntervalIndex::candidates_slice(target_spans, reference_position, u64::MAX)
                     .next()
                     .map_or(u64::MAX, |span| span.start)
             };
@@ -1111,16 +1189,6 @@ impl OverlapMode<'_> {
     }
 }
 
-#[derive(Clone, Copy)]
-enum CigarOp {
-    Aligned,
-    Insertion,
-    Deletion,
-    ReferenceSkip,
-    SoftClip,
-    Other,
-}
-
 fn normalize_intervals(
     intervals: &[GenomicInterval],
     reference_lengths: &BTreeMap<String, u64>,
@@ -1175,31 +1243,31 @@ fn normalize_intervals(
 }
 
 fn expanded_bait_overlaps(
-    bait_index: &IntervalIndex,
-    contig: &str,
+    bait_spans: &[IndexedSpan],
     start: u64,
     end: u64,
     near_distance: u64,
 ) -> bool {
     let expanded_start = start.saturating_sub(near_distance);
     let expanded_end = end.saturating_add(near_distance);
-    bait_index.overlaps(contig, expanded_start, expanded_end)
+    IntervalIndex::overlaps_slice(bait_spans, expanded_start, expanded_end)
 }
 
-fn aligned_bases_in_baits(record: &bam::Record, bait_index: &IntervalIndex, contig: &str) -> u64 {
+fn aligned_bases_in_baits(record: &bam::Record, bait_spans: &[IndexedSpan]) -> u64 {
     let mut reference_position = record.pos().max(0).cast_unsigned();
     let mut total = 0;
-    for cigar in record.cigar().iter().copied() {
-        match cigar {
-            Cigar::Match(length) | Cigar::Equal(length) | Cigar::Diff(length) => {
-                total += bait_index.overlap_bases(
-                    contig,
+    for raw in record.raw_cigar() {
+        let length = u64::from(raw >> 4);
+        match raw & 0xf {
+            0 | 7 | 8 => {
+                total += IntervalIndex::overlap_bases_slice(
+                    bait_spans,
                     reference_position,
-                    reference_position.saturating_add(u64::from(length)),
+                    reference_position.saturating_add(length),
                 );
-                reference_position += u64::from(length);
+                reference_position += length;
             }
-            Cigar::Del(length) | Cigar::RefSkip(length) => reference_position += u64::from(length),
+            2 | 3 => reference_position += length,
             _ => {}
         }
     }
@@ -1208,14 +1276,10 @@ fn aligned_bases_in_baits(record: &bam::Record, bait_index: &IntervalIndex, cont
 
 fn reference_consumed_len(record: &bam::Record) -> u64 {
     record
-        .cigar()
+        .raw_cigar()
         .iter()
-        .map(|cigar| match *cigar {
-            Cigar::Match(length)
-            | Cigar::Equal(length)
-            | Cigar::Diff(length)
-            | Cigar::Del(length)
-            | Cigar::RefSkip(length) => u64::from(length),
+        .map(|raw| match raw & 0xf {
+            0 | 2 | 3 | 7 | 8 => u64::from(raw >> 4),
             _ => 0,
         })
         .sum()
@@ -1223,10 +1287,10 @@ fn reference_consumed_len(record: &bam::Record) -> u64 {
 
 fn aligned_block_len(record: &bam::Record) -> u64 {
     record
-        .cigar()
+        .raw_cigar()
         .iter()
-        .map(|cigar| match *cigar {
-            Cigar::Match(length) | Cigar::Equal(length) | Cigar::Diff(length) => u64::from(length),
+        .map(|raw| match raw & 0xf {
+            0 | 7 | 8 => u64::from(raw >> 4),
             _ => 0,
         })
         .sum()
@@ -1361,8 +1425,9 @@ pub fn collect_hs_metrics<R: Read>(
         .collect::<Vec<_>>();
     let mut collector = HsMetricsCollector::new(config)?;
     let mut observed = 0_u32;
-    for record in reader.records() {
-        let record = record?;
+    let mut record = bam::Record::new();
+    while let Some(result) = reader.read(&mut record) {
+        result?;
         collector.observe(&record, &target_names)?;
         observed = observed.saturating_add(1);
         if config.stop_after > 0 && observed >= config.stop_after {
@@ -1378,6 +1443,7 @@ pub fn collect_hs_metrics<R: Read>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rust_htslib::bam::record::Cigar;
 
     #[test]
     fn interval_queries_match_linear_half_open_oracle() {
