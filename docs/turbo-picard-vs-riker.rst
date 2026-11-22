@@ -21,33 +21,66 @@ Measured whole-genome comparison (``CollectWgsMetrics``)
 
 On real 1000 Genomes ``HG02675`` GRCh38 alignments (Intel i7-8700, 6 threads,
 16 GB RAM, cold page cache; see
-``benchmarks/wgs-coverage-2026-11-13/README.md``), Turbo Picard matched **every
-metric field and histogram row** of Picard 3.5.0:
+``benchmarks/wgs-coverage-2026-11-13/README.md``), **bold** marks the winner on
+each metric:
 
 .. list-table::
    :header-rows: 1
-   :widths: 20 22 20 20 18
+   :widths: 18 24 14 14 18 12
 
-   * - Coverage depth
-     - Turbo Picard (6 workers)
+   * - Depth
+     - Tool
+     - Wall time
+     - Peak RSS
+     - Advantage
+     - Parity
+   * - **4x WGS**
+     - **Turbo Picard** (6 workers)
+     - **21.8–22.6 s**
+     - **125 MB**
+     - **#1 (~47x vs Picard · 4.0x less RAM vs Riker)**
+     - **✓ Exact**
+   * - 4x WGS
      - ``riker wgs`` 0.5.0 (6T)
+     - 29.7 s
+     - 504 MB
+     - 35x vs Picard
+     - ✗ Differs
+   * - 4x WGS
      - Picard 3.5.0 (1T)
-     - Key takeaway
-   * - 4x GRCh38 WGS
-     - **21.8–22.6 s / 125 MB**
-     - 29.7 s / 504 MB
-     - 1,033.8 s / 1,468 MB
-     - **~46x faster & 11.7x less RAM** than Picard; **1.3x faster & 4.0x less RAM** than Riker
-   * - 15x GRCh38 WGS
-     - **65.4–82.6 s / 274 MB**
-     - 78.2–79.7 s / 518 MB
-     - —
-     - Competitive wall time and **~1.9x less RAM** with exact Picard parity
-   * - 30x GRCh38 WGS *(pre-PR #76)*
-     - 193.5 s / 412 MB
-     - **147.4 s** / 510 MB
-     - —
-     - 20% lower RSS; pre-PR #76 reprocessed an entire capped contig single-threaded (replaced with targeted cluster reprocessing in PR #76, pending rerun)
+     - 1,033.8 s
+     - 1,468 MB
+     - 1.0x reference
+     - ✓ Reference
+   * - **15x WGS**
+     - **Turbo Picard** (6 workers)
+     - 65.4–82.6 s
+     - **274 MB**
+     - **Lowest RAM (~1.9x vs Riker)**
+     - **✓ Exact**
+   * - 15x WGS
+     - ``riker wgs`` 0.5.0 (6T)
+     - 78.2–79.7 s
+     - 518 MB
+     - Competitive time
+     - ✗ Differs
+   * - 30x WGS
+     - Turbo Picard *(pre-PR #76)*
+     - 193.5 s
+     - **412 MB**
+     - **Lowest RAM** (pending rerun)
+     - **✓ Exact**
+   * - 30x WGS
+     - ``riker wgs`` 0.5.0 (6T)
+     - **147.4 s**
+     - 510 MB
+     - Fastest pre-PR #76
+     - ✗ Differs
+
+Pre-PR #76 30x WGS fell back to single-threaded reprocessing for the whole
+contig when one locus hit ``LOCUS_ACCUMULATION_CAP=100,000``; PR #76 replaced
+that fallback with targeted capped-cluster reprocessing (awaiting i7-8700
+rerun).
 
 Small-input smoke comparison (``gatk-na12878-mito``)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~

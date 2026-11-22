@@ -6,7 +6,7 @@
 
 **Native Rust implementations of 39 Picard commands with Picard-checked outputs, `KEY=VALUE` flags, and transparent fallback to upstream Picard for the remaining 88 commands.**
 
-<a href="https://turbo-picard.readthedocs.io/en/latest/evidence/"><picture><source media="(max-width: 700px)" srcset="https://raw.githubusercontent.com/dnncha/turbo-picard/main/docs/site/assets/competitor-card-mobile.png"><img src="https://raw.githubusercontent.com/dnncha/turbo-picard/main/docs/site/assets/competitor-card.png" width="100%" alt="Turbo Picard MarkDuplicates timings and memory against Picard and other duplicate markers, from saved benchmark evidence."></picture></a>
+<a href="https://turbo-picard.readthedocs.io/en/latest/evidence/"><picture><source media="(max-width: 700px)" srcset="https://raw.githubusercontent.com/dnncha/turbo-picard/main/docs/site/assets/competitor-card-mobile.png"><img src="https://raw.githubusercontent.com/dnncha/turbo-picard/main/docs/site/assets/competitor-card.png" width="100%" alt="Turbo Picard MarkDuplicates and 4x GRCh38 WGS timings and memory against Picard, Riker, FastDup, and samtools." ></picture></a>
 
 [Documentation](https://turbo-picard.readthedocs.io/en/latest/) · [Command coverage](docs/commands.rst) · [Compare alternatives](https://turbo-picard.readthedocs.io/en/latest/compare/) · [Evaluate on your data](docs/real-data-evaluation.rst) · [Research](https://cheerfulduck.com/research)
 
@@ -16,28 +16,41 @@
 
 Most bioinformatics pipelines pay a heavy tax in **JVM startup**, **Java heap bloat**, and **repeated BAM/CRAM decompression passes**. Turbo Picard removes the JVM on native paths, streams directly through HTSlib/libdeflate, uses bounded external sorting, and validates outputs against Picard 3.4.0 and 3.5.0 in CI.
 
-### 1. Whole-genome QC vs Picard and Riker (`CollectWgsMetrics`)
+**Bold** marks the #1 result in each benchmark group below.
 
-Measured on real 1000 Genomes `HG02675` GRCh38 alignments (Intel i7-8700, 6 threads, 16 GB RAM, cold page cache; see [`benchmarks/wgs-coverage-2026-11-13/README.md`](benchmarks/wgs-coverage-2026-11-13/README.md)):
+### 1. Whole-genome QC vs Riker and Picard (`CollectWgsMetrics`)
 
-| Dataset | Turbo Picard (6 workers) | `riker wgs` 0.5.0 (6 threads) | Picard 3.5.0 (1 thread) | Takeaway |
-| :--- | ---: | ---: | ---: | :--- |
-| **4x GRCh38 WGS** | **21.8–22.6 s / 125 MB** | 29.7 s / 504 MB | 1,033.8 s / 1,468 MB | **~46x faster** & **11.7x less RAM** than Picard; **1.3x faster** & **4.0x less RAM** than Riker (with Picard-identical metrics & histogram) |
-| **15x GRCh38 WGS** | **65.4–82.6 s / 274 MB** | 78.2–79.7 s / 518 MB | — | **~1.9x less RAM** and competitive wall time while preserving exact Picard output |
-| **30x GRCh38 WGS** *(pre-PR #76)* | 193.5 s / 412 MB | **147.4 s / 510 MB** | — | Pre-PR #76 reprocessed an entire capped contig single-threaded; PR #76 replaced that with targeted capped-cluster reprocessing (pending i7-8700 rerun) |
+1000 Genomes `HG02675` GRCh38 alignments · Intel i7-8700 · 6 threads (Picard 1T) · cold page cache ([`benchmarks/wgs-coverage-2026-11-13/README.md`](benchmarks/wgs-coverage-2026-11-13/README.md)):
 
-*Note on contracts:* Turbo Picard matches **every metric field and histogram row** of Picard 3.5.0. `riker wgs` uses Riker's own simplified TSV format and documented metric differences. On a smaller 2.1 MB mitochondrial overlap smoke check ([`benchmarks/riker-comparison/evidence/bench_qc_vs_riker.md`](benchmarks/riker-comparison/evidence/bench_qc_vs_riker.md)), Turbo Picard ran `wgs-only` in **0.012 s** (`riker wgs` **0.024 s**, Picard **7.302 s**) and `wgs-bundle` in **0.025 s** (`riker multi` **0.053 s**, Picard **11.801 s** combined).
+| Depth | Tool | Wall time | Peak RSS | Advantage vs baseline / rival | Picard parity |
+| :--- | :--- | ---: | ---: | ---: | :--- |
+| **4x WGS** | **Turbo Picard** (6 workers) | **21.8–22.6 s** | **125 MB** | **~47x faster vs Picard · 1.3x faster & 4.0x less RAM vs Riker** | **✓ Exact** |
+| 4x WGS | `riker wgs` 0.5.0 (6 threads) | 29.7 s | 504 MB | 35x faster vs Picard · 4.0x more RAM than Turbo Picard | ✗ Differs |
+| 4x WGS | Picard 3.5.0 (1 thread) | 1,033.8 s | 1,468 MB | 1.0x reference · 11.7x more RAM than Turbo Picard | ✓ Reference |
+| **15x WGS** | **Turbo Picard** (6 workers) | 65.4–82.6 s | **274 MB** | **Lowest RAM (~1.9x less than Riker)** | **✓ Exact** |
+| 15x WGS | `riker wgs` 0.5.0 (6 threads) | 78.2–79.7 s | 518 MB | Competitive speed · ~1.9x more RAM | ✗ Differs |
+| **30x WGS** | Turbo Picard *(pre-PR #76)* | 193.5 s | **412 MB** | **Lowest RAM (19% less than Riker)** | **✓ Exact** |
+| 30x WGS | `riker wgs` 0.5.0 (6 threads) | **147.4 s** | 510 MB | Fastest pre-PR #76 (fallback to 1T on capped contig) | ✗ Differs |
 
-### 2. Duplicate marking vs Picard, FastDup, and samtools (`MarkDuplicates`)
+- Turbo Picard matches **every metric field and histogram row** of Picard 3.5.0; `riker wgs` uses simplified TSV output and documented metric differences.
+- On 30x WGS pre-PR #76, hitting `LOCUS_ACCUMULATION_CAP=100,000` forced single-threaded whole-contig reprocessing; PR #76 replaced that with targeted capped-cluster reprocessing (awaiting i7-8700 rerun).
+- On the 2.1 MB `gatk-na12878-mito` smoke check ([`bench_qc_vs_riker.md`](benchmarks/riker-comparison/evidence/bench_qc_vs_riker.md)): Turbo Picard ran `wgs-only` in **0.012 s** (`riker wgs` 0.024 s, **2.10x faster**; Picard 7.302 s, **634x faster**) and `wgs-bundle` in **0.025 s** (`riker multi` 0.053 s, **2.14x faster**; Picard 11.801 s, **477x faster**).
 
-Matched-pipeline comparison on Linux x86_64 with **1 pinned CPU** and BAM compression level 5 ([`benchmarks/markduplicates-competitors/`](benchmarks/markduplicates-competitors/README.md)):
+### 2. Duplicate marking vs FastDup, `samtools markdup`, and Picard
 
-| Input | Turbo Picard | FastDup | `samtools markdup` pipeline | Picard 3.4.0 | Output parity |
-| :--- | ---: | ---: | ---: | ---: | :--- |
-| **`paired-600k`** (600k pairs) | **1.054 s / 94.1 MiB** | 1.131 s / 383.8 MiB | 1.982 s / 235.7 MiB | 5.423 s / 1,052.6 MiB | Only Turbo Picard matches Picard (`full_parity: true`); **5.15x faster** & **11.2x less RAM** vs Picard, **4.1x less RAM** than FastDup, **1.88x faster** than `samtools` pipeline |
-| **`gatk-na12878-mito`** (real NA12878 chrM) | **0.141 s / 9.5 MiB** | 0.201 s / 356.7 MiB | — | 2.678 s / 721.3 MiB | **19.0x faster** & **75.9x less RAM** than Picard (`full_parity: true`); faster than FastDup (`full_parity: false`) |
+Linux x86_64 · **1 pinned CPU** · BAM compression level 5 ([`benchmarks/markduplicates-competitors/`](benchmarks/markduplicates-competitors/README.md)):
 
-`samtools markdup` requires query-grouped `fixmate -m` and coordinate sorting, so its timer includes those preparation steps from a coordinate-sorted BAM. Both FastDup and `samtools` differ from Picard on full record/metric parity on `paired-600k`.
+| Dataset | Tool | Wall time | Peak RSS | Speedup vs Picard | RAM vs Picard | Picard parity |
+| :--- | :--- | ---: | ---: | ---: | ---: | :--- |
+| **`paired-600k`** | **Turbo Picard** | **1.054 s** | **94.1 MiB** | **5.15x** | **11.2x less** | **✓ Exact** |
+| `paired-600k` | FastDup | 1.131 s | 383.8 MiB | 4.79x | 2.7x less | ✗ Differs |
+| `paired-600k` | `samtools markdup` | 1.982 s | 235.7 MiB | 2.74x | 4.5x less | ✗ Differs |
+| `paired-600k` | Picard 3.4.0 | 5.423 s | 1,052.6 MiB | 1.00x | 1.0x | ✓ Reference |
+| **`gatk-na12878-mito`** | **Turbo Picard** | **0.141 s** | **9.5 MiB** | **19.0x** | **75.9x less** | **✓ Exact** |
+| `gatk-na12878-mito` | FastDup | 0.201 s | 356.7 MiB | 13.3x | 2.0x less | ✗ Differs |
+| `gatk-na12878-mito` | Picard 3.4.0 | 2.678 s | 721.3 MiB | 1.00x | 1.0x | ✓ Reference |
+
+`samtools markdup` requires query-grouped `fixmate -m` and coordinate sorting, so its timer includes those preparation stages from a coordinate-sorted BAM. Only Turbo Picard matches Picard 3.4.0 on all flags, tags, metrics, and histograms.
 
 ### 3. Latest `main` core speedups (PR #76, Apple M5 vs prior `main` and Picard 3.4.0)
 
@@ -45,14 +58,14 @@ Paired warm-cache medians (1 warmup + 3 repeats) on Apple M5 comparing [`main`](
 
 | Command | Workload | Turbo Picard (`main`) | vs pre-PR #76 `main` | vs Picard 3.4.0 |
 | :--- | :--- | ---: | ---: | ---: |
-| `MarkDuplicates` | 1.2M paired BAM | **0.303 s / 73.8 MiB** | **2.07x faster** (37% less RSS) | **9.06x faster**, **18x less RAM** |
-| `MarkDuplicates` (spill) | 1.2M reads, bounded RAM | **0.458 s** | **1.60x faster** | **4.21x faster** |
-| `SortSam` (coordinate) | 1.2M reads | **0.520 s** | **2.35x faster** | **4.32x faster** |
-| `SortSam` (queryname) | 1.2M reads | **0.415 s** | **2.64x faster** | **4.63x faster** |
-| `MergeSamFiles` (4-way) | 1.2M reads | **0.166 s** | **1.74x faster** | **6.58x faster** (`samtools -@8`: 0.154 s) |
-| `CollectHsMetrics` | Capture panel intervals | **0.546 s** | **1.24x faster** | **12.8x faster** |
-| `SamToFastq` | 600k paired BAM | **0.577 s** | **1.71x faster** | **1.92x faster** |
-| `CleanSam` | 600k paired BAM | **0.077 s** | **1.40x faster** | **9.44x faster** |
+| **`MarkDuplicates`** | 1.2M paired BAM | **0.303 s / 73.8 MiB** | **2.07x faster** (37% less RSS) | **9.06x faster · 18x less RAM** |
+| **`MarkDuplicates` (spill)** | 1.2M reads, bounded | **0.458 s** | **1.60x faster** | **4.21x faster** |
+| **`SortSam` (coordinate)** | 1.2M reads | **0.520 s** | **2.35x faster** | **4.32x faster** |
+| **`SortSam` (queryname)** | 1.2M reads | **0.415 s** | **2.64x faster** | **4.63x faster** |
+| **`MergeSamFiles` (4-way)** | 1.2M reads | **0.166 s** | **1.74x faster** | **6.58x faster** (`samtools -@8`: 0.154 s) |
+| **`CollectHsMetrics`** | Capture panel intervals | **0.546 s** | **1.24x faster** | **12.8x faster** |
+| **`SamToFastq`** | 600k paired BAM | **0.577 s** | **1.71x faster** | **1.92x faster** |
+| **`CleanSam`** | 600k paired BAM | **0.077 s** | **1.40x faster** | **9.44x faster** |
 
 ---
 
