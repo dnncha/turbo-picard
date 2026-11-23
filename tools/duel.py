@@ -153,7 +153,11 @@ def wgs_trials(ds: Dataset, ctx: Context, out: str) -> list[Trial]:
 def multi_trials(ds: Dataset, ctx: Context, out: str) -> list[Trial]:
     ref, tools, threads = ctx.ref, ctx.tools, ctx.threads
     programs = " ".join(f"PROGRAM={p}" for p in BUNDLE_PROGRAMS)
+    picard_programs = " ".join(f"PROGRAM={p}" for p in BUNDLE_PROGRAMS if p != "CollectWgsMetrics")
     common = f"I={q(ds.coord_bam)} REFERENCE_SEQUENCE={q(ref)} {programs} VALIDATION_STRINGENCY=SILENT QUIET=true"
+    picard_common = (
+        f"I={q(ds.coord_bam)} REFERENCE_SEQUENCE={q(ref)} {picard_programs} VALIDATION_STRINGENCY=SILENT QUIET=true"
+    )
     trials = [
         Trial(
             "multi",
@@ -188,7 +192,9 @@ def multi_trials(ds: Dataset, ctx: Context, out: str) -> list[Trial]:
                 ds.name,
                 PICARD,
                 "reference",
-                f"{q(tools.picard)} CollectMultipleMetrics {common} O={q(out)}/picard.bundle",
+                f"{q(tools.picard)} CollectMultipleMetrics {picard_common} O={q(out)}/picard.bundle"
+                f" && {q(tools.picard)} CollectWgsMetrics I={q(ds.coord_bam)} R={q(ref)}"
+                f" O={q(out)}/picard.bundle.wgs_metrics COUNT_UNPAIRED=true VALIDATION_STRINGENCY=SILENT QUIET=true",
                 {},
                 {"bundle-prefix": f"{out}/picard.bundle"},
                 1,
@@ -494,12 +500,17 @@ def clean_outputs(trial: Trial) -> None:
 PERF_LINE = re.compile(r"^\s*([0-9.]+)%\s+(\S+)\s+(\S+)\s+\[[.k]\]\s+(.+?)\s*$")
 
 
+def clean_symbol(symbol: str) -> str:
+    return re.split(r"\s{2,}", symbol.strip())[0]
+
+
 def parse_perf_report(text: str, limit: int = 25) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     for line in text.splitlines():
         match = PERF_LINE.match(line)
         if match:
-            rows.append({"pct": float(match.group(1)), "dso": match.group(3), "symbol": match.group(4)})
+            symbol = clean_symbol(match.group(4))
+            rows.append({"pct": float(match.group(1)), "dso": match.group(3), "symbol": symbol})
     return sorted(rows, key=lambda row: -row["pct"])[:limit]
 
 
@@ -972,7 +983,7 @@ def render_scoreboard(records: list[dict[str, Any]], run_id: str) -> tuple[str, 
     for loss in losses:
         hot = next((h for (t, d, _), h in profiles.items() if t == loss["task"] and d == loss["dataset"] and h), None)
         if hot:
-            loss["hot"] = [f"{row['pct']:.1f}% {row['symbol']}" for row in hot[:5]]
+            loss["hot"] = [f"{row['pct']:.1f}% {clean_symbol(row['symbol'])}" for row in hot[:5]]
     sha = next((r["git_sha"] for r in records if r["run_id"] == run_id), "?")
     lines = [
         "# Duel scoreboard",

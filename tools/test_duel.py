@@ -59,6 +59,21 @@ class PlanTests(unittest.TestCase):
         assert all(t.env.get("TURBO_PICARD_REQUIRE_NATIVE") == "1" for t in turbo)
         assert all(t.repeats == 1 for t in plan if t.tool == "picard")
 
+    def test_picard_bundle_runs_wgs_separately_because_picard_rejects_it_in_cmm(self) -> None:
+        ds = duel.Dataset("4x", "/d/4x.bam", None, picard_reference=True, repeats=1, warmup=False)
+        plan = duel.build_plan([ds], duel.Context("/r.fa", tools(), 8), "/w", ["multi"])
+        picard = next(t for t in plan if t.tool == "picard")
+        cmm, wgs = picard.shell.split(" && ")
+        assert "PROGRAM=CollectWgsMetrics" not in cmm
+        assert "CollectWgsMetrics" in wgs
+        assert "COUNT_UNPAIRED=true" in wgs
+        turbo = next(t for t in plan if t.tool == "turbo-picard")
+        assert "PROGRAM=CollectWgsMetrics" in turbo.shell
+
+    def test_perf_symbols_drop_trailing_report_columns(self) -> None:
+        rows = duel.parse_perf_report("    19.40%  turbo-picard  turbo-picard  [.] <GcBias>::new        -      -")
+        assert rows[0]["symbol"] == "<GcBias>::new"
+
     def test_qgroup_task_is_skipped_without_query_grouped_input(self) -> None:
         ds = duel.Dataset("30x", "/d/30x.bam", None, picard_reference=False, repeats=2, warmup=False)
         plan = duel.build_plan([ds], duel.Context("/r.fa", tools(), 8), "/w", ["markdup-qgroup"])
