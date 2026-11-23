@@ -64,8 +64,10 @@ supplementary, 1,848 duplicates, one reference `N`) against Picard 3.4.0 on a
 second host, with `STOP_AFTER` of 300, 5,000 and 16,000: 54 comparisons, no
 differences.
 
-Not checked: the 15x and 30x genomes have no Picard output to compare with, and
-no CRAM, RNA or long-read input was compared at genome scale.
+Checked later: the full 30x genome matched Picard 3.4.0 field for field on
+23 November 2026 ([`../wgs-30x-colab-2026-11-23/README.md`](../wgs-30x-colab-2026-11-23/README.md)).
+Still not checked: 15x, and CRAM, RNA or long-read input at genome scale
+(Picard 3.5.0 cannot open the 1000 Genomes CRAM with its index).
 
 `tools/compare_wgs_metrics_real_data.sh` reruns the cases against a BAM or CRAM
 of your own:
