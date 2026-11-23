@@ -5492,6 +5492,7 @@ fn run_collectmultiplemetrics_single_pass(
                 .filter(|_| alignment_worker.is_some())
                 .map(|path| Arc::new(Mutex::new(AlignmentReferenceCache::new(path))));
             let mut handlers: Vec<cmm_pipeline::CmmBatchHandler> = Vec::new();
+            let mut handler_names = Vec::<&'static str>::new();
             let combine_alignment_and_insert_size =
                 alignment_worker.is_some() && insert_size_worker.is_some();
 
@@ -5515,6 +5516,7 @@ fn run_collectmultiplemetrics_single_pass(
                 let read_groups = Arc::clone(&read_groups);
                 let target_names = Arc::clone(&target_names);
                 let alignment_reference_cache = alignment_reference_cache.as_ref().map(Arc::clone);
+                handler_names.push("alignment+insert-size");
                 handlers.push(Box::new(move |batch| {
                     let mut alignment_metrics = alignment_worker
                         .lock()
@@ -5554,6 +5556,7 @@ fn run_collectmultiplemetrics_single_pass(
                 let read_groups = Arc::clone(&read_groups);
                 let target_names = Arc::clone(&target_names);
                 let alignment_reference_cache = alignment_reference_cache.as_ref().map(Arc::clone);
+                handler_names.push("alignment");
                 handlers.push(Box::new(move |batch| {
                     let mut metrics = worker
                         .lock()
@@ -5581,6 +5584,7 @@ fn run_collectmultiplemetrics_single_pass(
                 let worker = Arc::clone(worker);
                 let read_groups = Arc::clone(&read_groups);
                 let include_duplicates = *include_duplicates;
+                handler_names.push("insert-size");
                 handlers.push(Box::new(move |batch| {
                     let mut metrics = worker
                         .lock()
@@ -5603,6 +5607,7 @@ fn run_collectmultiplemetrics_single_pass(
                 let worker = Arc::clone(worker);
                 let aligned_reads_only = *aligned_reads_only;
                 let pf_reads_only = *pf_reads_only;
+                handler_names.push("base-distribution");
                 handlers.push(Box::new(move |batch| {
                     let mut metrics = worker
                         .lock()
@@ -5624,6 +5629,7 @@ fn run_collectmultiplemetrics_single_pass(
                 let aligned_reads_only = *aligned_reads_only;
                 let pf_reads_only = *pf_reads_only;
                 let include_no_calls = *include_no_calls;
+                handler_names.push("quality-distribution");
                 handlers.push(Box::new(move |batch| {
                     let mut metrics = worker
                         .lock()
@@ -5647,6 +5653,7 @@ fn run_collectmultiplemetrics_single_pass(
                 let worker = Arc::clone(worker);
                 let aligned_reads_only = *aligned_reads_only;
                 let pf_reads_only = *pf_reads_only;
+                handler_names.push("mean-quality");
                 handlers.push(Box::new(move |batch| {
                     let mut metrics = worker
                         .lock()
@@ -5673,6 +5680,7 @@ fn run_collectmultiplemetrics_single_pass(
                 let use_original_qualities = *use_original_qualities;
                 let include_secondary = *include_secondary;
                 let include_supplemental = *include_supplemental;
+                handler_names.push("quality-yield");
                 handlers.push(Box::new(move |batch| {
                     let mut metrics = worker
                         .lock()
@@ -5696,6 +5704,7 @@ fn run_collectmultiplemetrics_single_pass(
                 let worker = Arc::clone(worker);
                 let target_names = Arc::clone(&target_names);
                 let window_size = *window_size;
+                handler_names.push("gc-bias");
                 handlers.push(Box::new(move |batch| {
                     let mut metrics = worker
                         .lock()
@@ -5717,6 +5726,7 @@ fn run_collectmultiplemetrics_single_pass(
             if let Some((worker, ..)) = &wgs_worker {
                 let worker = Arc::clone(worker);
                 let target_names = Arc::clone(&target_names);
+                handler_names.push("wgs");
                 handlers.push(Box::new(move |batch| {
                     let mut metrics = worker
                         .lock()
@@ -5746,7 +5756,11 @@ fn run_collectmultiplemetrics_single_pass(
                 gc_bias: gc_bias_worker.is_some(),
                 wgs: wgs_worker.is_some(),
             };
-            cmm_pipeline::CmmWorkerPool::with_plan(handlers, plan).run_parallel_bam_pass(
+            cmm_pipeline::CmmWorkerPool::with_plan(
+                handler_names.into_iter().zip(handlers).collect(),
+                plan,
+            )
+            .run_parallel_bam_pass(
                 reader,
                 stop_after,
                 false,
