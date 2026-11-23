@@ -21,7 +21,7 @@ from typing import Any
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 ASSET_DIR = ROOT / "docs" / "site" / "assets"
 LANDSCAPE_DIR = ROOT / "benchmarks" / "markduplicates-competitors"
-WGS_BENCHMARK_README = ROOT / "benchmarks" / "wgs-coverage-2026-11-13" / "README.md"
+WGS_RESULTS = ROOT / "benchmarks" / "wgs-coverage-2026-11-13" / "results.json"
 SUITE_DATA = ASSET_DIR / "benchmark-data.json"
 PROGRESS = ROOT / "benchmarks" / "progress.json"
 SVG_PATH = ASSET_DIR / "competitor-card.svg"
@@ -102,31 +102,27 @@ def case_results(landscape: dict[str, Any], case: str) -> dict[str, dict[str, An
 
 
 def parse_wgs_4x_comparison() -> dict[str, Any]:
-    """Read 4x GRCh38 WGS CollectWgsMetrics numbers from the checked-in README."""
-    text = WGS_BENCHMARK_README.read_text(encoding="utf-8")
+    runs: list[dict[str, Any]] = json.loads(WGS_RESULTS.read_text(encoding="utf-8"))["runs"]
 
-    def extract_row(tool_prefix: str) -> tuple[float, str, float]:
-        pattern = rf"^\|\s*4x\s*\|\s*{re.escape(tool_prefix)}[^|]*\|\s*\d+\s*\|\s*([^|]+)\|\s*([\d,]+)\s*MB\s*\|"
-        match = re.search(pattern, text, re.MULTILINE)
-        if not match:
-            raise ValueError(f"WGS benchmark table missing 4x row for {tool_prefix!r}")
-        wall_raw = match.group(1).strip()
-        rss_mb = float(match.group(2).replace(",", ""))
-        range_match = re.fullmatch(r"([\d.]+)\s+to\s+([\d.]+)", wall_raw)
-        if range_match:
-            lo, hi = float(range_match.group(1)), float(range_match.group(2))
-            return (lo + hi) / 2.0, f"{lo:.1f}–{hi:.1f} s", rss_mb
-        val = float(wall_raw.replace(",", ""))
-        return val, f"{val:,.1f} s", rss_mb
+    def run_for(tool: str) -> dict[str, Any]:
+        for run in runs:
+            if run["depth"] == "4x" and run["tool"] == tool:
+                return run
+        raise ValueError(f"WGS results have no 4x run for {tool!r}")
 
-    turbo_s, turbo_label, turbo_rss = extract_row("turbo-picard, region workers")
-    riker_s, riker_label, riker_rss = extract_row("riker wgs")
-    picard_s, picard_label, picard_rss = extract_row("Picard 3.5.0")
-    return {
-        "turbo": {"wall": turbo_s, "wall_label": turbo_label, "rss": turbo_rss, "rss_label": f"{int(turbo_rss)} MB"},
-        "riker": {"wall": riker_s, "wall_label": riker_label, "rss": riker_rss, "rss_label": f"{int(riker_rss)} MB"},
-        "picard": {"wall": picard_s, "wall_label": picard_label, "rss": picard_rss, "rss_label": f"{int(picard_rss):,} MB"},
-    }
+    def entry(tool: str) -> dict[str, Any]:
+        run = run_for(tool)
+        walls = [float(v) for v in run["wall_seconds"]]
+        rss = float(run["peak_rss_mb"])
+        if len(walls) == 2:
+            wall, label = sum(walls) / 2.0, f"{walls[0]:.1f}\u2013{walls[1]:.1f} s"
+        elif len(walls) == 1:
+            wall, label = walls[0], f"{walls[0]:,.1f} s"
+        else:
+            raise ValueError(f"WGS run for {tool!r} needs one wall time or a two-value range")
+        return {"wall": wall, "wall_label": label, "rss": rss, "rss_label": f"{int(rss):,} MB"}
+
+    return {"turbo": entry("turbo-picard"), "riker": entry("riker"), "picard": entry("picard")}
 
 
 def headline(results: dict[str, dict[str, Any]]) -> tuple[str, str]:
@@ -190,7 +186,9 @@ def text_lines(lines: list[str], x: int, y: int, leading: int, cls: str) -> str:
     )
 
 
-def pill(x: int, y: int, label: str, *, bg: str, fg: str, border: str = "none", width: int | None = None) -> tuple[str, int]:
+def pill(
+    x: int, y: int, label: str, *, bg: str, fg: str, border: str = "none", width: int | None = None
+) -> tuple[str, int]:
     w = width if width is not None else max(34, int(len(label) * 6.5 + 14))
     svg = (
         f'<rect x="{x}" y="{y}" width="{w}" height="18" rx="9" fill="{bg}" stroke="{border}"/>'
@@ -236,9 +234,7 @@ def render_markdup_panel(
         plot_w = width - 2 * pad - label_w - val_col_w
         for frac in (0.25, 0.5, 0.75, 1.0):
             gx = plot_x + frac * plot_w
-            parts.append(
-                f'<line x1="{gx:.1f}" y1="{y + 66}" x2="{gx:.1f}" y2="{y + panel_h - 32}" class="gridLine"/>'
-            )
+            parts.append(f'<line x1="{gx:.1f}" y1="{y + 66}" x2="{gx:.1f}" y2="{y + panel_h - 32}" class="gridLine"/>')
     else:
         total_rows = len(exact) + len(differs)
         panel_h = 96 + total_rows * 54 + (24 if differs else 0)
@@ -362,7 +358,11 @@ def render_wgs_panel(
         plot_x = x + pad
         plot_w = width - 2 * pad - 126
 
-    def metric_block(title: str, top_y: int, turbo_v: float, turbo_lbl: str, riker_v: float, riker_lbl: str, badge_txt: str) -> int:
+    def metric_block(
+        title: str, top_y: int, *, turbo: tuple[float, str], riker: tuple[float, str], badge_txt: str
+    ) -> int:
+        turbo_v, turbo_lbl = turbo
+        riker_v, riker_lbl = riker
         max_v = max(turbo_v, riker_v)
         tw = max(12.0, turbo_v / max_v * plot_w)
         rw = max(12.0, riker_v / max_v * plot_w)
@@ -377,8 +377,7 @@ def render_wgs_panel(
             )
             badge_svg, _ = pill(x + pad + 104, cur + 3, badge_txt, bg="#10b981", fg="#031a12")
             parts.append(
-                badge_svg
-                + f'<rect x="{plot_x}" y="{cur + 23}" width="{plot_w}" height="14" rx="4" class="track"/>'
+                badge_svg + f'<rect x="{plot_x}" y="{cur + 23}" width="{plot_w}" height="14" rx="4" class="track"/>'
                 f'<rect x="{plot_x}" y="{cur + 23}" width="{tw:.1f}" height="14" rx="4" fill="url(#turbo)"/>'
                 f'<text x="{x + width - pad}" y="{cur + 35}" text-anchor="end" class="valueOn">{html.escape(turbo_lbl)}</text>'
             )
@@ -399,8 +398,7 @@ def render_wgs_panel(
         )
         badge_svg, _ = pill(x + pad + 98, cur + 8, "#1", bg="#10b981", fg="#031a12", width=26)
         parts.append(
-            badge_svg
-            + f'<rect x="{plot_x}" y="{cur + 8}" width="{plot_w}" height="18" rx="5" class="track"/>'
+            badge_svg + f'<rect x="{plot_x}" y="{cur + 8}" width="{plot_w}" height="18" rx="5" class="track"/>'
             f'<rect x="{plot_x}" y="{cur + 8}" width="{tw:.1f}" height="18" rx="5" fill="url(#turbo)"/>'
             f'<text x="{x + width - pad}" y="{cur + 22}" text-anchor="end" class="valueOn">{html.escape(turbo_lbl)} · {html.escape(badge_txt)}</text>'
         )
@@ -417,20 +415,16 @@ def render_wgs_panel(
     next_y = metric_block(
         "WALL TIME (COLD CACHE)",
         y + (55 if stacked else 58),
-        t["wall"],
-        t["wall_label"],
-        r["wall"],
-        r["wall_label"],
-        f"{r['wall'] / t['wall']:.1f}x faster",
+        turbo=(t["wall"], t["wall_label"]),
+        riker=(r["wall"], r["wall_label"]),
+        badge_txt=f"{r['wall'] / t['wall']:.1f}x faster",
     )
     next_y = metric_block(
         "PEAK MEMORY (RSS)",
         next_y + (8 if stacked else 10),
-        t["rss"],
-        t["rss_label"],
-        r["rss"],
-        r["rss_label"],
-        f"{ram_ratio_riker:.1f}x less RAM",
+        turbo=(t["rss"], t["rss_label"]),
+        riker=(r["rss"], r["rss_label"]),
+        badge_txt=f"{ram_ratio_riker:.1f}x less RAM",
     )
 
     callout_h = 46 if stacked else 36
@@ -454,7 +448,9 @@ def render_wgs_panel(
     return "".join(parts), y + panel_h
 
 
-def render_tile(x: int, y: int, tile: tuple[str, str, str, bool], *, width: int, height: int = 130, wide: bool = False) -> str:
+def render_tile(
+    x: int, y: int, tile: tuple[str, str, str, bool], *, width: int, height: int = 130, wide: bool = False
+) -> str:
     big, line1, line2, accent = tile
     cls = "bigOn" if accent else "big"
     tile_cls = "tileAccent" if accent else "tile"
@@ -473,7 +469,9 @@ def render_tile(x: int, y: int, tile: tuple[str, str, str, bool], *, width: int,
     )
 
 
-def render_progress(progress: dict[str, Any], x: int, y: int, *, width: int, spark_w: int, height: int = 130) -> tuple[str, int]:
+def render_progress(
+    progress: dict[str, Any], x: int, y: int, *, width: int, spark_w: int, height: int = 130
+) -> tuple[str, int]:
     rows = [(s, c) for s in progress["series"] if (c := series_change(s))]
     if not rows:
         return "", y
@@ -488,9 +486,7 @@ def render_progress(progress: dict[str, Any], x: int, y: int, *, width: int, spa
         lo, hi = min(values), max(values)
         span = hi - lo or 1.0
         step = spark_w / (len(values) - 1)
-        coords = [
-            (x + 18 + i * step, row_y - 2 - (hi - v) / span * 18) for i, v in enumerate(values)
-        ]
+        coords = [(x + 18 + i * step, row_y - 2 - (hi - v) / span * 18) for i, v in enumerate(values)]
         points = " ".join(f"{px:.1f},{py:.1f}" for px, py in coords)
         area_points = f"{coords[0][0]:.1f},{row_y + 16:.1f} {points} {coords[-1][0]:.1f},{row_y + 16:.1f}"
         label = series.get("short_label", series["label"])
@@ -503,7 +499,7 @@ def render_progress(progress: dict[str, Any], x: int, y: int, *, width: int, spa
             f'<circle cx="{end_x:.1f}" cy="{end_y:.1f}" r="3.5" fill="#a7f3d0"/>'
             f'<text x="{label_x}" y="{row_y}" class="tileText">{html.escape(label)}</text>'
             f'<text x="{label_x}" y="{row_y + 17}" class="tileFine">{html.escape(span_text)}</text>'
-            f'<text x="{x + width - 18}" y="{row_y + 2}" text-anchor="end" class="valueOn">−{pct:.0f}%</text>'
+            f'<text x="{x + width - 18}" y="{row_y + 2}" text-anchor="end" class="valueOn">\u2212{pct:.0f}%</text>'
         )
     return "".join(parts), y + box_h
 
@@ -585,7 +581,7 @@ def card_content() -> dict[str, Any]:
     return {
         "title": title,
         "qualifier": qualifier,
-        "subtitle": f"{qualifier} Native Rust across 39 commands; zero JVM.",
+        "subtitle": f"{qualifier} Native Rust across 41 commands; zero JVM.",
         "desc": desc,
         "primary": primary,
         "names": names,
@@ -677,7 +673,7 @@ def build_card(content: dict[str, Any] | None = None) -> str:
         '  <circle cx="46" cy="40" r="4" fill="#34d399"/>\n'
         '  <text x="58" y="44" class="brand">TURBO PICARD</text>\n'
         '  <text x="204" y="44" class="brandMeta">· NO JVM · PICARD-IDENTICAL BENCHMARKS</text>\n'
-        f'  {install_pill(908, 22, 332, height=38)}\n'
+        f"  {install_pill(908, 22, 332, height=38)}\n"
         f'  <text x="40" y="84" class="title">{html.escape(c["title"])}</text>\n'
         f'  <text x="40" y="110" class="sub">{html.escape(c["subtitle"])}</text>\n'
         f"  {markdup_panel}\n  {wgs_panel}\n  {tiles}\n  {progress}\n"
@@ -833,7 +829,7 @@ _DESCRIPTION = (
     "previews). Every number on it comes from four checked-in files:\n"
     "\n"
     "- the newest ``benchmarks/markduplicates-competitors/landscape-*.json``\n"
-    "- ``benchmarks/wgs-coverage-2026-11-13/README.md`` (4x GRCh38 WGS vs Riker/Picard)\n"
+    "- ``benchmarks/wgs-coverage-2026-11-13/results.json`` (4x GRCh38 WGS vs Riker/Picard)\n"
     "- ``docs/site/assets/benchmark-data.json`` (the parity-checked command suite)\n"
     "- ``benchmarks/progress.json`` (accepted hill-climb results on main)\n"
     "\n"

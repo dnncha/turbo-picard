@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "description": "Whole-genome CollectWgsMetrics timings from the 13 November 2026 record in README.md (HG02675, GRCh38, Intel Core i7-8700, cold page cache). Wall seconds are a single value or the observed range across runs.",
+  "host": "Intel Core i7-8700, 12 threads, 16 GB",
+  "runs": [
+    {"depth": "4x", "tool": "picard", "label": "Picard 3.5.0", "threads": 1, "wall_seconds": [1033.8], "peak_rss_mb": 1468, "picard_compared": true},
+    {"depth": "4x", "tool": "turbo-picard-single", "label": "turbo-picard, single pass", "threads": 1, "wall_seconds": [76.1], "peak_rss_mb": 50, "picard_compared": true},
+    {"depth": "4x", "tool": "turbo-picard", "label": "turbo-picard, region workers", "threads": 6, "wall_seconds": [21.8, 22.6], "peak_rss_mb": 125, "picard_compared": true},
+    {"depth": "4x", "tool": "riker", "label": "riker wgs", "threads": 6, "wall_seconds": [29.7], "peak_rss_mb": 504, "picard_compared": true},
+    {"depth": "15x", "tool": "turbo-picard", "label": "turbo-picard, region workers", "threads": 6, "wall_seconds": [65.4, 82.6], "peak_rss_mb": 274, "picard_compared": false},
+    {"depth": "15x", "tool": "riker", "label": "riker wgs", "threads": 6, "wall_seconds": [78.2, 79.7], "peak_rss_mb": 518, "picard_compared": false},
+    {"depth": "30x", "tool": "turbo-picard", "label": "turbo-picard, region workers", "threads": 6, "wall_seconds": [193.5], "peak_rss_mb": 412, "picard_compared": false},
+    {"depth": "30x", "tool": "riker", "label": "riker wgs", "threads": 6, "wall_seconds": [147.4], "peak_rss_mb": 510, "picard_compared": false}
+  ]
+}

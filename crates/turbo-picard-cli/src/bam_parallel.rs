@@ -65,68 +65,6 @@ pub(crate) fn count_mismatches_4bit(
     mismatches
 }
 
-pub(crate) fn build_gc_bins(
-    sequence: &[u8],
-    window_size: usize,
-    window_counts: &mut [u64; 101],
-) -> Vec<u8> {
-    let window_end = sequence.len().saturating_sub(window_size);
-    if window_size == 0 || window_end <= 1 {
-        return Vec::new();
-    }
-    let mut bins = vec![255_u8; window_end];
-    let mut gc = 0_usize;
-    let mut no_calls = 0_usize;
-
-    let base_class = |b: u8| -> (usize, usize) {
-        match b {
-            b'G' | b'g' | b'C' | b'c' => (1, 0),
-            b'N' | b'n' => (0, 1),
-            _ => (0, 0),
-        }
-    };
-
-    for &b in &sequence[..window_size] {
-        let (is_gc, is_n) = base_class(b);
-        gc += is_gc;
-        no_calls += is_n;
-    }
-    for start in 1..window_end {
-        let (sub_gc, sub_n) = base_class(sequence[start - 1]);
-        let (add_gc, add_n) = base_class(sequence[start + window_size - 1]);
-        gc = gc + add_gc - sub_gc;
-        no_calls = no_calls + add_n - sub_n;
-        if no_calls <= 4 {
-            let pct = (gc * 100) / window_size;
-            if let Ok(pct_u8) = u8::try_from(pct) {
-                bins[start] = pct_u8;
-            }
-            if pct <= 100 {
-                window_counts[pct] += 1;
-            }
-        }
-    }
-    bins
-}
-
-#[inline]
-pub(crate) fn lookup_gc_bin(
-    bins: &[u8],
-    ref_len: usize,
-    start: usize,
-    window_size: usize,
-) -> Option<usize> {
-    if start > ref_len {
-        return None;
-    }
-    let last_calculated_start = ref_len.saturating_sub(window_size);
-    if start >= last_calculated_start {
-        return Some(0);
-    }
-    let bin = *bins.get(start)?;
-    (bin <= 100).then_some(usize::from(bin))
-}
-
 pub(crate) fn current_index_for(input: &str) -> Option<PathBuf> {
     let input_path = Path::new(input);
     let input_modified = input_path.metadata().ok()?.modified().ok()?;
@@ -399,32 +337,5 @@ mod tests {
         par_names.sort();
 
         assert_eq!(par_names, seq_names);
-    }
-
-    #[test]
-    fn build_gc_bins_matches_window_definition() {
-        let seq = b"ACGTNnacgtGGGGCCCCAAAATTTT".repeat(10);
-        let win = 20;
-        let mut fast_counts = [0_u64; 101];
-        let bins = build_gc_bins(&seq, win, &mut fast_counts);
-
-        let mut ref_counts = [0_u64; 101];
-        for start in 1..seq.len().saturating_sub(win) {
-            let window = &seq[start..start + win];
-            let gc = window
-                .iter()
-                .filter(|b| matches!(b.to_ascii_uppercase(), b'G' | b'C'))
-                .count();
-            let ns = window
-                .iter()
-                .filter(|b| b.eq_ignore_ascii_case(&b'N'))
-                .count();
-            let expected = if ns > 4 { None } else { Some((gc * 100) / win) };
-            assert_eq!(lookup_gc_bin(&bins, seq.len(), start, win), expected);
-            if let Some(pct) = expected {
-                ref_counts[pct] += 1;
-            }
-        }
-        assert_eq!(fast_counts, ref_counts);
     }
 }

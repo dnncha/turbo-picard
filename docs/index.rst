@@ -1,9 +1,9 @@
 Turbo Picard
 ============
 
-Native Rust implementations of **39 Picard commands** with familiar CLI names,
+Native Rust implementations of **35 Picard commands** and 6 Turbo Picard utilities with familiar CLI names,
 ``KEY=VALUE`` options, and Picard-checked outputs—plus transparent upstream
-Picard fallback for the remaining 88 commands.
+Picard fallback for the remaining 86 commands.
 
 .. code-block:: bash
 
@@ -27,7 +27,7 @@ measurements before sizing production pipelines.
 Research and evidence
 ---------------------
 
-`Cheerful Duck Research <https://cheerfulduck.com/research>`_ publishes our
+`Bunsen <https://bunsen.science/>`_ publishes our
 bioinformatics software investigations, reproduction material, and corrections.
 Begin with :doc:`compatibility-contract` to define the outputs that matter to
 your workflow, then use :doc:`real-data-evaluation` to compare them.

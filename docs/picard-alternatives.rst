@@ -12,9 +12,9 @@ The right alternative to Broad Picard depends on what can change in your pipelin
 and which exact outputs downstream tools expect.
 
 ``turbo-picard`` is built for existing Picard-shaped workflows: it keeps Picard
-command names and ``KEY=VALUE`` options across **39 native commands**, matches
+command names and ``KEY=VALUE`` options across **41 native commands**, matches
 Picard outputs verified in CI against Picard 3.4.0 and 3.5.0, and transparently
-delegates the remaining **88 commands** to upstream Picard when configured.
+delegates the remaining **86 commands** to upstream Picard when configured.
 
 Measured head-to-head results
 -----------------------------
@@ -55,7 +55,7 @@ Comparison by workflow
      - Existing Picard preprocessing, QC, sorting, FASTQ, and VCF tasks
      - Picard command names and ``KEY=VALUE`` arguments across BAM, CRAM, SAM,
        FASTQ, and VCF
-     - Native coverage is command- and option-specific across 39 native and 88
+     - Native coverage is command- and option-specific across 41 native and 86
        fallback commands; check :doc:`commands` and :doc:`parity`
    * - `samtools <https://www.htslib.org/>`_
      - Standard SAM/BAM/CRAM manipulation and HTSlib pipelines
@@ -81,7 +81,7 @@ Comparison by workflow
    * - `FastDup <https://github.com/zzhofict/FastDup>`_
      - Multi-threaded duplicate marking on large coordinate-sorted BAM inputs
      - Dedicated FastDup CLI and narrower duplicate-marking scope
-     - Higher memory footprint (~384 MiB on 600k pairs) and representative-read
+     - Higher memory footprint (~384 MiB on 600k reads, about 300k pairs) and representative-read
        differences vs Picard
    * - `riker <https://github.com/fulcrumgenomics/riker>`_
      - New sequencing-QC workflows that prefer Riker's subcommands, TSV outputs,

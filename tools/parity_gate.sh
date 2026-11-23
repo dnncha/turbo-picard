@@ -3,6 +3,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 : "${TURBO_PICARD_CONDA_PREFIX:?set TURBO_PICARD_CONDA_PREFIX to a conda env with upstream picard and samtools}"
 export TURBO_PICARD_CONDA_PREFIX
+[[ "${JDK_JAVA_OPTIONS:-}" == *-Xlog* ]] || export JDK_JAVA_OPTIONS="${JDK_JAVA_OPTIONS:-} -Xlog:disable -Xlog:all=warning:stderr"
 
 ./tools/verify_basic_accelerationstatus_parity.sh
 ./tools/verify_basic_capabilities_parity.sh
