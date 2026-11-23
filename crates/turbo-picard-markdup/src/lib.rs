@@ -1941,6 +1941,7 @@ fn process_compact_pair_group(
         return Ok(());
     }
     let mut templates = HashMap::<(u32, &[u8]), (u64, u64)>::default();
+    let mut orientations = HashMap::<(u32, &[u8]), Option<OpticalOrientation>>::default();
     for entry in entries {
         let qname = &qnames[entry.qname_offset..entry.qname_offset + entry.qname_len];
         let min_ordinal = entry.first_ordinal.min(entry.second_ordinal);
@@ -1949,6 +1950,9 @@ fn process_compact_pair_group(
             .or_insert((0, min_ordinal));
         slot.0 = slot.0.saturating_add(entry.combined_score);
         slot.1 = slot.1.min(min_ordinal);
+        orientations
+            .entry((entry.rg_id, qname))
+            .or_insert_with(|| optical_orientation(entry.first_flags));
     }
     let set_size = u64::try_from(templates.len()).unwrap_or(u64::MAX);
     let library_id = entries[0].library_id;
@@ -1995,6 +1999,7 @@ fn process_compact_pair_group(
                     min_ordinal,
                     OpticalRead {
                         name: optical_name,
+                        orientation: orientations.get(&(rg_id, qname)).copied().flatten(),
                         location: processing_config.read_name_parser.coordinates(qname).map(
                             |(tile, x, y)| ReadLocation {
                                 read_group: rg_registry.get(rg_id).map(<[u8]>::to_vec),
@@ -2320,6 +2325,7 @@ fn process_external_duplicate_group_with_store(
             })
             .map(|member| OpticalRead {
                 name: member.template_key.clone(),
+                orientation: optical_orientation(member.flags),
                 location: processing_config
                     .read_name_parser
                     .coordinates(member.qname.as_slice())
@@ -3594,6 +3600,7 @@ fn optical_duplicate_record_indices(
         if seen_names.insert(name) {
             reads.push(OpticalRead {
                 name: name.to_vec(),
+                orientation: optical_orientation(records[index].flags()),
                 location: read_location_for_record(&records[index], read_name_parser),
             });
         }
@@ -3678,9 +3685,67 @@ fn parse_numeric_prefix(value: &str) -> Option<i64> {
 struct OpticalRead {
     name: Vec<u8>,
     location: Option<ReadLocation>,
+    orientation: Option<OpticalOrientation>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum OpticalOrientation {
+    ForwardForward,
+    ForwardReverse,
+    ReverseForward,
+    ReverseReverse,
+}
+
+fn optical_orientation(flags: u16) -> Option<OpticalOrientation> {
+    if flags & 0x1 == 0 {
+        return None;
+    }
+    let own_reverse = flags & 0x10 != 0;
+    let mate_reverse = flags & 0x20 != 0;
+    let (first_reverse, second_reverse) = if flags & 0x40 != 0 {
+        (own_reverse, mate_reverse)
+    } else {
+        (mate_reverse, own_reverse)
+    };
+    Some(match (first_reverse, second_reverse) {
+        (false, false) => OpticalOrientation::ForwardForward,
+        (false, true) => OpticalOrientation::ForwardReverse,
+        (true, false) => OpticalOrientation::ReverseForward,
+        (true, true) => OpticalOrientation::ReverseReverse,
+    })
+}
+
+const OPTICAL_GRAPH_MODE_MIN_READS: usize = 4;
+
 fn find_optical_duplicate_names(
+    reads: &[OpticalRead],
+    representative_name: &[u8],
+    pixel_distance: i64,
+) -> HashSet<Vec<u8>> {
+    let has = |wanted| reads.iter().any(|read| read.orientation == Some(wanted));
+    if has(OpticalOrientation::ForwardReverse) && has(OpticalOrientation::ReverseForward) {
+        let mut names = HashSet::default();
+        for wanted in [
+            OpticalOrientation::ForwardReverse,
+            OpticalOrientation::ReverseForward,
+        ] {
+            let partition = reads
+                .iter()
+                .filter(|read| read.orientation == Some(wanted))
+                .cloned()
+                .collect::<Vec<_>>();
+            names.extend(find_optical_duplicate_names_in_partition(
+                &partition,
+                representative_name,
+                pixel_distance,
+            ));
+        }
+        return names;
+    }
+    find_optical_duplicate_names_in_partition(reads, representative_name, pixel_distance)
+}
+
+fn find_optical_duplicate_names_in_partition(
     reads: &[OpticalRead],
     representative_name: &[u8],
     pixel_distance: i64,
@@ -3693,9 +3758,8 @@ fn find_optical_duplicate_names(
         .iter()
         .position(|read| read.name.as_slice() == representative_name && read.location.is_some());
     let mut flags = vec![false; reads.len()];
-    let graph_mode_threshold = if keeper_index.is_some() { 4 } else { 3 };
 
-    if reads.len() < graph_mode_threshold {
+    if reads.len() < OPTICAL_GRAPH_MODE_MIN_READS {
         if let Some(keeper_index) = keeper_index {
             for (index, read) in reads.iter().enumerate() {
                 flags[index] = reads[keeper_index]
@@ -5888,6 +5952,7 @@ mod optical_hot_path_tests {
             .enumerate()
             .map(|(index, &x)| OpticalRead {
                 name: format!("read{index}").into_bytes(),
+                orientation: None,
                 location: Some(location(x, x)),
             })
             .collect::<Vec<_>>();
@@ -5913,6 +5978,7 @@ mod optical_hot_path_tests {
         );
         let read = |name: &str| OpticalRead {
             name: name.as_bytes().to_vec(),
+            orientation: None,
             location: parser
                 .coordinates(name.as_bytes())
                 .map(|(tile, x, y)| ReadLocation {
@@ -5937,6 +6003,63 @@ mod optical_hot_path_tests {
             find_optical_duplicate_names(&both_wrapped, b"A:1:F:1:1101:500:40000", 100).len(),
             1
         );
+    }
+
+    #[test]
+    fn optical_detection_splits_mixed_fr_rf_sets_like_picard() {
+        let read = |name: &str, x: i64, flags: u16| OpticalRead {
+            name: name.as_bytes().to_vec(),
+            orientation: optical_orientation(flags),
+            location: Some(ReadLocation {
+                read_group: None,
+                tile: 1101,
+                x,
+                y: 500,
+            }),
+        };
+        let forward_reverse = 0x1 | 0x40 | 0x20;
+        let reverse_forward = 0x1 | 0x40 | 0x10;
+        let mixed = [
+            read("keeper", 100, forward_reverse),
+            read("fr", 150, forward_reverse),
+            read("rf", 120, reverse_forward),
+        ];
+        let flagged = find_optical_duplicate_names(&mixed, b"keeper", 100);
+        assert_eq!(flagged.len(), 1);
+        assert!(flagged.contains(b"fr".as_slice()));
+        let pooled = [
+            read("keeper", 100, forward_reverse),
+            read("fr", 150, forward_reverse),
+            read("fr2", 120, forward_reverse),
+        ];
+        assert_eq!(
+            find_optical_duplicate_names(&pooled, b"keeper", 100).len(),
+            2
+        );
+        assert_eq!(
+            optical_orientation(0x1 | 0x80 | 0x10),
+            Some(OpticalOrientation::ForwardReverse)
+        );
+        assert_eq!(optical_orientation(0x0), None);
+    }
+
+    #[test]
+    fn optical_graph_mode_needs_four_reads_even_when_the_keeper_is_elsewhere() {
+        let read = |name: &str, x: i64| OpticalRead {
+            name: name.as_bytes().to_vec(),
+            orientation: None,
+            location: Some(ReadLocation {
+                read_group: None,
+                tile: 1101,
+                x,
+                y: 500,
+            }),
+        };
+        let chain = [read("b", 200), read("a", 100), read("c", 300)];
+        let flagged = find_optical_duplicate_names(&chain, b"elsewhere", 100);
+        assert!(flagged.contains(b"a".as_slice()));
+        assert!(flagged.contains(b"c".as_slice()));
+        assert!(!flagged.contains(b"b".as_slice()));
     }
 
     #[test]
