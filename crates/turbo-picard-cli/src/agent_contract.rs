@@ -53,6 +53,7 @@ fn is_output_argument(command: &str, key: &str) -> bool {
                 | (
                     "CollectBaseDistributionByCycle"
                         | "CollectGcBiasMetrics"
+                        | "CollectRnaSeqMetrics"
                         | "MeanQualityByCycle"
                         | "QualityScoreDistribution",
                     "CHART_OUTPUT"

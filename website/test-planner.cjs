@@ -28,7 +28,7 @@ for (const input of ['relative.bam','/data/a\nb.bam','/data/a\0.bam','/data/a.sa
  check(()=>assert.throws(()=>buildTrial({...base,input})));
 check(()=>assert.throws(()=>buildTrial({...base,input:'/data/a.cram'}),/Reference/));
 check(()=>assert.match(buildTrial({...base,input:'/data/a.cram',reference:'/ref/a.fa'}),/--reference-fasta '\/ref\/a.fa'/));
-check(()=>assert.throws(()=>buildTrial({...base,command:'CollectRnaSeqMetrics'})));
+check(()=>assert.throws(()=>buildTrial({...base,command:'CollectRrbsMetrics'})));
 check(()=>assert.throws(()=>buildTrial({...base,version:base.version+'; touch bad'})));
 check(()=>assert.throws(()=>buildTrial({...base,jar:'https://example.com/picard.jar'})));
 check(()=>assert.equal(quote("a'b"),"'a'\"'\"'b'"));

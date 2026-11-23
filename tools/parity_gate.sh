@@ -32,6 +32,8 @@ export TURBO_PICARD_REQUIRE_NATIVE=1
 ./tools/verify_basic_collectbasedistributionbycycle_parity.sh
 ./tools/verify_basic_collectgcbiasmetrics_parity.sh
 ./tools/verify_basic_collecthsmetrics_parity.sh
+./tools/verify_basic_collectrnaseqmetrics_parity.sh
+./tools/verify_basic_collectsamerrormetrics_parity.sh
 ./tools/verify_basic_qualityyield_parity.sh
 ./tools/verify_basic_collectwgsmetrics_parity.sh
 ./tools/verify_basic_qualityscoredistribution_parity.sh

@@ -15,6 +15,8 @@ turbo-picard SortSam --help
 turbo-picard CleanSam --help
 turbo-picard ViewSam --help
 turbo-picard CollectHsMetrics --help
+turbo-picard CollectRnaSeqMetrics --help
+turbo-picard CollectSamErrorMetrics --help
 
 cat > input.sam <<'SAM'
 @HD	VN:1.6	SO:coordinate

@@ -1,9 +1,9 @@
 Turbo Picard
 ============
 
-Native Rust implementations of **33 Picard commands** and 6 Turbo Picard utilities with familiar CLI names,
+Native Rust implementations of **35 Picard commands** and 6 Turbo Picard utilities with familiar CLI names,
 ``KEY=VALUE`` options, and Picard-checked outputs—plus transparent upstream
-Picard fallback for the remaining 88 commands.
+Picard fallback for the remaining 86 commands.
 
 .. code-block:: bash
 

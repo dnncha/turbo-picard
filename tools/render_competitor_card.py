@@ -581,7 +581,7 @@ def card_content() -> dict[str, Any]:
     return {
         "title": title,
         "qualifier": qualifier,
-        "subtitle": f"{qualifier} Native Rust across 39 commands; zero JVM.",
+        "subtitle": f"{qualifier} Native Rust across 41 commands; zero JVM.",
         "desc": desc,
         "primary": primary,
         "names": names,

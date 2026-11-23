@@ -170,17 +170,19 @@ commands:
     native_scope: "Delegated to upstream Picard 3.4.0. turbo-picard runs the native accelerated implementation when one exists; otherwise it transparently forwards to upstream Picard when fallback is configured or auto-discovered."
     fallback_scope: Transparent upstream Picard 3.4.0 delegation. No native fast path yet.
   - name: CollectRnaSeqMetrics
-    status: fallback-only
-    native_scope: "Delegated to upstream Picard 3.4.0. turbo-picard runs the native accelerated implementation when one exists; otherwise it transparently forwards to upstream Picard when fallback is configured or auto-discovered."
-    fallback_scope: Transparent upstream Picard 3.4.0 delegation. No native fast path yet.
+    status: partial-native
+    parity_script: tools/verify_basic_collectrnaseqmetrics_parity.sh
+    native_scope: "Core RNA-seq metrics, multi-level ALL_READS/SAMPLE/LIBRARY/READ_GROUP accumulation, ribosomal interval counting, strand specificity (NONE/FIRST/SECOND_READ_TRANSCRIPTION_STRAND), 5'/3' normalized transcript coverage histogram, and lightweight chart PDF for coordinate-sorted BAM/CRAM inputs with UCSC refFlat models."
+    fallback_scope: "Text SAM inputs, multi-interval-only flags, and unsupported advanced options should use upstream Picard."
   - name: CollectRrbsMetrics
     status: fallback-only
     native_scope: "Delegated to upstream Picard 3.4.0. turbo-picard runs the native accelerated implementation when one exists; otherwise it transparently forwards to upstream Picard when fallback is configured or auto-discovered."
     fallback_scope: Transparent upstream Picard 3.4.0 delegation. No native fast path yet.
   - name: CollectSamErrorMetrics
-    status: fallback-only
-    native_scope: "Delegated to upstream Picard 3.4.0. turbo-picard runs the native accelerated implementation when one exists; otherwise it transparently forwards to upstream Picard when fallback is configured or auto-discovered."
-    fallback_scope: Transparent upstream Picard 3.4.0 delegation. No native fast path yet.
+    status: partial-native
+    parity_script: tools/verify_basic_collectsamerrormetrics_parity.sh
+    native_scope: "Core error, indel-error, and overlapping-read error calculators across all 26 Picard default stratifiers, custom ERROR_METRICS directives, INTERVALS, MAX_LOCI, PRIOR_Q, LONG_HOMOPOLYMER, and FILE_EXTENSION for reference-backed coordinate-sorted BAM/CRAM inputs."
+    fallback_scope: "VCF known-variant filtering, PROBABILITY < 1.0 downsampling, multi-file or VCF INTERVALS, text SAM inputs, and unsupported options should use upstream Picard."
   - name: CollectSequencingArtifactMetrics
     status: fallback-only
     native_scope: "Delegated to upstream Picard 3.4.0. turbo-picard runs the native accelerated implementation when one exists; otherwise it transparently forwards to upstream Picard when fallback is configured or auto-discovered."

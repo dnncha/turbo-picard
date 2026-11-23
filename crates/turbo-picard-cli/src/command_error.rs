@@ -113,14 +113,18 @@ impl From<CommandArgError> for CommandError {
 
 #[cfg(test)]
 mod tests {
-    const SOURCES: [(&str, &str); 12] = [
+    const SOURCES: [(&str, &str); 16] = [
         ("agent_contract.rs", include_str!("agent_contract.rs")),
+        ("bam_parallel.rs", include_str!("bam_parallel.rs")),
         ("cmm_pipeline.rs", include_str!("cmm_pipeline.rs")),
         ("command_error.rs", include_str!("command_error.rs")),
+        ("het_sensitivity.rs", include_str!("het_sensitivity.rs")),
         ("hs_metrics.rs", include_str!("hs_metrics.rs")),
         ("lib.rs", include_str!("lib.rs")),
         ("main.rs", include_str!("main.rs")),
         ("mcp.rs", include_str!("mcp.rs")),
+        ("rna_seq_metrics.rs", include_str!("rna_seq_metrics.rs")),
+        ("sam_error_metrics.rs", include_str!("sam_error_metrics.rs")),
         ("sam_sort.rs", include_str!("sam_sort.rs")),
         ("sam_structure.rs", include_str!("sam_structure.rs")),
         ("vcf_headers.rs", include_str!("vcf_headers.rs")),

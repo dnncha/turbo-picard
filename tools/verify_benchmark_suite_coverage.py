@@ -29,6 +29,8 @@ BENCHMARK_EXEMPTIONS: dict[str, str] = {
     "mcp": "agent protocol server with no Picard data-processing runtime to benchmark",
     "trial": "status/preflight command with no Picard data-processing runtime to benchmark",
     "CollectHsMetrics": "ALL_READS metrics and sidecar parity are guarded separately; public performance benchmark awaits representative capture data",
+    "CollectRnaSeqMetrics": "refFlat RNA-seq metrics, multi-level rows, histogram, and chart parity are guarded separately; suite-integrated RNA-seq benchmark awaits representative transcript data",
+    "CollectSamErrorMetrics": "26-metric default error, indel, overlapping-read, interval, and MAX_LOCI parity are guarded separately; suite-integrated error benchmark awaits representative error-metrics fixtures",
 }
 
 

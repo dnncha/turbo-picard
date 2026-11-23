@@ -1,13 +1,17 @@
 #![forbid(unsafe_code)]
 
 mod agent_contract;
+mod bam_parallel;
 mod cmm_pipeline;
 mod command_error;
 mod mcp;
 
 use agent_contract::declared_outputs;
 use command_error::{CommandError, unsupported};
+mod het_sensitivity;
 mod hs_metrics;
+mod rna_seq_metrics;
+mod sam_error_metrics;
 mod sam_sort;
 mod sam_structure;
 mod vcf_headers;
@@ -507,6 +511,42 @@ pub fn run_cli(program_name: &str, raw_args: impl IntoIterator<Item = String>) -
             }
             0
         }
+        Some("CollectRnaSeqMetrics") => {
+            let command_args = args.cloned().collect::<Vec<_>>();
+            if command_args
+                .iter()
+                .any(|arg| arg == "--help" || arg == "-h")
+            {
+                print_collectrnaseqmetrics_help();
+                return 0;
+            }
+            if let Err(error) = rna_seq_metrics::run_collectrnaseqmetrics(&command_args) {
+                if let Some(exit_code) = try_run_fallback_for_native_error(&error, &raw_args) {
+                    return exit_code;
+                }
+                eprintln!("{error}");
+                return 2;
+            }
+            0
+        }
+        Some("CollectSamErrorMetrics") => {
+            let command_args = args.cloned().collect::<Vec<_>>();
+            if command_args
+                .iter()
+                .any(|arg| arg == "--help" || arg == "-h")
+            {
+                print_collectsamerrormetrics_help();
+                return 0;
+            }
+            if let Err(error) = sam_error_metrics::run_collectsamerrormetrics(&command_args) {
+                if let Some(exit_code) = try_run_fallback_for_native_error(&error, &raw_args) {
+                    return exit_code;
+                }
+                eprintln!("{error}");
+                return 2;
+            }
+            0
+        }
         Some("FixMateInformation") => {
             let command_args = args.cloned().collect::<Vec<_>>();
             if command_args
@@ -873,6 +913,10 @@ Available commands:
                     Runs supported metric collectors from one Picard-shaped command
   CollectQualityYieldMetrics
                     Writes Picard-style read/base quality yield metrics
+  CollectRnaSeqMetrics
+                    Writes RNA-seq metrics and normalized transcript coverage
+  CollectSamErrorMetrics
+                    Writes stratified sequencing error, indel, and overlap metrics
   CollectWgsMetrics
                     Writes whole-genome coverage metrics for SAM/BAM/CRAM files
   CreateSequenceDictionary
@@ -2084,6 +2128,55 @@ Native core options:
 Native output covers the core ALL_READS hybrid-capture metrics and histogram.
 PER_TARGET_COVERAGE and PER_BASE_COVERAGE sidecar reports are native for
 ALL_READS; unsupported advanced options remain delegated to upstream Picard."
+    );
+}
+
+fn print_collectrnaseqmetrics_help() {
+    println!(
+        "\
+Usage: picard CollectRnaSeqMetrics I=<input.bam|input.cram> O=<metrics.txt> REF_FLAT=<refFlat.txt> STRAND_SPECIFICITY=<strand> [options]
+
+Required arguments:
+  INPUT / I                   Input SAM, BAM, or CRAM file
+  OUTPUT / O                  RNA-seq metrics file
+  REF_FLAT                    Gene annotations in refFlat format
+  STRAND_SPECIFICITY / STRAND NONE, FIRST_READ_TRANSCRIPTION_STRAND, or SECOND_READ_TRANSCRIPTION_STRAND
+
+Native options:
+  RIBOSOMAL_INTERVALS         Ribosomal interval_list file
+  MINIMUM_LENGTH              Minimum transcript length for bias metrics (default 500)
+  RRNA_FRAGMENT_PERCENTAGE    Minimum ribosomal fragment overlap (default 0.8)
+  END_BIAS_BASES              5'/3' end window length (default 100)
+  IGNORE_SEQUENCE             Contig names to ignore (repeatable)
+  METRIC_ACCUMULATION_LEVEL / LEVEL
+  CHART_OUTPUT / CHART        Normalized coverage chart PDF path
+  ASSUME_SORTED / AS
+  STOP_AFTER
+  REFERENCE_SEQUENCE / R"
+    );
+}
+
+fn print_collectsamerrormetrics_help() {
+    println!(
+        "\
+Usage: picard CollectSamErrorMetrics I=<input.bam> O=<output_prefix> R=<reference.fa> [options]
+
+Required arguments:
+  INPUT / I                   Coordinate-sorted BAM or CRAM file
+  OUTPUT / O                  Output metrics file prefix
+  REFERENCE_SEQUENCE / R      Reference FASTA file
+
+Native options:
+  ERROR_METRICS               Metric:stratifier specifications (supports null reset)
+  MIN_MAPPING_Q / MQ          Minimum mapping quality (default 20)
+  MIN_BASE_Q / BQ             Minimum base quality (default 20)
+  PRIOR_Q / PE                Prior error Phred quality (default 30)
+  MAX_LOCI / MAX              Maximum loci to process (default 0 = unlimited)
+  LONG_HOMOPOLYMER / LH       Homopolymer threshold for BINNED_HOMOPOLYMER (default 6)
+  INTERVALS / L               interval_list file to restrict loci
+  FILE_EXTENSION / EXT        Extension appended to output filenames (default empty)
+  PROBABILITY / P             Must be 1.0 (downsampling delegates to Picard)
+  VCF / V                     Delegates to Picard when supplied"
     );
 }
 
@@ -4017,24 +4110,109 @@ fn run_collectalignmentsummarymetrics(args: &[String]) -> Result<(), CommandErro
         return Ok(fs::write(output, metrics.to_picard_text()).map_err(|error| error.to_string())?);
     }
 
+    let workers = bam_parallel::parallel_workers();
+    if workers > 1
+        && stop_after == 0
+        && let Some(index) = bam_parallel::current_index_for(&input)
+        && let Ok(probe) =
+            bam_parallel::open_indexed_optional_ref(&input, &index, reference.as_deref())
+    {
+        let header = probe.header().clone();
+        drop(probe);
+        let read_groups = if accumulation == AlignmentAccumulation::AllReads {
+            BTreeMap::new()
+        } else {
+            insert_size_read_groups_from_header(&String::from_utf8_lossy(header.as_bytes()))
+        };
+        let target_names = header
+            .target_names()
+            .iter()
+            .map(|name| String::from_utf8_lossy(name).to_string())
+            .collect::<Vec<_>>();
+        let preloaded_ref = reference
+            .as_deref()
+            .map(|path| preload_reference_contigs_for_tids(path, &target_names))
+            .transpose()?
+            .flatten();
+
+        if let Some(((mut metrics, _), _)) = bam_parallel::collect_indexed_parallel(
+            &input,
+            reference.as_deref(),
+            workers,
+            true,
+            || {
+                Ok((
+                    AlignmentSummaryCollection::new(accumulation),
+                    reference.as_deref().map(|path| {
+                        AlignmentReferenceCache::new_with_preloaded(
+                            path,
+                            preloaded_ref.as_ref().map(Arc::clone),
+                        )
+                    }),
+                ))
+            },
+            |(local_metrics, local_cache), record| {
+                let read_group = if accumulation == AlignmentAccumulation::AllReads {
+                    None
+                } else {
+                    insert_size_read_group_ref_for_bam_record(record, &read_groups)
+                };
+                let mismatch_bases = alignment_reference_mismatch_bases(
+                    record,
+                    &target_names,
+                    local_cache.as_mut(),
+                )?;
+                local_metrics.observe(record, read_group, mismatch_bases);
+                Ok(())
+            },
+            |(acc_metrics, _), (part_metrics, _)| acc_metrics.merge_from(part_metrics),
+        )? {
+            metrics.finalize();
+            return Ok(
+                fs::write(output, metrics.to_picard_text()).map_err(|error| error.to_string())?
+            );
+        }
+    }
+
     let mut reader = open_bam_reader_for_args(&input, &args).map_err(|error| error.clone())?;
-    let read_groups =
-        insert_size_read_groups_from_header(&String::from_utf8_lossy(reader.header().as_bytes()));
+    let read_groups = if accumulation == AlignmentAccumulation::AllReads {
+        BTreeMap::new()
+    } else {
+        insert_size_read_groups_from_header(&String::from_utf8_lossy(reader.header().as_bytes()))
+    };
     let target_names = reader
         .header()
         .target_names()
         .iter()
         .map(|name| String::from_utf8_lossy(name).to_string())
         .collect::<Vec<_>>();
-    let mut reference_cache = reference.as_deref().map(AlignmentReferenceCache::new);
+    let preloaded_ref = reference
+        .as_deref()
+        .map(|path| preload_reference_contigs_for_tids(path, &target_names))
+        .transpose()?
+        .flatten();
+    let mut reference_cache = reference
+        .as_deref()
+        .map(|path| AlignmentReferenceCache::new_with_preloaded(path, preloaded_ref));
     let mut metrics = AlignmentSummaryCollection::new(accumulation);
-    for record in limited_records(&mut reader, stop_after) {
-        let record = record.map_err(|error| error.to_string())?;
-        let read_group = insert_size_read_group_for_bam_record(&record, &read_groups);
+    let mut record = bam::Record::new();
+    let mut observed = 0_u32;
+    while let Some(result) = reader.read(&mut record) {
+        result.map_err(|error| error.to_string())?;
+        let read_group = if accumulation == AlignmentAccumulation::AllReads {
+            None
+        } else {
+            insert_size_read_group_ref_for_bam_record(&record, &read_groups)
+        };
         let mismatch_bases =
             alignment_reference_mismatch_bases(&record, &target_names, reference_cache.as_mut())?;
-        metrics.observe(&record, read_group.as_ref(), mismatch_bases);
+        metrics.observe(&record, read_group, mismatch_bases);
+        observed = observed.saturating_add(1);
+        if stop_after > 0 && observed >= stop_after {
+            break;
+        }
     }
+    metrics.finalize();
 
     Ok(fs::write(output, metrics.to_picard_text()).map_err(|error| error.to_string())?)
 }
@@ -4062,16 +4240,46 @@ fn run_collectqualityyieldmetrics(args: &[String]) -> Result<(), CommandError> {
         return Ok(fs::write(output, metrics.to_picard_text()).map_err(|error| error.to_string())?);
     }
 
+    let workers = bam_parallel::parallel_workers();
+    if workers > 1
+        && stop_after == 0
+        && let Some((metrics, _)) = bam_parallel::collect_indexed_parallel(
+            &input,
+            None,
+            workers,
+            true,
+            || Ok(QualityYieldSummary::default()),
+            |local, record| {
+                local.observe(
+                    record,
+                    use_original_qualities,
+                    include_secondary,
+                    include_supplemental,
+                );
+                Ok(())
+            },
+            |acc, part| acc.merge_from(&part),
+        )?
+    {
+        return Ok(fs::write(output, metrics.to_picard_text()).map_err(|error| error.to_string())?);
+    }
+
     let mut reader = open_bam_reader_for_args(&input, &args).map_err(|error| error.clone())?;
     let mut metrics = QualityYieldSummary::default();
-    for record in limited_records(&mut reader, stop_after) {
-        let record = record.map_err(|error| error.to_string())?;
+    let mut record = bam::Record::new();
+    let mut observed = 0_u32;
+    while let Some(result) = reader.read(&mut record) {
+        result.map_err(|error| error.to_string())?;
         metrics.observe(
             &record,
             use_original_qualities,
             include_secondary,
             include_supplemental,
         );
+        observed = observed.saturating_add(1);
+        if stop_after > 0 && observed >= stop_after {
+            break;
+        }
     }
 
     Ok(fs::write(output, metrics.to_picard_text()).map_err(|error| error.to_string())?)
@@ -4101,15 +4309,68 @@ fn run_collectinsertsizemetrics(args: &[String]) -> Result<(), CommandError> {
         )?);
     }
 
-    let mut reader = open_bam_reader_for_args(&input, &args).map_err(|error| error.clone())?;
-    let read_groups =
-        insert_size_read_groups_from_header(&String::from_utf8_lossy(reader.header().as_bytes()));
-    let mut metrics = InsertSizeCollection::new(accumulation);
-    for record in limited_records(&mut reader, stop_after) {
-        let record = record.map_err(|error| error.to_string())?;
-        let read_group = insert_size_read_group_for_bam_record(&record, &read_groups);
-        metrics.observe(&record, include_duplicates, read_group.as_ref());
+    let workers = bam_parallel::parallel_workers();
+    if workers > 1
+        && stop_after == 0
+        && let Some(index) = bam_parallel::current_index_for(&input)
+        && let Ok(probe) = bam_parallel::open_indexed_optional_ref(&input, &index, None)
+    {
+        let read_groups = if accumulation == InsertSizeAccumulation::AllReads {
+            BTreeMap::new()
+        } else {
+            insert_size_read_groups_from_header(&String::from_utf8_lossy(probe.header().as_bytes()))
+        };
+        drop(probe);
+        if let Some((mut metrics, _)) = bam_parallel::collect_indexed_parallel(
+            &input,
+            None,
+            workers,
+            true,
+            || Ok(InsertSizeCollection::new(accumulation)),
+            |local, record| {
+                let read_group = if accumulation == InsertSizeAccumulation::AllReads {
+                    None
+                } else {
+                    insert_size_read_group_ref_for_bam_record(record, &read_groups)
+                };
+                local.observe(record, include_duplicates, read_group);
+                Ok(())
+            },
+            InsertSizeCollection::merge_from,
+        )? {
+            metrics.finalize();
+            fs::write(output, metrics.to_picard_text(minimum_pct, deviations))
+                .map_err(|error| error.to_string())?;
+            return Ok(write_summary_chart_pdf(
+                &histogram,
+                "CollectInsertSizeMetrics",
+            )?);
+        }
     }
+
+    let mut reader = open_bam_reader_for_args(&input, &args).map_err(|error| error.clone())?;
+    let read_groups = if accumulation == InsertSizeAccumulation::AllReads {
+        BTreeMap::new()
+    } else {
+        insert_size_read_groups_from_header(&String::from_utf8_lossy(reader.header().as_bytes()))
+    };
+    let mut metrics = InsertSizeCollection::new(accumulation);
+    let mut record = bam::Record::new();
+    let mut observed = 0_u32;
+    while let Some(result) = reader.read(&mut record) {
+        result.map_err(|error| error.to_string())?;
+        let read_group = if accumulation == InsertSizeAccumulation::AllReads {
+            None
+        } else {
+            insert_size_read_group_ref_for_bam_record(&record, &read_groups)
+        };
+        metrics.observe(&record, include_duplicates, read_group);
+        observed = observed.saturating_add(1);
+        if stop_after > 0 && observed >= stop_after {
+            break;
+        }
+    }
+    metrics.finalize();
 
     fs::write(output, metrics.to_picard_text(minimum_pct, deviations))
         .map_err(|error| error.to_string())?;
@@ -4137,12 +4398,37 @@ fn run_collectbasedistributionbycycle(args: &[String]) -> Result<(), CommandErro
             pf_reads_only,
             stop_after,
         )?
+    } else if let Some((par, _)) = (bam_parallel::parallel_workers() > 1 && stop_after == 0)
+        .then(|| {
+            bam_parallel::collect_indexed_parallel(
+                &input,
+                None,
+                bam_parallel::parallel_workers(),
+                true,
+                || Ok(BaseDistributionByCycleSummary::default()),
+                |local, record| {
+                    local.observe(record, aligned_reads_only, pf_reads_only);
+                    Ok(())
+                },
+                |acc, part| acc.merge_from(&part),
+            )
+        })
+        .transpose()?
+        .flatten()
+    {
+        par
     } else {
         let mut reader = open_bam_reader_for_args(&input, &args).map_err(|error| error.clone())?;
         let mut metrics = BaseDistributionByCycleSummary::default();
-        for record in limited_records(&mut reader, stop_after) {
-            let record = record.map_err(|error| error.to_string())?;
+        let mut record = bam::Record::new();
+        let mut observed = 0_u32;
+        while let Some(result) = reader.read(&mut record) {
+            result.map_err(|error| error.to_string())?;
             metrics.observe(&record, aligned_reads_only, pf_reads_only);
+            observed = observed.saturating_add(1);
+            if stop_after > 0 && observed >= stop_after {
+                break;
+            }
         }
         metrics
     };
@@ -4186,6 +4472,43 @@ fn run_collectgcbiasmetrics(args: &[String]) -> Result<(), CommandError> {
         return Ok(write_summary_chart_pdf(&chart, "CollectGcBiasMetrics")?);
     }
 
+    let workers = bam_parallel::parallel_workers();
+    let template = GcBiasMetricsSummary::new(&reference, window_size, also_ignore_duplicates)?;
+    if workers > 1
+        && stop_after == 0
+        && let Some(index) = bam_parallel::current_index_for(&input)
+        && let Ok(probe) = bam_parallel::open_indexed_optional_ref(&input, &index, Some(&reference))
+    {
+        let target_names = probe
+            .header()
+            .target_names()
+            .iter()
+            .map(|name| String::from_utf8_lossy(name).to_string())
+            .collect::<Vec<_>>();
+        drop(probe);
+        if let Some((metrics, _)) = bam_parallel::collect_indexed_parallel(
+            &input,
+            Some(&reference),
+            workers,
+            true,
+            || Ok(template.clone_empty()),
+            |local, record| local.observe(record, &target_names, window_size),
+            |acc, part| acc.merge_from(&part),
+        )? {
+            fs::write(
+                output,
+                metrics.detail_text(window_size, minimum_genome_fraction),
+            )
+            .map_err(|error| error.to_string())?;
+            fs::write(
+                summary_output,
+                metrics.summary_text(window_size, minimum_genome_fraction),
+            )
+            .map_err(|error| error.to_string())?;
+            return Ok(write_summary_chart_pdf(&chart, "CollectGcBiasMetrics")?);
+        }
+    }
+
     let mut reader = open_bam_reader_for_args(&input, &args).map_err(|error| error.clone())?;
     let target_names = reader
         .header()
@@ -4193,10 +4516,16 @@ fn run_collectgcbiasmetrics(args: &[String]) -> Result<(), CommandError> {
         .iter()
         .map(|name| String::from_utf8_lossy(name).to_string())
         .collect::<Vec<_>>();
-    let mut metrics = GcBiasMetricsSummary::new(&reference, window_size, also_ignore_duplicates)?;
-    for record in limited_records(&mut reader, stop_after) {
-        let record = record.map_err(|error| error.to_string())?;
+    let mut metrics = template;
+    let mut record = bam::Record::new();
+    let mut observed = 0_u32;
+    while let Some(result) = reader.read(&mut record) {
+        result.map_err(|error| error.to_string())?;
         metrics.observe(&record, &target_names, window_size)?;
+        observed = observed.saturating_add(1);
+        if stop_after > 0 && observed >= stop_after {
+            break;
+        }
     }
 
     fs::write(
@@ -4300,8 +4629,14 @@ fn run_collecthsmetrics(args: &[String]) -> Result<(), CommandError> {
         stop_after: optional_u32(&args, "STOP_AFTER")?.unwrap_or(0),
     };
 
-    let mut reader = open_bam_reader_for_args(&input, &args).map_err(|error| error.clone())?;
-    let metrics_text = hs_metrics::collect_hs_metrics(&mut reader, &config)?;
+    let metrics_text = if let Some(parallel_text) =
+        hs_metrics::collect_hs_metrics_path(&input, Some(&reference), &config)?
+    {
+        parallel_text
+    } else {
+        let mut reader = open_bam_reader_for_args(&input, &args).map_err(|error| error.clone())?;
+        hs_metrics::collect_hs_metrics(&mut reader, &config)?
+    };
     Ok(fs::write(output, metrics_text).map_err(|error| error.to_string())?)
 }
 
@@ -4363,9 +4698,7 @@ fn cmm_collector_thread_count(active_collectors: usize) -> usize {
 }
 
 fn default_cmm_collector_thread_count(active_collectors: usize) -> usize {
-    std::thread::available_parallelism()
-        .ok()
-        .map_or(1, |parallelism| parallelism.get().saturating_sub(2))
+    bam_parallel::parallel_workers()
         .min(active_collectors)
         .max(1)
 }
@@ -4662,572 +4995,473 @@ fn run_collectmultiplemetrics_single_pass(
         }
     }
 
-    let mut reader = open_bam_reader_with_reference(input, reference.as_deref())
-        .map_err(|error| error.clone())?;
-    let header_text = String::from_utf8_lossy(reader.header().as_bytes());
-    let read_groups = insert_size_read_groups_from_header(&header_text);
-    let target_names = reader
-        .header()
-        .target_names()
-        .iter()
-        .map(|name| String::from_utf8_lossy(name).to_string())
-        .collect::<Vec<_>>();
-    let mut alignment_reference_cache = reference
-        .as_deref()
-        .filter(|_| alignment.is_some())
-        .map(AlignmentReferenceCache::new);
+    let workers = bam_parallel::parallel_workers();
+    let need_rg = alignment
+        .as_ref()
+        .is_some_and(|(m, _)| m.accumulation != AlignmentAccumulation::AllReads)
+        || insert_size
+            .as_ref()
+            .is_some_and(|(m, ..)| m.accumulation != InsertSizeAccumulation::AllReads);
 
-    let active_collectors = [
-        alignment.is_some(),
-        insert_size.is_some(),
-        base_distribution.is_some(),
-        quality_distribution.is_some(),
-        mean_quality.is_some(),
-        quality_yield.is_some(),
-        gc_bias.is_some(),
-        wgs.is_some(),
-    ]
-    .into_iter()
-    .filter(|enabled| *enabled)
-    .count();
-    let thread_count = cmm_collector_thread_count(active_collectors);
+    let mut ran_indexed_parallel = false;
+    if workers > 1
+        && stop_after == 0
+        && let Some(index) = bam_parallel::current_index_for(input)
+        && let Ok(probe) =
+            bam_parallel::open_indexed_optional_ref(input, &index, reference.as_deref())
+    {
+        let probe_header = probe.header().clone();
+        drop(probe);
+        if probe_header.target_count() > 1 || wgs.is_none() {
+            struct CmmWorkerState {
+                alignment: Option<(AlignmentSummaryCollection, Option<AlignmentReferenceCache>)>,
+                insert_size: Option<(InsertSizeCollection, bool)>,
+                base_distribution: Option<(BaseDistributionByCycleSummary, bool, bool)>,
+                quality_distribution: Option<(QualityScoreDistributionSummary, bool, bool, bool)>,
+                mean_quality: Option<(MeanQualityByCycleSummary, bool, bool)>,
+                quality_yield: Option<(QualityYieldSummary, bool, bool, bool)>,
+                gc_bias: Option<(GcBiasMetricsSummary, usize)>,
+                wgs: Option<wgs_metrics::WgsCollector>,
+                wgs_counts: Vec<wgs_metrics::WgsCounts>,
+                wgs_active_tid: Option<i32>,
+                wgs_cap_reached: bool,
+            }
 
-    let mut observe_record = |record: &bam::Record| -> Result<(), String> {
-        let read_group = if alignment.is_some() || insert_size.is_some() {
-            insert_size_read_group_for_bam_record(record, &read_groups)
-        } else {
-            None
-        };
-
-        if let Some((metrics, ..)) = alignment.as_mut() {
-            let mismatch_bases = alignment_reference_mismatch_bases(
-                record,
-                &target_names,
-                alignment_reference_cache.as_mut(),
-            )?;
-            metrics.observe(record, read_group.as_ref(), mismatch_bases);
-        }
-        if let Some((metrics, _, _, include_duplicates, ..)) = insert_size.as_mut() {
-            metrics.observe(record, *include_duplicates, read_group.as_ref());
-        }
-        if let Some((metrics, .., aligned_reads_only, pf_reads_only)) = base_distribution.as_mut() {
-            metrics.observe(record, *aligned_reads_only, *pf_reads_only);
-        }
-        if let Some((metrics, _, _, aligned_reads_only, pf_reads_only, include_no_calls)) =
-            quality_distribution.as_mut()
-        {
-            metrics.observe(
-                record,
-                *aligned_reads_only,
-                *pf_reads_only,
-                *include_no_calls,
-            );
-        }
-        if let Some((metrics, _, _, aligned_reads_only, pf_reads_only)) = mean_quality.as_mut() {
-            metrics.observe(record, *aligned_reads_only, *pf_reads_only);
-        }
-        if let Some((metrics, _, use_original_qualities, include_secondary, include_supplemental)) =
-            quality_yield.as_mut()
-        {
-            metrics.observe(
-                record,
-                *use_original_qualities,
-                *include_secondary,
-                *include_supplemental,
-            );
-        }
-        if let Some((metrics, _, _, _, window_size, ..)) = gc_bias.as_mut() {
-            metrics.observe(record, &target_names, *window_size)?;
-        }
-        if let Some((metrics, ..)) = wgs.as_mut() {
-            metrics.observe(record, &target_names)?;
-        }
-        Ok(())
-    };
-
-    if thread_count <= 1 {
-        for record in limited_records(&mut reader, stop_after) {
-            let record = record.map_err(|error| error.to_string())?;
-            observe_record(&record)?;
-        }
-    } else {
-        let alignment_worker = alignment
-            .take()
-            .map(|(metrics, path)| (Arc::new(Mutex::new(metrics)), path));
-        let insert_size_worker = insert_size.take().map(
-            |(metrics, path, chart_path, include_duplicates, minimum_pct, deviations)| {
-                (
-                    Arc::new(Mutex::new(metrics)),
-                    path,
-                    chart_path,
-                    include_duplicates,
-                    minimum_pct,
-                    deviations,
-                )
-            },
-        );
-        let base_distribution_worker = base_distribution.take().map(
-            |(metrics, path, chart_path, aligned_reads_only, pf_reads_only)| {
-                (
-                    Arc::new(Mutex::new(metrics)),
-                    path,
-                    chart_path,
-                    aligned_reads_only,
-                    pf_reads_only,
-                )
-            },
-        );
-        let quality_distribution_worker = quality_distribution.take().map(
-            |(metrics, path, chart_path, aligned_reads_only, pf_reads_only, include_no_calls)| {
-                (
-                    Arc::new(Mutex::new(metrics)),
-                    path,
-                    chart_path,
-                    aligned_reads_only,
-                    pf_reads_only,
-                    include_no_calls,
-                )
-            },
-        );
-        let mean_quality_worker = mean_quality.take().map(
-            |(metrics, path, chart_path, aligned_reads_only, pf_reads_only)| {
-                (
-                    Arc::new(Mutex::new(metrics)),
-                    path,
-                    chart_path,
-                    aligned_reads_only,
-                    pf_reads_only,
-                )
-            },
-        );
-        let quality_yield_flags =
-            quality_yield
-                .as_ref()
-                .map(|(_, _, _, include_secondary, include_supplemental)| {
-                    (*include_secondary, *include_supplemental)
-                });
-        let quality_yield_worker = quality_yield.take().map(
-            |(metrics, path, use_original_qualities, include_secondary, include_supplemental)| {
-                (
-                    Arc::new(Mutex::new(metrics)),
-                    path,
-                    use_original_qualities,
-                    include_secondary,
-                    include_supplemental,
-                )
-            },
-        );
-        let gc_bias_worker = gc_bias.take().map(
-            |(
-                metrics,
-                detail_path,
-                summary_path,
-                chart_path,
-                window_size,
-                minimum_genome_fraction,
-            )| {
-                (
-                    Arc::new(Mutex::new(metrics)),
-                    detail_path,
-                    summary_path,
-                    chart_path,
-                    window_size,
-                    minimum_genome_fraction,
-                )
-            },
-        );
-        let wgs_worker = wgs.take().map(
-            |(
-                metrics,
-                path,
-                minimum_mapping_quality,
-                minimum_base_quality,
-                coverage_cap,
-                locus_accumulation_cap,
-                count_unpaired,
-                sample_size,
-                include_bq_histogram,
-            )| {
-                (
-                    Arc::new(Mutex::new(metrics)),
-                    path,
-                    minimum_mapping_quality,
-                    minimum_base_quality,
-                    coverage_cap,
-                    locus_accumulation_cap,
-                    count_unpaired,
-                    sample_size,
-                    include_bq_histogram,
-                )
-            },
-        );
-
-        let read_groups = Arc::new(read_groups);
-        let target_names = Arc::new(target_names);
-        let alignment_reference_cache = reference
-            .as_deref()
-            .filter(|_| alignment_worker.is_some())
-            .map(|path| Arc::new(Mutex::new(AlignmentReferenceCache::new(path))));
-        let mut handlers: Vec<cmm_pipeline::CmmBatchHandler> = Vec::new();
-        let combine_alignment_and_insert_size =
-            alignment_worker.is_some() && insert_size_worker.is_some();
-
-        if combine_alignment_and_insert_size {
-            let alignment_worker = Arc::clone(
-                &alignment_worker
-                    .as_ref()
-                    .ok_or_else(|| "alignment worker".to_string())?
-                    .0,
-            );
-            let include_duplicates = insert_size_worker
-                .as_ref()
-                .ok_or_else(|| "insert-size worker".to_string())?
-                .3;
-            let insert_size_worker = Arc::clone(
-                &insert_size_worker
-                    .as_ref()
-                    .ok_or_else(|| "insert-size worker".to_string())?
-                    .0,
-            );
-            let read_groups = Arc::clone(&read_groups);
-            let target_names = Arc::clone(&target_names);
-            let alignment_reference_cache = alignment_reference_cache.as_ref().map(Arc::clone);
-            handlers.push(Box::new(move |batch| {
-                let mut alignment_metrics = alignment_worker
-                    .lock()
-                    .map_err(|_| "alignment collector lock poisoned".to_string())?;
-                let mut insert_size_metrics = insert_size_worker
-                    .lock()
-                    .map_err(|_| "insert-size collector lock poisoned".to_string())?;
-                for entry in batch {
-                    if !entry.gates.alignment && !entry.gates.insert_size {
-                        continue;
-                    }
-                    let record = &entry.record;
-                    let read_group =
-                        insert_size_read_group_for_bam_record(record, read_groups.as_ref());
-                    if entry.gates.alignment {
-                        let mismatch_bases = alignment_reference_mismatch_bases_locked(
-                            record,
-                            target_names.as_slice(),
-                            alignment_reference_cache.as_deref(),
-                        )?;
-                        alignment_metrics.observe(record, read_group.as_ref(), mismatch_bases);
-                    }
-                    if entry.gates.insert_size {
-                        insert_size_metrics.observe(
-                            record,
-                            include_duplicates,
-                            read_group.as_ref(),
-                        );
-                    }
-                }
-                Ok(())
-            }));
-        }
-
-        if !combine_alignment_and_insert_size && let Some((worker, _)) = &alignment_worker {
-            let worker = Arc::clone(worker);
-            let read_groups = Arc::clone(&read_groups);
-            let target_names = Arc::clone(&target_names);
-            let alignment_reference_cache = alignment_reference_cache.as_ref().map(Arc::clone);
-            handlers.push(Box::new(move |batch| {
-                let mut metrics = worker
-                    .lock()
-                    .map_err(|_| "alignment collector lock poisoned".to_string())?;
-                for entry in batch {
-                    if !entry.gates.alignment {
-                        continue;
-                    }
-                    let record = &entry.record;
-                    let read_group =
-                        insert_size_read_group_for_bam_record(record, read_groups.as_ref());
-                    let mismatch_bases = alignment_reference_mismatch_bases_locked(
-                        record,
-                        target_names.as_slice(),
-                        alignment_reference_cache.as_deref(),
-                    )?;
-                    metrics.observe(record, read_group.as_ref(), mismatch_bases);
-                }
-                Ok(())
-            }));
-        }
-        if !combine_alignment_and_insert_size
-            && let Some((worker, _, _, include_duplicates, _, _)) = &insert_size_worker
-        {
-            let worker = Arc::clone(worker);
-            let read_groups = Arc::clone(&read_groups);
-            let include_duplicates = *include_duplicates;
-            handlers.push(Box::new(move |batch| {
-                let mut metrics = worker
-                    .lock()
-                    .map_err(|_| "insert-size collector lock poisoned".to_string())?;
-                for entry in batch {
-                    if !entry.gates.insert_size {
-                        continue;
-                    }
-                    let record = &entry.record;
-                    let read_group =
-                        insert_size_read_group_for_bam_record(record, read_groups.as_ref());
-                    metrics.observe(record, include_duplicates, read_group.as_ref());
-                }
-                Ok(())
-            }));
-        }
-        if let Some((worker, _, _, aligned_reads_only, pf_reads_only)) = &base_distribution_worker {
-            let worker = Arc::clone(worker);
-            let aligned_reads_only = *aligned_reads_only;
-            let pf_reads_only = *pf_reads_only;
-            handlers.push(Box::new(move |batch| {
-                let mut metrics = worker
-                    .lock()
-                    .map_err(|_| "base-distribution collector lock poisoned".to_string())?;
-                for entry in batch {
-                    if !entry.gates.base_distribution {
-                        continue;
-                    }
-                    let record = &entry.record;
-                    metrics.observe(record, aligned_reads_only, pf_reads_only);
-                }
-                Ok(())
-            }));
-        }
-        if let Some((worker, _, _, aligned_reads_only, pf_reads_only, include_no_calls)) =
-            &quality_distribution_worker
-        {
-            let worker = Arc::clone(worker);
-            let aligned_reads_only = *aligned_reads_only;
-            let pf_reads_only = *pf_reads_only;
-            let include_no_calls = *include_no_calls;
-            handlers.push(Box::new(move |batch| {
-                let mut metrics = worker
-                    .lock()
-                    .map_err(|_| "quality-distribution collector lock poisoned".to_string())?;
-                for entry in batch {
-                    if !entry.gates.quality_distribution {
-                        continue;
-                    }
-                    let record = &entry.record;
-                    metrics.observe(record, aligned_reads_only, pf_reads_only, include_no_calls);
-                }
-                Ok(())
-            }));
-        }
-        if let Some((worker, _, _, aligned_reads_only, pf_reads_only)) = &mean_quality_worker {
-            let worker = Arc::clone(worker);
-            let aligned_reads_only = *aligned_reads_only;
-            let pf_reads_only = *pf_reads_only;
-            handlers.push(Box::new(move |batch| {
-                let mut metrics = worker
-                    .lock()
-                    .map_err(|_| "mean-quality collector lock poisoned".to_string())?;
-                for entry in batch {
-                    if !entry.gates.mean_quality {
-                        continue;
-                    }
-                    let record = &entry.record;
-                    metrics.observe(record, aligned_reads_only, pf_reads_only);
-                }
-                Ok(())
-            }));
-        }
-        if let Some((worker, _, use_original_qualities, include_secondary, include_supplemental)) =
-            &quality_yield_worker
-        {
-            let worker = Arc::clone(worker);
-            let use_original_qualities = *use_original_qualities;
-            let include_secondary = *include_secondary;
-            let include_supplemental = *include_supplemental;
-            handlers.push(Box::new(move |batch| {
-                let mut metrics = worker
-                    .lock()
-                    .map_err(|_| "quality-yield collector lock poisoned".to_string())?;
-                for entry in batch {
-                    if !entry.gates.quality_yield {
-                        continue;
-                    }
-                    let record = &entry.record;
-                    metrics.observe(
-                        record,
-                        use_original_qualities,
-                        include_secondary,
-                        include_supplemental,
-                    );
-                }
-                Ok(())
-            }));
-        }
-        if let Some((worker, _, _, _, window_size, _)) = &gc_bias_worker {
-            let worker = Arc::clone(worker);
-            let target_names = Arc::clone(&target_names);
-            let window_size = *window_size;
-            handlers.push(Box::new(move |batch| {
-                let mut metrics = worker
-                    .lock()
-                    .map_err(|_| "gc-bias collector lock poisoned".to_string())?;
-                for entry in batch {
-                    if !entry.gates.gc_bias {
-                        continue;
-                    }
-                    let record = &entry.record;
-                    if let Err(error) =
-                        metrics.observe(record, target_names.as_slice(), window_size)
+            impl CmmWorkerState {
+                fn flush_wgs(&mut self) {
+                    if self.wgs_active_tid.take().is_some()
+                        && let Some(wgs) = self.wgs.as_mut()
                     {
-                        return Err(format!("CollectGcBiasMetrics failed: {error}"));
+                        self.wgs_cap_reached |= wgs.take_accumulation_cap_reached();
+                        self.wgs_counts.push(wgs.drain_counts());
                     }
                 }
-                Ok(())
-            }));
-        }
-        if let Some((worker, ..)) = &wgs_worker {
-            let worker = Arc::clone(worker);
-            let target_names = Arc::clone(&target_names);
-            handlers.push(Box::new(move |batch| {
-                let mut metrics = worker
-                    .lock()
-                    .map_err(|_| "wgs collector lock poisoned".to_string())?;
-                for entry in batch {
-                    if !entry.gates.wgs {
-                        continue;
-                    }
-                    let record = &entry.record;
-                    if let Err(error) = metrics.observe(record, target_names.as_slice()) {
-                        return Err(format!("CollectWgsMetrics failed: {error}"));
-                    }
-                }
-                Ok(())
-            }));
-        }
+            }
 
-        let (include_secondary_yield, include_supplemental_yield) =
-            quality_yield_flags.unwrap_or((false, false));
-        let plan = cmm_pipeline::CmmPlan {
-            alignment: alignment_worker.is_some(),
-            insert_size: insert_size_worker.is_some(),
-            base_distribution: base_distribution_worker.is_some(),
-            quality_distribution: quality_distribution_worker.is_some(),
-            mean_quality: mean_quality_worker.is_some(),
-            quality_yield: quality_yield_worker.is_some(),
-            gc_bias: gc_bias_worker.is_some(),
-            wgs: wgs_worker.is_some(),
+            let read_groups = if need_rg {
+                insert_size_read_groups_from_header(&String::from_utf8_lossy(
+                    probe_header.as_bytes(),
+                ))
+            } else {
+                BTreeMap::new()
+            };
+            let target_names = probe_header
+                .target_names()
+                .iter()
+                .map(|name| String::from_utf8_lossy(name).to_string())
+                .collect::<Vec<_>>();
+            let preloaded_ref = reference
+                .as_deref()
+                .filter(|_| alignment.is_some())
+                .map(|path| preload_reference_contigs_for_tids(path, &target_names))
+                .transpose()?
+                .flatten();
+
+            let aln_acc = alignment.as_ref().map(|(m, _)| m.accumulation);
+            let isize_opts = insert_size
+                .as_ref()
+                .map(|(m, _, _, inc, ..)| (m.accumulation, *inc));
+            let bd_opts = base_distribution.as_ref().map(|(_, _, _, a, p)| (*a, *p));
+            let qd_opts = quality_distribution
+                .as_ref()
+                .map(|(_, _, _, a, p, inc)| (*a, *p, *inc));
+            let mq_opts = mean_quality.as_ref().map(|(_, _, _, a, p)| (*a, *p));
+            let qy_opts = quality_yield
+                .as_ref()
+                .map(|(_, _, uoq, isec, isup)| (*uoq, *isec, *isup));
+            let gc_template = gc_bias
+                .as_ref()
+                .map(|(m, _, _, _, ws, _)| (m.clone_empty(), *ws));
+            let wgs_template = wgs.as_ref().map(|(m, ..)| m);
+
+            if let Some((mut combined, _)) = bam_parallel::collect_indexed_parallel(
+                input,
+                reference.as_deref(),
+                workers,
+                wgs.is_none(),
+                || {
+                    Ok(CmmWorkerState {
+                        alignment: aln_acc.map(|acc| {
+                            (
+                                AlignmentSummaryCollection::new(acc),
+                                reference.as_deref().map(|path| {
+                                    AlignmentReferenceCache::new_with_preloaded(
+                                        path,
+                                        preloaded_ref.as_ref().map(Arc::clone),
+                                    )
+                                }),
+                            )
+                        }),
+                        insert_size: isize_opts
+                            .map(|(acc, inc)| (InsertSizeCollection::new(acc), inc)),
+                        base_distribution: bd_opts
+                            .map(|(a, p)| (BaseDistributionByCycleSummary::default(), a, p)),
+                        quality_distribution: qd_opts.map(|(a, p, inc)| {
+                            (QualityScoreDistributionSummary::default(), a, p, inc)
+                        }),
+                        mean_quality: mq_opts
+                            .map(|(a, p)| (MeanQualityByCycleSummary::default(), a, p)),
+                        quality_yield: qy_opts.map(|(uoq, isec, isup)| {
+                            (QualityYieldSummary::default(), uoq, isec, isup)
+                        }),
+                        gc_bias: gc_template
+                            .as_ref()
+                            .map(|(tpl, ws)| (tpl.clone_empty(), *ws)),
+                        wgs: wgs_template.map(wgs_metrics::WgsCollector::region_worker),
+                        wgs_counts: Vec::new(),
+                        wgs_active_tid: None,
+                        wgs_cap_reached: false,
+                    })
+                },
+                |state, record| {
+                    let read_group = if need_rg {
+                        insert_size_read_group_ref_for_bam_record(record, &read_groups)
+                    } else {
+                        None
+                    };
+                    if let Some((metrics, cache)) = state.alignment.as_mut() {
+                        let mismatch_bases = alignment_reference_mismatch_bases(
+                            record,
+                            &target_names,
+                            cache.as_mut(),
+                        )?;
+                        metrics.observe(record, read_group, mismatch_bases);
+                    }
+                    if let Some((metrics, include_duplicates)) = state.insert_size.as_mut() {
+                        metrics.observe(record, *include_duplicates, read_group);
+                    }
+                    if let Some((metrics, a, p)) = state.base_distribution.as_mut() {
+                        metrics.observe(record, *a, *p);
+                    }
+                    if let Some((metrics, a, p, inc)) = state.quality_distribution.as_mut() {
+                        metrics.observe(record, *a, *p, *inc);
+                    }
+                    if let Some((metrics, a, p)) = state.mean_quality.as_mut() {
+                        metrics.observe(record, *a, *p);
+                    }
+                    if let Some((metrics, uoq, isec, isup)) = state.quality_yield.as_mut() {
+                        metrics.observe(record, *uoq, *isec, *isup);
+                    }
+                    if let Some((metrics, window_size)) = state.gc_bias.as_mut() {
+                        metrics.observe(record, &target_names, *window_size)?;
+                    }
+                    if let Some(wgs_col) = state.wgs.as_mut() {
+                        let tid = record.tid();
+                        if tid >= 0 && state.wgs_active_tid != Some(tid) {
+                            if state.wgs_active_tid.is_some() {
+                                state.wgs_cap_reached |= wgs_col.take_accumulation_cap_reached();
+                                state.wgs_counts.push(wgs_col.drain_counts());
+                            }
+                            wgs_col.begin_region(0, usize::MAX);
+                            state.wgs_active_tid = Some(tid);
+                        }
+                        wgs_col.observe(record, &target_names)?;
+                    }
+                    Ok(())
+                },
+                |acc, mut part| {
+                    part.flush_wgs();
+                    if let (Some((a, _)), Some((p, _))) = (acc.alignment.as_mut(), part.alignment) {
+                        a.merge_from(p);
+                    }
+                    if let (Some((a, _)), Some((p, _))) =
+                        (acc.insert_size.as_mut(), part.insert_size)
+                    {
+                        a.merge_from(p);
+                    }
+                    if let (Some((a, ..)), Some((p, ..))) = (
+                        acc.base_distribution.as_mut(),
+                        part.base_distribution.as_ref(),
+                    ) {
+                        a.merge_from(p);
+                    }
+                    if let (Some((a, ..)), Some((p, ..))) = (
+                        acc.quality_distribution.as_mut(),
+                        part.quality_distribution.as_ref(),
+                    ) {
+                        a.merge_from(p);
+                    }
+                    if let (Some((a, ..)), Some((p, ..))) =
+                        (acc.mean_quality.as_mut(), part.mean_quality.as_ref())
+                    {
+                        a.merge_from(p);
+                    }
+                    if let (Some((a, ..)), Some((p, ..))) =
+                        (acc.quality_yield.as_mut(), part.quality_yield.as_ref())
+                    {
+                        a.merge_from(p);
+                    }
+                    if let (Some((a, _)), Some((p, _))) =
+                        (acc.gc_bias.as_mut(), part.gc_bias.as_ref())
+                    {
+                        a.merge_from(p);
+                    }
+                    acc.wgs_counts.extend(part.wgs_counts);
+                    acc.wgs_cap_reached |= part.wgs_cap_reached;
+                },
+            )? {
+                combined.flush_wgs();
+                if let (Some((dst, _)), Some((src, _))) = (alignment.as_mut(), combined.alignment) {
+                    *dst = src;
+                }
+                if let (Some((dst, ..)), Some((src, _))) =
+                    (insert_size.as_mut(), combined.insert_size)
+                {
+                    *dst = src;
+                }
+                if let (Some((dst, ..)), Some((src, ..))) =
+                    (base_distribution.as_mut(), combined.base_distribution)
+                {
+                    *dst = src;
+                }
+                if let (Some((dst, ..)), Some((src, ..))) =
+                    (quality_distribution.as_mut(), combined.quality_distribution)
+                {
+                    *dst = src;
+                }
+                if let (Some((dst, ..)), Some((src, ..))) =
+                    (mean_quality.as_mut(), combined.mean_quality)
+                {
+                    *dst = src;
+                }
+                if let (Some((dst, ..)), Some((src, ..))) =
+                    (quality_yield.as_mut(), combined.quality_yield)
+                {
+                    *dst = src;
+                }
+                if let (Some((dst, ..)), Some((src, _))) = (gc_bias.as_mut(), combined.gc_bias) {
+                    *dst = src;
+                }
+                if let Some((ref mut dst_wgs, ..)) = wgs {
+                    if combined.wgs_cap_reached {
+                        let ref_str = reference
+                            .as_deref()
+                            .ok_or_else(|| "reference checked above".to_string())?;
+                        if !wgs_regions::collect_by_region(input, ref_str, dst_wgs)? {
+                            for counts in &combined.wgs_counts {
+                                dst_wgs.absorb_counts(counts);
+                            }
+                        }
+                    } else {
+                        for counts in &combined.wgs_counts {
+                            dst_wgs.absorb_counts(counts);
+                        }
+                    }
+                }
+                ran_indexed_parallel = true;
+            }
+        }
+    }
+
+    if !ran_indexed_parallel {
+        let mut reader = open_bam_reader_with_reference(input, reference.as_deref())
+            .map_err(|error| error.clone())?;
+        let header_text = String::from_utf8_lossy(reader.header().as_bytes());
+        let read_groups = if need_rg {
+            insert_size_read_groups_from_header(&header_text)
+        } else {
+            BTreeMap::new()
         };
-        cmm_pipeline::CmmWorkerPool::with_plan(handlers, plan).run_parallel_bam_pass(
-            reader,
-            stop_after,
-            false,
-            false,
-            include_secondary_yield,
-            include_supplemental_yield,
-        )?;
+        let target_names = reader
+            .header()
+            .target_names()
+            .iter()
+            .map(|name| String::from_utf8_lossy(name).to_string())
+            .collect::<Vec<_>>();
+        let preloaded_ref = reference
+            .as_deref()
+            .filter(|_| alignment.is_some())
+            .map(|path| preload_reference_contigs_for_tids(path, &target_names))
+            .transpose()?
+            .flatten();
+        let mut alignment_reference_cache = reference
+            .as_deref()
+            .filter(|_| alignment.is_some())
+            .map(|path| AlignmentReferenceCache::new_with_preloaded(path, preloaded_ref));
 
-        alignment = alignment_worker
-            .map(|(worker, path)| Ok::<_, String>((unwrap_collector(worker, "alignment")?, path)))
-            .transpose()?;
-        insert_size = insert_size_worker
-            .map(
-                |(worker, path, chart_path, include_duplicates, minimum_pct, deviations)| {
-                    Ok::<_, String>((
-                        unwrap_collector(worker, "insert-size")?,
+        let active_collectors = [
+            alignment.is_some(),
+            insert_size.is_some(),
+            base_distribution.is_some(),
+            quality_distribution.is_some(),
+            mean_quality.is_some(),
+            quality_yield.is_some(),
+            gc_bias.is_some(),
+            wgs.is_some(),
+        ]
+        .into_iter()
+        .filter(|enabled| *enabled)
+        .count();
+        let thread_count = cmm_collector_thread_count(active_collectors);
+
+        let mut observe_record = |record: &bam::Record| -> Result<(), String> {
+            let read_group = if need_rg {
+                insert_size_read_group_ref_for_bam_record(record, &read_groups)
+            } else {
+                None
+            };
+
+            if let Some((metrics, ..)) = alignment.as_mut() {
+                let mismatch_bases = alignment_reference_mismatch_bases(
+                    record,
+                    &target_names,
+                    alignment_reference_cache.as_mut(),
+                )?;
+                metrics.observe(record, read_group, mismatch_bases);
+            }
+            if let Some((metrics, _, _, include_duplicates, ..)) = insert_size.as_mut() {
+                metrics.observe(record, *include_duplicates, read_group);
+            }
+            if let Some((metrics, .., aligned_reads_only, pf_reads_only)) =
+                base_distribution.as_mut()
+            {
+                metrics.observe(record, *aligned_reads_only, *pf_reads_only);
+            }
+            if let Some((metrics, _, _, aligned_reads_only, pf_reads_only, include_no_calls)) =
+                quality_distribution.as_mut()
+            {
+                metrics.observe(
+                    record,
+                    *aligned_reads_only,
+                    *pf_reads_only,
+                    *include_no_calls,
+                );
+            }
+            if let Some((metrics, _, _, aligned_reads_only, pf_reads_only)) = mean_quality.as_mut()
+            {
+                metrics.observe(record, *aligned_reads_only, *pf_reads_only);
+            }
+            if let Some((
+                metrics,
+                _,
+                use_original_qualities,
+                include_secondary,
+                include_supplemental,
+            )) = quality_yield.as_mut()
+            {
+                metrics.observe(
+                    record,
+                    *use_original_qualities,
+                    *include_secondary,
+                    *include_supplemental,
+                );
+            }
+            if let Some((metrics, _, _, _, window_size, ..)) = gc_bias.as_mut() {
+                metrics.observe(record, &target_names, *window_size)?;
+            }
+            if let Some((metrics, ..)) = wgs.as_mut() {
+                metrics.observe(record, &target_names)?;
+            }
+            Ok(())
+        };
+
+        if thread_count <= 1 {
+            for record in limited_records(&mut reader, stop_after) {
+                let record = record.map_err(|error| error.to_string())?;
+                observe_record(&record)?;
+            }
+        } else {
+            let alignment_worker = alignment
+                .take()
+                .map(|(metrics, path)| (Arc::new(Mutex::new(metrics)), path));
+            let insert_size_worker = insert_size.take().map(
+                |(metrics, path, chart_path, include_duplicates, minimum_pct, deviations)| {
+                    (
+                        Arc::new(Mutex::new(metrics)),
                         path,
                         chart_path,
                         include_duplicates,
                         minimum_pct,
                         deviations,
-                    ))
+                    )
                 },
-            )
-            .transpose()?;
-        base_distribution = base_distribution_worker
-            .map(
-                |(worker, path, chart_path, aligned_reads_only, pf_reads_only)| {
-                    Ok::<_, String>((
-                        unwrap_collector(worker, "base-distribution")?,
+            );
+            let base_distribution_worker = base_distribution.take().map(
+                |(metrics, path, chart_path, aligned_reads_only, pf_reads_only)| {
+                    (
+                        Arc::new(Mutex::new(metrics)),
                         path,
                         chart_path,
                         aligned_reads_only,
                         pf_reads_only,
-                    ))
+                    )
                 },
-            )
-            .transpose()?;
-        quality_distribution = quality_distribution_worker
-            .map(
+            );
+            let quality_distribution_worker = quality_distribution.take().map(
                 |(
-                    worker,
+                    metrics,
                     path,
                     chart_path,
                     aligned_reads_only,
                     pf_reads_only,
                     include_no_calls,
                 )| {
-                    Ok::<_, String>((
-                        unwrap_collector(worker, "quality-distribution")?,
+                    (
+                        Arc::new(Mutex::new(metrics)),
                         path,
                         chart_path,
                         aligned_reads_only,
                         pf_reads_only,
                         include_no_calls,
-                    ))
+                    )
                 },
-            )
-            .transpose()?;
-        mean_quality = mean_quality_worker
-            .map(
-                |(worker, path, chart_path, aligned_reads_only, pf_reads_only)| {
-                    Ok::<_, String>((
-                        unwrap_collector(worker, "mean-quality")?,
+            );
+            let mean_quality_worker = mean_quality.take().map(
+                |(metrics, path, chart_path, aligned_reads_only, pf_reads_only)| {
+                    (
+                        Arc::new(Mutex::new(metrics)),
                         path,
                         chart_path,
                         aligned_reads_only,
                         pf_reads_only,
-                    ))
+                    )
                 },
-            )
-            .transpose()?;
-        quality_yield = quality_yield_worker
-            .map(
+            );
+            let quality_yield_flags =
+                quality_yield
+                    .as_ref()
+                    .map(|(_, _, _, include_secondary, include_supplemental)| {
+                        (*include_secondary, *include_supplemental)
+                    });
+            let quality_yield_worker = quality_yield.take().map(
                 |(
-                    worker,
+                    metrics,
                     path,
                     use_original_qualities,
                     include_secondary,
                     include_supplemental,
                 )| {
-                    Ok::<_, String>((
-                        unwrap_collector(worker, "quality-yield")?,
+                    (
+                        Arc::new(Mutex::new(metrics)),
                         path,
                         use_original_qualities,
                         include_secondary,
                         include_supplemental,
-                    ))
+                    )
                 },
-            )
-            .transpose()?;
-        gc_bias = gc_bias_worker
-            .map(
+            );
+            let gc_bias_worker = gc_bias.take().map(
                 |(
-                    worker,
+                    metrics,
                     detail_path,
                     summary_path,
                     chart_path,
                     window_size,
                     minimum_genome_fraction,
                 )| {
-                    Ok::<_, String>((
-                        unwrap_collector(worker, "gc-bias")?,
+                    (
+                        Arc::new(Mutex::new(metrics)),
                         detail_path,
                         summary_path,
                         chart_path,
                         window_size,
                         minimum_genome_fraction,
-                    ))
+                    )
                 },
-            )
-            .transpose()?;
-        wgs = wgs_worker
-            .map(
+            );
+            let wgs_worker = wgs.take().map(
                 |(
-                    worker,
+                    metrics,
                     path,
                     minimum_mapping_quality,
                     minimum_base_quality,
@@ -5237,8 +5471,8 @@ fn run_collectmultiplemetrics_single_pass(
                     sample_size,
                     include_bq_histogram,
                 )| {
-                    Ok::<_, String>((
-                        unwrap_collector(worker, "wgs")?,
+                    (
+                        Arc::new(Mutex::new(metrics)),
                         path,
                         minimum_mapping_quality,
                         minimum_base_quality,
@@ -5247,22 +5481,434 @@ fn run_collectmultiplemetrics_single_pass(
                         count_unpaired,
                         sample_size,
                         include_bq_histogram,
-                    ))
+                    )
                 },
-            )
-            .transpose()?;
+            );
+
+            let read_groups = Arc::new(read_groups);
+            let target_names = Arc::new(target_names);
+            let alignment_reference_cache = reference
+                .as_deref()
+                .filter(|_| alignment_worker.is_some())
+                .map(|path| Arc::new(Mutex::new(AlignmentReferenceCache::new(path))));
+            let mut handlers: Vec<cmm_pipeline::CmmBatchHandler> = Vec::new();
+            let combine_alignment_and_insert_size =
+                alignment_worker.is_some() && insert_size_worker.is_some();
+
+            if combine_alignment_and_insert_size {
+                let alignment_worker = Arc::clone(
+                    &alignment_worker
+                        .as_ref()
+                        .ok_or_else(|| "alignment worker".to_string())?
+                        .0,
+                );
+                let include_duplicates = insert_size_worker
+                    .as_ref()
+                    .ok_or_else(|| "insert-size worker".to_string())?
+                    .3;
+                let insert_size_worker = Arc::clone(
+                    &insert_size_worker
+                        .as_ref()
+                        .ok_or_else(|| "insert-size worker".to_string())?
+                        .0,
+                );
+                let read_groups = Arc::clone(&read_groups);
+                let target_names = Arc::clone(&target_names);
+                let alignment_reference_cache = alignment_reference_cache.as_ref().map(Arc::clone);
+                handlers.push(Box::new(move |batch| {
+                    let mut alignment_metrics = alignment_worker
+                        .lock()
+                        .map_err(|_| "alignment collector lock poisoned".to_string())?;
+                    let mut insert_size_metrics = insert_size_worker
+                        .lock()
+                        .map_err(|_| "insert-size collector lock poisoned".to_string())?;
+                    for entry in batch {
+                        if !entry.gates.alignment && !entry.gates.insert_size {
+                            continue;
+                        }
+                        let record = &entry.record;
+                        let read_group =
+                            insert_size_read_group_for_bam_record(record, read_groups.as_ref());
+                        if entry.gates.alignment {
+                            let mismatch_bases = alignment_reference_mismatch_bases_locked(
+                                record,
+                                target_names.as_slice(),
+                                alignment_reference_cache.as_deref(),
+                            )?;
+                            alignment_metrics.observe(record, read_group.as_ref(), mismatch_bases);
+                        }
+                        if entry.gates.insert_size {
+                            insert_size_metrics.observe(
+                                record,
+                                include_duplicates,
+                                read_group.as_ref(),
+                            );
+                        }
+                    }
+                    Ok(())
+                }));
+            }
+
+            if !combine_alignment_and_insert_size && let Some((worker, _)) = &alignment_worker {
+                let worker = Arc::clone(worker);
+                let read_groups = Arc::clone(&read_groups);
+                let target_names = Arc::clone(&target_names);
+                let alignment_reference_cache = alignment_reference_cache.as_ref().map(Arc::clone);
+                handlers.push(Box::new(move |batch| {
+                    let mut metrics = worker
+                        .lock()
+                        .map_err(|_| "alignment collector lock poisoned".to_string())?;
+                    for entry in batch {
+                        if !entry.gates.alignment {
+                            continue;
+                        }
+                        let record = &entry.record;
+                        let read_group =
+                            insert_size_read_group_for_bam_record(record, read_groups.as_ref());
+                        let mismatch_bases = alignment_reference_mismatch_bases_locked(
+                            record,
+                            target_names.as_slice(),
+                            alignment_reference_cache.as_deref(),
+                        )?;
+                        metrics.observe(record, read_group.as_ref(), mismatch_bases);
+                    }
+                    Ok(())
+                }));
+            }
+            if !combine_alignment_and_insert_size
+                && let Some((worker, _, _, include_duplicates, _, _)) = &insert_size_worker
+            {
+                let worker = Arc::clone(worker);
+                let read_groups = Arc::clone(&read_groups);
+                let include_duplicates = *include_duplicates;
+                handlers.push(Box::new(move |batch| {
+                    let mut metrics = worker
+                        .lock()
+                        .map_err(|_| "insert-size collector lock poisoned".to_string())?;
+                    for entry in batch {
+                        if !entry.gates.insert_size {
+                            continue;
+                        }
+                        let record = &entry.record;
+                        let read_group =
+                            insert_size_read_group_for_bam_record(record, read_groups.as_ref());
+                        metrics.observe(record, include_duplicates, read_group.as_ref());
+                    }
+                    Ok(())
+                }));
+            }
+            if let Some((worker, _, _, aligned_reads_only, pf_reads_only)) =
+                &base_distribution_worker
+            {
+                let worker = Arc::clone(worker);
+                let aligned_reads_only = *aligned_reads_only;
+                let pf_reads_only = *pf_reads_only;
+                handlers.push(Box::new(move |batch| {
+                    let mut metrics = worker
+                        .lock()
+                        .map_err(|_| "base-distribution collector lock poisoned".to_string())?;
+                    for entry in batch {
+                        if !entry.gates.base_distribution {
+                            continue;
+                        }
+                        let record = &entry.record;
+                        metrics.observe(record, aligned_reads_only, pf_reads_only);
+                    }
+                    Ok(())
+                }));
+            }
+            if let Some((worker, _, _, aligned_reads_only, pf_reads_only, include_no_calls)) =
+                &quality_distribution_worker
+            {
+                let worker = Arc::clone(worker);
+                let aligned_reads_only = *aligned_reads_only;
+                let pf_reads_only = *pf_reads_only;
+                let include_no_calls = *include_no_calls;
+                handlers.push(Box::new(move |batch| {
+                    let mut metrics = worker
+                        .lock()
+                        .map_err(|_| "quality-distribution collector lock poisoned".to_string())?;
+                    for entry in batch {
+                        if !entry.gates.quality_distribution {
+                            continue;
+                        }
+                        let record = &entry.record;
+                        metrics.observe(
+                            record,
+                            aligned_reads_only,
+                            pf_reads_only,
+                            include_no_calls,
+                        );
+                    }
+                    Ok(())
+                }));
+            }
+            if let Some((worker, _, _, aligned_reads_only, pf_reads_only)) = &mean_quality_worker {
+                let worker = Arc::clone(worker);
+                let aligned_reads_only = *aligned_reads_only;
+                let pf_reads_only = *pf_reads_only;
+                handlers.push(Box::new(move |batch| {
+                    let mut metrics = worker
+                        .lock()
+                        .map_err(|_| "mean-quality collector lock poisoned".to_string())?;
+                    for entry in batch {
+                        if !entry.gates.mean_quality {
+                            continue;
+                        }
+                        let record = &entry.record;
+                        metrics.observe(record, aligned_reads_only, pf_reads_only);
+                    }
+                    Ok(())
+                }));
+            }
+            if let Some((
+                worker,
+                _,
+                use_original_qualities,
+                include_secondary,
+                include_supplemental,
+            )) = &quality_yield_worker
+            {
+                let worker = Arc::clone(worker);
+                let use_original_qualities = *use_original_qualities;
+                let include_secondary = *include_secondary;
+                let include_supplemental = *include_supplemental;
+                handlers.push(Box::new(move |batch| {
+                    let mut metrics = worker
+                        .lock()
+                        .map_err(|_| "quality-yield collector lock poisoned".to_string())?;
+                    for entry in batch {
+                        if !entry.gates.quality_yield {
+                            continue;
+                        }
+                        let record = &entry.record;
+                        metrics.observe(
+                            record,
+                            use_original_qualities,
+                            include_secondary,
+                            include_supplemental,
+                        );
+                    }
+                    Ok(())
+                }));
+            }
+            if let Some((worker, _, _, _, window_size, _)) = &gc_bias_worker {
+                let worker = Arc::clone(worker);
+                let target_names = Arc::clone(&target_names);
+                let window_size = *window_size;
+                handlers.push(Box::new(move |batch| {
+                    let mut metrics = worker
+                        .lock()
+                        .map_err(|_| "gc-bias collector lock poisoned".to_string())?;
+                    for entry in batch {
+                        if !entry.gates.gc_bias {
+                            continue;
+                        }
+                        let record = &entry.record;
+                        if let Err(error) =
+                            metrics.observe(record, target_names.as_slice(), window_size)
+                        {
+                            return Err(format!("CollectGcBiasMetrics failed: {error}"));
+                        }
+                    }
+                    Ok(())
+                }));
+            }
+            if let Some((worker, ..)) = &wgs_worker {
+                let worker = Arc::clone(worker);
+                let target_names = Arc::clone(&target_names);
+                handlers.push(Box::new(move |batch| {
+                    let mut metrics = worker
+                        .lock()
+                        .map_err(|_| "wgs collector lock poisoned".to_string())?;
+                    for entry in batch {
+                        if !entry.gates.wgs {
+                            continue;
+                        }
+                        let record = &entry.record;
+                        if let Err(error) = metrics.observe(record, target_names.as_slice()) {
+                            return Err(format!("CollectWgsMetrics failed: {error}"));
+                        }
+                    }
+                    Ok(())
+                }));
+            }
+
+            let (include_secondary_yield, include_supplemental_yield) =
+                quality_yield_flags.unwrap_or((false, false));
+            let plan = cmm_pipeline::CmmPlan {
+                alignment: alignment_worker.is_some(),
+                insert_size: insert_size_worker.is_some(),
+                base_distribution: base_distribution_worker.is_some(),
+                quality_distribution: quality_distribution_worker.is_some(),
+                mean_quality: mean_quality_worker.is_some(),
+                quality_yield: quality_yield_worker.is_some(),
+                gc_bias: gc_bias_worker.is_some(),
+                wgs: wgs_worker.is_some(),
+            };
+            cmm_pipeline::CmmWorkerPool::with_plan(handlers, plan).run_parallel_bam_pass(
+                reader,
+                stop_after,
+                false,
+                false,
+                include_secondary_yield,
+                include_supplemental_yield,
+            )?;
+
+            alignment = alignment_worker
+                .map(|(worker, path)| {
+                    Ok::<_, String>((unwrap_collector(worker, "alignment")?, path))
+                })
+                .transpose()?;
+            insert_size = insert_size_worker
+                .map(
+                    |(worker, path, chart_path, include_duplicates, minimum_pct, deviations)| {
+                        Ok::<_, String>((
+                            unwrap_collector(worker, "insert-size")?,
+                            path,
+                            chart_path,
+                            include_duplicates,
+                            minimum_pct,
+                            deviations,
+                        ))
+                    },
+                )
+                .transpose()?;
+            base_distribution = base_distribution_worker
+                .map(
+                    |(worker, path, chart_path, aligned_reads_only, pf_reads_only)| {
+                        Ok::<_, String>((
+                            unwrap_collector(worker, "base-distribution")?,
+                            path,
+                            chart_path,
+                            aligned_reads_only,
+                            pf_reads_only,
+                        ))
+                    },
+                )
+                .transpose()?;
+            quality_distribution = quality_distribution_worker
+                .map(
+                    |(
+                        worker,
+                        path,
+                        chart_path,
+                        aligned_reads_only,
+                        pf_reads_only,
+                        include_no_calls,
+                    )| {
+                        Ok::<_, String>((
+                            unwrap_collector(worker, "quality-distribution")?,
+                            path,
+                            chart_path,
+                            aligned_reads_only,
+                            pf_reads_only,
+                            include_no_calls,
+                        ))
+                    },
+                )
+                .transpose()?;
+            mean_quality = mean_quality_worker
+                .map(
+                    |(worker, path, chart_path, aligned_reads_only, pf_reads_only)| {
+                        Ok::<_, String>((
+                            unwrap_collector(worker, "mean-quality")?,
+                            path,
+                            chart_path,
+                            aligned_reads_only,
+                            pf_reads_only,
+                        ))
+                    },
+                )
+                .transpose()?;
+            quality_yield = quality_yield_worker
+                .map(
+                    |(
+                        worker,
+                        path,
+                        use_original_qualities,
+                        include_secondary,
+                        include_supplemental,
+                    )| {
+                        Ok::<_, String>((
+                            unwrap_collector(worker, "quality-yield")?,
+                            path,
+                            use_original_qualities,
+                            include_secondary,
+                            include_supplemental,
+                        ))
+                    },
+                )
+                .transpose()?;
+            gc_bias = gc_bias_worker
+                .map(
+                    |(
+                        worker,
+                        detail_path,
+                        summary_path,
+                        chart_path,
+                        window_size,
+                        minimum_genome_fraction,
+                    )| {
+                        Ok::<_, String>((
+                            unwrap_collector(worker, "gc-bias")?,
+                            detail_path,
+                            summary_path,
+                            chart_path,
+                            window_size,
+                            minimum_genome_fraction,
+                        ))
+                    },
+                )
+                .transpose()?;
+            wgs = wgs_worker
+                .map(
+                    |(
+                        worker,
+                        path,
+                        minimum_mapping_quality,
+                        minimum_base_quality,
+                        coverage_cap,
+                        locus_accumulation_cap,
+                        count_unpaired,
+                        sample_size,
+                        include_bq_histogram,
+                    )| {
+                        Ok::<_, String>((
+                            unwrap_collector(worker, "wgs")?,
+                            path,
+                            minimum_mapping_quality,
+                            minimum_base_quality,
+                            coverage_cap,
+                            locus_accumulation_cap,
+                            count_unpaired,
+                            sample_size,
+                            include_bq_histogram,
+                        ))
+                    },
+                )
+                .transpose()?;
+        }
     }
 
-    if let Some((metrics, output_path)) = alignment {
+    if let Some((mut metrics, output_path)) = alignment {
+        metrics.finalize();
         fs::write(output_path, metrics.to_picard_text()).map_err(|error| error.to_string())?;
         write_summary_chart_pdf(
             &format!("{output}.read_length_histogram.pdf"),
             "CollectAlignmentSummaryMetrics",
         )?;
     }
-    if let Some((metrics, output_path, chart_path, _include_duplicates, minimum_pct, deviations)) =
-        insert_size
+    if let Some((
+        mut metrics,
+        output_path,
+        chart_path,
+        _include_duplicates,
+        minimum_pct,
+        deviations,
+    )) = insert_size
     {
+        metrics.finalize();
         fs::write(output_path, metrics.to_picard_text(minimum_pct, deviations))
             .map_err(|error| error.to_string())?;
         write_summary_chart_pdf(&chart_path, "CollectInsertSizeMetrics")?;
@@ -5976,12 +6622,37 @@ fn run_qualityscoredistribution(args: &[String]) -> Result<(), CommandError> {
             include_no_calls,
             stop_after,
         )?
+    } else if let Some((par, _)) = (bam_parallel::parallel_workers() > 1 && stop_after == 0)
+        .then(|| {
+            bam_parallel::collect_indexed_parallel(
+                &input,
+                None,
+                bam_parallel::parallel_workers(),
+                true,
+                || Ok(QualityScoreDistributionSummary::default()),
+                |local, record| {
+                    local.observe(record, aligned_reads_only, pf_reads_only, include_no_calls);
+                    Ok(())
+                },
+                |acc, part| acc.merge_from(&part),
+            )
+        })
+        .transpose()?
+        .flatten()
+    {
+        par
     } else {
         let mut reader = open_bam_reader_for_args(&input, &args).map_err(|error| error.clone())?;
         let mut metrics = QualityScoreDistributionSummary::default();
-        for record in limited_records(&mut reader, stop_after) {
-            let record = record.map_err(|error| error.to_string())?;
+        let mut record = bam::Record::new();
+        let mut observed = 0_u32;
+        while let Some(result) = reader.read(&mut record) {
+            result.map_err(|error| error.to_string())?;
             metrics.observe(&record, aligned_reads_only, pf_reads_only, include_no_calls);
+            observed = observed.saturating_add(1);
+            if stop_after > 0 && observed >= stop_after {
+                break;
+            }
         }
         metrics
     };
@@ -6008,12 +6679,37 @@ fn run_meanqualitybycycle(args: &[String]) -> Result<(), CommandError> {
             pf_reads_only,
             stop_after,
         )?
+    } else if let Some((par, _)) = (bam_parallel::parallel_workers() > 1 && stop_after == 0)
+        .then(|| {
+            bam_parallel::collect_indexed_parallel(
+                &input,
+                None,
+                bam_parallel::parallel_workers(),
+                true,
+                || Ok(MeanQualityByCycleSummary::default()),
+                |local, record| {
+                    local.observe(record, aligned_reads_only, pf_reads_only);
+                    Ok(())
+                },
+                |acc, part| acc.merge_from(&part),
+            )
+        })
+        .transpose()?
+        .flatten()
+    {
+        par
     } else {
         let mut reader = open_bam_reader_for_args(&input, &args).map_err(|error| error.clone())?;
         let mut metrics = MeanQualityByCycleSummary::default();
-        for record in limited_records(&mut reader, stop_after) {
-            let record = record.map_err(|error| error.to_string())?;
+        let mut record = bam::Record::new();
+        let mut observed = 0_u32;
+        while let Some(result) = reader.read(&mut record) {
+            result.map_err(|error| error.to_string())?;
             metrics.observe(&record, aligned_reads_only, pf_reads_only);
+            observed = observed.saturating_add(1);
+            if stop_after > 0 && observed >= stop_after {
+                break;
+            }
         }
         metrics
     };
@@ -9642,6 +10338,13 @@ fn add_gc_window_counts(sequence: &[u8], window_size: usize, windows: &mut [u64;
     histogram.merge_into(windows);
 }
 
+fn gc_at_start(gc_by_start: &[u8], start: usize) -> Option<usize> {
+    match gc_by_start.get(start) {
+        Some(&NO_GC_WINDOW) | None => None,
+        Some(&gc) => Some(usize::from(gc)),
+    }
+}
+
 fn gc_percent_by_start(reference: &[u8], window_size: usize) -> Vec<u8> {
     let mut table = vec![0_u8; reference.len() + 1];
     let last_calculated_start = reference.len().saturating_sub(window_size);
@@ -10633,10 +11336,20 @@ fn insert_size_read_group_for_bam_record(
     record: &bam::Record,
     read_groups: &BTreeMap<String, InsertSizeReadGroup>,
 ) -> Option<InsertSizeReadGroup> {
+    insert_size_read_group_ref_for_bam_record(record, read_groups).cloned()
+}
+
+fn insert_size_read_group_ref_for_bam_record<'a>(
+    record: &bam::Record,
+    read_groups: &'a BTreeMap<String, InsertSizeReadGroup>,
+) -> Option<&'a InsertSizeReadGroup> {
+    if read_groups.is_empty() {
+        return None;
+    }
     let Ok(Aux::String(read_group)) = record.aux(b"RG") else {
         return None;
     };
-    read_groups.get(read_group).cloned()
+    read_groups.get(read_group)
 }
 
 fn validate_qname(record: &bam::Record) -> String {
@@ -11916,6 +12629,7 @@ struct AlignmentSummarySet {
     unpaired: AlignmentSummary,
     first: AlignmentSummary,
     second: AlignmentSummary,
+    pair_other: AlignmentSummary,
     pair: AlignmentSummary,
     saw_paired: bool,
 }
@@ -12107,6 +12821,47 @@ impl AlignmentSummaryCollection {
         }
     }
 
+    fn finalize(&mut self) {
+        self.all_reads.finalize();
+        for summary in self.samples.values_mut() {
+            summary.finalize();
+        }
+        for summary in self.libraries.values_mut() {
+            summary.summary.finalize();
+        }
+        for summary in self.read_groups.values_mut() {
+            summary.summary.finalize();
+        }
+    }
+
+    fn merge_from(&mut self, other: Self) {
+        self.all_reads.merge_from(&other.all_reads);
+        for (key, value) in other.samples {
+            self.samples.entry(key).or_default().merge_from(&value);
+        }
+        for (key, value) in other.libraries {
+            self.libraries
+                .entry(key)
+                .or_insert_with(|| AlignmentSummaryLibrary {
+                    sample: value.sample,
+                    summary: AlignmentSummarySet::default(),
+                })
+                .summary
+                .merge_from(&value.summary);
+        }
+        for (key, value) in other.read_groups {
+            self.read_groups
+                .entry(key)
+                .or_insert_with(|| AlignmentSummaryReadGroup {
+                    sample: value.sample,
+                    library: value.library,
+                    summary: AlignmentSummarySet::default(),
+                })
+                .summary
+                .merge_from(&value.summary);
+        }
+    }
+
     fn to_picard_text(&self) -> String {
         let mut rows = self.all_reads.picard_rows(None, None, None);
         if self.accumulation == AlignmentAccumulation::Sample {
@@ -12135,6 +12890,24 @@ impl AlignmentSummaryCollection {
 }
 
 impl AlignmentSummarySet {
+    fn finalize(&mut self) {
+        if !self.saw_paired {
+            return;
+        }
+        self.pair = self.first.clone();
+        self.pair.merge_from(&self.second);
+        self.pair.merge_from(&self.pair_other);
+    }
+
+    fn merge_from(&mut self, other: &Self) {
+        self.saw_paired |= other.saw_paired;
+        self.unpaired.merge_from(&other.unpaired);
+        self.first.merge_from(&other.first);
+        self.second.merge_from(&other.second);
+        self.pair_other.merge_from(&other.pair_other);
+        self.pair.merge_from(&other.pair);
+    }
+
     fn observe(&mut self, record: &bam::Record, mismatch_bases: Option<u64>) {
         if record.is_secondary() || record.is_supplementary() {
             return;
@@ -12145,8 +12918,9 @@ impl AlignmentSummarySet {
                 self.first.observe(record, mismatch_bases);
             } else if record.is_last_in_template() {
                 self.second.observe(record, mismatch_bases);
+            } else {
+                self.pair_other.observe(record, mismatch_bases);
             }
-            self.pair.observe(record, mismatch_bases);
         } else {
             self.unpaired.observe(record, mismatch_bases);
         }
@@ -12197,18 +12971,19 @@ impl AlignmentSummarySet {
                     chimeric,
                     noise,
                 );
+            } else {
+                self.pair_other.observe_sam_parts(
+                    flags,
+                    read_length,
+                    sequence_bases,
+                    aligned_length,
+                    mapq,
+                    qualities,
+                    cigar,
+                    chimeric,
+                    noise,
+                );
             }
-            self.pair.observe_sam_parts(
-                flags,
-                read_length,
-                sequence_bases,
-                aligned_length,
-                mapq,
-                qualities,
-                cigar,
-                chimeric,
-                noise,
-            );
         } else {
             self.unpaired.observe_sam_parts(
                 flags,
@@ -12282,7 +13057,7 @@ struct AlignmentSummaryRow<'a> {
     read_group: Option<&'a str>,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 struct AlignmentSummary {
     total_reads: u64,
     pf_reads: u64,
@@ -12308,22 +13083,67 @@ struct AlignmentSummary {
     hard_clip_bases: u64,
     three_prime_soft_clip_bases: u64,
     three_prime_soft_clip_reads: u64,
-    cycle_bases: Vec<u64>,
+    pf_read_lengths: Vec<u64>,
     cycle_no_calls: Vec<u64>,
     total_read_lengths: Vec<u64>,
     aligned_read_lengths: Vec<u64>,
 }
 
+fn merge_histogram(dst: &mut Vec<u64>, src: &[u64]) {
+    if src.is_empty() {
+        return;
+    }
+    if dst.len() < src.len() {
+        dst.resize(src.len(), 0);
+    }
+    for (target, value) in dst.iter_mut().zip(src) {
+        *target += *value;
+    }
+}
+
 impl AlignmentSummary {
+    fn merge_from(&mut self, other: &Self) {
+        self.total_reads += other.total_reads;
+        self.pf_reads += other.pf_reads;
+        self.pf_read_bases += other.pf_read_bases;
+        self.pf_noise_reads += other.pf_noise_reads;
+        self.pf_reads_aligned += other.pf_reads_aligned;
+        self.pf_aligned_bases += other.pf_aligned_bases;
+        self.pf_read_aligned_bases += other.pf_read_aligned_bases;
+        self.pf_hq_aligned_reads += other.pf_hq_aligned_reads;
+        self.pf_hq_aligned_bases += other.pf_hq_aligned_bases;
+        self.pf_hq_aligned_q20_bases += other.pf_hq_aligned_q20_bases;
+        self.mismatch_bases += other.mismatch_bases;
+        self.hq_mismatch_bases += other.hq_mismatch_bases;
+        merge_histogram(
+            &mut self.hq_mismatches_by_read,
+            &other.hq_mismatches_by_read,
+        );
+        self.reads_aligned_in_pairs += other.reads_aligned_in_pairs;
+        self.pf_reads_improper_pairs += other.pf_reads_improper_pairs;
+        self.forward_aligned_reads += other.forward_aligned_reads;
+        self.reverse_aligned_reads += other.reverse_aligned_reads;
+        self.chimeras += other.chimeras;
+        self.adapter_reads += other.adapter_reads;
+        self.indel_bases += other.indel_bases;
+        self.soft_clip_bases += other.soft_clip_bases;
+        self.hard_clip_bases += other.hard_clip_bases;
+        self.three_prime_soft_clip_bases += other.three_prime_soft_clip_bases;
+        self.three_prime_soft_clip_reads += other.three_prime_soft_clip_reads;
+        merge_histogram(&mut self.pf_read_lengths, &other.pf_read_lengths);
+        merge_histogram(&mut self.cycle_no_calls, &other.cycle_no_calls);
+        merge_histogram(&mut self.total_read_lengths, &other.total_read_lengths);
+        merge_histogram(&mut self.aligned_read_lengths, &other.aligned_read_lengths);
+    }
+
     fn observe(&mut self, record: &bam::Record, mismatch_bases: Option<u64>) {
         let read_length = record.seq_len() as u64;
-        let cigar = alignment_cigar_summary(record.cigar().iter(), record.is_reverse());
-        let aligned_length = if record.is_unmapped() {
-            0
-        } else {
-            cigar.aligned_length
-        };
-        let aligned_read_length = if record.is_unmapped() {
+        let raw_cigar = record.raw_cigar();
+        let is_reverse = record.is_reverse();
+        let is_unmapped = record.is_unmapped();
+        let cigar = alignment_cigar_summary_raw(raw_cigar, is_reverse);
+        let aligned_length = if is_unmapped { 0 } else { cigar.aligned_length };
+        let aligned_read_length = if is_unmapped {
             0
         } else {
             cigar.read_aligned_length
@@ -12341,19 +13161,15 @@ impl AlignmentSummary {
         if is_noise_read(record) {
             self.pf_noise_reads += 1;
         }
-        let sequence_bases = record.seq().as_bytes();
-        self.observe_bad_cycle_bases(&sequence_bases);
-        if is_adapter_read(
-            &sequence_bases,
-            record.is_unmapped(),
-            record.mapq(),
-            record.is_reverse(),
-        ) {
+        let seq = record.seq();
+        let encoded = seq.encoded;
+        let seq_len = record.seq_len();
+        self.observe_bad_cycle_bases_encoded(encoded, seq_len);
+        if is_adapter_read_encoded(encoded, seq_len, is_unmapped, record.mapq(), is_reverse) {
             self.adapter_reads += 1;
         }
 
-        let is_aligned = !record.is_unmapped();
-        if is_aligned {
+        if !is_unmapped {
             let mismatch_bases = mismatch_bases.unwrap_or_default();
             self.pf_reads_aligned += 1;
             self.pf_aligned_bases += aligned_length;
@@ -12363,11 +13179,11 @@ impl AlignmentSummary {
                 self.pf_hq_aligned_reads += 1;
                 self.pf_hq_aligned_bases += aligned_length;
                 self.pf_hq_aligned_q20_bases +=
-                    q20_match_bases(record.cigar().iter(), hts_io::base_qualities(record));
+                    q20_match_bases_raw(raw_cigar, hts_io::base_qualities(record));
                 self.hq_mismatch_bases += mismatch_bases;
                 observe_histogram_value(&mut self.hq_mismatches_by_read, mismatch_bases);
             }
-            if record.is_reverse() {
+            if is_reverse {
                 self.reverse_aligned_reads += 1;
             } else {
                 self.forward_aligned_reads += 1;
@@ -12482,15 +13298,31 @@ impl AlignmentSummary {
         }
     }
 
+    fn observe_bad_cycle_bases_encoded(&mut self, encoded: &[u8], seq_len: usize) {
+        if seq_len == 0 {
+            return;
+        }
+        ensure_histogram_len(&mut self.pf_read_lengths, seq_len);
+        self.pf_read_lengths[seq_len] += 1;
+        if wgs_metrics::has_no_call_read_base(encoded) {
+            ensure_histogram_len(&mut self.cycle_no_calls, seq_len - 1);
+            for index in 0..seq_len {
+                if bam_parallel::bam_nibble(encoded, index) == 0xf {
+                    self.cycle_no_calls[index] += 1;
+                }
+            }
+        }
+    }
+
     fn observe_bad_cycle_bases(&mut self, bases: &[u8]) {
         if bases.is_empty() {
             return;
         }
+        ensure_histogram_len(&mut self.pf_read_lengths, bases.len());
+        self.pf_read_lengths[bases.len()] += 1;
         let last = bases.len() - 1;
-        ensure_histogram_len(&mut self.cycle_bases, last);
         ensure_histogram_len(&mut self.cycle_no_calls, last);
         for (index, base) in bases.iter().enumerate() {
-            self.cycle_bases[index] += 1;
             if base.eq_ignore_ascii_case(&b'N') {
                 self.cycle_no_calls[index] += 1;
             }
@@ -12498,15 +13330,18 @@ impl AlignmentSummary {
     }
 
     fn bad_cycles(&self) -> u64 {
-        self.cycle_bases
-            .iter()
-            .enumerate()
-            .filter(|(index, bases)| {
-                **bases > 0
-                    && self.cycle_no_calls.get(*index).copied().unwrap_or_default() * 5
-                        >= **bases * 4
-            })
-            .count() as u64
+        let mut running = 0_u64;
+        let mut bad = 0_u64;
+        for (index, &count) in self.pf_read_lengths.iter().enumerate().skip(1).rev() {
+            running += count;
+            let cycle = index - 1;
+            if running > 0
+                && self.cycle_no_calls.get(cycle).copied().unwrap_or_default() * 5 >= running * 4
+            {
+                bad += 1;
+            }
+        }
+        bad
     }
 
     fn to_picard_row(
@@ -12667,42 +13502,40 @@ struct CigarSummary {
     q20_match_bases: u64,
 }
 
-fn alignment_cigar_summary<'a>(
-    cigars: impl Iterator<Item = &'a Cigar>,
-    is_reverse: bool,
-) -> CigarSummary {
+fn alignment_cigar_summary_raw(raw_cigar: &[u32], is_reverse: bool) -> CigarSummary {
     let mut summary = CigarSummary::default();
     let mut first_soft_clip = 0;
     let mut last_soft_clip = 0;
     let mut seen_operator = false;
-    for cigar in cigars {
-        match cigar {
-            Cigar::Match(len) | Cigar::Equal(len) | Cigar::Diff(len) => {
-                summary.aligned_length += u64::from(*len);
-                summary.read_aligned_length += u64::from(*len);
+    for &raw in raw_cigar {
+        let len = u64::from(raw >> 4);
+        match raw & 0xf {
+            0 | 7 | 8 => {
+                summary.aligned_length += len;
+                summary.read_aligned_length += len;
                 last_soft_clip = 0;
             }
-            Cigar::Ins(len) => {
-                summary.read_aligned_length += u64::from(*len);
+            1 => {
+                summary.read_aligned_length += len;
                 summary.indel_events += 1;
                 last_soft_clip = 0;
             }
-            Cigar::Del(_) => {
+            2 => {
                 summary.indel_events += 1;
                 last_soft_clip = 0;
             }
-            Cigar::SoftClip(len) => {
-                summary.soft_clip_bases += u64::from(*len);
+            4 => {
+                summary.soft_clip_bases += len;
                 if !seen_operator {
-                    first_soft_clip = u64::from(*len);
+                    first_soft_clip = len;
                 }
-                last_soft_clip = u64::from(*len);
+                last_soft_clip = len;
             }
-            Cigar::HardClip(len) => {
-                summary.hard_clip_bases += u64::from(*len);
+            5 => {
+                summary.hard_clip_bases += len;
                 last_soft_clip = 0;
             }
-            Cigar::RefSkip(_) | Cigar::Pad(_) => {
+            _ => {
                 last_soft_clip = 0;
             }
         }
@@ -12716,13 +13549,13 @@ fn alignment_cigar_summary<'a>(
     summary
 }
 
-fn q20_match_bases<'a>(cigars: impl Iterator<Item = &'a Cigar>, qualities: &[u8]) -> u64 {
+fn q20_match_bases_raw(raw_cigar: &[u32], qualities: &[u8]) -> u64 {
     let mut read_position = 0_usize;
     let mut q20 = 0_u64;
-    for cigar in cigars {
-        match cigar {
-            Cigar::Match(len) | Cigar::Equal(len) | Cigar::Diff(len) => {
-                let len = *len as usize;
+    for &raw in raw_cigar {
+        let len = (raw >> 4) as usize;
+        match raw & 0xf {
+            0 | 7 | 8 => {
                 q20 += qualities
                     .get(read_position..read_position.saturating_add(len))
                     .unwrap_or_default()
@@ -12731,28 +13564,60 @@ fn q20_match_bases<'a>(cigars: impl Iterator<Item = &'a Cigar>, qualities: &[u8]
                     .count() as u64;
                 read_position = read_position.saturating_add(len);
             }
-            Cigar::Ins(len) | Cigar::SoftClip(len) => {
-                read_position = read_position.saturating_add(*len as usize);
+            1 | 4 => {
+                read_position = read_position.saturating_add(len);
             }
-            Cigar::Del(_) | Cigar::RefSkip(_) | Cigar::HardClip(_) | Cigar::Pad(_) => {}
+            _ => {}
         }
     }
     q20
 }
+
+fn preload_reference_contigs_for_tids(
+    reference_path: &str,
+    target_names: &[String],
+) -> Result<Option<PreloadedContigs>, String> {
+    const MAX_PRELOAD_BASES: usize = 256_000_000;
+    let contigs = read_reference_contigs_for_wgs(reference_path)?;
+    let total_bases = contigs.iter().map(|(_, len)| *len).sum::<usize>();
+    if total_bases > MAX_PRELOAD_BASES {
+        return Ok(None);
+    }
+    let needed: BTreeSet<&str> = target_names.iter().map(String::as_str).collect();
+    let mut by_name = FxHashMap::default();
+    for fasta in read_fasta_sequences(reference_path, true)? {
+        if needed.contains(fasta.name.as_str()) {
+            by_name.insert(fasta.name, fasta.sequence);
+        }
+    }
+    let slots = target_names
+        .iter()
+        .map(|name| by_name.remove(name))
+        .collect::<Vec<_>>();
+    Ok(Some(Arc::new(slots)))
+}
+
+type PreloadedContigs = Arc<Vec<Option<Vec<u8>>>>;
 
 #[derive(Debug)]
 struct AlignmentReferenceCache {
     reference_path: String,
     active_contig: Option<String>,
     active_sequence: Vec<u8>,
+    preloaded: Option<PreloadedContigs>,
 }
 
 impl AlignmentReferenceCache {
     fn new(reference_path: &str) -> Self {
+        Self::new_with_preloaded(reference_path, None)
+    }
+
+    fn new_with_preloaded(reference_path: &str, preloaded: Option<PreloadedContigs>) -> Self {
         Self {
             reference_path: reference_path.to_string(),
             active_contig: None,
             active_sequence: Vec::new(),
+            preloaded,
         }
     }
 
@@ -12773,11 +13638,23 @@ impl AlignmentReferenceCache {
         if record.is_unmapped() || record.tid() < 0 {
             return Ok(None);
         }
-        let contig = target_names
-            .get(usize_or_max(record.tid()))
-            .ok_or_else(|| {
-                "CollectAlignmentSummaryMetrics record references unknown target".to_string()
-            })?;
+        let tid_idx = usize_or_max(record.tid());
+        if let Some(preloaded) = &self.preloaded {
+            if let Some(Some(sequence)) = preloaded.get(tid_idx) {
+                return record_reference_mismatch_bases(record, sequence).map(Some);
+            }
+            if target_names.get(tid_idx).is_some() {
+                let contig = &target_names[tid_idx];
+                self.ensure_contig(contig)?;
+                return record_reference_mismatch_bases(record, &self.active_sequence).map(Some);
+            }
+            return Err(
+                "CollectAlignmentSummaryMetrics record references unknown target".to_string(),
+            );
+        }
+        let contig = target_names.get(tid_idx).ok_or_else(|| {
+            "CollectAlignmentSummaryMetrics record references unknown target".to_string()
+        })?;
         self.ensure_contig(contig)?;
         record_reference_mismatch_bases(record, &self.active_sequence).map(Some)
     }
@@ -12814,71 +13691,62 @@ fn record_reference_mismatch_bases(record: &bam::Record, reference: &[u8]) -> Re
     }
     let mut read_offset = 0_usize;
     let mut reference_offset = usize_or_max(record.pos());
-    let read_bases = record.seq().as_bytes();
+    let seq_len = record.seq_len();
+    let encoded = record.seq().encoded;
     let mut mismatches = 0_u64;
 
-    for cigar in &record.cigar() {
-        match *cigar {
-            Cigar::Match(length) => {
-                let length = length as usize;
-                let read_end =
-                    collect_alignment_checked_read_end(read_offset, length, &read_bases)?;
+    for &raw in record.raw_cigar() {
+        let length = (raw >> 4) as usize;
+        match raw & 0xf {
+            0 => {
+                let read_end = read_offset
+                    .checked_add(length)
+                    .filter(|end| *end <= seq_len)
+                    .ok_or_else(|| "malformed CollectAlignmentSummaryMetrics CIGAR".to_string())?;
                 let reference_end =
                     collect_alignment_checked_reference_end(reference_offset, length, reference)?;
-                for (read_base, reference_base) in read_bases[read_offset..read_end]
-                    .iter()
-                    .zip(&reference[reference_offset..reference_end])
-                {
-                    if !dna_bases_equal(*read_base, *reference_base) {
-                        mismatches += 1;
-                    }
-                }
+                mismatches += bam_parallel::count_mismatches_4bit(
+                    encoded,
+                    read_offset,
+                    reference,
+                    reference_offset,
+                    length,
+                );
                 read_offset = read_end;
                 reference_offset = reference_end;
             }
-            Cigar::Equal(length) => {
-                let length = length as usize;
-                read_offset = collect_alignment_checked_read_end(read_offset, length, &read_bases)?;
+            7 => {
+                read_offset = read_offset
+                    .checked_add(length)
+                    .filter(|end| *end <= seq_len)
+                    .ok_or_else(|| "malformed CollectAlignmentSummaryMetrics CIGAR".to_string())?;
                 reference_offset =
                     collect_alignment_checked_reference_end(reference_offset, length, reference)?;
             }
-            Cigar::Diff(length) => {
-                let length = length as usize;
-                read_offset = collect_alignment_checked_read_end(read_offset, length, &read_bases)?;
+            8 => {
+                read_offset = read_offset
+                    .checked_add(length)
+                    .filter(|end| *end <= seq_len)
+                    .ok_or_else(|| "malformed CollectAlignmentSummaryMetrics CIGAR".to_string())?;
                 reference_offset =
                     collect_alignment_checked_reference_end(reference_offset, length, reference)?;
                 mismatches += length as u64;
             }
-            Cigar::Ins(length) | Cigar::SoftClip(length) => {
-                read_offset =
-                    collect_alignment_checked_read_end(read_offset, length as usize, &read_bases)?;
+            1 | 4 => {
+                read_offset = read_offset
+                    .checked_add(length)
+                    .filter(|end| *end <= seq_len)
+                    .ok_or_else(|| "malformed CollectAlignmentSummaryMetrics CIGAR".to_string())?;
             }
-            Cigar::Del(length) | Cigar::RefSkip(length) => {
-                reference_offset = collect_alignment_checked_reference_end(
-                    reference_offset,
-                    length as usize,
-                    reference,
-                )?;
+            2 | 3 => {
+                reference_offset =
+                    collect_alignment_checked_reference_end(reference_offset, length, reference)?;
             }
-            Cigar::HardClip(_) | Cigar::Pad(_) => {}
+            _ => {}
         }
     }
 
     Ok(mismatches)
-}
-
-fn collect_alignment_checked_read_end(
-    offset: usize,
-    length: usize,
-    read_bases: &[u8],
-) -> Result<usize, String> {
-    let end = offset
-        .checked_add(length)
-        .ok_or_else(|| "malformed CollectAlignmentSummaryMetrics CIGAR".to_string())?;
-    if end > read_bases.len() {
-        return Err("malformed CollectAlignmentSummaryMetrics CIGAR".to_string());
-    }
-    Ok(end)
 }
 
 fn collect_alignment_checked_reference_end(
@@ -13038,6 +13906,43 @@ fn complement_base(base: u8) -> u8 {
     }
 }
 
+pub(crate) fn is_adapter_read_encoded(
+    encoded: &[u8],
+    seq_len: usize,
+    unmapped: bool,
+    mapq: u8,
+    reverse: bool,
+) -> bool {
+    if seq_len < ADAPTER_MATCH_LENGTH || (!unmapped && mapq != 0) {
+        return false;
+    }
+    let mut bases = [0_u8; ADAPTER_MATCH_LENGTH];
+    if reverse && !unmapped {
+        for (index, slot) in bases.iter_mut().enumerate() {
+            let ascii = bam_parallel::BAM_ENC_TO_ASCII
+                [usize::from(bam_parallel::bam_nibble(encoded, seq_len - index - 1))];
+            *slot = complement_base(ascii);
+        }
+    } else {
+        for (index, slot) in bases.iter_mut().enumerate() {
+            *slot = bam_parallel::BAM_ENC_TO_ASCII
+                [usize::from(bam_parallel::bam_nibble(encoded, index))];
+        }
+    }
+    adapter_kmers().iter().any(|adapter| {
+        let mut errors = 0;
+        for index in 0..ADAPTER_MATCH_LENGTH {
+            if bases[index] != adapter[index] {
+                errors += 1;
+                if errors > MAX_ADAPTER_ERRORS {
+                    return false;
+                }
+            }
+        }
+        true
+    })
+}
+
 fn is_adapter_read(read: &[u8], unmapped: bool, mapq: u8, reverse: bool) -> bool {
     if read.len() < ADAPTER_MATCH_LENGTH || (!unmapped && mapq != 0) {
         return false;
@@ -13094,6 +13999,7 @@ fn collect_alignment_sam_text(
             break;
         }
     }
+    metrics.finalize();
     Ok(metrics)
 }
 
@@ -13411,6 +14317,19 @@ impl QualityYieldSummary {
         }
     }
 
+    fn merge_from(&mut self, other: &Self) {
+        self.total_reads += other.total_reads;
+        self.pf_reads += other.pf_reads;
+        self.total_bases += other.total_bases;
+        self.pf_bases += other.pf_bases;
+        self.q20_bases += other.q20_bases;
+        self.pf_q20_bases += other.pf_q20_bases;
+        self.q30_bases += other.q30_bases;
+        self.pf_q30_bases += other.pf_q30_bases;
+        self.total_quality += other.total_quality;
+        self.pf_quality += other.pf_quality;
+    }
+
     fn to_picard_text(&self) -> String {
         let read_length = self.total_bases.checked_div(self.total_reads).unwrap_or(0);
         format!(
@@ -13564,6 +14483,7 @@ fn collect_insert_size_sam_text(
             break;
         }
     }
+    metrics.finalize();
     Ok(metrics)
 }
 
@@ -13959,7 +14879,7 @@ fn het_snp_sensitivity_from_histograms(
     if total == 0 {
         return 0.0;
     }
-    let called_proportions = sampled_quality_called_proportions(
+    let called_proportions = het_sensitivity::hs_called_proportions(
         depth_histogram.len().min(1001),
         sample_size as usize,
         quality_histogram,
@@ -13973,34 +14893,6 @@ fn het_snp_sensitivity_from_histograms(
         })
         .sum::<f64>()
         / total as f64
-}
-
-fn sampled_quality_called_proportions(
-    iterations: usize,
-    sample_size: usize,
-    quality_histogram: &[u64],
-) -> Vec<f64> {
-    if sample_size == 0 || iterations == 0 {
-        return vec![0.0; iterations];
-    }
-    let mut wheel = PicardRouletteWheel::new(quality_histogram);
-    let thresholds = (0..iterations)
-        .map(|depth| 10.0 * (depth as f64 * 2.0_f64.log10() + 3.0))
-        .collect::<Vec<_>>();
-    let mut called_counts = vec![0usize; iterations];
-    for _ in 0..sample_size {
-        let mut sum = 0_u32;
-        for (index, threshold) in thresholds.iter().enumerate() {
-            if f64::from(sum) >= *threshold {
-                called_counts[index] += 1;
-            }
-            sum = sum.saturating_add(u32_or_max(wheel.draw()));
-        }
-    }
-    called_counts
-        .into_iter()
-        .map(|count| count as f64 / sample_size as f64)
-        .collect()
 }
 
 fn het_snp_detection_probability(depth: usize, called_proportions: &[f64]) -> f64 {
@@ -14023,81 +14915,6 @@ fn het_snp_detection_probability(depth: usize, called_proportions: &[f64]) -> f6
         }
     }
     probability
-}
-
-struct PicardRouletteWheel {
-    probabilities: Vec<f64>,
-    count: u32,
-    rng: JavaRandom,
-}
-
-impl PicardRouletteWheel {
-    fn new(histogram: &[u64]) -> Self {
-        let last_non_zero = histogram
-            .iter()
-            .rposition(|count| *count > 0)
-            .map_or(1, |index| index + 1);
-        let histogram = &histogram[..last_non_zero];
-        let max = histogram.iter().copied().max().unwrap_or(0) as f64;
-        let probabilities = if max == 0.0 {
-            vec![1.0]
-        } else {
-            histogram.iter().map(|count| *count as f64 / max).collect()
-        };
-        Self {
-            probabilities,
-            count: 0,
-            rng: JavaRandom::new(51),
-        }
-    }
-
-    fn draw(&mut self) -> usize {
-        loop {
-            let index = usize_or_max(f64_to_u64(
-                self.probabilities.len() as f64 * self.rng.next_double(),
-            ));
-            self.count += 1;
-            if self.rng.next_double() < self.probabilities[index] {
-                self.count = 0;
-                return index;
-            }
-            if self.count >= 600 {
-                self.count = 0;
-                return 0;
-            }
-        }
-    }
-}
-
-struct JavaRandom {
-    seed: u64,
-}
-
-impl JavaRandom {
-    const MULTIPLIER: u64 = 0x5_DEEC_E66D;
-    const ADDEND: u64 = 0xB;
-    const MASK: u64 = (1_u64 << 48) - 1;
-
-    fn new(seed: u64) -> Self {
-        Self {
-            seed: (seed ^ Self::MULTIPLIER) & Self::MASK,
-        }
-    }
-
-    fn next_bits(&mut self, bits: u32) -> u32 {
-        self.seed = self
-            .seed
-            .wrapping_mul(Self::MULTIPLIER)
-            .wrapping_add(Self::ADDEND)
-            & Self::MASK;
-        u32_or_max(self.seed >> (48 - bits))
-    }
-
-    fn next_double(&mut self) -> f64 {
-        let high = u64::from(self.next_bits(26));
-        let low = u64::from(self.next_bits(27));
-        ((high << 27) + low) as f64 / (1_u64 << 53) as f64
-    }
 }
 
 fn het_snp_q(sensitivity_text: &str) -> String {
@@ -14360,6 +15177,16 @@ impl Default for QualityScoreDistributionSummary {
 }
 
 impl QualityScoreDistributionSummary {
+    fn merge_from(&mut self, other: &Self) {
+        self.has_original |= other.has_original;
+        for (dst, src) in self.counts.iter_mut().zip(&other.counts) {
+            *dst += *src;
+        }
+        for (dst, src) in self.original_counts.iter_mut().zip(&other.original_counts) {
+            *dst += *src;
+        }
+    }
+
     fn observe(
         &mut self,
         record: &bam::Record,
@@ -14370,20 +15197,32 @@ impl QualityScoreDistributionSummary {
         if skip_quality_metric_record(record, aligned_reads_only, pf_reads_only) {
             return;
         }
-        let sequence = record.seq().as_bytes();
-        for (index, quality) in hts_io::base_qualities(record).iter().copied().enumerate() {
-            if !include_no_calls && sequence.get(index).is_some_and(|base| *base == b'N') {
-                continue;
+        let encoded = record.seq().encoded;
+        let check_nocalls = !include_no_calls && wgs_metrics::has_no_call_read_base(encoded);
+        let qualities = hts_io::base_qualities(record);
+        if check_nocalls {
+            for (index, &quality) in qualities.iter().enumerate() {
+                if bam_parallel::bam_nibble(encoded, index) != 0xf {
+                    self.counts[usize::from(quality)] += 1;
+                }
             }
-            self.counts[quality as usize] += 1;
+        } else {
+            for &quality in qualities {
+                self.counts[usize::from(quality)] += 1;
+            }
         }
         if let Some(original_qualities) = original_quality_values(record) {
             self.has_original = true;
-            for (index, quality) in original_qualities.into_iter().enumerate() {
-                if !include_no_calls && sequence.get(index).is_some_and(|base| *base == b'N') {
-                    continue;
+            if check_nocalls {
+                for (index, quality) in original_qualities.into_iter().enumerate() {
+                    if bam_parallel::bam_nibble(encoded, index) != 0xf {
+                        self.original_counts[usize::from(quality)] += 1;
+                    }
                 }
-                self.original_counts[quality as usize] += 1;
+            } else {
+                for quality in original_qualities {
+                    self.original_counts[usize::from(quality)] += 1;
+                }
             }
         }
     }
@@ -14437,6 +15276,24 @@ struct BaseCycleCounts {
 }
 
 impl BaseCycleCounts {
+    fn observe_slot(&mut self, slot: usize) {
+        match slot {
+            0 => self.a += 1,
+            1 => self.c += 1,
+            2 => self.g += 1,
+            3 => self.t += 1,
+            _ => self.n += 1,
+        }
+    }
+
+    fn merge_from(&mut self, other: Self) {
+        self.a += other.a;
+        self.c += other.c;
+        self.g += other.g;
+        self.t += other.t;
+        self.n += other.n;
+    }
+
     fn observe(&mut self, base: u8) {
         match base.to_ascii_uppercase() {
             b'A' => self.a += 1,
@@ -14459,26 +15316,61 @@ fn ensure_base_cycle_capacity(cycles: &mut Vec<BaseCycleCounts>, needed: usize) 
 }
 
 impl BaseDistributionByCycleSummary {
+    fn merge_from(&mut self, other: &Self) {
+        if self.first.len() < other.first.len() {
+            self.first
+                .resize(other.first.len(), BaseCycleCounts::default());
+        }
+        for (dst, &src) in self.first.iter_mut().zip(&other.first) {
+            dst.merge_from(src);
+        }
+        if self.second.len() < other.second.len() {
+            self.second
+                .resize(other.second.len(), BaseCycleCounts::default());
+        }
+        for (dst, &src) in self.second.iter_mut().zip(&other.second) {
+            dst.merge_from(src);
+        }
+    }
+
     fn observe(&mut self, record: &bam::Record, aligned_reads_only: bool, pf_reads_only: bool) {
         if skip_quality_metric_record(record, aligned_reads_only, pf_reads_only) {
             return;
         }
-        let bases = record.seq().as_bytes();
+        let len = record.seq_len();
+        let encoded = record.seq().encoded;
         let is_second_end = record.is_paired() && record.is_last_in_template();
-        let cycle_offset = if is_second_end { bases.len() } else { 0 };
+        let cycle_offset = if is_second_end { len } else { 0 };
         let cycles = if is_second_end {
             &mut self.second
         } else {
             &mut self.first
         };
-        ensure_base_cycle_capacity(cycles, cycle_offset + bases.len());
+        ensure_base_cycle_capacity(cycles, cycle_offset + len);
         if record.is_reverse() {
-            for (index, base) in bases.iter().rev().enumerate() {
-                cycles[cycle_offset + index].observe(*base);
+            for index in 0..len {
+                let nib = bam_parallel::bam_nibble(encoded, len - 1 - index);
+                cycles[cycle_offset + index].observe_slot(usize::from(
+                    bam_parallel::BAM_ENC_TO_BASE_SLOT[usize::from(nib)],
+                ));
             }
         } else {
-            for (index, base) in bases.iter().enumerate() {
-                cycles[cycle_offset + index].observe(*base);
+            let pairs = len / 2;
+            let dst = &mut cycles[cycle_offset..cycle_offset + len];
+            for (pair_idx, &byte) in encoded.iter().take(pairs).enumerate() {
+                let c = pair_idx * 2;
+                dst[c].observe_slot(usize::from(
+                    bam_parallel::BAM_ENC_TO_BASE_SLOT[usize::from((byte >> 4) & 0xf)],
+                ));
+                dst[c + 1].observe_slot(usize::from(
+                    bam_parallel::BAM_ENC_TO_BASE_SLOT[usize::from(byte & 0xf)],
+                ));
+            }
+            if !len.is_multiple_of(2) {
+                let nib = (encoded[pairs] >> 4) & 0xf;
+                dst[len - 1].observe_slot(usize::from(
+                    bam_parallel::BAM_ENC_TO_BASE_SLOT[usize::from(nib)],
+                ));
             }
         }
     }
@@ -14553,6 +15445,13 @@ fn collect_gc_bias_sam_text(
 }
 
 #[derive(Debug)]
+struct GcPreloadedReference {
+    by_name: FxHashMap<String, usize>,
+    sequences: Vec<Vec<u8>>,
+    bins: Vec<Vec<u8>>,
+}
+
+#[derive(Debug)]
 struct GcBiasMetricsSummary {
     windows: [u64; 101],
     read_starts: [u64; 101],
@@ -14565,6 +15464,8 @@ struct GcBiasMetricsSummary {
     active_contig: Option<String>,
     active_sequence: Vec<u8>,
     active_gc_by_start: Vec<u8>,
+    preloaded: Option<Arc<GcPreloadedReference>>,
+    tid_to_preloaded: Vec<Option<usize>>,
     total_clusters: u64,
     aligned_reads: u64,
     summary_aligned_reads: u64,
@@ -14574,10 +15475,43 @@ struct GcBiasMetricsSummary {
     emit_unique: bool,
 }
 
+fn load_gc_preloaded_reference(
+    reference_path: &str,
+    window_size: usize,
+) -> Result<([u64; 101], Option<Arc<GcPreloadedReference>>), String> {
+    const MAX_PRELOAD_BASES: usize = 256_000_000;
+    let contigs = read_reference_contigs_for_wgs(reference_path)?;
+    let total_bases = contigs.iter().map(|(_, len)| *len).sum::<usize>();
+    if total_bases > MAX_PRELOAD_BASES {
+        return Ok((count_gc_bias_windows(reference_path, window_size)?, None));
+    }
+    let mut windows = [0_u64; 101];
+    let mut by_name = FxHashMap::default();
+    let mut sequences = Vec::new();
+    let mut bins = Vec::new();
+    for record in read_fasta_sequences(reference_path, true)? {
+        add_gc_window_counts(&record.sequence, window_size, &mut windows);
+        let contig_bins = gc_percent_by_start(&record.sequence, window_size);
+        let idx = sequences.len();
+        by_name.insert(record.name, idx);
+        sequences.push(record.sequence);
+        bins.push(contig_bins);
+    }
+    Ok((
+        windows,
+        Some(Arc::new(GcPreloadedReference {
+            by_name,
+            sequences,
+            bins,
+        })),
+    ))
+}
+
 impl GcBiasMetricsSummary {
     fn new(reference_path: &str, window_size: usize, emit_unique: bool) -> Result<Self, String> {
+        let (windows, preloaded) = load_gc_preloaded_reference(reference_path, window_size)?;
         Ok(Self {
-            windows: count_gc_bias_windows(reference_path, window_size)?,
+            windows,
             read_starts: [0; 101],
             unique_read_starts: [0; 101],
             bases_by_gc: [0; 101],
@@ -14588,6 +15522,8 @@ impl GcBiasMetricsSummary {
             active_contig: None,
             active_sequence: Vec::new(),
             active_gc_by_start: Vec::new(),
+            preloaded,
+            tid_to_preloaded: Vec::new(),
             total_clusters: 0,
             aligned_reads: 0,
             summary_aligned_reads: 0,
@@ -14598,6 +15534,48 @@ impl GcBiasMetricsSummary {
         })
     }
 
+    fn clone_empty(&self) -> Self {
+        Self {
+            windows: self.windows,
+            read_starts: [0; 101],
+            unique_read_starts: [0; 101],
+            bases_by_gc: [0; 101],
+            errors_by_gc: [0; 101],
+            unique_bases_by_gc: [0; 101],
+            unique_errors_by_gc: [0; 101],
+            reference_path: self.reference_path.clone(),
+            active_contig: None,
+            active_sequence: Vec::new(),
+            active_gc_by_start: Vec::new(),
+            preloaded: self.preloaded.clone(),
+            tid_to_preloaded: Vec::new(),
+            total_clusters: 0,
+            aligned_reads: 0,
+            summary_aligned_reads: 0,
+            unique_total_clusters: 0,
+            unique_aligned_reads: 0,
+            unique_summary_aligned_reads: 0,
+            emit_unique: self.emit_unique,
+        }
+    }
+
+    fn merge_from(&mut self, other: &Self) {
+        for i in 0..101 {
+            self.read_starts[i] += other.read_starts[i];
+            self.unique_read_starts[i] += other.unique_read_starts[i];
+            self.bases_by_gc[i] += other.bases_by_gc[i];
+            self.errors_by_gc[i] += other.errors_by_gc[i];
+            self.unique_bases_by_gc[i] += other.unique_bases_by_gc[i];
+            self.unique_errors_by_gc[i] += other.unique_errors_by_gc[i];
+        }
+        self.total_clusters += other.total_clusters;
+        self.aligned_reads += other.aligned_reads;
+        self.summary_aligned_reads += other.summary_aligned_reads;
+        self.unique_total_clusters += other.unique_total_clusters;
+        self.unique_aligned_reads += other.unique_aligned_reads;
+        self.unique_summary_aligned_reads += other.unique_summary_aligned_reads;
+    }
+
     fn ensure_contig(&mut self, contig: &str, window_size: usize) -> Result<(), String> {
         if self.active_contig.as_deref() == Some(contig) {
             return Ok(());
@@ -14606,13 +15584,6 @@ impl GcBiasMetricsSummary {
         self.active_gc_by_start = gc_percent_by_start(&self.active_sequence, window_size);
         self.active_contig = Some(contig.to_string());
         Ok(())
-    }
-
-    fn gc_at(&self, start: usize) -> Option<usize> {
-        match self.active_gc_by_start.get(start) {
-            Some(&NO_GC_WINDOW) | None => None,
-            Some(&gc) => Some(usize::from(gc)),
-        }
     }
 
     fn observe(
@@ -14638,26 +15609,49 @@ impl GcBiasMetricsSummary {
         if self.emit_unique && !record.is_duplicate() {
             self.unique_aligned_reads += 1;
         }
-        let contig = target_names
-            .get(usize_or_max(record.tid()))
-            .ok_or_else(|| "CollectGcBiasMetrics record references unknown target".to_string())?;
-        self.ensure_contig(contig, window_size)?;
-        if self.active_sequence.len() < window_size {
+
+        let tid_idx = usize_or_max(record.tid());
+        if tid_idx >= target_names.len() {
+            return Err("CollectGcBiasMetrics record references unknown target".to_string());
+        }
+
+        let (reference, gc_by_start): (&[u8], &[u8]) = if let Some(preloaded) = &self.preloaded {
+            if self.tid_to_preloaded.len() != target_names.len() {
+                self.tid_to_preloaded = target_names
+                    .iter()
+                    .map(|name| preloaded.by_name.get(name).copied())
+                    .collect();
+            }
+            if let Some(pre_idx) = self.tid_to_preloaded[tid_idx] {
+                (&preloaded.sequences[pre_idx], &preloaded.bins[pre_idx])
+            } else {
+                let contig = &target_names[tid_idx];
+                self.ensure_contig(contig, window_size)?;
+                (&self.active_sequence, &self.active_gc_by_start)
+            }
+        } else {
+            let contig = &target_names[tid_idx];
+            self.ensure_contig(contig, window_size)?;
+            (&self.active_sequence, &self.active_gc_by_start)
+        };
+
+        if reference.len() < window_size {
             return Ok(());
         }
         let start = if record.is_reverse() {
-            record.cigar().end_pos() - i64_or_max(window_size)
+            let ref_span = raw_cigar_ref_span(record.raw_cigar());
+            record.pos() + ref_span - i64_or_max(window_size)
         } else {
             record.pos() + 1
         };
         if start <= 0 {
             return Ok(());
         }
-        let Some(gc) = self.gc_at(usize_or_max(start)) else {
+        let Some(gc) = gc_at_start(gc_by_start, usize_or_max(start)) else {
             return Ok(());
         };
         let bases = record.seq_len() as u64;
-        let errors = gc_bias_error_count(record, &self.active_sequence)?;
+        let errors = gc_bias_error_count(record, reference)?;
         self.read_starts[gc] += 1;
         self.bases_by_gc[gc] += bases;
         self.errors_by_gc[gc] += errors;
@@ -14730,7 +15724,7 @@ impl GcBiasMetricsSummary {
         if start <= 0 {
             return Ok(());
         }
-        let Some(gc) = self.gc_at(usize_or_max(start)) else {
+        let Some(gc) = gc_at_start(&self.active_gc_by_start, usize_or_max(start)) else {
             return Ok(());
         };
         self.read_starts[gc] += 1;
@@ -14986,55 +15980,71 @@ fn phred_score_from_observed_errors(bases: f64, errors: f64) -> f64 {
     }
 }
 
-fn gc_bias_error_count(record: &bam::Record, reference: &[u8]) -> Result<u64, String> {
-    let read_bases = record.seq();
-    let mut read_offset = 0usize;
-    let mut ref_offset = usize_or_max(record.pos().max(0));
-    let mut errors = 0u64;
+fn raw_cigar_ref_span(raw_cigar: &[u32]) -> i64 {
+    let mut span = 0_i64;
+    for &raw in raw_cigar {
+        if matches!(raw & 0xf, 0 | 2 | 3 | 7 | 8) {
+            span += i64::from(raw >> 4);
+        }
+    }
+    span
+}
 
-    for cigar in &record.cigar() {
-        match *cigar {
-            Cigar::Match(length) => {
-                for _ in 0..length {
-                    if read_offset >= read_bases.len() {
-                        return Err(
-                            "CollectGcBiasMetrics read sequence shorter than CIGAR".to_string()
-                        );
-                    }
-                    let Some(ref_base) = reference.get(ref_offset).copied() else {
-                        return Ok(errors);
-                    };
-                    if !dna_bases_equal(read_bases[read_offset], ref_base) {
-                        errors += 1;
-                    }
-                    read_offset += 1;
-                    ref_offset += 1;
+fn gc_bias_error_count(record: &bam::Record, reference: &[u8]) -> Result<u64, String> {
+    let seq_len = record.seq_len();
+    let encoded = record.seq().encoded;
+    let mut read_offset = 0_usize;
+    let mut ref_offset = usize_or_max(record.pos().max(0));
+    let mut errors = 0_u64;
+
+    for &raw in record.raw_cigar() {
+        let length = (raw >> 4) as usize;
+        match raw & 0xf {
+            0 => {
+                if read_offset + length > seq_len {
+                    return Err("CollectGcBiasMetrics read sequence shorter than CIGAR".to_string());
                 }
+                let avail = reference.len().saturating_sub(ref_offset);
+                let cmp_len = length.min(avail);
+                if cmp_len > 0 {
+                    errors += bam_parallel::count_mismatches_4bit(
+                        encoded,
+                        read_offset,
+                        reference,
+                        ref_offset,
+                        cmp_len,
+                    );
+                }
+                if cmp_len < length {
+                    return Ok(errors);
+                }
+                read_offset += length;
+                ref_offset += length;
             }
-            Cigar::Equal(length) => {
-                read_offset = read_offset.saturating_add(length as usize);
-                ref_offset = ref_offset.saturating_add(length as usize);
+            7 => {
+                read_offset = read_offset.saturating_add(length);
+                ref_offset = ref_offset.saturating_add(length);
             }
-            Cigar::Diff(length) => {
-                read_offset = read_offset.saturating_add(length as usize);
-                ref_offset = ref_offset.saturating_add(length as usize);
-                errors += u64::from(length);
+            8 => {
+                read_offset = read_offset.saturating_add(length);
+                ref_offset = ref_offset.saturating_add(length);
+                errors += length as u64;
             }
-            Cigar::Ins(length) => {
-                read_offset = read_offset.saturating_add(length as usize);
-                errors += u64::from(length);
+            1 => {
+                read_offset = read_offset.saturating_add(length);
+                errors += length as u64;
             }
-            Cigar::Del(length) => {
-                ref_offset = ref_offset.saturating_add(length as usize);
-                errors += u64::from(length);
+            2 => {
+                ref_offset = ref_offset.saturating_add(length);
+                errors += length as u64;
             }
-            Cigar::SoftClip(length) => {
-                read_offset = read_offset.saturating_add(length as usize);
+            4 => {
+                read_offset = read_offset.saturating_add(length);
             }
-            Cigar::RefSkip(length) => {
-                ref_offset = ref_offset.saturating_add(length as usize);
+            3 => {
+                ref_offset = ref_offset.saturating_add(length);
             }
-            Cigar::HardClip(_) | Cigar::Pad(_) => {}
+            _ => {}
         }
     }
 
@@ -15233,46 +16243,72 @@ fn ensure_cycle_quality_capacity(cycles: &mut Vec<CycleQuality>, needed: usize) 
 }
 
 impl MeanQualityByCycleSummary {
+    fn merge_from(&mut self, other: &Self) {
+        self.records += other.records;
+        self.original_records += other.original_records;
+        let add_cycles = |dst: &mut Vec<CycleQuality>, src: &[CycleQuality]| {
+            if dst.len() < src.len() {
+                dst.resize(src.len(), CycleQuality::default());
+            }
+            for (d, s) in dst.iter_mut().zip(src) {
+                d.quality_sum += s.quality_sum;
+                d.count += s.count;
+            }
+        };
+        add_cycles(&mut self.first, &other.first);
+        add_cycles(&mut self.second, &other.second);
+        add_cycles(&mut self.original_first, &other.original_first);
+        add_cycles(&mut self.original_second, &other.original_second);
+    }
+
     fn observe(&mut self, record: &bam::Record, aligned_reads_only: bool, pf_reads_only: bool) {
         if skip_quality_metric_record(record, aligned_reads_only, pf_reads_only) {
             return;
         }
         self.records += 1;
         let qualities = hts_io::base_qualities(record);
-        let cycles = if record.is_paired() && record.is_last_in_template() {
+        let is_reverse = record.is_reverse();
+        let is_second = record.is_paired() && record.is_last_in_template();
+        let cycles = if is_second {
             &mut self.second
         } else {
             &mut self.first
         };
         if !qualities.is_empty() {
-            ensure_cycle_quality_capacity(cycles, qualities.len());
-            for (cycle, quality) in qualities.iter().copied().enumerate() {
-                let cycle = if record.is_reverse() {
-                    qualities.len() - cycle - 1
-                } else {
-                    cycle
-                };
-                cycles[cycle].quality_sum += u64::from(quality);
-                cycles[cycle].count += 1;
+            let len = qualities.len();
+            ensure_cycle_quality_capacity(cycles, len);
+            if is_reverse {
+                for (slot, &quality) in cycles[..len].iter_mut().rev().zip(qualities) {
+                    slot.quality_sum += u64::from(quality);
+                    slot.count += 1;
+                }
+            } else {
+                for (slot, &quality) in cycles[..len].iter_mut().zip(qualities) {
+                    slot.quality_sum += u64::from(quality);
+                    slot.count += 1;
+                }
             }
         }
         if let Some(original_qualities) = original_quality_values(record) {
             self.original_records += 1;
-            let cycles = if record.is_paired() && record.is_last_in_template() {
+            let cycles = if is_second {
                 &mut self.original_second
             } else {
                 &mut self.original_first
             };
             if !original_qualities.is_empty() {
-                ensure_cycle_quality_capacity(cycles, original_qualities.len());
-                for (cycle, quality) in original_qualities.iter().copied().enumerate() {
-                    let cycle = if record.is_reverse() {
-                        original_qualities.len() - cycle - 1
-                    } else {
-                        cycle
-                    };
-                    cycles[cycle].quality_sum += u64::from(quality);
-                    cycles[cycle].count += 1;
+                let len = original_qualities.len();
+                ensure_cycle_quality_capacity(cycles, len);
+                if is_reverse {
+                    for (slot, quality) in cycles[..len].iter_mut().rev().zip(original_qualities) {
+                        slot.quality_sum += u64::from(quality);
+                        slot.count += 1;
+                    }
+                } else {
+                    for (slot, quality) in cycles[..len].iter_mut().zip(original_qualities) {
+                        slot.quality_sum += u64::from(quality);
+                        slot.count += 1;
+                    }
                 }
             }
         }
@@ -15415,6 +16451,47 @@ impl InsertSizeCollection {
             samples: BTreeMap::new(),
             libraries: BTreeMap::new(),
             read_groups: BTreeMap::new(),
+        }
+    }
+
+    fn finalize(&mut self) {
+        self.all_reads.finalize();
+        for summary in self.samples.values_mut() {
+            summary.finalize();
+        }
+        for summary in self.libraries.values_mut() {
+            summary.summary.finalize();
+        }
+        for summary in self.read_groups.values_mut() {
+            summary.summary.finalize();
+        }
+    }
+
+    fn merge_from(&mut self, other: Self) {
+        self.all_reads.merge_from(other.all_reads);
+        for (key, value) in other.samples {
+            self.samples.entry(key).or_default().merge_from(value);
+        }
+        for (key, value) in other.libraries {
+            self.libraries
+                .entry(key)
+                .or_insert_with(|| InsertSizeLibrarySummary {
+                    sample: value.sample,
+                    summary: InsertSizeSummary::default(),
+                })
+                .summary
+                .merge_from(value.summary);
+        }
+        for (key, value) in other.read_groups {
+            self.read_groups
+                .entry(key)
+                .or_insert_with(|| InsertSizeReadGroupSummary {
+                    sample: value.sample,
+                    library: value.library,
+                    summary: InsertSizeSummary::default(),
+                })
+                .summary
+                .merge_from(value.summary);
         }
     }
 
@@ -15680,12 +16757,95 @@ impl InsertSizeOrientation {
     }
 }
 
+const FAST_INSERT_CAP: usize = 4096;
+
 #[derive(Debug, Default)]
 struct InsertSizeSummary {
+    fast_bins: [Vec<u64>; 3],
+    overflow: [BTreeMap<u64, u64>; 3],
     histograms: BTreeMap<InsertSizeOrientation, BTreeMap<u64, u64>>,
 }
 
+impl InsertSizeOrientation {
+    #[inline]
+    fn idx(self) -> usize {
+        match self {
+            InsertSizeOrientation::Fr => 0,
+            InsertSizeOrientation::Rf => 1,
+            InsertSizeOrientation::Tandem => 2,
+        }
+    }
+
+    fn from_idx(idx: usize) -> Self {
+        match idx {
+            0 => InsertSizeOrientation::Fr,
+            1 => InsertSizeOrientation::Rf,
+            _ => InsertSizeOrientation::Tandem,
+        }
+    }
+}
+
 impl InsertSizeSummary {
+    #[inline]
+    fn record_size(&mut self, orientation: InsertSizeOrientation, size: u64) {
+        let idx = orientation.idx();
+        if let Ok(pos) = usize::try_from(size)
+            && pos < FAST_INSERT_CAP
+        {
+            let bins = &mut self.fast_bins[idx];
+            if bins.len() <= pos {
+                bins.resize((pos + 1).clamp(512, FAST_INSERT_CAP), 0);
+            }
+            bins[pos] += 1;
+        } else {
+            *self.overflow[idx].entry(size).or_default() += 1;
+        }
+    }
+
+    fn merge_from(&mut self, other: Self) {
+        for idx in 0..3 {
+            let src_fast = &other.fast_bins[idx];
+            if !src_fast.is_empty() {
+                let dst_fast = &mut self.fast_bins[idx];
+                if dst_fast.len() < src_fast.len() {
+                    dst_fast.resize(src_fast.len(), 0);
+                }
+                for (d, &s) in dst_fast.iter_mut().zip(src_fast) {
+                    *d += s;
+                }
+            }
+            for (k, v) in &other.overflow[idx] {
+                *self.overflow[idx].entry(*k).or_default() += *v;
+            }
+        }
+        for (orient, map) in other.histograms {
+            let entry = self.histograms.entry(orient).or_default();
+            for (k, v) in map {
+                *entry.entry(k).or_default() += v;
+            }
+        }
+    }
+
+    fn finalize(&mut self) {
+        for idx in 0..3 {
+            let orient = InsertSizeOrientation::from_idx(idx);
+            let fast = std::mem::take(&mut self.fast_bins[idx]);
+            let over = std::mem::take(&mut self.overflow[idx]);
+            let has_fast = fast.iter().any(|&c| c > 0);
+            if has_fast || !over.is_empty() {
+                let entry = self.histograms.entry(orient).or_default();
+                for (size, count) in fast.into_iter().enumerate() {
+                    if count > 0 {
+                        *entry.entry(size as u64).or_default() += count;
+                    }
+                }
+                for (size, count) in over {
+                    *entry.entry(size).or_default() += count;
+                }
+            }
+        }
+    }
+
     fn observe(&mut self, record: &bam::Record, include_duplicates: bool) -> bool {
         if !record.is_paired()
             || record.is_unmapped()
@@ -15703,12 +16863,7 @@ impl InsertSizeSummary {
             record.is_mate_reverse(),
             record.insert_size(),
         );
-        *self
-            .histograms
-            .entry(orientation)
-            .or_default()
-            .entry(record.insert_size().unsigned_abs())
-            .or_default() += 1;
+        self.record_size(orientation, record.insert_size().unsigned_abs());
         true
     }
 
@@ -15730,12 +16885,7 @@ impl InsertSizeSummary {
             return false;
         }
         let orientation = insert_size_orientation_from_flags(flags, insert_size);
-        *self
-            .histograms
-            .entry(orientation)
-            .or_default()
-            .entry(insert_size.unsigned_abs())
-            .or_default() += 1;
+        self.record_size(orientation, insert_size.unsigned_abs());
         true
     }
 
@@ -20766,6 +21916,8 @@ mod tests {
             active_contig: None,
             active_sequence: Vec::new(),
             active_gc_by_start: Vec::new(),
+            preloaded: None,
+            tid_to_preloaded: Vec::new(),
             total_clusters: 1,
             aligned_reads: 1,
             summary_aligned_reads: 1,
@@ -20777,6 +21929,34 @@ mod tests {
 
         let text = summary.detail_text(100, 0.0);
         assert!(text.contains("All Reads\tALL\t50\t2\t1\t20\t1\t1"));
+    }
+
+    #[test]
+    fn gc_bias_counts_mismatches_against_preloaded_reference() {
+        let dir = tempfile::tempdir().expect("tempdir exists");
+        let reference = dir.path().join("ref.fa");
+        fs::write(&reference, ">chr1\nAAAACCCCGGGGAAAACCCC\n").expect("reference is written");
+
+        let mut summary =
+            GcBiasMetricsSummary::new(reference.to_str().unwrap(), 4, false).expect("summary");
+        assert!(summary.preloaded.is_some());
+        let mut record = bam::Record::new();
+        record.set(
+            b"mismatched",
+            Some(&CigarString(vec![Cigar::Match(4)])),
+            b"TTTT",
+            b"FFFF",
+        );
+        record.set_tid(0);
+        record.set_pos(0);
+        record.set_flags(0);
+
+        summary
+            .observe(&record, &["chr1".to_string()], 4)
+            .expect("record is observed");
+
+        assert_eq!(summary.read_starts.iter().sum::<u64>(), 1);
+        assert_eq!(summary.errors_by_gc.iter().sum::<u64>(), 4);
     }
 
     #[test]

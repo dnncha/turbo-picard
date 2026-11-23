@@ -57,7 +57,9 @@ class MarketingSiteTests(unittest.TestCase):
 
     def test_catalogue_preserves_native_and_fallback_boundary(self) -> None:
         page = verify.Page((build.ROOT / "docs/site/commands/index.html").read_text())
-        assert page.commands["CollectRnaSeqMetrics"] == "fallback-only"
+        assert page.commands["CollectRrbsMetrics"] == "fallback-only"
+        assert page.commands["CollectRnaSeqMetrics"] == "partial-native"
+        assert page.commands["CollectSamErrorMetrics"] == "partial-native"
         assert page.commands["MarkDuplicates"] == "partial-native"
         assert len(page.commands) == 127
 

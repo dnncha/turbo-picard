@@ -4,7 +4,7 @@
 [![PyPI](https://img.shields.io/pypi/v/turbo-picard.svg)](https://pypi.org/project/turbo-picard/)
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.20541927.svg)](https://doi.org/10.5281/zenodo.20541927)
 
-**Native Rust implementations of 33 Picard commands, plus 6 Turbo Picard utilities, with Picard-checked outputs, `KEY=VALUE` flags, and transparent fallback to upstream Picard for the remaining 88 commands.**
+**Native Rust implementations of 35 Picard commands, plus 6 Turbo Picard utilities, with Picard-checked outputs, `KEY=VALUE` flags, and transparent fallback to upstream Picard for the remaining 86 commands.**
 
 <a href="https://turbo-picard.readthedocs.io/en/latest/evidence/"><picture><source media="(max-width: 700px)" srcset="https://raw.githubusercontent.com/dnncha/turbo-picard/main/docs/site/assets/competitor-card-mobile.png"><img src="https://raw.githubusercontent.com/dnncha/turbo-picard/main/docs/site/assets/competitor-card.png" width="100%" alt="Turbo Picard MarkDuplicates and 4x GRCh38 WGS timings and memory against Picard, Riker, FastDup, and samtools." ></picture></a>
 
@@ -91,7 +91,7 @@ cargo install --locked --path crates/turbo-picard-cli --bin turbo-picard --bin p
 
 ### Keep upstream Picard as automatic fallback
 
-`turbo-picard` runs natively when a command and its options fall inside its documented native scope (**39 commands**: 12 full-scope, 27 scoped-native), and forwards the remaining **88 commands** (or unsupported flags) to upstream Picard when configured:
+`turbo-picard` runs natively when a command and its options fall inside its documented native scope (**41 commands**: 12 full-scope, 29 scoped-native), and forwards the remaining **86 commands** (or unsupported flags) to upstream Picard when configured:
 
 ```bash
 mamba create -n turbo-picard -c conda-forge -c bioconda \
@@ -137,7 +137,7 @@ claude mcp add turbo-picard -- turbo-picard mcp
 
 ## When It Helps
 
-- You run `MarkDuplicates`, `SortSam`, `MergeSamFiles`, `SamToFastq`, `FastqToSam`, `FixMateInformation`, `BuildBamIndex`, `CollectWgsMetrics`, `CollectHsMetrics`, `CollectMultipleMetrics`, or VCF utilities and want lower wall time and memory without rewriting pipeline syntax.
+- You run `MarkDuplicates`, `SortSam`, `MergeSamFiles`, `SamToFastq`, `FastqToSam`, `FixMateInformation`, `BuildBamIndex`, `CollectWgsMetrics`, `CollectHsMetrics`, `CollectRnaSeqMetrics`, `CollectSamErrorMetrics`, `CollectMultipleMetrics`, or VCF utilities and want lower wall time and memory without rewriting pipeline syntax.
 - You need Picard-style command names, `KEY=VALUE` flags, and Picard-checked outputs (flags, tags, metrics text, histograms, indexes, MD5 sidecars) to stay intact.
 - You want a one-command-at-a-time rollout where unsupported commands or flags cleanly fall back to upstream Picard.
 - You want to compare outputs side by side on your own BAM/CRAM with [`tools/compare_real_data.py`](docs/real-data-evaluation.rst) before changing anything in a shared pipeline.
@@ -181,7 +181,7 @@ Saved benchmark run:
 - Date: `2026-08-14`
 - Command: `python3 tools/bench_suite.py --repeats 3 --skip-build`
 - Raw log: `docs/site/assets/bench-suite-output.txt`
-- benchmark exceptions: `AccelerationStatus`, `capabilities`, `doctor`, `explain`, `mcp`, and `trial` are utility commands, not Picard workload comparisons. `CollectHsMetrics` has separate ALL_READS and sidecar parity coverage, plus a real-data comparator path for pinned WES/capture intervals; representative capture-data performance evidence is still pending.
+- benchmark exceptions: `AccelerationStatus`, `capabilities`, `doctor`, `explain`, `mcp`, and `trial` are utility commands, not Picard workload comparisons. `CollectHsMetrics`, `CollectRnaSeqMetrics`, and `CollectSamErrorMetrics` have separate Picard parity coverage; suite-integrated small-fixture entries await representative capture/transcript/error fixtures in the automated suite.
 
 | Command | Speedup | Parity |
 | --- | ---: | :--- |

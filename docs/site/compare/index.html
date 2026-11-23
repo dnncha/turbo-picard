@@ -45,9 +45,9 @@
 <h2 id="matrix">Choose by the workflow contract.</h2>
 <p>Reference comparison reviewed on <strong>22 November 2026</strong> across speed, memory, CLI drop-in effort, and exact output requirements.</p>
 <div class="table-scroll" role="region" aria-label="Genomics tool trade-offs" tabindex="0"><table class="comparison-table"><thead><tr><th scope="col">Tool</th><th scope="col">Best fit</th><th scope="col">Trade-offs &amp; parity boundary</th></tr></thead><tbody>
-<tr><th scope="row">Turbo Picard</th><td>Speed up existing Picard commands without rewriting WDL, Nextflow, Snakemake, or shell tasks.</td><td>Exact <code>KEY=VALUE</code> CLI, Picard-identical checked outputs across 39 native commands, automatic fallback for the other 88.</td></tr>
+<tr><th scope="row">Turbo Picard</th><td>Speed up existing Picard commands without rewriting WDL, Nextflow, Snakemake, or shell tasks.</td><td>Exact <code>KEY=VALUE</code> CLI, Picard-identical checked outputs across 41 native commands, automatic fallback for the other 86.</td></tr>
 <tr><th scope="row">Upstream Picard</th><td>Commands outside Turbo Picard’s native scope or workflows requiring full R-rendered chart PDFs.</td><td>JVM startup and higher memory footprint; used as fallback target and truth reference.</td></tr>
-<tr><th scope="row">Riker</th><td>Greenfield QC-only pipelines adopting Riker’s simplified TSV schema, plots, and RNA-seq collector.</td><td>No duplicate marking, sorting, FASTQ, or VCF commands; intentional metric divergences from Picard; higher peak RSS on 4x–15x WGS (504–518 MB vs 125–274 MB).</td></tr>
+<tr><th scope="row">Riker</th><td>Greenfield QC-only pipelines adopting Riker’s simplified TSV schema, plots, GTF/GFF3 RNA-seq models, or BigWig tracks.</td><td>No duplicate marking, sorting, FASTQ, or VCF commands; intentional metric divergences from Picard; higher peak RSS on 4x–15x WGS (504–518 MB vs 125–274 MB).</td></tr>
 <tr><th scope="row">FastDup</th><td>High-thread-count duplicate marking when Picard CLI/metric parity is not required.</td><td>Custom CLI; higher RSS than Turbo Picard (~384 MiB vs ~94 MiB on 1-CPU tests); differs on representative selection and metric columns.</td></tr>
 <tr><th scope="row">samtools / Sambamba</th><td>Pipelines already structured around <code>samtools fixmate -m | sort | markdup</code> or Sambamba subcommands.</td><td>Different CLI, different multi-step input ordering requirements, and distinct duplicate/supplementary flags vs Picard.</td></tr>
 <tr><th scope="row">SAMBLASTER / dupblaster</th><td>Streaming duplicate marking directly inside the aligner pipe before coordinate sorting.</td><td>Requires query-grouped aligner stream; replaces a pipeline stage rather than a post-sort Picard step.</td></tr>
@@ -58,7 +58,7 @@
 <p>Configured upstream fallback handles unsupported commands and edge options safely, while <code>TURBO_PICARD_REQUIRE_NATIVE=1</code> lets you guarantee no silent Java fallback during native benchmarking or production execution.</p>
 <h2 id="other">When a specialist still wins</h2>
 <ul>
-<li><strong>Greenfield RNA-seq QC:</strong> <code>CollectRnaSeqMetrics</code> is fallback-only in Turbo Picard today, whereas Riker includes native RNA-seq QC collectors.</li>
+<li><strong>GTF/GFF3 RNA-seq models or BigWig tracks:</strong> Turbo Picard runs refFlat <code>CollectRnaSeqMetrics</code> and <code>CollectSamErrorMetrics</code> natively with Picard-identical TSV outputs, while Riker includes native GTF/GFF3 transcript annotation and BigWig per-base depth tracks.</li>
 <li><strong>Pre-sort aligner pipes:</strong> If you are designing a brand-new alignment pipeline and do not need Picard compatibility or post-sort optical families, <code>SAMBLASTER</code> or <code>dupblaster</code> in the aligner stream avoids an extra pass.</li>
 <li><strong>Native samtools chains:</strong> If your workflow already runs <code>samtools fixmate -m</code> before sorting, <code>samtools markdup</code> avoids adding a separate command layer—just validate downstream tag expectations.</li>
 </ul>

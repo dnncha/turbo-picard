@@ -209,6 +209,7 @@ fn canonical_key_for_command(command: &str, key: &str) -> Result<String, PicardA
             | "CollectBaseDistributionByCycle"
             | "CollectGcBiasMetrics"
             | "CollectHsMetrics"
+            | "CollectRnaSeqMetrics"
             | "QualityScoreDistribution"
             | "MeanQualityByCycle"
             | "CollectInsertSizeMetrics"
@@ -227,22 +228,35 @@ fn canonical_key_for_command(command: &str, key: &str) -> Result<String, PicardA
         (
             "CollectAlignmentSummaryMetrics"
             | "CollectInsertSizeMetrics"
-            | "CollectMultipleMetrics",
+            | "CollectMultipleMetrics"
+            | "CollectRnaSeqMetrics",
             "LEVEL",
         ) => "METRIC_ACCUMULATION_LEVEL",
         (
             "CollectBaseDistributionByCycle"
             | "CollectGcBiasMetrics"
+            | "CollectRnaSeqMetrics"
             | "QualityScoreDistribution"
             | "MeanQualityByCycle",
             "CHART",
         ) => "CHART_OUTPUT",
+        ("CollectRnaSeqMetrics", "STRAND") => "STRAND_SPECIFICITY",
+        ("CollectSamErrorMetrics" | "CollectMultipleMetrics", "EXT") => "FILE_EXTENSION",
+        ("CollectSamErrorMetrics", "L") => "INTERVALS",
+        ("CollectSamErrorMetrics", "LBS") => "LOCATION_BIN_SIZE",
+        ("CollectSamErrorMetrics", "LH") => "LONG_HOMOPOLYMER",
+        ("CollectSamErrorMetrics", "MAX") => "MAX_LOCI",
+        ("CollectSamErrorMetrics", "BQ") => "MIN_BASE_Q",
+        ("CollectSamErrorMetrics", "MQ") => "MIN_MAPPING_Q",
+        ("CollectSamErrorMetrics", "PE") => "PRIOR_Q",
+        ("CollectSamErrorMetrics", "P") => "PROBABILITY",
+        ("CollectSamErrorMetrics", "V") => "VCF",
         ("CollectGcBiasMetrics", "S") => "SUMMARY_OUTPUT",
         ("CollectGcBiasMetrics", "WINDOW_SIZE") => "SCAN_WINDOW_SIZE",
         ("CollectGcBiasMetrics", "MGF") => "MINIMUM_GENOME_FRACTION",
         ("CollectGcBiasMetrics", "BS") => "IS_BISULFITE_SEQUENCED",
         ("CollectHsMetrics", "BAIT" | "BI") => "BAIT_INTERVALS",
-        ("CollectHsMetrics", "TARGET") => "TARGET_INTERVALS",
+        ("CollectHsMetrics", "TARGET" | "TI") => "TARGET_INTERVALS",
         ("CollectHsMetrics", "N") => "BAIT_SET_NAME",
         ("CollectHsMetrics" | "CollectWgsMetrics", "MQ") => "MINIMUM_MAPPING_QUALITY",
         ("CollectHsMetrics" | "CollectWgsMetrics", "Q") => "MINIMUM_BASE_QUALITY",
@@ -273,7 +287,6 @@ fn canonical_key_for_command(command: &str, key: &str) -> Result<String, PicardA
         ("QualityScoreDistribution", "PF") => "PF_READS_ONLY",
         ("CollectInsertSizeMetrics", "H" | "HISTOGRAM") => "HISTOGRAM_FILE",
         ("CollectInsertSizeMetrics", "M") => "MINIMUM_PCT",
-        ("CollectMultipleMetrics", "EXT") => "FILE_EXTENSION",
         ("CreateSequenceDictionary", "AS") => "GENOME_ASSEMBLY",
         ("CreateSequenceDictionary", "UR") => "URI",
         ("CreateSequenceDictionary", "SP") => "SPECIES",

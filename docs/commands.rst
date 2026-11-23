@@ -67,6 +67,8 @@ Metrics and repair examples
    picard CollectInsertSizeMetrics I=input.bam O=insert_size_metrics.txt H=insert_size_histogram.pdf
    picard CollectGcBiasMetrics I=input.bam O=gc_bias_detail.txt S=gc_bias_summary.txt CHART=gc_bias.pdf R=reference.fa
    picard CollectHsMetrics I=input.bam O=hs_metrics.txt BAIT=baits.interval_list TARGET=targets.interval_list R=reference.fa
+   picard CollectRnaSeqMetrics I=input.bam O=rna_metrics.txt REF_FLAT=refFlat.txt STRAND_SPECIFICITY=NONE
+   picard CollectSamErrorMetrics I=input.bam O=error_metrics R=reference.fa
    picard CollectMultipleMetrics I=input.bam O=multiple_metrics PROGRAM=CollectInsertSizeMetrics
    picard CollectWgsMetrics I=input.bam O=wgs_metrics.txt R=reference.fa COUNT_UNPAIRED=true
    picard CollectWgsMetrics I=input.bam O=wgs_metrics.fast.txt R=reference.fa COUNT_UNPAIRED=true USE_FAST_ALGORITHM=true
@@ -106,8 +108,8 @@ evidence in one schema-versioned response for coding agents and CI policies.
 
 Current matrix status summary:
 
-* ``39 accelerated`` commands with native or partial-native Rust implementations
-* ``88 delegated`` Picard 3.4.0 commands forwarded to upstream Picard
+* ``41 accelerated`` commands with native or partial-native Rust implementations
+* ``86 delegated`` Picard 3.4.0 commands forwarded to upstream Picard
 
 Accelerated command status:
 
@@ -124,6 +126,13 @@ Accelerated command status:
   hybrid-capture metrics, histogram, per-target coverage, and per-base
   coverage; unsupported advanced options remain delegated.
 * ``CollectQualityYieldMetrics``: ``native``
+* ``CollectRnaSeqMetrics``: ``partial-native`` for refFlat RNA-seq metrics,
+  multi-level accumulation, ribosomal intervals, strand specificity, 5'/3'
+  normalized coverage histogram, and chart PDF summaries.
+* ``CollectSamErrorMetrics``: ``partial-native`` for error, indel-error, and
+  overlapping-read error calculators across the 26 default stratifiers, custom
+  directives, intervals, and ``MAX_LOCI``; VCF filtering and downsampling remain
+  delegated.
 * ``CollectWgsMetrics``: ``partial-native``. ``INCLUDE_BQ_HISTOGRAM`` defaults
   to ``false`` to match Picard 3.4.0 histogram output. ``USE_FAST_ALGORITHM=true``
   stays native and defaults ``SAMPLE_SIZE`` to ``0`` unless it is set explicitly.

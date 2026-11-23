@@ -4,6 +4,7 @@ use std::collections::BTreeMap;
 use std::fmt::Write as FmtWrite;
 use std::fs;
 use std::io::{BufWriter, Write};
+use std::sync::Arc;
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -229,6 +230,17 @@ struct TargetCoverage {
     read_count: u64,
 }
 
+impl TargetCoverage {
+    #[inline]
+    fn ensure_allocated(&mut self) {
+        if self.unfiltered_depths.is_empty() {
+            let length = index_from(self.span.end.saturating_sub(self.span.start));
+            self.unfiltered_depths.resize(length, 0);
+            self.high_quality_depths.resize(length, 0);
+        }
+    }
+}
+
 #[derive(Debug, Default)]
 struct OverlapBitmap {
     words: Vec<u64>,
@@ -316,9 +328,9 @@ impl MateBuffer {
 
 #[derive(Debug)]
 pub struct HsMetricsCollector {
-    config: HsMetricsConfig,
-    bait_index: IntervalIndex,
-    target_index: IntervalIndex,
+    config: Arc<HsMetricsConfig>,
+    bait_index: Arc<IntervalIndex>,
+    target_index: Arc<IntervalIndex>,
     targets: Vec<TargetCoverage>,
     target_territory: u64,
     bait_territory: u64,
@@ -348,7 +360,6 @@ pub struct HsMetricsCollector {
     tid_cache_len: usize,
     tid_to_bait: Vec<Option<usize>>,
     tid_to_target: Vec<Option<usize>>,
-    read_bases: Vec<u8>,
     covered_targets: FxHashSet<usize>,
 }
 
@@ -398,9 +409,9 @@ impl HsMetricsCollector {
             .sum();
 
         Ok(Self {
-            config: config.clone(),
-            bait_index: IntervalIndex::from_spans(&bait_spans),
-            target_index: IntervalIndex::from_spans(&target_spans),
+            config: Arc::new(config.clone()),
+            bait_index: Arc::new(IntervalIndex::from_spans(&bait_spans)),
+            target_index: Arc::new(IntervalIndex::from_spans(&target_spans)),
             targets,
             target_territory,
             bait_territory,
@@ -430,9 +441,101 @@ impl HsMetricsCollector {
             tid_cache_len: usize::MAX,
             tid_to_bait: Vec::new(),
             tid_to_target: Vec::new(),
-            read_bases: Vec::new(),
             covered_targets: FxHashSet::default(),
         })
+    }
+
+    fn clone_empty(&self) -> Self {
+        Self {
+            config: Arc::clone(&self.config),
+            bait_index: Arc::clone(&self.bait_index),
+            target_index: Arc::clone(&self.target_index),
+            targets: self
+                .targets
+                .iter()
+                .map(|target| TargetCoverage {
+                    span: target.span.clone(),
+                    high_quality_depths: Vec::new(),
+                    unfiltered_depths: Vec::new(),
+                    gc_fraction: target.gc_fraction,
+                    gc_percent: target.gc_percent,
+                    read_count: 0,
+                })
+                .collect(),
+            target_territory: self.target_territory,
+            bait_territory: self.bait_territory,
+            total_reads: 0,
+            pf_reads: 0,
+            pf_bases: 0,
+            pf_unique_reads: 0,
+            pf_uq_reads_aligned: 0,
+            pf_bases_aligned: 0,
+            pf_uq_bases_aligned: 0,
+            on_target_bases: 0,
+            on_target_from_pair_bases: 0,
+            on_bait_bases: 0,
+            near_bait_bases: 0,
+            off_bait_bases: 0,
+            selected_pairs: 0,
+            selected_unique_pairs: 0,
+            excluded_dupe: 0,
+            excluded_adapter: 0,
+            excluded_mapq: 0,
+            excluded_baseq: 0,
+            excluded_overlap: 0,
+            excluded_off_target: 0,
+            baseq_histogram: [0; 256],
+            uncapped_baseq_histogram: [0; 256],
+            mate_buffer: MateBuffer::default(),
+            tid_cache_len: usize::MAX,
+            tid_to_bait: Vec::new(),
+            tid_to_target: Vec::new(),
+            covered_targets: FxHashSet::default(),
+        }
+    }
+
+    fn merge_from(&mut self, other: Self) {
+        self.total_reads += other.total_reads;
+        self.pf_reads += other.pf_reads;
+        self.pf_bases += other.pf_bases;
+        self.pf_unique_reads += other.pf_unique_reads;
+        self.pf_uq_reads_aligned += other.pf_uq_reads_aligned;
+        self.pf_bases_aligned += other.pf_bases_aligned;
+        self.pf_uq_bases_aligned += other.pf_uq_bases_aligned;
+        self.on_target_bases += other.on_target_bases;
+        self.on_target_from_pair_bases += other.on_target_from_pair_bases;
+        self.on_bait_bases += other.on_bait_bases;
+        self.near_bait_bases += other.near_bait_bases;
+        self.off_bait_bases += other.off_bait_bases;
+        self.selected_pairs += other.selected_pairs;
+        self.selected_unique_pairs += other.selected_unique_pairs;
+        self.excluded_dupe += other.excluded_dupe;
+        self.excluded_adapter += other.excluded_adapter;
+        self.excluded_mapq += other.excluded_mapq;
+        self.excluded_baseq += other.excluded_baseq;
+        self.excluded_overlap += other.excluded_overlap;
+        self.excluded_off_target += other.excluded_off_target;
+        for i in 0..256 {
+            self.baseq_histogram[i] += other.baseq_histogram[i];
+            self.uncapped_baseq_histogram[i] += other.uncapped_baseq_histogram[i];
+        }
+        let cap = self.config.coverage_cap;
+        for (dst, src) in self.targets.iter_mut().zip(other.targets) {
+            dst.read_count += src.read_count;
+            if !src.unfiltered_depths.is_empty() {
+                dst.ensure_allocated();
+                for (d, s) in dst.unfiltered_depths.iter_mut().zip(src.unfiltered_depths) {
+                    *d = d.saturating_add(s).min(cap);
+                }
+                for (d, s) in dst
+                    .high_quality_depths
+                    .iter_mut()
+                    .zip(src.high_quality_depths)
+                {
+                    *d = d.saturating_add(s);
+                }
+            }
+        }
     }
 
     fn ensure_tid_cache(&mut self, target_names: &[String]) {
@@ -539,13 +642,17 @@ impl HsMetricsCollector {
             self.excluded_dupe += aligned_bases;
             return Ok(());
         }
-        if record.mapq() == 0 {
-            self.read_bases.clear();
-            self.read_bases.extend(record.seq().as_bytes());
-            if super::is_adapter_read(&self.read_bases, false, 0, record.is_reverse()) {
-                self.excluded_adapter += aligned_bases;
-                return Ok(());
-            }
+        if record.mapq() == 0
+            && super::is_adapter_read_encoded(
+                record.seq().encoded,
+                record.seq_len(),
+                false,
+                0,
+                record.is_reverse(),
+            )
+        {
+            self.excluded_adapter += aligned_bases;
+            return Ok(());
         }
         if record.mapq() < self.config.minimum_mapping_quality {
             self.excluded_mapq += aligned_bases;
@@ -613,16 +720,27 @@ impl HsMetricsCollector {
             let length = (raw >> 4) as usize;
             match raw & 0xf {
                 0 | 7 | 8 => {
-                    for index in 0..length {
-                        let quality = qualities.get(read_offset + index).copied().unwrap_or(0);
-                        self.observe_base_in_id(
+                    if scan.overlap_mode.is_none() && read_offset + length <= qualities.len() {
+                        self.observe_aligned_block_no_overlap(
                             target_id,
-                            reference_offset + index as u64,
-                            quality,
+                            reference_offset,
+                            &qualities[read_offset..read_offset + length],
                             mapped_in_pair,
-                            true,
-                            &mut scan,
+                            &mut scan.covered_targets,
+                            &mut scan.target_cursor,
                         );
+                    } else {
+                        for index in 0..length {
+                            let quality = qualities.get(read_offset + index).copied().unwrap_or(0);
+                            self.observe_base_in_id(
+                                target_id,
+                                reference_offset + index as u64,
+                                quality,
+                                mapped_in_pair,
+                                true,
+                                &mut scan,
+                            );
+                        }
                     }
                     read_offset += length;
                     reference_offset += length as u64;
@@ -688,6 +806,80 @@ impl HsMetricsCollector {
         );
     }
 
+    fn observe_aligned_block_no_overlap(
+        &mut self,
+        target_id: Option<usize>,
+        block_start: u64,
+        qualities: &[u8],
+        mapped_in_pair: bool,
+        covered_targets: &mut FxHashSet<usize>,
+        target_cursor: &mut TargetCursor,
+    ) {
+        let min_bq = self.config.minimum_base_quality;
+        let cap = self.config.coverage_cap;
+        let mut pos = block_start;
+        let mut q_off = 0_usize;
+        let block_end = block_start + qualities.len() as u64;
+        while pos < block_end {
+            if pos >= target_cursor.end {
+                let target_spans = self.target_index.spans_by_id(target_id);
+                target_cursor.index = IntervalIndex::index_at_slice(target_spans, pos);
+                target_cursor.end = if let Some(index) = target_cursor.index {
+                    self.targets[index].span.end
+                } else {
+                    IntervalIndex::candidates_slice(target_spans, pos, u64::MAX)
+                        .next()
+                        .map_or(u64::MAX, |span| span.start)
+                };
+            }
+            let chunk_end = block_end.min(target_cursor.end);
+            let chunk_len = index_from(chunk_end - pos);
+            let sub_q = &qualities[q_off..q_off + chunk_len];
+            if let Some(target_index) = target_cursor.index {
+                let low_q = sub_q.iter().filter(|&&q| q < min_bq).count() as u64;
+                let high_q = chunk_len as u64 - low_q;
+                self.excluded_baseq += low_q;
+                self.on_target_bases += high_q;
+                if mapped_in_pair {
+                    self.on_target_from_pair_bases += high_q;
+                }
+
+                let target = &mut self.targets[target_index];
+                target.ensure_allocated();
+                let target_offset = index_from(pos.saturating_sub(target.span.start));
+                let avail =
+                    chunk_len.min(target.unfiltered_depths.len().saturating_sub(target_offset));
+                let mut saw_hq = false;
+                for (i, &q) in sub_q[..avail].iter().enumerate() {
+                    if q <= 2 {
+                        continue;
+                    }
+                    let u_slot = &mut target.unfiltered_depths[target_offset + i];
+                    let within_cap = *u_slot < cap;
+                    *u_slot = u_slot.saturating_add(1).min(cap);
+                    if within_cap {
+                        self.baseq_histogram[q as usize] += 1;
+                    }
+                    self.uncapped_baseq_histogram[q as usize] += 1;
+                    if q >= min_bq {
+                        target.high_quality_depths[target_offset + i] =
+                            target.high_quality_depths[target_offset + i].saturating_add(1);
+                        saw_hq = true;
+                    }
+                }
+                if saw_hq && covered_targets.insert(target_index) {
+                    target.read_count = target.read_count.saturating_add(1);
+                }
+            } else {
+                let low_q = sub_q.iter().filter(|&&q| q < min_bq).count() as u64;
+                self.excluded_baseq += low_q;
+                self.excluded_off_target += chunk_len as u64 - low_q;
+            }
+            pos = chunk_end;
+            q_off += chunk_len;
+        }
+    }
+
     fn observe_base_in_id(
         &mut self,
         target_id: Option<usize>,
@@ -745,6 +937,7 @@ impl HsMetricsCollector {
         }
 
         let target = &mut self.targets[target_index];
+        target.ensure_allocated();
         let target_offset = index_from(reference_position.saturating_sub(target.span.start));
         let Some(unfiltered_depth) = target.unfiltered_depths.get_mut(target_offset) else {
             return;
@@ -1413,6 +1606,56 @@ fn estimate_roi(
     let library_size = library_size as f64;
     library_size * (1.0 - (-(coverage_multiple * read_pairs as f64) / library_size).exp())
         / unique_pairs as f64
+}
+
+pub(crate) fn collect_hs_metrics_path(
+    input: &str,
+    reference: Option<&str>,
+    config: &HsMetricsConfig,
+) -> Result<Option<String>, HsMetricsError> {
+    let workers = super::bam_parallel::parallel_workers();
+    if workers < 2 || config.stop_after > 0 {
+        return Ok(None);
+    }
+    let Some(index) = super::bam_parallel::current_index_for(input) else {
+        return Ok(None);
+    };
+    let Ok(probe) = super::bam_parallel::open_indexed_optional_ref(input, &index, reference) else {
+        return Ok(None);
+    };
+    let target_names = probe
+        .header()
+        .target_names()
+        .iter()
+        .map(|name| String::from_utf8_lossy(name).to_string())
+        .collect::<Vec<_>>();
+    drop(probe);
+
+    let mut combined = HsMetricsCollector::new(config)?;
+    let template = &combined;
+    let res = super::bam_parallel::collect_indexed_parallel(
+        input,
+        reference,
+        workers,
+        false,
+        || Ok(template.clone_empty()),
+        |local, record| {
+            local
+                .observe(record, &target_names)
+                .map_err(|error| error.to_string())
+        },
+        HsMetricsCollector::merge_from,
+    )
+    .map_err(|error| HsMetricsError::Io(std::io::Error::other(error)))?;
+
+    let Some((worker_merged, _)) = res else {
+        return Ok(None);
+    };
+    combined.merge_from(worker_merged);
+    combined.mate_buffer.clear();
+    let metrics_text = combined.to_picard_text();
+    combined.write_sidecar_outputs()?;
+    Ok(Some(metrics_text))
 }
 
 pub fn collect_hs_metrics<R: Read>(
