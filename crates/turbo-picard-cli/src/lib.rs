@@ -5515,38 +5515,45 @@ fn run_collectmultiplemetrics_single_pass(
                 let read_groups = Arc::clone(&read_groups);
                 let target_names = Arc::clone(&target_names);
                 let alignment_reference_cache = alignment_reference_cache.as_ref().map(Arc::clone);
-                handlers.push(Box::new(move |batch| {
-                    let mut alignment_metrics = alignment_worker
-                        .lock()
-                        .map_err(|_| "alignment collector lock poisoned".to_string())?;
-                    let mut insert_size_metrics = insert_size_worker
-                        .lock()
-                        .map_err(|_| "insert-size collector lock poisoned".to_string())?;
-                    for entry in batch {
-                        if !entry.gates.alignment && !entry.gates.insert_size {
-                            continue;
+                handlers.push((
+                    "alignment+insert-size",
+                    Box::new(move |batch| {
+                        let mut alignment_metrics = alignment_worker
+                            .lock()
+                            .map_err(|_| "alignment collector lock poisoned".to_string())?;
+                        let mut insert_size_metrics = insert_size_worker
+                            .lock()
+                            .map_err(|_| "insert-size collector lock poisoned".to_string())?;
+                        for entry in batch {
+                            if !entry.gates.alignment && !entry.gates.insert_size {
+                                continue;
+                            }
+                            let record = &entry.record;
+                            let read_group =
+                                insert_size_read_group_for_bam_record(record, read_groups.as_ref());
+                            if entry.gates.alignment {
+                                let mismatch_bases = alignment_reference_mismatch_bases_locked(
+                                    record,
+                                    target_names.as_slice(),
+                                    alignment_reference_cache.as_deref(),
+                                )?;
+                                alignment_metrics.observe(
+                                    record,
+                                    read_group.as_ref(),
+                                    mismatch_bases,
+                                );
+                            }
+                            if entry.gates.insert_size {
+                                insert_size_metrics.observe(
+                                    record,
+                                    include_duplicates,
+                                    read_group.as_ref(),
+                                );
+                            }
                         }
-                        let record = &entry.record;
-                        let read_group =
-                            insert_size_read_group_for_bam_record(record, read_groups.as_ref());
-                        if entry.gates.alignment {
-                            let mismatch_bases = alignment_reference_mismatch_bases_locked(
-                                record,
-                                target_names.as_slice(),
-                                alignment_reference_cache.as_deref(),
-                            )?;
-                            alignment_metrics.observe(record, read_group.as_ref(), mismatch_bases);
-                        }
-                        if entry.gates.insert_size {
-                            insert_size_metrics.observe(
-                                record,
-                                include_duplicates,
-                                read_group.as_ref(),
-                            );
-                        }
-                    }
-                    Ok(())
-                }));
+                        Ok(())
+                    }),
+                ));
             }
 
             if !combine_alignment_and_insert_size && let Some((worker, _)) = &alignment_worker {
@@ -5554,26 +5561,29 @@ fn run_collectmultiplemetrics_single_pass(
                 let read_groups = Arc::clone(&read_groups);
                 let target_names = Arc::clone(&target_names);
                 let alignment_reference_cache = alignment_reference_cache.as_ref().map(Arc::clone);
-                handlers.push(Box::new(move |batch| {
-                    let mut metrics = worker
-                        .lock()
-                        .map_err(|_| "alignment collector lock poisoned".to_string())?;
-                    for entry in batch {
-                        if !entry.gates.alignment {
-                            continue;
+                handlers.push((
+                    "alignment",
+                    Box::new(move |batch| {
+                        let mut metrics = worker
+                            .lock()
+                            .map_err(|_| "alignment collector lock poisoned".to_string())?;
+                        for entry in batch {
+                            if !entry.gates.alignment {
+                                continue;
+                            }
+                            let record = &entry.record;
+                            let read_group =
+                                insert_size_read_group_for_bam_record(record, read_groups.as_ref());
+                            let mismatch_bases = alignment_reference_mismatch_bases_locked(
+                                record,
+                                target_names.as_slice(),
+                                alignment_reference_cache.as_deref(),
+                            )?;
+                            metrics.observe(record, read_group.as_ref(), mismatch_bases);
                         }
-                        let record = &entry.record;
-                        let read_group =
-                            insert_size_read_group_for_bam_record(record, read_groups.as_ref());
-                        let mismatch_bases = alignment_reference_mismatch_bases_locked(
-                            record,
-                            target_names.as_slice(),
-                            alignment_reference_cache.as_deref(),
-                        )?;
-                        metrics.observe(record, read_group.as_ref(), mismatch_bases);
-                    }
-                    Ok(())
-                }));
+                        Ok(())
+                    }),
+                ));
             }
             if !combine_alignment_and_insert_size
                 && let Some((worker, _, _, include_duplicates, _, _)) = &insert_size_worker
@@ -5581,21 +5591,24 @@ fn run_collectmultiplemetrics_single_pass(
                 let worker = Arc::clone(worker);
                 let read_groups = Arc::clone(&read_groups);
                 let include_duplicates = *include_duplicates;
-                handlers.push(Box::new(move |batch| {
-                    let mut metrics = worker
-                        .lock()
-                        .map_err(|_| "insert-size collector lock poisoned".to_string())?;
-                    for entry in batch {
-                        if !entry.gates.insert_size {
-                            continue;
+                handlers.push((
+                    "insert-size",
+                    Box::new(move |batch| {
+                        let mut metrics = worker
+                            .lock()
+                            .map_err(|_| "insert-size collector lock poisoned".to_string())?;
+                        for entry in batch {
+                            if !entry.gates.insert_size {
+                                continue;
+                            }
+                            let record = &entry.record;
+                            let read_group =
+                                insert_size_read_group_for_bam_record(record, read_groups.as_ref());
+                            metrics.observe(record, include_duplicates, read_group.as_ref());
                         }
-                        let record = &entry.record;
-                        let read_group =
-                            insert_size_read_group_for_bam_record(record, read_groups.as_ref());
-                        metrics.observe(record, include_duplicates, read_group.as_ref());
-                    }
-                    Ok(())
-                }));
+                        Ok(())
+                    }),
+                ));
             }
             if let Some((worker, _, _, aligned_reads_only, pf_reads_only)) =
                 &base_distribution_worker
@@ -5603,19 +5616,22 @@ fn run_collectmultiplemetrics_single_pass(
                 let worker = Arc::clone(worker);
                 let aligned_reads_only = *aligned_reads_only;
                 let pf_reads_only = *pf_reads_only;
-                handlers.push(Box::new(move |batch| {
-                    let mut metrics = worker
-                        .lock()
-                        .map_err(|_| "base-distribution collector lock poisoned".to_string())?;
-                    for entry in batch {
-                        if !entry.gates.base_distribution {
-                            continue;
+                handlers.push((
+                    "base-distribution",
+                    Box::new(move |batch| {
+                        let mut metrics = worker
+                            .lock()
+                            .map_err(|_| "base-distribution collector lock poisoned".to_string())?;
+                        for entry in batch {
+                            if !entry.gates.base_distribution {
+                                continue;
+                            }
+                            let record = &entry.record;
+                            metrics.observe(record, aligned_reads_only, pf_reads_only);
                         }
-                        let record = &entry.record;
-                        metrics.observe(record, aligned_reads_only, pf_reads_only);
-                    }
-                    Ok(())
-                }));
+                        Ok(())
+                    }),
+                ));
             }
             if let Some((worker, _, _, aligned_reads_only, pf_reads_only, include_no_calls)) =
                 &quality_distribution_worker
@@ -5624,42 +5640,48 @@ fn run_collectmultiplemetrics_single_pass(
                 let aligned_reads_only = *aligned_reads_only;
                 let pf_reads_only = *pf_reads_only;
                 let include_no_calls = *include_no_calls;
-                handlers.push(Box::new(move |batch| {
-                    let mut metrics = worker
-                        .lock()
-                        .map_err(|_| "quality-distribution collector lock poisoned".to_string())?;
-                    for entry in batch {
-                        if !entry.gates.quality_distribution {
-                            continue;
+                handlers.push((
+                    "quality-distribution",
+                    Box::new(move |batch| {
+                        let mut metrics = worker.lock().map_err(|_| {
+                            "quality-distribution collector lock poisoned".to_string()
+                        })?;
+                        for entry in batch {
+                            if !entry.gates.quality_distribution {
+                                continue;
+                            }
+                            let record = &entry.record;
+                            metrics.observe(
+                                record,
+                                aligned_reads_only,
+                                pf_reads_only,
+                                include_no_calls,
+                            );
                         }
-                        let record = &entry.record;
-                        metrics.observe(
-                            record,
-                            aligned_reads_only,
-                            pf_reads_only,
-                            include_no_calls,
-                        );
-                    }
-                    Ok(())
-                }));
+                        Ok(())
+                    }),
+                ));
             }
             if let Some((worker, _, _, aligned_reads_only, pf_reads_only)) = &mean_quality_worker {
                 let worker = Arc::clone(worker);
                 let aligned_reads_only = *aligned_reads_only;
                 let pf_reads_only = *pf_reads_only;
-                handlers.push(Box::new(move |batch| {
-                    let mut metrics = worker
-                        .lock()
-                        .map_err(|_| "mean-quality collector lock poisoned".to_string())?;
-                    for entry in batch {
-                        if !entry.gates.mean_quality {
-                            continue;
+                handlers.push((
+                    "mean-quality",
+                    Box::new(move |batch| {
+                        let mut metrics = worker
+                            .lock()
+                            .map_err(|_| "mean-quality collector lock poisoned".to_string())?;
+                        for entry in batch {
+                            if !entry.gates.mean_quality {
+                                continue;
+                            }
+                            let record = &entry.record;
+                            metrics.observe(record, aligned_reads_only, pf_reads_only);
                         }
-                        let record = &entry.record;
-                        metrics.observe(record, aligned_reads_only, pf_reads_only);
-                    }
-                    Ok(())
-                }));
+                        Ok(())
+                    }),
+                ));
             }
             if let Some((
                 worker,
@@ -5673,65 +5695,74 @@ fn run_collectmultiplemetrics_single_pass(
                 let use_original_qualities = *use_original_qualities;
                 let include_secondary = *include_secondary;
                 let include_supplemental = *include_supplemental;
-                handlers.push(Box::new(move |batch| {
-                    let mut metrics = worker
-                        .lock()
-                        .map_err(|_| "quality-yield collector lock poisoned".to_string())?;
-                    for entry in batch {
-                        if !entry.gates.quality_yield {
-                            continue;
+                handlers.push((
+                    "quality-yield",
+                    Box::new(move |batch| {
+                        let mut metrics = worker
+                            .lock()
+                            .map_err(|_| "quality-yield collector lock poisoned".to_string())?;
+                        for entry in batch {
+                            if !entry.gates.quality_yield {
+                                continue;
+                            }
+                            let record = &entry.record;
+                            metrics.observe(
+                                record,
+                                use_original_qualities,
+                                include_secondary,
+                                include_supplemental,
+                            );
                         }
-                        let record = &entry.record;
-                        metrics.observe(
-                            record,
-                            use_original_qualities,
-                            include_secondary,
-                            include_supplemental,
-                        );
-                    }
-                    Ok(())
-                }));
+                        Ok(())
+                    }),
+                ));
             }
             if let Some((worker, _, _, _, window_size, _)) = &gc_bias_worker {
                 let worker = Arc::clone(worker);
                 let target_names = Arc::clone(&target_names);
                 let window_size = *window_size;
-                handlers.push(Box::new(move |batch| {
-                    let mut metrics = worker
-                        .lock()
-                        .map_err(|_| "gc-bias collector lock poisoned".to_string())?;
-                    for entry in batch {
-                        if !entry.gates.gc_bias {
-                            continue;
+                handlers.push((
+                    "gc-bias",
+                    Box::new(move |batch| {
+                        let mut metrics = worker
+                            .lock()
+                            .map_err(|_| "gc-bias collector lock poisoned".to_string())?;
+                        for entry in batch {
+                            if !entry.gates.gc_bias {
+                                continue;
+                            }
+                            let record = &entry.record;
+                            if let Err(error) =
+                                metrics.observe(record, target_names.as_slice(), window_size)
+                            {
+                                return Err(format!("CollectGcBiasMetrics failed: {error}"));
+                            }
                         }
-                        let record = &entry.record;
-                        if let Err(error) =
-                            metrics.observe(record, target_names.as_slice(), window_size)
-                        {
-                            return Err(format!("CollectGcBiasMetrics failed: {error}"));
-                        }
-                    }
-                    Ok(())
-                }));
+                        Ok(())
+                    }),
+                ));
             }
             if let Some((worker, ..)) = &wgs_worker {
                 let worker = Arc::clone(worker);
                 let target_names = Arc::clone(&target_names);
-                handlers.push(Box::new(move |batch| {
-                    let mut metrics = worker
-                        .lock()
-                        .map_err(|_| "wgs collector lock poisoned".to_string())?;
-                    for entry in batch {
-                        if !entry.gates.wgs {
-                            continue;
+                handlers.push((
+                    "wgs",
+                    Box::new(move |batch| {
+                        let mut metrics = worker
+                            .lock()
+                            .map_err(|_| "wgs collector lock poisoned".to_string())?;
+                        for entry in batch {
+                            if !entry.gates.wgs {
+                                continue;
+                            }
+                            let record = &entry.record;
+                            if let Err(error) = metrics.observe(record, target_names.as_slice()) {
+                                return Err(format!("CollectWgsMetrics failed: {error}"));
+                            }
                         }
-                        let record = &entry.record;
-                        if let Err(error) = metrics.observe(record, target_names.as_slice()) {
-                            return Err(format!("CollectWgsMetrics failed: {error}"));
-                        }
-                    }
-                    Ok(())
-                }));
+                        Ok(())
+                    }),
+                ));
             }
 
             let (include_secondary_yield, include_supplemental_yield) =

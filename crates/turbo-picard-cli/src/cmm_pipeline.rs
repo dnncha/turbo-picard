@@ -207,10 +207,16 @@ pub struct CmmWorkerPool {
 impl CmmWorkerPool {
     #[cfg(test)]
     pub fn new(handlers: Vec<CmmBatchHandler>) -> Self {
-        Self::with_plan(handlers, CmmPlan::ALL)
+        Self::with_plan(
+            handlers
+                .into_iter()
+                .map(|handler| ("test", handler))
+                .collect(),
+            CmmPlan::ALL,
+        )
     }
 
-    pub fn with_plan(handlers: Vec<CmmBatchHandler>, plan: CmmPlan) -> Self {
+    pub fn with_plan(handlers: Vec<(&'static str, CmmBatchHandler)>, plan: CmmPlan) -> Self {
         let worker_count = handlers.len();
         let (batch_return, batch_pool) = bounded(BATCH_POOL_DEPTH);
         let (completion_tx, completion_rx) = crossbeam_channel::unbounded::<Vec<CmmBatchRecord>>();
@@ -221,12 +227,12 @@ impl CmmWorkerPool {
         let mut handles = Vec::with_capacity(worker_count);
         let (completion_job_tx, completion_job_rx) = bounded(BATCH_POOL_DEPTH);
 
-        for handler in handlers {
+        for (name, handler) in handlers {
             let (work_tx, work_rx) = bounded::<WorkerJob>(BATCH_POOL_DEPTH);
             let error_tx = error_tx.clone();
             let poison = Arc::clone(&poison);
             work_txs.push(work_tx);
-            handles.push(thread::spawn(move || {
+            let work = move || {
                 while let Ok(WorkerJob { batch, ack }) = work_rx.recv() {
                     let result =
                         panic::catch_unwind(AssertUnwindSafe(|| handler(batch.as_slice())));
@@ -246,7 +252,8 @@ impl CmmWorkerPool {
                     drop(batch);
                     let _ = ack.send(());
                 }
-            }));
+            };
+            handles.push(spawn_named(&format!("cmm-{name}"), work));
         }
 
         let completion_handle = thread::spawn({
@@ -383,7 +390,7 @@ impl CmmWorkerPool {
             include_supplemental_quality_yield,
         );
 
-        let reader_handle = thread::spawn({
+        let reader_handle = spawn_named("cmm-reader", {
             let poison = Arc::clone(&poison);
             let worker_error_tx = pool.error_tx.clone();
             move || {
@@ -452,6 +459,24 @@ impl CmmWorkerPool {
         drop(pool);
         Ok(())
     }
+}
+
+fn spawn_named<F>(name: &str, work: F) -> JoinHandle<()>
+where
+    F: FnOnce() + Send + 'static,
+{
+    let shared = Arc::new(std::sync::Mutex::new(Some(work)));
+    let fallback = Arc::clone(&shared);
+    let run = move |slot: &std::sync::Mutex<Option<F>>| {
+        if let Some(work) = slot.lock().ok().and_then(|mut guard| guard.take()) {
+            work();
+        }
+    };
+    let named = run.clone();
+    thread::Builder::new()
+        .name(name.to_string())
+        .spawn(move || named(&shared))
+        .unwrap_or_else(|_| thread::spawn(move || run(&fallback)))
 }
 
 fn panic_message(error: &dyn Any) -> String {
