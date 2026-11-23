@@ -63,7 +63,7 @@ make_bam() {
   if [ "$n" = 30x ]; then
     $BIN/samtools view -@ "$THREADS" -b -T $DATA/ref.fa -o $DATA/$n.bam $DATA/in.cram
   elif [ "$n" = 4x ] && [ -s $DATA/15x.bam ]; then
-    $BIN/samtools view -@ "$THREADS" -b -s "42$(awk 'BEGIN {printf "%.4f", 4/15}' | sed 's/^0//')" -o $DATA/$n.bam $DATA/15x.bam
+    $BIN/samtools view -@ "$THREADS" -b -s "7$(awk 'BEGIN {printf "%.4f", 4/15}' | sed 's/^0//')" -o $DATA/$n.bam $DATA/15x.bam
   else
     local frac; frac=$(awk -v x="$x" -v d="$depth" 'BEGIN {printf "%.4f", x/d}')
     $BIN/samtools view -@ "$THREADS" -b -T $DATA/ref.fa -s "42${frac#0}" -o $DATA/$n.bam $DATA/in.cram
