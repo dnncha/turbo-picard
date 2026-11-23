@@ -69,6 +69,18 @@ make_bam() {
     $BIN/samtools view -@ "$THREADS" -b -T $DATA/ref.fa -s "42${frac#0}" -o $DATA/$n.bam $DATA/in.cram
   fi
   $BIN/samtools index -@ "$THREADS" $DATA/$n.bam
+  [ "$n" = 30x ] || check_depth "$n" "$x"
+}
+
+check_depth() {
+  local n=$1 x=$2 got
+  got=$($BIN/samtools idxstats $DATA/$n.bam | awk '{m+=$3} END {printf "%.2f", m*151/3.1e9}')
+  if ! awk -v g="$got" -v x="$x" 'BEGIN {exit !(g >= 0.75 * x && g <= 1.25 * x)}'; then
+    echo "prepare $n: expected about ${x}x but the subsample is ${got}x; a dataset that is not the depth it is named for makes every row of its duel wrong" >&2
+    rm -f $DATA/$n.bam $DATA/$n.bam.bai
+    return 1
+  fi
+  echo "prepare $n: ${got}x (target ${x}x)"
 }
 
 RUN_ID="${RUN_ID:-$(date -u +%Y%m%dT%H%M%SZ)-$(head -c3 /dev/urandom | od -An -tx1 | tr -d ' \n')}"
