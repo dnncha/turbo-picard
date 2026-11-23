@@ -3551,6 +3551,11 @@ impl ReadNameLocationParser {
     }
 
     fn coordinates(&self, name: &[u8]) -> Option<(i64, i64, i64)> {
+        self.parsed_coordinates(name)
+            .map(|(tile, x, y)| (java_short(tile), java_short(x), java_short(y)))
+    }
+
+    fn parsed_coordinates(&self, name: &[u8]) -> Option<(i64, i64, i64)> {
         let text = std::str::from_utf8(name).ok()?;
         match self {
             Self::Disabled => None,
@@ -3569,6 +3574,10 @@ impl ReadNameLocationParser {
             }
         }
     }
+}
+
+fn java_short(value: i64) -> i64 {
+    value.wrapping_add(32_768).rem_euclid(65_536) - 32_768
 }
 
 fn optical_duplicate_record_indices(
@@ -5885,6 +5894,49 @@ mod optical_hot_path_tests {
         let duplicates = find_optical_duplicate_names(&reads, b"read0", 0);
         assert_eq!(duplicates.len(), 2);
         assert!(!duplicates.contains(b"read0".as_slice()));
+    }
+
+    #[test]
+    fn optical_coordinates_wrap_to_java_short_like_picard_read_ends() {
+        let parser = ReadNameLocationParser::Default;
+        assert_eq!(
+            parser.coordinates(b"A00217:72:HFKHYDSXX:1:2211:20799:27837"),
+            Some((2211, 20799, 27837))
+        );
+        assert_eq!(
+            parser.coordinates(b"A00217:72:HFKHYDSXX:1:2553:1841:33489"),
+            Some((2553, 1841, 33489 - 65_536))
+        );
+        assert_eq!(
+            parser.coordinates(b"A:1:F:1:1101:65536:98303"),
+            Some((1101, 0, 32_767))
+        );
+        let read = |name: &str| OpticalRead {
+            name: name.as_bytes().to_vec(),
+            location: parser
+                .coordinates(name.as_bytes())
+                .map(|(tile, x, y)| ReadLocation {
+                    read_group: None,
+                    tile,
+                    x,
+                    y,
+                }),
+        };
+        let straddling = [
+            read("A:1:F:1:1101:500:32760"),
+            read("A:1:F:1:1101:500:32800"),
+        ];
+        assert!(
+            find_optical_duplicate_names(&straddling, b"A:1:F:1:1101:500:32760", 100).is_empty()
+        );
+        let both_wrapped = [
+            read("A:1:F:1:1101:500:40000"),
+            read("A:1:F:1:1101:500:40050"),
+        ];
+        assert_eq!(
+            find_optical_duplicate_names(&both_wrapped, b"A:1:F:1:1101:500:40000", 100).len(),
+            1
+        );
     }
 
     #[test]
