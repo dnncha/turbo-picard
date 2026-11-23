@@ -461,9 +461,8 @@ fn external_sorter_with_bytes(
     max_bytes: usize,
 ) -> Result<ExternalSorter, MarkDuplicatesError> {
     let mut sort_config = ExternalSortConfig::new(tmp_dir);
-    sort_config.max_records_in_ram = (EXTERNAL_MARKDUP_MAX_RECORDS_IN_RAM / 2).max(1);
-    sort_config.max_bytes_in_ram = (max_bytes / 2).max(1);
-    sort_config.background_spill = true;
+    sort_config.max_records_in_ram = EXTERNAL_MARKDUP_MAX_RECORDS_IN_RAM;
+    sort_config.max_bytes_in_ram = max_bytes;
     sort_config.threads = bgzf_threads_for(HtsThreadRole::Reader).unwrap_or(1);
     sort_config.prefix = prefix.to_string();
     Ok(ExternalSorter::new(sort_config)?)
@@ -569,7 +568,6 @@ fn try_run_external_plan(
     for input in &config.inputs {
         let mut reader = open_markdup_reader(config, input)?;
         let input_library_lookup = library_lookup(reader.header(), &mut library_registry)?;
-        let mut read_group_cache = ReadGroupLookupCache::default();
         let mut record = bam::Record::new();
         while let Some(result) = reader.read(&mut record) {
             result?;
@@ -595,7 +593,7 @@ fn try_run_external_plan(
             }
 
             let (rg_id, library_id) =
-                read_group_cache.resolve(&record, &input_library_lookup, &mut rg_registry);
+                record_rg_and_library(&record, &input_library_lookup, &mut rg_registry);
             let ordinal = record_count;
             record_count = record_count
                 .checked_add(1)
@@ -4847,41 +4845,6 @@ fn record_rg_and_library(
             (rg_registry.intern(&bytes), library_id)
         }
         _ => (0, lookup.unknown_id),
-    }
-}
-
-#[derive(Default)]
-struct ReadGroupLookupCache {
-    read_group: Vec<u8>,
-    resolved: Option<(u32, LibraryId)>,
-}
-
-impl ReadGroupLookupCache {
-    fn resolve(
-        &mut self,
-        record: &bam::Record,
-        lookup: &LibraryLookup,
-        rg_registry: &mut ReadGroupRegistry,
-    ) -> (u32, LibraryId) {
-        let char_bytes;
-        let bytes = match record.aux(b"RG") {
-            Ok(Aux::String(read_group)) => read_group.as_bytes(),
-            Ok(Aux::Char(read_group)) => {
-                char_bytes = [read_group];
-                char_bytes.as_slice()
-            }
-            _ => return (0, lookup.unknown_id),
-        };
-        if let Some(resolved) = self.resolved
-            && self.read_group == bytes
-        {
-            return resolved;
-        }
-        let resolved = record_rg_and_library(record, lookup, rg_registry);
-        self.read_group.clear();
-        self.read_group.extend_from_slice(bytes);
-        self.resolved = Some(resolved);
-        resolved
     }
 }
 

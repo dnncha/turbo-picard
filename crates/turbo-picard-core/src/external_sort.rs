@@ -23,7 +23,6 @@ pub struct ExternalSortConfig {
     pub merge_fan_in: usize,
     pub threads: usize,
     pub prefix: String,
-    pub background_spill: bool,
 }
 
 impl ExternalSortConfig {
@@ -35,7 +34,6 @@ impl ExternalSortConfig {
             merge_fan_in: DEFAULT_MERGE_FAN_IN,
             threads: 1,
             prefix: "turbo-picard-sort".to_string(),
-            background_spill: false,
         }
     }
 }
@@ -108,21 +106,6 @@ pub struct ExternalSorter {
     metrics: ExternalSortMetrics,
     instance_id: u64,
     next_run_index: u64,
-    pending_spill: Option<std::thread::JoinHandle<Result<FinishedSpill, SortError>>>,
-}
-
-struct FinishedSpill {
-    bytes: u64,
-    entries: Vec<ArenaEntry>,
-    arena: Vec<u8>,
-}
-
-impl Drop for ExternalSorter {
-    fn drop(&mut self) {
-        if let Some(handle) = self.pending_spill.take() {
-            let _ = handle.join();
-        }
-    }
 }
 
 impl ExternalSorter {
@@ -139,7 +122,6 @@ impl ExternalSorter {
             metrics: ExternalSortMetrics::default(),
             instance_id: SORTER_ID.fetch_add(1, AtomicOrdering::Relaxed),
             next_run_index: 0,
-            pending_spill: None,
         })
     }
 
@@ -329,7 +311,6 @@ impl ExternalSorter {
         }
 
         self.spill_current_run()?;
-        self.wait_for_background_spill()?;
         self.arena = Vec::new();
         self.entries = Vec::new();
         let mut runs = std::mem::take(&mut self.runs);
@@ -364,7 +345,6 @@ impl ExternalSorter {
         }
 
         self.spill_current_run()?;
-        self.wait_for_background_spill()?;
         self.arena = Vec::new();
         self.entries = Vec::new();
         let mut runs = std::mem::take(&mut self.runs);
@@ -389,54 +369,9 @@ impl ExternalSorter {
         self.metrics
     }
 
-    fn wait_for_background_spill(&mut self) -> Result<(), SortError> {
-        let Some(handle) = self.pending_spill.take() else {
-            return Ok(());
-        };
-        let finished = handle
-            .join()
-            .map_err(|_| io::Error::other("external sort spill thread panicked"))??;
-        self.metrics.bytes_written = self.metrics.bytes_written.saturating_add(finished.bytes);
-        self.metrics.spills += 1;
-        self.metrics.run_count += 1;
-        if self.entries.capacity() == 0 && self.arena.capacity() == 0 {
-            self.entries = finished.entries;
-            self.arena = finished.arena;
-        }
-        Ok(())
-    }
-
-    fn spill_current_run_in_background(&mut self) -> Result<(), SortError> {
-        let path = self.create_run_path()?;
-        self.wait_for_background_spill()?;
-        let mut entries = std::mem::take(&mut self.entries);
-        let mut arena = std::mem::take(&mut self.arena);
-        let needs_sort = !self.already_sorted;
-        let threads = self.config.threads;
-        self.already_sorted = true;
-        self.runs.push(path.clone());
-        self.pending_spill = Some(std::thread::spawn(move || {
-            if needs_sort {
-                sort_entries(&mut entries, &arena, threads);
-            }
-            let bytes = write_run(&path, &entries, &arena)?;
-            entries.clear();
-            arena.clear();
-            Ok(FinishedSpill {
-                bytes,
-                entries,
-                arena,
-            })
-        }));
-        Ok(())
-    }
-
     fn spill_current_run(&mut self) -> Result<(), SortError> {
         if self.entries.is_empty() {
             return Ok(());
-        }
-        if self.config.background_spill {
-            return self.spill_current_run_in_background();
         }
         if !self.already_sorted {
             sort_entries(&mut self.entries, &self.arena, self.config.threads);
@@ -822,48 +757,6 @@ mod tests {
     fn memory_estimate_counts_reserved_buffers_and_metadata() {
         let item = SortItem::new(Vec::with_capacity(1024), 0, Vec::with_capacity(2048));
         assert_eq!(item.estimated_bytes(), size_of::<SortItem>() + 3072);
-    }
-
-    #[test]
-    fn background_spills_sort_identically_to_foreground_spills() {
-        let mut state = 0x243f_6a88_85a3_08d3_u64;
-        let mut next = move || {
-            state ^= state << 13;
-            state ^= state >> 7;
-            state ^= state << 17;
-            state
-        };
-        for (case, limit) in [1_usize, 2, 3, 17, 64, 1000].into_iter().enumerate() {
-            let items = (0..600)
-                .map(|_| {
-                    let key = vec![u8::try_from(next() % 9).unwrap_or(0); 1 + case % 3];
-                    let payload = next().to_le_bytes().to_vec();
-                    (key, payload)
-                })
-                .collect::<Vec<_>>();
-            let run = |background: bool| {
-                let dir = test_dir(&format!("sort-background-{case}-{background}"));
-                let mut config = ExternalSortConfig::new(&dir);
-                config.max_records_in_ram = limit;
-                config.merge_fan_in = 3;
-                config.background_spill = background;
-                let mut sorter = ExternalSorter::new(config).unwrap();
-                for (key, payload) in &items {
-                    sorter.push_slice(key, payload).unwrap();
-                }
-                let mut observed = Vec::new();
-                let metrics = sorter
-                    .finish_into(|item| {
-                        observed.push((item.key, item.ordinal, item.payload));
-                        Ok(())
-                    })
-                    .unwrap();
-                assert!(fs::read_dir(&dir).unwrap().next().is_none());
-                fs::remove_dir(&dir).unwrap();
-                (observed, metrics.spills, metrics.bytes_written)
-            };
-            assert_eq!(run(true), run(false), "limit {limit}");
-        }
     }
 
     #[test]
