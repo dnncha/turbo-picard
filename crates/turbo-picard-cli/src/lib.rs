@@ -21236,9 +21236,10 @@ mod tests {
                     fasta.extend_from_slice(if crlf { b"\r\n" } else { b"\n" });
                 }
                 let line_width = line_bases + if crlf { 2 } else { 1 };
-                fai.push_str(&format!(
-                    "c{contig}\t{length}\t{offset}\t{line_bases}\t{line_width}\n"
-                ));
+                let _ = writeln!(
+                    fai,
+                    "c{contig}\t{length}\t{offset}\t{line_bases}\t{line_width}"
+                );
             }
             let path = dir.join(format!("case{case}.fa"));
             fs::write(&path, &fasta).unwrap_or_default();
