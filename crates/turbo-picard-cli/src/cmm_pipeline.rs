@@ -472,7 +472,7 @@ where
             work();
         }
     };
-    let named = run.clone();
+    let named = run;
     thread::Builder::new()
         .name(name.to_string())
         .spawn(move || named(&shared))
