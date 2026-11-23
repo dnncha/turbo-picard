@@ -21217,14 +21217,14 @@ mod tests {
             state
         };
         let alphabet = b"ACGTNacgtnRY";
-        let dir = std::env::temp_dir().join(format!("tp-gc-fai-{}", std::process::id()));
+        let dir = env::temp_dir().join(format!("tp-gc-fai-{}", process::id()));
         fs::create_dir_all(&dir).unwrap_or_default();
         for case in 0..60 {
             let line_bases = 1 + usize::try_from(next() % 80).unwrap_or(0);
             let crlf = case % 2 == 1;
             let mut fasta = Vec::new();
             let mut fai = String::new();
-            for contig in 0..1 + usize::try_from(next() % 6).unwrap_or(0) {
+            for contig in 0..=usize::try_from(next() % 6).unwrap_or(0) {
                 let length = usize::try_from(next() % 900).unwrap_or(0);
                 let sequence = (0..length)
                     .map(|_| alphabet[usize::try_from(next() % 12).unwrap_or(0)])
