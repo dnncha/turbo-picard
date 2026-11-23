@@ -9520,6 +9520,15 @@ fn load_fasta_contig_sequence(path: &str, contig: &str) -> Result<Vec<u8>, Strin
 
 fn count_gc_bias_windows(reference_path: &str, window_size: usize) -> Result<[u64; 101], String> {
     if !has_gzip_extension(reference_path) {
+        if window_size > 0
+            && let Some(spans) = fasta_contig_spans(&format!("{reference_path}.fai"))
+            && !spans.is_empty()
+        {
+            return count_gc_windows_by_contig_in_parallel(reference_path, spans, window_size)
+                .map_err(|error| {
+                    format!("CollectGcBiasMetrics reference {reference_path}: {error}")
+                });
+        }
         let file = fs::File::open(reference_path).map_err(|error| error.to_string())?;
         return stream_gc_bias_windows(BufReader::with_capacity(1 << 22, file), window_size)
             .map_err(|error| format!("CollectGcBiasMetrics reference {reference_path}: {error}"));
@@ -9658,6 +9667,48 @@ fn gc_percent_by_start(reference: &[u8], window_size: usize) -> Vec<u8> {
     table
 }
 
+struct GcWindowScanner {
+    window_size: usize,
+    ring: Vec<u8>,
+    slot: usize,
+    tally: GcWindowTally,
+    position: usize,
+}
+
+impl GcWindowScanner {
+    fn new(window_size: usize) -> Self {
+        Self {
+            window_size,
+            ring: vec![0; window_size],
+            slot: 0,
+            tally: GcWindowTally::default(),
+            position: 0,
+        }
+    }
+
+    fn start_contig(&mut self) {
+        self.tally = GcWindowTally::default();
+        self.position = 0;
+        self.slot = 0;
+    }
+
+    fn push(&mut self, base: u8, histogram: &mut GcWindowHistogram) {
+        if self.position > self.window_size {
+            histogram.observe(self.tally);
+            self.tally.remove(self.ring[self.slot]);
+        }
+        if self.position >= 1 {
+            self.ring[self.slot] = base;
+            self.tally.add(base);
+            self.slot += 1;
+            if self.slot == self.window_size {
+                self.slot = 0;
+            }
+        }
+        self.position += 1;
+    }
+}
+
 fn stream_gc_bias_windows<R: BufRead>(
     mut reader: R,
     window_size: usize,
@@ -9667,10 +9718,7 @@ fn stream_gc_bias_windows<R: BufRead>(
         return Ok(windows);
     }
     let mut histogram = GcWindowHistogram::new(window_size);
-    let mut ring = vec![0_u8; window_size];
-    let mut slot = 0_usize;
-    let mut tally = GcWindowTally::default();
-    let mut position = 0_usize;
+    let mut scanner = GcWindowScanner::new(window_size);
     let mut in_sequence = false;
     let mut line = Vec::with_capacity(256);
     loop {
@@ -9679,9 +9727,7 @@ fn stream_gc_bias_windows<R: BufRead>(
             break;
         }
         if line.first() == Some(&b'>') {
-            tally = GcWindowTally::default();
-            position = 0;
-            slot = 0;
+            scanner.start_contig();
             in_sequence = true;
             continue;
         }
@@ -9689,22 +9735,113 @@ fn stream_gc_bias_windows<R: BufRead>(
             continue;
         }
         for &base in line.trim_ascii() {
-            if position > window_size {
-                histogram.observe(tally);
-                tally.remove(ring[slot]);
-            }
-            if position >= 1 {
-                ring[slot] = base;
-                tally.add(base);
-                slot += 1;
-                if slot == window_size {
-                    slot = 0;
-                }
-            }
-            position += 1;
+            scanner.push(base, &mut histogram);
         }
     }
     histogram.merge_into(&mut windows);
+    Ok(windows)
+}
+
+struct FastaContigSpan {
+    offset: u64,
+    bytes: u64,
+    length: usize,
+}
+
+fn fasta_contig_spans(fai_path: &str) -> Option<Vec<FastaContigSpan>> {
+    let text = fs::read_to_string(fai_path).ok()?;
+    let mut spans = Vec::new();
+    for line in text.lines().filter(|line| !line.trim().is_empty()) {
+        let fields = line.split('\t').collect::<Vec<_>>();
+        let [_, length, offset, line_bases, line_width, ..] = fields.as_slice() else {
+            return None;
+        };
+        let length = length.parse::<u64>().ok()?;
+        let line_bases = line_bases.parse::<u64>().ok().filter(|value| *value > 0)?;
+        let line_width = line_width.parse::<u64>().ok()?;
+        spans.push(FastaContigSpan {
+            offset: offset.parse::<u64>().ok()?,
+            bytes: (length / line_bases) * line_width + length % line_bases,
+            length: usize::try_from(length).ok()?,
+        });
+    }
+    Some(spans)
+}
+
+fn scan_contig_span(
+    file: &mut fs::File,
+    span: &FastaContigSpan,
+    scanner: &mut GcWindowScanner,
+    histogram: &mut GcWindowHistogram,
+    buffer: &mut [u8],
+) -> std::io::Result<()> {
+    file.seek(SeekFrom::Start(span.offset))?;
+    let mut remaining = span.bytes;
+    scanner.start_contig();
+    while remaining > 0 {
+        let want = usize::try_from(remaining.min(buffer.len() as u64)).unwrap_or(buffer.len());
+        let read = file.read(&mut buffer[..want])?;
+        if read == 0 {
+            break;
+        }
+        remaining -= read as u64;
+        for &base in &buffer[..read] {
+            if !base.is_ascii_whitespace() {
+                scanner.push(base, histogram);
+            }
+        }
+    }
+    Ok(())
+}
+
+fn count_gc_windows_by_contig_in_parallel(
+    reference_path: &str,
+    mut spans: Vec<FastaContigSpan>,
+    window_size: usize,
+) -> std::io::Result<[u64; 101]> {
+    spans.sort_by_key(|span| std::cmp::Reverse(span.length));
+    let threads = std::thread::available_parallelism()
+        .map_or(1, std::num::NonZero::get)
+        .min(spans.len())
+        .max(1);
+    let next = std::sync::atomic::AtomicUsize::new(0);
+    let partials = std::thread::scope(|scope| {
+        let workers = (0..threads)
+            .map(|_| {
+                scope.spawn(|| -> std::io::Result<GcWindowHistogram> {
+                    let mut file = fs::File::open(reference_path)?;
+                    let mut histogram = GcWindowHistogram::new(window_size);
+                    let mut scanner = GcWindowScanner::new(window_size);
+                    let mut buffer = vec![0_u8; 1 << 20];
+                    loop {
+                        let index = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        let Some(span) = spans.get(index) else {
+                            return Ok(histogram);
+                        };
+                        scan_contig_span(
+                            &mut file,
+                            span,
+                            &mut scanner,
+                            &mut histogram,
+                            &mut buffer,
+                        )?;
+                    }
+                })
+            })
+            .collect::<Vec<_>>();
+        workers
+            .into_iter()
+            .map(|worker| {
+                worker
+                    .join()
+                    .unwrap_or_else(|_| Err(std::io::Error::other("GC window worker panicked")))
+            })
+            .collect::<Vec<_>>()
+    });
+    let mut windows = [0_u64; 101];
+    for partial in partials {
+        partial?.merge_into(&mut windows);
+    }
     Ok(windows)
 }
 
@@ -20628,6 +20765,7 @@ mod tests {
             reference_path: String::new(),
             active_contig: None,
             active_sequence: Vec::new(),
+            active_gc_by_start: Vec::new(),
             total_clusters: 1,
             aligned_reads: 1,
             summary_aligned_reads: 1,
@@ -21067,6 +21205,55 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn indexed_parallel_gc_windows_match_streaming() {
+        let mut state = 0xbb67_ae85_84ca_a73b_u64;
+        let mut next = move || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            state
+        };
+        let alphabet = b"ACGTNacgtnRY";
+        let dir = std::env::temp_dir().join(format!("tp-gc-fai-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap_or_default();
+        for case in 0..60 {
+            let line_bases = 1 + usize::try_from(next() % 80).unwrap_or(0);
+            let crlf = case % 2 == 1;
+            let mut fasta = Vec::new();
+            let mut fai = String::new();
+            for contig in 0..1 + usize::try_from(next() % 6).unwrap_or(0) {
+                let length = usize::try_from(next() % 900).unwrap_or(0);
+                let sequence = (0..length)
+                    .map(|_| alphabet[usize::try_from(next() % 12).unwrap_or(0)])
+                    .collect::<Vec<_>>();
+                fasta.extend_from_slice(format!(">c{contig}\n").as_bytes());
+                let offset = fasta.len();
+                for chunk in sequence.chunks(line_bases) {
+                    fasta.extend_from_slice(chunk);
+                    fasta.extend_from_slice(if crlf { b"\r\n" } else { b"\n" });
+                }
+                let line_width = line_bases + if crlf { 2 } else { 1 };
+                fai.push_str(&format!(
+                    "c{contig}\t{length}\t{offset}\t{line_bases}\t{line_width}\n"
+                ));
+            }
+            let path = dir.join(format!("case{case}.fa"));
+            fs::write(&path, &fasta).unwrap_or_default();
+            fs::write(format!("{}.fai", path.display()), &fai).unwrap_or_default();
+            let path = path.display().to_string();
+            for window_size in [1_usize, 7, 100] {
+                let spans = fasta_contig_spans(&format!("{path}.fai")).unwrap_or_default();
+                let parallel = count_gc_windows_by_contig_in_parallel(&path, spans, window_size)
+                    .unwrap_or([u64::MAX; 101]);
+                let streamed = stream_gc_bias_windows(std::io::Cursor::new(&fasta), window_size)
+                    .unwrap_or([0; 101]);
+                assert_eq!(parallel, streamed, "case {case} window {window_size}");
+            }
+        }
+        fs::remove_dir_all(&dir).unwrap_or_default();
     }
 
     #[test]
