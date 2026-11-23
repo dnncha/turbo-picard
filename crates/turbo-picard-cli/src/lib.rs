@@ -9555,10 +9555,10 @@ fn stream_gc_bias_windows<R: BufRead>(
             continue;
         }
         for &base in line.trim_ascii() {
-            if position > window_size {
-                if let Some(gc) = tally.percent(window_size) {
-                    windows[gc] += 1;
-                }
+            if position > window_size
+                && let Some(gc) = tally.percent(window_size)
+            {
+                windows[gc] += 1;
             }
             if position >= 1 {
                 let slot = position % window_size;
