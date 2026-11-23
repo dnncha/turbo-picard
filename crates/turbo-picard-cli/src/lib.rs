@@ -9527,53 +9527,6 @@ fn count_gc_bias_windows(reference_path: &str, window_size: usize) -> Result<[u6
     count_gc_bias_windows_per_contig(reference_path, window_size)
 }
 
-fn stream_gc_bias_windows<R: BufRead>(
-    mut reader: R,
-    window_size: usize,
-) -> std::io::Result<[u64; 101]> {
-    let mut windows = [0_u64; 101];
-    if window_size == 0 {
-        return Ok(windows);
-    }
-    let mut ring = vec![0_u8; window_size];
-    let mut tally = GcWindowTally::default();
-    let mut position = 0_usize;
-    let mut in_sequence = false;
-    let mut line = Vec::with_capacity(256);
-    loop {
-        line.clear();
-        if reader.read_until(b'\n', &mut line)? == 0 {
-            break;
-        }
-        if line.first() == Some(&b'>') {
-            tally = GcWindowTally::default();
-            position = 0;
-            in_sequence = true;
-            continue;
-        }
-        if !in_sequence {
-            continue;
-        }
-        for &base in line.trim_ascii() {
-            if position > window_size
-                && let Some(gc) = tally.percent(window_size)
-            {
-                windows[gc] += 1;
-            }
-            if position >= 1 {
-                let slot = position % window_size;
-                if position > window_size {
-                    tally.shift(ring[slot], -1);
-                }
-                ring[slot] = base;
-                tally.shift(base, 1);
-            }
-            position += 1;
-        }
-    }
-    Ok(windows)
-}
-
 fn count_gc_bias_windows_per_contig(
     reference_path: &str,
     window_size: usize,
@@ -9589,6 +9542,22 @@ fn count_gc_bias_windows_per_contig(
     Ok(windows)
 }
 
+const NO_GC_WINDOW: u8 = u8::MAX;
+const GC_CLASS_OTHER: u8 = 0;
+const GC_CLASS_GC: u8 = 1;
+const GC_CLASS_NO_CALL: u8 = 2;
+
+const GC_CLASS: [u8; 256] = {
+    let mut table = [GC_CLASS_OTHER; 256];
+    table[b'G' as usize] = GC_CLASS_GC;
+    table[b'C' as usize] = GC_CLASS_GC;
+    table[b'g' as usize] = GC_CLASS_GC;
+    table[b'c' as usize] = GC_CLASS_GC;
+    table[b'N' as usize] = GC_CLASS_NO_CALL;
+    table[b'n' as usize] = GC_CLASS_NO_CALL;
+    table
+};
+
 #[derive(Default, Clone, Copy)]
 struct GcWindowTally {
     gc: usize,
@@ -9596,17 +9565,52 @@ struct GcWindowTally {
 }
 
 impl GcWindowTally {
-    fn shift(&mut self, base: u8, delta: isize) {
-        let slot = match base.to_ascii_uppercase() {
-            b'G' | b'C' => &mut self.gc,
-            b'N' => &mut self.no_calls,
-            _ => return,
-        };
-        *slot = slot.wrapping_add_signed(delta);
+    fn add(&mut self, base: u8) {
+        match GC_CLASS[usize::from(base)] {
+            GC_CLASS_GC => self.gc += 1,
+            GC_CLASS_NO_CALL => self.no_calls += 1,
+            _ => {}
+        }
     }
 
-    fn percent(self, window_size: usize) -> Option<usize> {
-        (self.no_calls <= 4).then(|| (self.gc * 100) / window_size)
+    fn remove(&mut self, base: u8) {
+        match GC_CLASS[usize::from(base)] {
+            GC_CLASS_GC => self.gc -= 1,
+            GC_CLASS_NO_CALL => self.no_calls -= 1,
+            _ => {}
+        }
+    }
+}
+
+fn gc_percent_of_count(window_size: usize) -> Vec<u8> {
+    (0..=window_size)
+        .map(|gc| u8::try_from((gc * 100) / window_size.max(1)).unwrap_or(100))
+        .collect()
+}
+
+struct GcWindowHistogram {
+    by_gc_count: Vec<u64>,
+    percent_of: Vec<u8>,
+}
+
+impl GcWindowHistogram {
+    fn new(window_size: usize) -> Self {
+        Self {
+            by_gc_count: vec![0; window_size + 1],
+            percent_of: gc_percent_of_count(window_size),
+        }
+    }
+
+    fn observe(&mut self, tally: GcWindowTally) {
+        if tally.no_calls <= 4 {
+            self.by_gc_count[tally.gc] += 1;
+        }
+    }
+
+    fn merge_into(&self, windows: &mut [u64; 101]) {
+        for (gc, count) in self.by_gc_count.iter().enumerate() {
+            windows[usize::from(self.percent_of[gc])] += count;
+        }
     }
 }
 
@@ -9615,19 +9619,93 @@ fn add_gc_window_counts(sequence: &[u8], window_size: usize, windows: &mut [u64;
     if window_size == 0 || window_end <= 1 {
         return;
     }
+    let mut histogram = GcWindowHistogram::new(window_size);
     let mut tally = GcWindowTally::default();
     for &base in &sequence[1..=window_size] {
-        tally.shift(base, 1);
+        tally.add(base);
     }
-    for start in 1..window_end {
-        if start > 1 {
-            tally.shift(sequence[start - 1], -1);
-            tally.shift(sequence[start + window_size - 1], 1);
+    histogram.observe(tally);
+    for start in 2..window_end {
+        tally.remove(sequence[start - 1]);
+        tally.add(sequence[start + window_size - 1]);
+        histogram.observe(tally);
+    }
+    histogram.merge_into(windows);
+}
+
+fn gc_percent_by_start(reference: &[u8], window_size: usize) -> Vec<u8> {
+    let mut table = vec![0_u8; reference.len() + 1];
+    let last_calculated_start = reference.len().saturating_sub(window_size);
+    if window_size == 0 || last_calculated_start == 0 {
+        return table;
+    }
+    let percent_of = gc_percent_of_count(window_size);
+    let mut tally = GcWindowTally::default();
+    for &base in &reference[..window_size] {
+        tally.add(base);
+    }
+    for start in 0..last_calculated_start {
+        if start > 0 {
+            tally.remove(reference[start - 1]);
+            tally.add(reference[start + window_size - 1]);
         }
-        if let Some(gc) = tally.percent(window_size) {
-            windows[gc] += 1;
+        table[start] = if tally.no_calls > 4 {
+            NO_GC_WINDOW
+        } else {
+            percent_of[tally.gc]
+        };
+    }
+    table
+}
+
+fn stream_gc_bias_windows<R: BufRead>(
+    mut reader: R,
+    window_size: usize,
+) -> std::io::Result<[u64; 101]> {
+    let mut windows = [0_u64; 101];
+    if window_size == 0 {
+        return Ok(windows);
+    }
+    let mut histogram = GcWindowHistogram::new(window_size);
+    let mut ring = vec![0_u8; window_size];
+    let mut slot = 0_usize;
+    let mut tally = GcWindowTally::default();
+    let mut position = 0_usize;
+    let mut in_sequence = false;
+    let mut line = Vec::with_capacity(256);
+    loop {
+        line.clear();
+        if reader.read_until(b'\n', &mut line)? == 0 {
+            break;
+        }
+        if line.first() == Some(&b'>') {
+            tally = GcWindowTally::default();
+            position = 0;
+            slot = 0;
+            in_sequence = true;
+            continue;
+        }
+        if !in_sequence {
+            continue;
+        }
+        for &base in line.trim_ascii() {
+            if position > window_size {
+                histogram.observe(tally);
+                tally.remove(ring[slot]);
+            }
+            if position >= 1 {
+                ring[slot] = base;
+                tally.add(base);
+                slot += 1;
+                if slot == window_size {
+                    slot = 0;
+                }
+            }
+            position += 1;
         }
     }
+    histogram.merge_into(&mut windows);
+    Ok(windows)
 }
 
 fn read_fasta_sequences(path: &str, truncate_names: bool) -> Result<Vec<FastaSequence>, String> {
@@ -14349,6 +14427,7 @@ struct GcBiasMetricsSummary {
     reference_path: String,
     active_contig: Option<String>,
     active_sequence: Vec<u8>,
+    active_gc_by_start: Vec<u8>,
     total_clusters: u64,
     aligned_reads: u64,
     summary_aligned_reads: u64,
@@ -14371,6 +14450,7 @@ impl GcBiasMetricsSummary {
             reference_path: reference_path.to_string(),
             active_contig: None,
             active_sequence: Vec::new(),
+            active_gc_by_start: Vec::new(),
             total_clusters: 0,
             aligned_reads: 0,
             summary_aligned_reads: 0,
@@ -14381,13 +14461,21 @@ impl GcBiasMetricsSummary {
         })
     }
 
-    fn ensure_contig(&mut self, contig: &str) -> Result<(), String> {
+    fn ensure_contig(&mut self, contig: &str, window_size: usize) -> Result<(), String> {
         if self.active_contig.as_deref() == Some(contig) {
             return Ok(());
         }
         self.active_sequence = load_fasta_contig_sequence(&self.reference_path, contig)?;
+        self.active_gc_by_start = gc_percent_by_start(&self.active_sequence, window_size);
         self.active_contig = Some(contig.to_string());
         Ok(())
+    }
+
+    fn gc_at(&self, start: usize) -> Option<usize> {
+        match self.active_gc_by_start.get(start) {
+            Some(&NO_GC_WINDOW) | None => None,
+            Some(&gc) => Some(usize::from(gc)),
+        }
     }
 
     fn observe(
@@ -14416,9 +14504,8 @@ impl GcBiasMetricsSummary {
         let contig = target_names
             .get(usize_or_max(record.tid()))
             .ok_or_else(|| "CollectGcBiasMetrics record references unknown target".to_string())?;
-        self.ensure_contig(contig)?;
-        let reference = &self.active_sequence;
-        if reference.len() < window_size {
+        self.ensure_contig(contig, window_size)?;
+        if self.active_sequence.len() < window_size {
             return Ok(());
         }
         let start = if record.is_reverse() {
@@ -14429,12 +14516,11 @@ impl GcBiasMetricsSummary {
         if start <= 0 {
             return Ok(());
         }
-        let Some(gc) = picard_gc_percent_for_start(reference, usize_or_max(start), window_size)
-        else {
+        let Some(gc) = self.gc_at(usize_or_max(start)) else {
             return Ok(());
         };
         let bases = record.seq_len() as u64;
-        let errors = gc_bias_error_count(record, reference)?;
+        let errors = gc_bias_error_count(record, &self.active_sequence)?;
         self.read_starts[gc] += 1;
         self.bases_by_gc[gc] += bases;
         self.errors_by_gc[gc] += errors;
@@ -14495,9 +14581,8 @@ impl GcBiasMetricsSummary {
 
         let contig = std::str::from_utf8(rname)
             .map_err(|_| "malformed CollectGcBiasMetrics SAM contig".to_string())?;
-        self.ensure_contig(contig)?;
-        let reference = &self.active_sequence;
-        if reference.len() < window_size {
+        self.ensure_contig(contig, window_size)?;
+        if self.active_sequence.len() < window_size {
             return Ok(());
         }
         let start = if flags & 0x10 != 0 {
@@ -14508,8 +14593,7 @@ impl GcBiasMetricsSummary {
         if start <= 0 {
             return Ok(());
         }
-        let Some(gc) = picard_gc_percent_for_start(reference, usize_or_max(start), window_size)
-        else {
+        let Some(gc) = self.gc_at(usize_or_max(start)) else {
             return Ok(());
         };
         self.read_starts[gc] += 1;
@@ -14723,6 +14807,7 @@ impl GcBiasMetricsSummary {
     }
 }
 
+#[cfg(test)]
 fn gc_percent(window: &[u8], window_size: usize) -> Option<usize> {
     let mut gc = 0_usize;
     let mut no_calls = 0_usize;
@@ -14740,6 +14825,7 @@ fn gc_percent(window: &[u8], window_size: usize) -> Option<usize> {
     }
 }
 
+#[cfg(test)]
 fn picard_gc_percent_for_start(
     reference: &[u8],
     start: usize,
@@ -20939,6 +21025,46 @@ mod tests {
                 let mut actual = [0_u64; 101];
                 add_gc_window_counts(&sequence, window_size, &mut actual);
                 assert_eq!(actual, expected, "length {length} window {window_size}");
+            }
+        }
+    }
+
+    #[test]
+    fn gc_lookup_table_matches_picard_window_rule() {
+        let mut state = 0x6a09_e667_f3bc_c909_u64;
+        let mut next = move || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            state
+        };
+        let alphabet = b"ACGTNacgtnRY";
+        for case in 0..300 {
+            let length = usize::try_from(next() % 300).unwrap_or(0);
+            let n_heavy = case % 4 == 0;
+            let reference = (0..length)
+                .map(|_| {
+                    let pick = usize::try_from(next() % 12).unwrap_or(0);
+                    if n_heavy && pick < 5 {
+                        b'N'
+                    } else {
+                        alphabet[pick]
+                    }
+                })
+                .collect::<Vec<_>>();
+            for window_size in [1_usize, 4, 37, 100] {
+                let table = gc_percent_by_start(&reference, window_size);
+                for start in 0..=length + 2 {
+                    let expected = picard_gc_percent_for_start(&reference, start, window_size);
+                    let actual = match table.get(start) {
+                        Some(&NO_GC_WINDOW) | None => None,
+                        Some(&gc) => Some(usize::from(gc)),
+                    };
+                    assert_eq!(
+                        actual, expected,
+                        "length {length} window {window_size} start {start}"
+                    );
+                }
             }
         }
     }
