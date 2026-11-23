@@ -9525,16 +9525,50 @@ fn count_gc_bias_windows(reference_path: &str, window_size: usize) -> Result<[u6
             continue;
         }
         let sequence = load_fasta_contig_sequence(reference_path, &name)?;
-        let window_end = sequence.len().saturating_sub(window_size);
-        for start in 1..window_end {
-            if let Some(window) = sequence.get(start..start + window_size)
-                && let Some(gc) = gc_percent(window, window_size)
-            {
-                windows[gc] += 1;
-            }
-        }
+        add_gc_window_counts(&sequence, window_size, &mut windows);
     }
     Ok(windows)
+}
+
+#[derive(Default, Clone, Copy)]
+struct GcWindowTally {
+    gc: usize,
+    no_calls: usize,
+}
+
+impl GcWindowTally {
+    fn shift(&mut self, base: u8, delta: isize) {
+        let slot = match base.to_ascii_uppercase() {
+            b'G' | b'C' => &mut self.gc,
+            b'N' => &mut self.no_calls,
+            _ => return,
+        };
+        *slot = slot.wrapping_add_signed(delta);
+    }
+
+    fn percent(self, window_size: usize) -> Option<usize> {
+        (self.no_calls <= 4).then(|| (self.gc * 100) / window_size)
+    }
+}
+
+fn add_gc_window_counts(sequence: &[u8], window_size: usize, windows: &mut [u64; 101]) {
+    let window_end = sequence.len().saturating_sub(window_size);
+    if window_size == 0 || window_end <= 1 {
+        return;
+    }
+    let mut tally = GcWindowTally::default();
+    for &base in &sequence[1..=window_size] {
+        tally.shift(base, 1);
+    }
+    for start in 1..window_end {
+        if start > 1 {
+            tally.shift(sequence[start - 1], -1);
+            tally.shift(sequence[start + window_size - 1], 1);
+        }
+        if let Some(gc) = tally.percent(window_size) {
+            windows[gc] += 1;
+        }
+    }
 }
 
 fn read_fasta_sequences(path: &str, truncate_names: bool) -> Result<Vec<FastaSequence>, String> {
@@ -20809,6 +20843,45 @@ mod tests {
                 "input.jar".to_string()
             ]
         );
+    }
+
+    #[test]
+    fn sliding_gc_windows_match_recounting_every_window() {
+        let mut state = 0x9e37_79b9_7f4a_7c15_u64;
+        let mut next = move || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            state
+        };
+        let alphabet = b"ACGTNacgtnRY";
+        for case in 0..400 {
+            let length = usize::try_from(next() % 400).unwrap_or(0);
+            let n_heavy = case % 3 == 0;
+            let sequence = (0..length)
+                .map(|_| {
+                    let pick = usize::try_from(next() % 12).unwrap_or(0);
+                    if n_heavy && pick < 6 {
+                        b'N'
+                    } else {
+                        alphabet[pick]
+                    }
+                })
+                .collect::<Vec<_>>();
+            for window_size in [1_usize, 2, 5, 37, 100, 399] {
+                let mut expected = [0_u64; 101];
+                let window_end = sequence.len().saturating_sub(window_size);
+                for start in 1..window_end {
+                    if let Some(gc) = gc_percent(&sequence[start..start + window_size], window_size)
+                    {
+                        expected[gc] += 1;
+                    }
+                }
+                let mut actual = [0_u64; 101];
+                add_gc_window_counts(&sequence, window_size, &mut actual);
+                assert_eq!(actual, expected, "length {length} window {window_size}");
+            }
+        }
     }
 
     #[test]
