@@ -15651,7 +15651,7 @@ impl GcBiasMetricsSummary {
             return Ok(());
         };
         let bases = record.seq_len() as u64;
-        let errors = gc_bias_error_count(record, &self.active_sequence)?;
+        let errors = gc_bias_error_count(record, reference)?;
         self.read_starts[gc] += 1;
         self.bases_by_gc[gc] += bases;
         self.errors_by_gc[gc] += errors;
@@ -21929,6 +21929,34 @@ mod tests {
 
         let text = summary.detail_text(100, 0.0);
         assert!(text.contains("All Reads\tALL\t50\t2\t1\t20\t1\t1"));
+    }
+
+    #[test]
+    fn gc_bias_counts_mismatches_against_preloaded_reference() {
+        let dir = tempfile::tempdir().expect("tempdir exists");
+        let reference = dir.path().join("ref.fa");
+        fs::write(&reference, ">chr1\nAAAACCCCGGGGAAAACCCC\n").expect("reference is written");
+
+        let mut summary =
+            GcBiasMetricsSummary::new(reference.to_str().unwrap(), 4, false).expect("summary");
+        assert!(summary.preloaded.is_some());
+        let mut record = bam::Record::new();
+        record.set(
+            b"mismatched",
+            Some(&CigarString(vec![Cigar::Match(4)])),
+            b"TTTT",
+            b"FFFF",
+        );
+        record.set_tid(0);
+        record.set_pos(0);
+        record.set_flags(0);
+
+        summary
+            .observe(&record, &["chr1".to_string()], 4)
+            .expect("record is observed");
+
+        assert_eq!(summary.read_starts.iter().sum::<u64>(), 1);
+        assert_eq!(summary.errors_by_gc.iter().sum::<u64>(), 4);
     }
 
     #[test]
