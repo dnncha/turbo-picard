@@ -13306,9 +13306,9 @@ impl AlignmentSummary {
         self.pf_read_lengths[seq_len] += 1;
         if wgs_metrics::has_no_call_read_base(encoded) {
             ensure_histogram_len(&mut self.cycle_no_calls, seq_len - 1);
-            for index in 0..seq_len {
+            for (index, count) in self.cycle_no_calls.iter_mut().enumerate().take(seq_len) {
                 if bam_parallel::bam_nibble(encoded, index) == 0xf {
-                    self.cycle_no_calls[index] += 1;
+                    *count += 1;
                 }
             }
         }

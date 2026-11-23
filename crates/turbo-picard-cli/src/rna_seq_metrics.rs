@@ -507,7 +507,7 @@ fn picard_median(values: &mut [f64]) -> f64 {
     if values.len() % 2 == 1 {
         values[mid]
     } else {
-        0.5 * (values[mid - 1] + values[mid])
+        values[mid - 1].midpoint(values[mid])
     }
 }
 
@@ -1289,8 +1289,13 @@ fn classify_record(
             if gene.start > b_end || gene.end < b_start {
                 continue;
             }
-            for tx_idx in gene.tx_start_idx..gene.tx_end_idx {
-                let tx = &annotation.transcripts[tx_idx];
+            for (tx_idx, tx) in annotation
+                .transcripts
+                .iter()
+                .enumerate()
+                .take(gene.tx_end_idx)
+                .skip(gene.tx_start_idx)
+            {
                 if tx.tx_start <= b_end && tx.tx_end >= b_start {
                     assign_locus_function_for_transcript(
                         b_start,
@@ -1894,7 +1899,7 @@ mod tests {
         let mut even = [4.0, 1.0, 2.0, 8.0];
         assert!((picard_median(&mut even) - 3.0).abs() < 1e-12);
         let mut empty: [f64; 0] = [];
-        assert!(picard_median(&mut empty) == 0.0);
+        assert!(picard_median(&mut empty).abs() < f64::EPSILON);
     }
 
     #[test]

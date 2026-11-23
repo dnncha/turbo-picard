@@ -522,7 +522,7 @@ enum AggregatorStore {
 }
 
 const HP_DENSE_LIMIT: usize = 32;
-const HOMOPOLYMER_ALPHABET: [u8; 5] = [b'A', b'C', b'G', b'T', b'N'];
+const HOMOPOLYMER_ALPHABET: [u8; 5] = *b"ACGTN";
 
 impl AggregatorStore {
     fn new_for_spec(spec: &MetricSpec) -> Self {
@@ -812,7 +812,7 @@ impl AggregatorStore {
                 rows
             }
             Self::OneBaseContext(arr, extra) => {
-                const ALPHABET: [u8; 5] = [b'A', b'C', b'G', b'T', b'N'];
+                const ALPHABET: [u8; 5] = *b"ACGTN";
                 let mut rows = Vec::new();
                 for (idx, c) in arr.into_iter().enumerate() {
                     if c.active {
