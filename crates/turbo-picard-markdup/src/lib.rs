@@ -7,9 +7,11 @@ mod error;
 mod external_mates;
 mod fragment_taint;
 mod input_headers;
+mod program_groups;
 
 pub use error::{ExternalPlanError, MarkDuplicatesError};
 use fragment_taint::FragmentTaint;
+use program_groups::{ProgramGroups, ProgramGroupsSeen};
 use regex::Regex;
 use rust_htslib::bam::header::HeaderRecord;
 use rust_htslib::bam::record::Aux;
@@ -240,14 +242,11 @@ fn run_hts_container(
         let reader = open_markdup_reader(config, input)?;
         append_missing_read_groups(&mut header, reader.header(), &mut known_read_groups);
     }
-    if config.add_pg_tag_to_reads {
-        push_markdup_pg_header_if_needed(&mut header);
-    }
-    let mut writer = open_markdup_writer(config, &config.output, &header)?;
     let mut records = Vec::new();
     let mut read_ends = Vec::new();
     let mut eligible_indices = Vec::new();
     let mut barcode_registry = BarcodeRegistry::default();
+    let mut program_groups_seen = ProgramGroupsSeen::default();
     let mut summary = MarkDuplicatesSummary {
         library,
         unpaired_reads_examined: 0,
@@ -270,6 +269,7 @@ fn run_hts_container(
             config,
             summary: &mut summary,
             compact_plan: false,
+            program_groups_seen: &mut program_groups_seen,
         };
         read_state.read(&mut reader, &first_library_lookup, &mut library_registry)?;
         for input in config.inputs.iter().skip(1) {
@@ -287,6 +287,8 @@ fn run_hts_container(
         &mut library_registry,
         config,
     )?;
+    let program_groups = chain_program_groups(&mut header, &program_groups_seen, config);
+    let mut writer = open_markdup_writer(config, &config.output, &header)?;
 
     {
         if config.inputs.len() > 1 {
@@ -295,11 +297,12 @@ fn run_hts_container(
                 .zip(optical_duplicate_records)
                 .collect::<Vec<_>>();
             marked_records.sort_by(|(left, _), (right, _)| compare_bam_output_order(left, right));
-            write_bam_records(marked_records, config, &mut writer)?;
+            write_bam_records(marked_records, config, &program_groups, &mut writer)?;
         } else {
             write_bam_records(
                 records.into_iter().zip(optical_duplicate_records),
                 config,
+                &program_groups,
                 &mut writer,
             )?;
         }
@@ -531,9 +534,6 @@ fn try_run_external_plan(
         let reader = open_markdup_reader(config, input)?;
         append_missing_read_groups(&mut header, reader.header(), &mut known_read_groups);
     }
-    if config.add_pg_tag_to_reads {
-        push_markdup_pg_header_if_needed(&mut header);
-    }
 
     drop(reader);
     let mut summary = MarkDuplicatesSummary {
@@ -562,6 +562,7 @@ fn try_run_external_plan(
         "turbo-picard-markdup-fragment",
     )?);
     let mut record_count = 0_u64;
+    let mut program_groups_seen = ProgramGroupsSeen::default();
     let mut last_output_order = None::<(i32, i64, Vec<u8>, u16)>;
     let mut last_coordinate = None::<(i32, i64)>;
 
@@ -571,6 +572,7 @@ fn try_run_external_plan(
         let mut record = bam::Record::new();
         while let Some(result) = reader.read(&mut record) {
             result?;
+            program_groups_seen.observe(&record);
             let flag = record.flags() & !DUPLICATE_FLAG;
             if record.flags() != flag {
                 record.set_flags(flag);
@@ -685,6 +687,7 @@ fn try_run_external_plan(
         )?;
     }
 
+    let program_groups = chain_program_groups(&mut header, &program_groups_seen, config);
     let mut writer = open_markdup_writer(config, &config.output, &header)?;
     let mut replay_ordinal = 0_u64;
     match decision_store {
@@ -696,6 +699,7 @@ fn try_run_external_plan(
                     &bitset,
                     &mut replay_ordinal,
                     config,
+                    &program_groups,
                     &mut writer,
                 )?;
             }
@@ -713,6 +717,7 @@ fn try_run_external_plan(
                     &mut replay_ordinal,
                     &mut next_duplicate,
                     config,
+                    &program_groups,
                     &mut writer,
                 )?;
             }
@@ -2652,6 +2657,7 @@ fn write_external_plan_records_bitset(
     bitset: &DecisionBitset,
     ordinal: &mut u64,
     config: &MarkDuplicatesConfig,
+    program_groups: &ProgramGroups,
     writer: &mut bam::Writer,
 ) -> Result<(), MarkDuplicatesError> {
     let mut record = bam::Record::new();
@@ -2665,7 +2671,13 @@ fn write_external_plan_records_bitset(
         if record.flags() != flags {
             record.set_flags(flags);
         }
-        write_bam_record(&mut record, is_optical_duplicate, config, writer)?;
+        write_bam_record(
+            &mut record,
+            is_optical_duplicate,
+            config,
+            program_groups,
+            writer,
+        )?;
         *ordinal = (*ordinal)
             .checked_add(1)
             .ok_or(MarkDuplicatesError::TooManyRecords)?;
@@ -2679,6 +2691,7 @@ fn write_external_plan_records(
     ordinal: &mut u64,
     next_duplicate: &mut Option<(u64, ExternalDecision)>,
     config: &MarkDuplicatesConfig,
+    program_groups: &ProgramGroups,
     writer: &mut bam::Writer,
 ) -> Result<(), MarkDuplicatesError> {
     let mut record = bam::Record::new();
@@ -2709,7 +2722,13 @@ fn write_external_plan_records(
         if record.flags() != flags {
             record.set_flags(flags);
         }
-        write_bam_record(&mut record, is_optical_duplicate, config, writer)?;
+        write_bam_record(
+            &mut record,
+            is_optical_duplicate,
+            config,
+            program_groups,
+            writer,
+        )?;
         *ordinal = (*ordinal)
             .checked_add(1)
             .ok_or(MarkDuplicatesError::TooManyRecords)?;
@@ -2733,13 +2752,11 @@ fn try_run_single_bam_compact_plan(
         .library
         .clone();
     let mut header = bam::Header::from_template(reader.header());
-    if config.add_pg_tag_to_reads {
-        push_markdup_pg_header_if_needed(&mut header);
-    }
     let mut records = Vec::new();
     let mut read_ends = Vec::new();
     let mut eligible_indices = Vec::new();
     let mut barcode_registry = BarcodeRegistry::default();
+    let mut program_groups_seen = ProgramGroupsSeen::default();
     let mut summary = MarkDuplicatesSummary {
         library,
         unpaired_reads_examined: 0,
@@ -2762,6 +2779,7 @@ fn try_run_single_bam_compact_plan(
             config,
             summary: &mut summary,
             compact_plan: true,
+            program_groups_seen: &mut program_groups_seen,
         };
         read_state.read(&mut reader, &first_library_lookup, &mut library_registry)?;
     }
@@ -2776,6 +2794,7 @@ fn try_run_single_bam_compact_plan(
     )?;
     drop(reader);
 
+    let program_groups = chain_program_groups(&mut header, &program_groups_seen, config);
     let mut writer = open_markdup_writer(config, &config.output, &header)?;
     let mut replay_reader = open_markdup_reader(config, first_input)?;
     write_compact_plan_records(
@@ -2783,6 +2802,7 @@ fn try_run_single_bam_compact_plan(
         &records,
         &optical_duplicate_records,
         config,
+        &program_groups,
         &mut writer,
     )?;
     drop(writer);
@@ -2896,6 +2916,7 @@ fn write_compact_plan_records(
     plan_records: &[bam::Record],
     optical_duplicate_records: &[bool],
     config: &MarkDuplicatesConfig,
+    program_groups: &ProgramGroups,
     writer: &mut bam::Writer,
 ) -> Result<(), MarkDuplicatesError> {
     let mut record_count = 0usize;
@@ -2913,7 +2934,13 @@ fn write_compact_plan_records(
             .get(record_count)
             .copied()
             .ok_or(MarkDuplicatesError::MissingOpticalDuplicateDecision)?;
-        write_bam_record(&mut record, optical_duplicate, config, writer)?;
+        write_bam_record(
+            &mut record,
+            optical_duplicate,
+            config,
+            program_groups,
+            writer,
+        )?;
         record_count += 1;
     }
     if record_count != plan_records.len() {
@@ -3008,6 +3035,9 @@ struct FastPairRecord {
 fn try_run_single_bam_no_duplicate_fast_path(
     config: &MarkDuplicatesConfig,
 ) -> Result<Option<MarkDuplicatesSummary>, MarkDuplicatesError> {
+    if config.add_pg_tag_to_reads {
+        return Ok(None);
+    }
     if config.inputs.len() != 1
         || config.tag_duplicate_set_members
         || config.barcode_tag.is_some()
@@ -3045,11 +3075,9 @@ fn try_run_single_bam_no_duplicate_fast_path(
     let mut pending_pairs = HashMap::<Vec<u8>, FastPairRecord>::default();
     let copy_input_on_success = can_copy_input_without_rewrite(config);
     let temp_output = (!copy_input_on_success).then(|| temp_hts_output_path(&config.output));
+    let program_groups = ProgramGroups::default();
     let mut writer = if let Some(temp_output) = temp_output.as_deref() {
-        let mut header = bam::Header::from_template(reader.header());
-        if config.add_pg_tag_to_reads {
-            push_markdup_pg_header_if_needed(&mut header);
-        }
+        let header = bam::Header::from_template(reader.header());
         let writer = open_markdup_writer(config, temp_output, &header)?;
         Some(writer)
     } else {
@@ -3074,7 +3102,7 @@ fn try_run_single_bam_no_duplicate_fast_path(
             summary.unmapped_records += 1;
             library_registry.summary_mut(library_id).unmapped_records += 1;
             if let Some(writer) = writer.as_mut() {
-                write_bam_record(&mut record, false, config, writer)?;
+                write_bam_record(&mut record, false, config, &program_groups, writer)?;
             }
             continue;
         }
@@ -3084,7 +3112,7 @@ fn try_run_single_bam_no_duplicate_fast_path(
                 .summary_mut(library_id)
                 .secondary_or_supplementary_records += 1;
             if let Some(writer) = writer.as_mut() {
-                write_bam_record(&mut record, false, config, writer)?;
+                write_bam_record(&mut record, false, config, &program_groups, writer)?;
             }
             continue;
         }
@@ -3160,7 +3188,7 @@ fn try_run_single_bam_no_duplicate_fast_path(
             }
         }
         if let Some(writer) = writer.as_mut() {
-            write_bam_record(&mut record, false, config, writer)?;
+            write_bam_record(&mut record, false, config, &program_groups, writer)?;
         }
     }
 
@@ -3358,6 +3386,7 @@ struct BamRecordReadState<'a> {
     config: &'a MarkDuplicatesConfig,
     summary: &'a mut MarkDuplicatesSummary,
     compact_plan: bool,
+    program_groups_seen: &'a mut ProgramGroupsSeen,
 }
 
 impl BamRecordReadState<'_> {
@@ -3369,6 +3398,7 @@ impl BamRecordReadState<'_> {
     ) -> Result<(), MarkDuplicatesError> {
         for result in reader.records() {
             let mut record = result?;
+            self.program_groups_seen.observe(&record);
             let flag = record.flags() & !DUPLICATE_FLAG;
             if record.flags() != flag {
                 record.set_flags(flag);
@@ -3468,10 +3498,17 @@ fn compare_bam_output_order(left: &bam::Record, right: &bam::Record) -> Ordering
 fn write_bam_records(
     records: impl IntoIterator<Item = (bam::Record, bool)>,
     config: &MarkDuplicatesConfig,
+    program_groups: &ProgramGroups,
     writer: &mut bam::Writer,
 ) -> Result<(), MarkDuplicatesError> {
     for (mut record, is_optical_duplicate) in records {
-        write_bam_record(&mut record, is_optical_duplicate, config, writer)?;
+        write_bam_record(
+            &mut record,
+            is_optical_duplicate,
+            config,
+            program_groups,
+            writer,
+        )?;
     }
     Ok(())
 }
@@ -3480,6 +3517,7 @@ fn write_bam_record(
     record: &mut bam::Record,
     is_optical_duplicate: bool,
     config: &MarkDuplicatesConfig,
+    program_groups: &ProgramGroups,
     writer: &mut bam::Writer,
 ) -> Result<(), MarkDuplicatesError> {
     let flags = record.flags();
@@ -3499,7 +3537,7 @@ fn write_bam_record(
         record.push_aux(b"DT", Aux::String(duplicate_type))?;
     }
     if config.add_pg_tag_to_reads {
-        add_program_group_to_bam_record(record)?;
+        program_groups.retag(record)?;
     }
     writer.write(record)?;
     Ok(())
@@ -3975,28 +4013,23 @@ fn replace_i32_aux(
     Ok(())
 }
 
-fn add_program_group_to_bam_record(record: &mut bam::Record) -> Result<(), MarkDuplicatesError> {
-    if record.aux(b"PG").is_ok() {
-        record.remove_aux(b"PG")?;
-    }
-    record.push_aux(b"PG", Aux::String("MarkDuplicates"))?;
-    Ok(())
+fn program_version() -> String {
+    format!("turbo-picard {}", env!("CARGO_PKG_VERSION"))
 }
 
-fn push_markdup_pg_header_if_needed(header: &mut bam::Header) {
-    let header_bytes = header.to_bytes();
-    let header_text = String::from_utf8_lossy(&header_bytes);
-    if header_text
-        .lines()
-        .any(|line| line.starts_with("@PG") && line.contains("ID:MarkDuplicates"))
-    {
-        return;
+fn program_command_line() -> String {
+    std::env::args().collect::<Vec<_>>().join(" ")
+}
+
+fn chain_program_groups(
+    header: &mut bam::Header,
+    seen: &ProgramGroupsSeen,
+    config: &MarkDuplicatesConfig,
+) -> ProgramGroups {
+    if !config.add_pg_tag_to_reads {
+        return ProgramGroups::default();
     }
-    header.push_record(
-        HeaderRecord::new(b"PG")
-            .push_tag(b"ID", "MarkDuplicates")
-            .push_tag(b"PN", "MarkDuplicates"),
-    );
+    ProgramGroups::chain(header, seen, &program_version(), &program_command_line())
 }
 
 fn picard_bai_path(output: &str) -> String {
