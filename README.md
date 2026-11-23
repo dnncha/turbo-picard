@@ -8,7 +8,7 @@
 
 <a href="https://turbo-picard.readthedocs.io/en/latest/evidence/"><picture><source media="(max-width: 700px)" srcset="https://raw.githubusercontent.com/dnncha/turbo-picard/main/docs/site/assets/competitor-card-mobile.png"><img src="https://raw.githubusercontent.com/dnncha/turbo-picard/main/docs/site/assets/competitor-card.png" width="100%" alt="Turbo Picard MarkDuplicates and 4x GRCh38 WGS timings and memory against Picard, Riker, FastDup, and samtools." ></picture></a>
 
-[Documentation](https://turbo-picard.readthedocs.io/en/latest/) · [Command coverage](docs/commands.rst) · [Compare alternatives](https://turbo-picard.readthedocs.io/en/latest/compare/) · [Evaluate on your data](docs/real-data-evaluation.rst) · [Research](https://cheerfulduck.com/research)
+[Documentation](https://turbo-picard.readthedocs.io/en/latest/) · [Command coverage](docs/commands.rst) · [Compare alternatives](https://turbo-picard.readthedocs.io/en/latest/compare/) · [Evaluate on your data](docs/real-data-evaluation.rst) · [Bunsen](https://bunsen.science)
 
 ---
 
@@ -163,7 +163,7 @@ Run your own side-by-side comparison using the repository evaluator (local execu
 
 ## Saved 32-Command Small-Fixture Suite & Evidence Gates
 
-Across the 32 parity-checked commands in the saved small-fixture suite (where JVM startup contributes materially and does not by itself predict whole-genome ratios), Turbo Picard records a **22.88x** minimum, **84.52x** geometric mean, **99.51x** median, and **272.12x** maximum speedup against Picard 3.4.0. In the saved `MarkDuplicates` fixture (`reads=50000`), median wall times were **0.075464 seconds** for Turbo Picard vs **2.238986 seconds** for Picard. See the [benchmark guide](docs/benchmarks.rst) and [parity guide](docs/parity.rst). Metrics-text agreement does not establish Picard-equivalent charts; [Cheerful Duck Research](https://cheerfulduck.com/research) publishes broader software investigations and corrections.
+Across the 32 parity-checked commands in the saved small-fixture suite (where JVM startup contributes materially and does not by itself predict whole-genome ratios), Turbo Picard records a **22.88x** minimum, **84.52x** geometric mean, **99.51x** median, and **272.12x** maximum speedup against Picard 3.4.0. In the saved `MarkDuplicates` fixture (`reads=50000`), median wall times were **0.075464 seconds** for Turbo Picard vs **2.238986 seconds** for Picard. See the [benchmark guide](docs/benchmarks.rst) and [parity guide](docs/parity.rst). Metrics-text agreement does not establish Picard-equivalent charts; [Bunsen](https://bunsen.science/) publishes broader software investigations and corrections.
 
 ### Saved benchmark record
 
