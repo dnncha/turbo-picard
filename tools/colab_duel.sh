@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
-usage() { echo "usage: $0 launch|sync|report|stop <session> [KEY=VALUE env for tools/duel_vm.sh...]" >&2; exit 64; }
+usage() { echo "usage: $0 launch|sync|watch|report|stop <session> [KEY=VALUE env for tools/duel_vm.sh...]" >&2; exit 64; }
 [ $# -ge 2 ] || usage
 cmd=$1 session=$2; shift 2
 repo="$(cd "$(dirname "$0")/.." && pwd)"
@@ -31,6 +31,13 @@ PY
   report)
     python3 "$repo/tools/duel.py" report --ledger "$repo/benchmarks/duel/ledger.jsonl" --add "$local_dir/out/results.jsonl" \
       --scoreboard "$repo/benchmarks/duel/SCOREBOARD.md" --losses "$repo/benchmarks/duel/losses.json"
+    ;;
+  watch)
+    while :; do
+      "$0" sync "$session" > /dev/null 2>&1 || true
+      [ -e "$local_dir/out/DONE" ] && exit 0
+      sleep "${WATCH_SECONDS:-900}"
+    done
     ;;
   stop) colab --config "$cfg" stop -s "$session" ;;
   *) usage ;;
