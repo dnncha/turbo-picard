@@ -32,7 +32,7 @@ measured SHA-256; the release-ready verifier must pass before submission.
 
 - URL: `https://github.com/dnncha/turbo-picard/archive/refs/tags/v0.1.20.tar.gz`
 Archive SHA-256:
-`abaa7de03d3b4f94e757115da16acf3eee7e0f28ebd5f7294a975e21c2f3af5e`
+`682540133ed06387d33d88d6623f4e60e87238d0dddbf2bbf904da228bfaf25e`
 
 ## Evidence
 
