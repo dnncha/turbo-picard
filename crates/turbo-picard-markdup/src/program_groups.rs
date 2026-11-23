@@ -11,12 +11,6 @@ pub(crate) struct ProgramGroupsSeen {
 }
 
 impl ProgramGroupsSeen {
-    pub(crate) fn untagged() -> Self {
-        let mut seen = Self::default();
-        seen.observe_value(None);
-        seen
-    }
-
     pub(crate) fn observe(&mut self, record: &bam::Record) {
         let value = match record.aux(b"PG") {
             Ok(Aux::String(value)) => Some(value.as_bytes()),

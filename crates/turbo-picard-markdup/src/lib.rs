@@ -4026,12 +4026,9 @@ fn chain_program_groups(
     seen: &ProgramGroupsSeen,
     config: &MarkDuplicatesConfig,
 ) -> ProgramGroups {
-    let untagged = ProgramGroupsSeen::untagged();
-    let seen = if config.add_pg_tag_to_reads {
-        seen
-    } else {
-        &untagged
-    };
+    if !config.add_pg_tag_to_reads {
+        return ProgramGroups::default();
+    }
     ProgramGroups::chain(header, seen, &program_version(), &program_command_line())
 }
 
