@@ -9519,6 +9519,65 @@ fn load_fasta_contig_sequence(path: &str, contig: &str) -> Result<Vec<u8>, Strin
 }
 
 fn count_gc_bias_windows(reference_path: &str, window_size: usize) -> Result<[u64; 101], String> {
+    if !has_gzip_extension(reference_path) {
+        let file = fs::File::open(reference_path).map_err(|error| error.to_string())?;
+        return stream_gc_bias_windows(BufReader::with_capacity(1 << 22, file), window_size)
+            .map_err(|error| format!("CollectGcBiasMetrics reference {reference_path}: {error}"));
+    }
+    count_gc_bias_windows_per_contig(reference_path, window_size)
+}
+
+fn stream_gc_bias_windows<R: BufRead>(
+    mut reader: R,
+    window_size: usize,
+) -> std::io::Result<[u64; 101]> {
+    let mut windows = [0_u64; 101];
+    if window_size == 0 {
+        return Ok(windows);
+    }
+    let mut ring = vec![0_u8; window_size];
+    let mut tally = GcWindowTally::default();
+    let mut position = 0_usize;
+    let mut in_sequence = false;
+    let mut line = Vec::with_capacity(256);
+    loop {
+        line.clear();
+        if reader.read_until(b'\n', &mut line)? == 0 {
+            break;
+        }
+        if line.first() == Some(&b'>') {
+            tally = GcWindowTally::default();
+            position = 0;
+            in_sequence = true;
+            continue;
+        }
+        if !in_sequence {
+            continue;
+        }
+        for &base in line.trim_ascii() {
+            if position > window_size {
+                if let Some(gc) = tally.percent(window_size) {
+                    windows[gc] += 1;
+                }
+            }
+            if position >= 1 {
+                let slot = position % window_size;
+                if position > window_size {
+                    tally.shift(ring[slot], -1);
+                }
+                ring[slot] = base;
+                tally.shift(base, 1);
+            }
+            position += 1;
+        }
+    }
+    Ok(windows)
+}
+
+fn count_gc_bias_windows_per_contig(
+    reference_path: &str,
+    window_size: usize,
+) -> Result<[u64; 101], String> {
     let mut windows = [0u64; 101];
     for (name, length) in read_reference_contigs_for_wgs(reference_path)? {
         if length < window_size {
@@ -20880,6 +20939,46 @@ mod tests {
                 let mut actual = [0_u64; 101];
                 add_gc_window_counts(&sequence, window_size, &mut actual);
                 assert_eq!(actual, expected, "length {length} window {window_size}");
+            }
+        }
+    }
+
+    #[test]
+    fn streamed_gc_windows_match_per_contig_counts() {
+        let mut state = 0x2545_f491_4f6c_dd1d_u64;
+        let mut next = move || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            state
+        };
+        let alphabet = b"ACGTNacgtnRY";
+        for case in 0..200 {
+            let contigs = 1 + usize::try_from(next() % 4).unwrap_or(0);
+            let line_width = 1 + usize::try_from(next() % 70).unwrap_or(0);
+            let mut fasta = Vec::new();
+            let mut sequences = Vec::new();
+            for contig in 0..contigs {
+                let length = usize::try_from(next() % 500).unwrap_or(0);
+                let sequence = (0..length)
+                    .map(|_| alphabet[usize::try_from(next() % 12).unwrap_or(0)])
+                    .collect::<Vec<_>>();
+                fasta.extend_from_slice(format!(">c{contig} desc\n").as_bytes());
+                for chunk in sequence.chunks(line_width) {
+                    fasta.extend_from_slice(chunk);
+                    fasta.extend_from_slice(if case % 2 == 0 { b"\n" } else { b"\r\n" });
+                }
+                sequences.push(sequence);
+            }
+            for window_size in [1_usize, 3, 37, 100] {
+                let mut expected = [0_u64; 101];
+                for sequence in &sequences {
+                    let upper = sequence.to_ascii_uppercase();
+                    add_gc_window_counts(&upper, window_size, &mut expected);
+                }
+                let actual = stream_gc_bias_windows(std::io::Cursor::new(&fasta), window_size)
+                    .unwrap_or([0; 101]);
+                assert_eq!(actual, expected, "case {case} window {window_size}");
             }
         }
     }
