@@ -41,6 +41,7 @@ parity_conda_setup() {
 }
 
 parity_picard() {
+  [[ "${JDK_JAVA_OPTIONS:-}" == *-Xlog* ]] || export JDK_JAVA_OPTIONS="${JDK_JAVA_OPTIONS:-} -Xlog:disable -Xlog:all=warning:stderr"
   if ((${#PARITY_CONDA_RUNNER[@]} > 0)); then
     "${PARITY_CONDA_RUNNER[@]}" run -p "$PARITY_CONDA_PREFIX" env \
       "PATH=${PARITY_WORKDIR}:${PARITY_CONDA_PREFIX}/bin:${PATH:-/usr/bin:/bin}" \

@@ -64,7 +64,7 @@ fn default_threads(role: HtsThreadRole) -> usize {
         .ok()
         .and_then(|value| value.parse::<usize>().ok())
         .filter(|threads| *threads > 0)
-        .unwrap_or(16);
+        .unwrap_or(available);
     let reserved = match role {
         HtsThreadRole::PipelineReader => 2,
         HtsThreadRole::RegionWorker => 0,
@@ -74,7 +74,7 @@ fn default_threads(role: HtsThreadRole) -> usize {
         HtsThreadRole::Reader => 8,
         HtsThreadRole::Writer | HtsThreadRole::Index => 12,
         HtsThreadRole::PipelineReader => 2,
-        HtsThreadRole::RegionWorker => 32,
+        HtsThreadRole::RegionWorker => available,
     };
     available
         .saturating_sub(reserved)
@@ -95,6 +95,18 @@ mod tests {
     #[test]
     fn htslib_worker_threads_is_at_least_one() {
         assert!(htslib_worker_threads() >= 1);
+    }
+
+    #[test]
+    fn region_workers_default_to_every_core() {
+        if std::env::var_os("TURBO_PICARD_MAX_THREADS").is_some()
+            || std::env::var_os("TURBO_PICARD_REGION_WORKERS").is_some()
+            || std::env::var_os("TURBO_PICARD_THREADS").is_some()
+        {
+            return;
+        }
+        let available = std::thread::available_parallelism().map_or(1, NonZero::get);
+        assert_eq!(default_threads(HtsThreadRole::RegionWorker), available);
     }
 
     #[test]

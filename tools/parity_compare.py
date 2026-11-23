@@ -5,11 +5,11 @@ from __future__ import annotations
 import argparse
 import csv
 import importlib.util
-import math
 import subprocess
 import sys
 from collections import Counter
 from collections.abc import Sequence
+from decimal import ROUND_HALF_EVEN, ROUND_HALF_UP, Decimal, InvalidOperation
 from pathlib import Path
 from types import ModuleType
 
@@ -52,28 +52,46 @@ def load_metrics(path: Path) -> list[list[str]]:
     return rows
 
 
+def printed_decimals(text: str) -> int:
+    mantissa = text.lower().split("e", 1)[0]
+    return len(mantissa.split(".", 1)[1]) if "." in mantissa else 0
+
+
+def same_printed_value(picard_cell: str, turbo_cell: str) -> bool:
+    if picard_cell == turbo_cell:
+        return True
+    try:
+        picard_value, turbo_value = Decimal(picard_cell), Decimal(turbo_cell)
+    except InvalidOperation:
+        return False
+    if not (picard_value.is_finite() and turbo_value.is_finite()):
+        return False
+    step = Decimal(1).scaleb(-min(printed_decimals(picard_cell), printed_decimals(turbo_cell)))
+    return any(
+        picard_value.quantize(step, rounding=mode) == turbo_value.quantize(step, rounding=mode)
+        for mode in (ROUND_HALF_EVEN, ROUND_HALF_UP)
+    )
+
+
 def compare_metrics(picard_path: Path, turbo_path: Path, label: str) -> None:
     picard = load_metrics(picard_path)
     turbo = load_metrics(turbo_path)
     if len(picard) != len(turbo):
-        raise SystemExit(f"{label} metrics differ between Picard and turbo-picard")
-    for picard_row, turbo_row in zip(picard, turbo):
+        raise SystemExit(f"{label} metrics differ: Picard has {len(picard)} rows, turbo-picard has {len(turbo)}")
+    header: list[str] = []
+    for row_number, (picard_row, turbo_row) in enumerate(zip(picard, turbo), start=1):
+        if picard_row and picard_row[0].isupper() and picard_row == turbo_row:
+            header = picard_row
         if len(picard_row) != len(turbo_row):
-            raise SystemExit(f"{label} metrics differ between Picard and turbo-picard")
-        for picard_cell, turbo_cell in zip(picard_row, turbo_row):
-            if picard_cell == turbo_cell:
-                continue
-            try:
-                picard_value = float(picard_cell)
-                turbo_value = float(turbo_cell)
-            except ValueError:
-                raise SystemExit(f"{label} metrics differ between Picard and turbo-picard") from None
-            if (
-                not math.isfinite(picard_value)
-                or not math.isfinite(turbo_value)
-                or abs(picard_value - turbo_value) > 1e-5
-            ):
-                raise SystemExit(f"{label} metrics differ between Picard and turbo-picard")
+            raise SystemExit(
+                f"{label} metrics row {row_number} differs in width: Picard {len(picard_row)}, turbo-picard {len(turbo_row)}"
+            )
+        for column, (picard_cell, turbo_cell) in enumerate(zip(picard_row, turbo_row)):
+            if not same_printed_value(picard_cell, turbo_cell):
+                name = header[column] if column < len(header) else f"column {column + 1}"
+                raise SystemExit(
+                    f"{label} metrics differ at row {row_number} {name}: Picard={picard_cell!r} turbo={turbo_cell!r}"
+                )
 
 
 def load_wgs_metrics(path: Path) -> tuple[dict[str, str], list[list[str]]]:

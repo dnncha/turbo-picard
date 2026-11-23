@@ -41,6 +41,8 @@ installed version before using source-only discovery features.
 
 ## Complete the checks
 
+See `NET.md` for the inner loop, the gate, the Colab duel against competitors, and the escape log.
+
 Run `tools/static_gate.sh` (rustfmt, clippy pedantic with `-D warnings`, cargo-deny, ruff, mypy --strict) and `cargo test --workspace --locked`. Build on Omarchy when the Mac is busy.
 Run `TURBO_PICARD_CONDA_PREFIX=<env with picard and samtools> tools/parity_gate.sh` for Picard parity; it runs every matrix parity script, and `tools/verify_command_matrix.py` rejects a matrix script the gate does not run.
 Install the Python test dependencies and run:

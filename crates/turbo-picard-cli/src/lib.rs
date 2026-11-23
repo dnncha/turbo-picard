@@ -4367,7 +4367,7 @@ fn default_cmm_collector_thread_count(active_collectors: usize) -> usize {
         .ok()
         .map_or(1, |parallelism| parallelism.get().saturating_sub(2))
         .min(active_collectors)
-        .clamp(1, 6)
+        .max(1)
 }
 
 fn run_collectmultiplemetrics_single_pass(
@@ -5326,6 +5326,79 @@ fn run_collectmultiplemetrics_single_pass(
     Ok(())
 }
 
+const PARALLEL_WGS_MIN_CORES: usize = 4;
+
+fn collectmultiplemetrics_parallel_wgs_split(
+    args: &PicardArgs,
+    programs: &[String],
+) -> Result<Option<Vec<String>>, CommandError> {
+    let cores = std::thread::available_parallelism().map_or(1, std::num::NonZero::get);
+    Ok(parallel_wgs_split_for(
+        programs,
+        optional_scalar(args, "STOP_AFTER")?.is_some(),
+        cores,
+    ))
+}
+
+fn parallel_wgs_split_for(
+    programs: &[String],
+    stop_after: bool,
+    cores: usize,
+) -> Option<Vec<String>> {
+    if stop_after || cores < PARALLEL_WGS_MIN_CORES {
+        return None;
+    }
+    if !programs
+        .iter()
+        .any(|program| program == "CollectWgsMetrics")
+    {
+        return None;
+    }
+    let shared_pass = programs
+        .iter()
+        .filter(|program| program.as_str() != "CollectWgsMetrics")
+        .cloned()
+        .collect::<Vec<_>>();
+    (shared_pass.len() >= 2).then_some(shared_pass)
+}
+
+fn collectmultiplemetrics_wgs_child_args(
+    args: &PicardArgs,
+    input: &str,
+    output: &str,
+    file_extension: &str,
+    stop_after_arg: &[String],
+) -> Result<Vec<String>, CommandError> {
+    let reference = optional_scalar(args, "REFERENCE_SEQUENCE")?.ok_or_else(|| {
+        "missing required CollectMultipleMetrics argument for CollectWgsMetrics: REFERENCE_SEQUENCE"
+            .to_string()
+    })?;
+    let use_fast_algorithm =
+        if let Some(use_fast_algorithm) = optional_bool(args, "USE_FAST_ALGORITHM")? {
+            use_fast_algorithm
+        } else {
+            env_bool("TURBO_PICARD_WGS_FAST_DEFAULT")?.unwrap_or(false)
+        };
+    let sample_size =
+        optional_u32(args, "SAMPLE_SIZE")?.unwrap_or(if use_fast_algorithm { 0 } else { 10_000 });
+    let include_bq_histogram = optional_bool(args, "INCLUDE_BQ_HISTOGRAM")?.unwrap_or(false);
+    let mut child_args = vec![
+        format!("I={input}"),
+        format!(
+            "O={}",
+            collectmultiplemetrics_metric_path(output, ".wgs_metrics", file_extension)
+        ),
+        format!("R={reference}"),
+        "COUNT_UNPAIRED=true".to_string(),
+        format!("SAMPLE_SIZE={sample_size}"),
+        format!("INCLUDE_BQ_HISTOGRAM={include_bq_histogram}"),
+        "VALIDATION_STRINGENCY=SILENT".to_string(),
+        "QUIET=true".to_string(),
+    ];
+    child_args.extend(stop_after_arg.iter().cloned());
+    Ok(child_args)
+}
+
 fn run_collectmultiplemetrics(args: &[String]) -> Result<(), CommandError> {
     let args = normalize_picard_args_for_command("CollectMultipleMetrics", args)
         .map_err(|error| error.to_string())?;
@@ -5335,6 +5408,29 @@ fn run_collectmultiplemetrics(args: &[String]) -> Result<(), CommandError> {
     let file_extension = optional_scalar(&args, "FILE_EXTENSION")?.unwrap_or_default();
     let programs = collectmultiplemetrics_programs(&args)?;
     if collectmultiplemetrics_can_single_pass(&input, &programs) {
+        if let Some(shared_pass) = collectmultiplemetrics_parallel_wgs_split(&args, &programs)? {
+            let wgs_args = collectmultiplemetrics_wgs_child_args(
+                &args,
+                &input,
+                &output,
+                &file_extension,
+                &[],
+            )?;
+            return std::thread::scope(|scope| {
+                let wgs = scope.spawn(|| run_collectwgsmetrics(&wgs_args));
+                let shared = run_collectmultiplemetrics_single_pass(
+                    &args,
+                    &input,
+                    &output,
+                    &file_extension,
+                    &shared_pass,
+                );
+                let wgs = wgs.join().map_err(|_| {
+                    CommandError::from("CollectWgsMetrics worker panicked".to_string())
+                })?;
+                shared.and(wgs)
+            });
+        }
         return run_collectmultiplemetrics_single_pass(
             &args,
             &input,
@@ -5556,38 +5652,13 @@ fn run_collectmultiplemetrics(args: &[String]) -> Result<(), CommandError> {
                 run_collectqualityyieldmetrics(&child_args)?;
             }
             "CollectWgsMetrics" => {
-                let reference = optional_scalar(&args, "REFERENCE_SEQUENCE")?.ok_or_else(|| {
-                    "missing required CollectMultipleMetrics argument for CollectWgsMetrics: REFERENCE_SEQUENCE"
-                        .to_string()
-                })?;
-                let use_fast_algorithm =
-                    if let Some(use_fast_algorithm) = optional_bool(&args, "USE_FAST_ALGORITHM")? {
-                        use_fast_algorithm
-                    } else {
-                        env_bool("TURBO_PICARD_WGS_FAST_DEFAULT")?.unwrap_or(false)
-                    };
-                let sample_size = optional_u32(&args, "SAMPLE_SIZE")?
-                    .unwrap_or(if use_fast_algorithm { 0 } else { 10_000 });
-                let include_bq_histogram =
-                    optional_bool(&args, "INCLUDE_BQ_HISTOGRAM")?.unwrap_or(false);
-                let mut child_args = vec![
-                    format!("I={input}"),
-                    format!(
-                        "O={}",
-                        collectmultiplemetrics_metric_path(
-                            &output,
-                            ".wgs_metrics",
-                            &file_extension
-                        )
-                    ),
-                    format!("R={reference}"),
-                    "COUNT_UNPAIRED=true".to_string(),
-                    format!("SAMPLE_SIZE={sample_size}"),
-                    format!("INCLUDE_BQ_HISTOGRAM={include_bq_histogram}"),
-                    "VALIDATION_STRINGENCY=SILENT".to_string(),
-                    "QUIET=true".to_string(),
-                ];
-                child_args.extend(stop_after_arg.clone());
+                let child_args = collectmultiplemetrics_wgs_child_args(
+                    &args,
+                    &input,
+                    &output,
+                    &file_extension,
+                    &stop_after_arg,
+                )?;
                 run_collectwgsmetrics(&child_args)?;
             }
             _ => {
@@ -9448,20 +9519,328 @@ fn load_fasta_contig_sequence(path: &str, contig: &str) -> Result<Vec<u8>, Strin
 }
 
 fn count_gc_bias_windows(reference_path: &str, window_size: usize) -> Result<[u64; 101], String> {
+    if !has_gzip_extension(reference_path) {
+        if window_size > 0
+            && let Some(spans) = fasta_contig_spans(&format!("{reference_path}.fai"))
+            && !spans.is_empty()
+        {
+            return count_gc_windows_by_contig_in_parallel(reference_path, spans, window_size)
+                .map_err(|error| {
+                    format!("CollectGcBiasMetrics reference {reference_path}: {error}")
+                });
+        }
+        let file = fs::File::open(reference_path).map_err(|error| error.to_string())?;
+        return stream_gc_bias_windows(BufReader::with_capacity(1 << 22, file), window_size)
+            .map_err(|error| format!("CollectGcBiasMetrics reference {reference_path}: {error}"));
+    }
+    count_gc_bias_windows_per_contig(reference_path, window_size)
+}
+
+fn count_gc_bias_windows_per_contig(
+    reference_path: &str,
+    window_size: usize,
+) -> Result<[u64; 101], String> {
     let mut windows = [0u64; 101];
     for (name, length) in read_reference_contigs_for_wgs(reference_path)? {
         if length < window_size {
             continue;
         }
         let sequence = load_fasta_contig_sequence(reference_path, &name)?;
-        let window_end = sequence.len().saturating_sub(window_size);
-        for start in 1..window_end {
-            if let Some(window) = sequence.get(start..start + window_size)
-                && let Some(gc) = gc_percent(window, window_size)
-            {
-                windows[gc] += 1;
+        add_gc_window_counts(&sequence, window_size, &mut windows);
+    }
+    Ok(windows)
+}
+
+const NO_GC_WINDOW: u8 = u8::MAX;
+const GC_CLASS_OTHER: u8 = 0;
+const GC_CLASS_GC: u8 = 1;
+const GC_CLASS_NO_CALL: u8 = 2;
+
+const GC_CLASS: [u8; 256] = {
+    let mut table = [GC_CLASS_OTHER; 256];
+    table[b'G' as usize] = GC_CLASS_GC;
+    table[b'C' as usize] = GC_CLASS_GC;
+    table[b'g' as usize] = GC_CLASS_GC;
+    table[b'c' as usize] = GC_CLASS_GC;
+    table[b'N' as usize] = GC_CLASS_NO_CALL;
+    table[b'n' as usize] = GC_CLASS_NO_CALL;
+    table
+};
+
+#[derive(Default, Clone, Copy)]
+struct GcWindowTally {
+    gc: usize,
+    no_calls: usize,
+}
+
+impl GcWindowTally {
+    fn add(&mut self, base: u8) {
+        match GC_CLASS[usize::from(base)] {
+            GC_CLASS_GC => self.gc += 1,
+            GC_CLASS_NO_CALL => self.no_calls += 1,
+            _ => {}
+        }
+    }
+
+    fn remove(&mut self, base: u8) {
+        match GC_CLASS[usize::from(base)] {
+            GC_CLASS_GC => self.gc -= 1,
+            GC_CLASS_NO_CALL => self.no_calls -= 1,
+            _ => {}
+        }
+    }
+}
+
+fn gc_percent_of_count(window_size: usize) -> Vec<u8> {
+    (0..=window_size)
+        .map(|gc| u8::try_from((gc * 100) / window_size.max(1)).unwrap_or(100))
+        .collect()
+}
+
+struct GcWindowHistogram {
+    by_gc_count: Vec<u64>,
+    percent_of: Vec<u8>,
+}
+
+impl GcWindowHistogram {
+    fn new(window_size: usize) -> Self {
+        Self {
+            by_gc_count: vec![0; window_size + 1],
+            percent_of: gc_percent_of_count(window_size),
+        }
+    }
+
+    fn observe(&mut self, tally: GcWindowTally) {
+        if tally.no_calls <= 4 {
+            self.by_gc_count[tally.gc] += 1;
+        }
+    }
+
+    fn merge_into(&self, windows: &mut [u64; 101]) {
+        for (gc, count) in self.by_gc_count.iter().enumerate() {
+            windows[usize::from(self.percent_of[gc])] += count;
+        }
+    }
+}
+
+fn add_gc_window_counts(sequence: &[u8], window_size: usize, windows: &mut [u64; 101]) {
+    let window_end = sequence.len().saturating_sub(window_size);
+    if window_size == 0 || window_end <= 1 {
+        return;
+    }
+    let mut histogram = GcWindowHistogram::new(window_size);
+    let mut tally = GcWindowTally::default();
+    for &base in &sequence[1..=window_size] {
+        tally.add(base);
+    }
+    histogram.observe(tally);
+    for start in 2..window_end {
+        tally.remove(sequence[start - 1]);
+        tally.add(sequence[start + window_size - 1]);
+        histogram.observe(tally);
+    }
+    histogram.merge_into(windows);
+}
+
+fn gc_percent_by_start(reference: &[u8], window_size: usize) -> Vec<u8> {
+    let mut table = vec![0_u8; reference.len() + 1];
+    let last_calculated_start = reference.len().saturating_sub(window_size);
+    if window_size == 0 || last_calculated_start == 0 {
+        return table;
+    }
+    let percent_of = gc_percent_of_count(window_size);
+    let mut tally = GcWindowTally::default();
+    for &base in &reference[..window_size] {
+        tally.add(base);
+    }
+    for start in 0..last_calculated_start {
+        if start > 0 {
+            tally.remove(reference[start - 1]);
+            tally.add(reference[start + window_size - 1]);
+        }
+        table[start] = if tally.no_calls > 4 {
+            NO_GC_WINDOW
+        } else {
+            percent_of[tally.gc]
+        };
+    }
+    table
+}
+
+struct GcWindowScanner {
+    window_size: usize,
+    ring: Vec<u8>,
+    slot: usize,
+    tally: GcWindowTally,
+    position: usize,
+}
+
+impl GcWindowScanner {
+    fn new(window_size: usize) -> Self {
+        Self {
+            window_size,
+            ring: vec![0; window_size],
+            slot: 0,
+            tally: GcWindowTally::default(),
+            position: 0,
+        }
+    }
+
+    fn start_contig(&mut self) {
+        self.tally = GcWindowTally::default();
+        self.position = 0;
+        self.slot = 0;
+    }
+
+    fn push(&mut self, base: u8, histogram: &mut GcWindowHistogram) {
+        if self.position > self.window_size {
+            histogram.observe(self.tally);
+            self.tally.remove(self.ring[self.slot]);
+        }
+        if self.position >= 1 {
+            self.ring[self.slot] = base;
+            self.tally.add(base);
+            self.slot += 1;
+            if self.slot == self.window_size {
+                self.slot = 0;
             }
         }
+        self.position += 1;
+    }
+}
+
+fn stream_gc_bias_windows<R: BufRead>(
+    mut reader: R,
+    window_size: usize,
+) -> std::io::Result<[u64; 101]> {
+    let mut windows = [0_u64; 101];
+    if window_size == 0 {
+        return Ok(windows);
+    }
+    let mut histogram = GcWindowHistogram::new(window_size);
+    let mut scanner = GcWindowScanner::new(window_size);
+    let mut in_sequence = false;
+    let mut line = Vec::with_capacity(256);
+    loop {
+        line.clear();
+        if reader.read_until(b'\n', &mut line)? == 0 {
+            break;
+        }
+        if line.first() == Some(&b'>') {
+            scanner.start_contig();
+            in_sequence = true;
+            continue;
+        }
+        if !in_sequence {
+            continue;
+        }
+        for &base in line.trim_ascii() {
+            scanner.push(base, &mut histogram);
+        }
+    }
+    histogram.merge_into(&mut windows);
+    Ok(windows)
+}
+
+struct FastaContigSpan {
+    offset: u64,
+    bytes: u64,
+    length: usize,
+}
+
+fn fasta_contig_spans(fai_path: &str) -> Option<Vec<FastaContigSpan>> {
+    let text = fs::read_to_string(fai_path).ok()?;
+    let mut spans = Vec::new();
+    for line in text.lines().filter(|line| !line.trim().is_empty()) {
+        let fields = line.split('\t').collect::<Vec<_>>();
+        let [_, length, offset, line_bases, line_width, ..] = fields.as_slice() else {
+            return None;
+        };
+        let length = length.parse::<u64>().ok()?;
+        let line_bases = line_bases.parse::<u64>().ok().filter(|value| *value > 0)?;
+        let line_width = line_width.parse::<u64>().ok()?;
+        spans.push(FastaContigSpan {
+            offset: offset.parse::<u64>().ok()?,
+            bytes: (length / line_bases) * line_width + length % line_bases,
+            length: usize::try_from(length).ok()?,
+        });
+    }
+    Some(spans)
+}
+
+fn scan_contig_span(
+    file: &mut fs::File,
+    span: &FastaContigSpan,
+    scanner: &mut GcWindowScanner,
+    histogram: &mut GcWindowHistogram,
+    buffer: &mut [u8],
+) -> std::io::Result<()> {
+    file.seek(SeekFrom::Start(span.offset))?;
+    let mut remaining = span.bytes;
+    scanner.start_contig();
+    while remaining > 0 {
+        let want = usize::try_from(remaining.min(buffer.len() as u64)).unwrap_or(buffer.len());
+        let read = file.read(&mut buffer[..want])?;
+        if read == 0 {
+            break;
+        }
+        remaining -= read as u64;
+        for &base in &buffer[..read] {
+            if !base.is_ascii_whitespace() {
+                scanner.push(base, histogram);
+            }
+        }
+    }
+    Ok(())
+}
+
+fn count_gc_windows_by_contig_in_parallel(
+    reference_path: &str,
+    mut spans: Vec<FastaContigSpan>,
+    window_size: usize,
+) -> std::io::Result<[u64; 101]> {
+    spans.sort_by_key(|span| std::cmp::Reverse(span.length));
+    let threads = std::thread::available_parallelism()
+        .map_or(1, std::num::NonZero::get)
+        .min(spans.len())
+        .max(1);
+    let next = std::sync::atomic::AtomicUsize::new(0);
+    let partials = std::thread::scope(|scope| {
+        let workers = (0..threads)
+            .map(|_| {
+                scope.spawn(|| -> std::io::Result<GcWindowHistogram> {
+                    let mut file = fs::File::open(reference_path)?;
+                    let mut histogram = GcWindowHistogram::new(window_size);
+                    let mut scanner = GcWindowScanner::new(window_size);
+                    let mut buffer = vec![0_u8; 1 << 20];
+                    loop {
+                        let index = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        let Some(span) = spans.get(index) else {
+                            return Ok(histogram);
+                        };
+                        scan_contig_span(
+                            &mut file,
+                            span,
+                            &mut scanner,
+                            &mut histogram,
+                            &mut buffer,
+                        )?;
+                    }
+                })
+            })
+            .collect::<Vec<_>>();
+        workers
+            .into_iter()
+            .map(|worker| {
+                worker
+                    .join()
+                    .unwrap_or_else(|_| Err(std::io::Error::other("GC window worker panicked")))
+            })
+            .collect::<Vec<_>>()
+    });
+    let mut windows = [0_u64; 101];
+    for partial in partials {
+        partial?.merge_into(&mut windows);
     }
     Ok(windows)
 }
@@ -14185,6 +14564,7 @@ struct GcBiasMetricsSummary {
     reference_path: String,
     active_contig: Option<String>,
     active_sequence: Vec<u8>,
+    active_gc_by_start: Vec<u8>,
     total_clusters: u64,
     aligned_reads: u64,
     summary_aligned_reads: u64,
@@ -14207,6 +14587,7 @@ impl GcBiasMetricsSummary {
             reference_path: reference_path.to_string(),
             active_contig: None,
             active_sequence: Vec::new(),
+            active_gc_by_start: Vec::new(),
             total_clusters: 0,
             aligned_reads: 0,
             summary_aligned_reads: 0,
@@ -14217,13 +14598,21 @@ impl GcBiasMetricsSummary {
         })
     }
 
-    fn ensure_contig(&mut self, contig: &str) -> Result<(), String> {
+    fn ensure_contig(&mut self, contig: &str, window_size: usize) -> Result<(), String> {
         if self.active_contig.as_deref() == Some(contig) {
             return Ok(());
         }
         self.active_sequence = load_fasta_contig_sequence(&self.reference_path, contig)?;
+        self.active_gc_by_start = gc_percent_by_start(&self.active_sequence, window_size);
         self.active_contig = Some(contig.to_string());
         Ok(())
+    }
+
+    fn gc_at(&self, start: usize) -> Option<usize> {
+        match self.active_gc_by_start.get(start) {
+            Some(&NO_GC_WINDOW) | None => None,
+            Some(&gc) => Some(usize::from(gc)),
+        }
     }
 
     fn observe(
@@ -14252,9 +14641,8 @@ impl GcBiasMetricsSummary {
         let contig = target_names
             .get(usize_or_max(record.tid()))
             .ok_or_else(|| "CollectGcBiasMetrics record references unknown target".to_string())?;
-        self.ensure_contig(contig)?;
-        let reference = &self.active_sequence;
-        if reference.len() < window_size {
+        self.ensure_contig(contig, window_size)?;
+        if self.active_sequence.len() < window_size {
             return Ok(());
         }
         let start = if record.is_reverse() {
@@ -14265,12 +14653,11 @@ impl GcBiasMetricsSummary {
         if start <= 0 {
             return Ok(());
         }
-        let Some(gc) = picard_gc_percent_for_start(reference, usize_or_max(start), window_size)
-        else {
+        let Some(gc) = self.gc_at(usize_or_max(start)) else {
             return Ok(());
         };
         let bases = record.seq_len() as u64;
-        let errors = gc_bias_error_count(record, reference)?;
+        let errors = gc_bias_error_count(record, &self.active_sequence)?;
         self.read_starts[gc] += 1;
         self.bases_by_gc[gc] += bases;
         self.errors_by_gc[gc] += errors;
@@ -14331,9 +14718,8 @@ impl GcBiasMetricsSummary {
 
         let contig = std::str::from_utf8(rname)
             .map_err(|_| "malformed CollectGcBiasMetrics SAM contig".to_string())?;
-        self.ensure_contig(contig)?;
-        let reference = &self.active_sequence;
-        if reference.len() < window_size {
+        self.ensure_contig(contig, window_size)?;
+        if self.active_sequence.len() < window_size {
             return Ok(());
         }
         let start = if flags & 0x10 != 0 {
@@ -14344,8 +14730,7 @@ impl GcBiasMetricsSummary {
         if start <= 0 {
             return Ok(());
         }
-        let Some(gc) = picard_gc_percent_for_start(reference, usize_or_max(start), window_size)
-        else {
+        let Some(gc) = self.gc_at(usize_or_max(start)) else {
             return Ok(());
         };
         self.read_starts[gc] += 1;
@@ -14559,6 +14944,7 @@ impl GcBiasMetricsSummary {
     }
 }
 
+#[cfg(test)]
 fn gc_percent(window: &[u8], window_size: usize) -> Option<usize> {
     let mut gc = 0_usize;
     let mut no_calls = 0_usize;
@@ -14576,6 +14962,7 @@ fn gc_percent(window: &[u8], window_size: usize) -> Option<usize> {
     }
 }
 
+#[cfg(test)]
 fn picard_gc_percent_for_start(
     reference: &[u8],
     start: usize,
@@ -20052,10 +20439,24 @@ fn fallback_status(fallback_command: &str, args: &[String]) -> Result<i32, Strin
 
     let status = command
         .env_remove("TURBO_PICARD_FALLBACK_COMMAND")
+        .env(
+            "JDK_JAVA_OPTIONS",
+            jvm_options_with_logs_on_stderr(env::var("JDK_JAVA_OPTIONS").ok().as_deref()),
+        )
         .status()
         .map_err(|error| format!("failed to run Picard fallback command: {error}"))?;
 
     Ok(status.code().unwrap_or(1))
+}
+
+const JVM_LOGS_TO_STDERR: &str = "-Xlog:disable -Xlog:all=warning:stderr";
+
+fn jvm_options_with_logs_on_stderr(existing: Option<&str>) -> String {
+    match existing.map(str::trim) {
+        Some(options) if options.contains("-Xlog") => options.to_string(),
+        Some(options) if !options.is_empty() => format!("{options} {JVM_LOGS_TO_STDERR}"),
+        _ => JVM_LOGS_TO_STDERR.to_string(),
+    }
 }
 
 fn split_fallback_command(command: &str) -> Result<Vec<String>, String> {
@@ -20364,6 +20765,7 @@ mod tests {
             reference_path: String::new(),
             active_contig: None,
             active_sequence: Vec::new(),
+            active_gc_by_start: Vec::new(),
             total_clusters: 1,
             aligned_reads: 1,
             summary_aligned_reads: 1,
@@ -20723,6 +21125,213 @@ mod tests {
                 "-jar".to_string(),
                 "input.jar".to_string()
             ]
+        );
+    }
+
+    #[test]
+    fn sliding_gc_windows_match_recounting_every_window() {
+        let mut state = 0x9e37_79b9_7f4a_7c15_u64;
+        let mut next = move || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            state
+        };
+        let alphabet = b"ACGTNacgtnRY";
+        for case in 0..400 {
+            let length = usize::try_from(next() % 400).unwrap_or(0);
+            let n_heavy = case % 3 == 0;
+            let sequence = (0..length)
+                .map(|_| {
+                    let pick = usize::try_from(next() % 12).unwrap_or(0);
+                    if n_heavy && pick < 6 {
+                        b'N'
+                    } else {
+                        alphabet[pick]
+                    }
+                })
+                .collect::<Vec<_>>();
+            for window_size in [1_usize, 2, 5, 37, 100, 399] {
+                let mut expected = [0_u64; 101];
+                let window_end = sequence.len().saturating_sub(window_size);
+                for start in 1..window_end {
+                    if let Some(gc) = gc_percent(&sequence[start..start + window_size], window_size)
+                    {
+                        expected[gc] += 1;
+                    }
+                }
+                let mut actual = [0_u64; 101];
+                add_gc_window_counts(&sequence, window_size, &mut actual);
+                assert_eq!(actual, expected, "length {length} window {window_size}");
+            }
+        }
+    }
+
+    #[test]
+    fn gc_lookup_table_matches_picard_window_rule() {
+        let mut state = 0x6a09_e667_f3bc_c909_u64;
+        let mut next = move || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            state
+        };
+        let alphabet = b"ACGTNacgtnRY";
+        for case in 0..300 {
+            let length = usize::try_from(next() % 300).unwrap_or(0);
+            let n_heavy = case % 4 == 0;
+            let reference = (0..length)
+                .map(|_| {
+                    let pick = usize::try_from(next() % 12).unwrap_or(0);
+                    if n_heavy && pick < 5 {
+                        b'N'
+                    } else {
+                        alphabet[pick]
+                    }
+                })
+                .collect::<Vec<_>>();
+            for window_size in [1_usize, 4, 37, 100] {
+                let table = gc_percent_by_start(&reference, window_size);
+                for start in 0..=length + 2 {
+                    let expected = picard_gc_percent_for_start(&reference, start, window_size);
+                    let actual = match table.get(start) {
+                        Some(&NO_GC_WINDOW) | None => None,
+                        Some(&gc) => Some(usize::from(gc)),
+                    };
+                    assert_eq!(
+                        actual, expected,
+                        "length {length} window {window_size} start {start}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn indexed_parallel_gc_windows_match_streaming() {
+        let mut state = 0xbb67_ae85_84ca_a73b_u64;
+        let mut next = move || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            state
+        };
+        let alphabet = b"ACGTNacgtnRY";
+        let dir = env::temp_dir().join(format!("tp-gc-fai-{}", process::id()));
+        fs::create_dir_all(&dir).unwrap_or_default();
+        for case in 0..60 {
+            let line_bases = 1 + usize::try_from(next() % 80).unwrap_or(0);
+            let crlf = case % 2 == 1;
+            let mut fasta = Vec::new();
+            let mut fai = String::new();
+            for contig in 0..=usize::try_from(next() % 6).unwrap_or(0) {
+                let length = usize::try_from(next() % 900).unwrap_or(0);
+                let sequence = (0..length)
+                    .map(|_| alphabet[usize::try_from(next() % 12).unwrap_or(0)])
+                    .collect::<Vec<_>>();
+                fasta.extend_from_slice(format!(">c{contig}\n").as_bytes());
+                let offset = fasta.len();
+                for chunk in sequence.chunks(line_bases) {
+                    fasta.extend_from_slice(chunk);
+                    fasta.extend_from_slice(if crlf { b"\r\n" } else { b"\n" });
+                }
+                let line_width = line_bases + if crlf { 2 } else { 1 };
+                let _ = writeln!(
+                    fai,
+                    "c{contig}\t{length}\t{offset}\t{line_bases}\t{line_width}"
+                );
+            }
+            let path = dir.join(format!("case{case}.fa"));
+            fs::write(&path, &fasta).unwrap_or_default();
+            fs::write(format!("{}.fai", path.display()), &fai).unwrap_or_default();
+            let path = path.display().to_string();
+            for window_size in [1_usize, 7, 100] {
+                let spans = fasta_contig_spans(&format!("{path}.fai")).unwrap_or_default();
+                let parallel = count_gc_windows_by_contig_in_parallel(&path, spans, window_size)
+                    .unwrap_or([u64::MAX; 101]);
+                let streamed = stream_gc_bias_windows(std::io::Cursor::new(&fasta), window_size)
+                    .unwrap_or([0; 101]);
+                assert_eq!(parallel, streamed, "case {case} window {window_size}");
+            }
+        }
+        fs::remove_dir_all(&dir).unwrap_or_default();
+    }
+
+    #[test]
+    fn streamed_gc_windows_match_per_contig_counts() {
+        let mut state = 0x2545_f491_4f6c_dd1d_u64;
+        let mut next = move || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            state
+        };
+        let alphabet = b"ACGTNacgtnRY";
+        for case in 0..200 {
+            let contigs = 1 + usize::try_from(next() % 4).unwrap_or(0);
+            let line_width = 1 + usize::try_from(next() % 70).unwrap_or(0);
+            let mut fasta = Vec::new();
+            let mut sequences = Vec::new();
+            for contig in 0..contigs {
+                let length = usize::try_from(next() % 500).unwrap_or(0);
+                let sequence = (0..length)
+                    .map(|_| alphabet[usize::try_from(next() % 12).unwrap_or(0)])
+                    .collect::<Vec<_>>();
+                fasta.extend_from_slice(format!(">c{contig} desc\n").as_bytes());
+                for chunk in sequence.chunks(line_width) {
+                    fasta.extend_from_slice(chunk);
+                    fasta.extend_from_slice(if case % 2 == 0 { b"\n" } else { b"\r\n" });
+                }
+                sequences.push(sequence);
+            }
+            for window_size in [1_usize, 3, 37, 100] {
+                let mut expected = [0_u64; 101];
+                for sequence in &sequences {
+                    let upper = sequence.to_ascii_uppercase();
+                    add_gc_window_counts(&upper, window_size, &mut expected);
+                }
+                let actual = stream_gc_bias_windows(std::io::Cursor::new(&fasta), window_size)
+                    .unwrap_or([0; 101]);
+                assert_eq!(actual, expected, "case {case} window {window_size}");
+            }
+        }
+    }
+
+    #[test]
+    fn collectmultiplemetrics_runs_wgs_beside_the_shared_pass() {
+        let programs = [
+            "CollectAlignmentSummaryMetrics",
+            "CollectInsertSizeMetrics",
+            "CollectWgsMetrics",
+        ]
+        .map(String::from);
+        assert_eq!(
+            parallel_wgs_split_for(&programs, false, 8),
+            Some(vec![
+                "CollectAlignmentSummaryMetrics".to_string(),
+                "CollectInsertSizeMetrics".to_string()
+            ])
+        );
+        assert_eq!(parallel_wgs_split_for(&programs, true, 8), None);
+        assert_eq!(parallel_wgs_split_for(&programs, false, 2), None);
+        assert_eq!(parallel_wgs_split_for(&programs[1..], false, 8), None);
+        assert_eq!(parallel_wgs_split_for(&programs[..2], false, 8), None);
+    }
+
+    #[test]
+    fn fallback_jvm_logs_never_reach_stdout() {
+        assert_eq!(jvm_options_with_logs_on_stderr(None), JVM_LOGS_TO_STDERR);
+        assert_eq!(
+            jvm_options_with_logs_on_stderr(Some("  ")),
+            JVM_LOGS_TO_STDERR
+        );
+        assert_eq!(
+            jvm_options_with_logs_on_stderr(Some("-Xmx8g")),
+            format!("-Xmx8g {JVM_LOGS_TO_STDERR}")
+        );
+        assert_eq!(
+            jvm_options_with_logs_on_stderr(Some("-Xlog:gc:file=gc.log")),
+            "-Xlog:gc:file=gc.log"
         );
     }
 

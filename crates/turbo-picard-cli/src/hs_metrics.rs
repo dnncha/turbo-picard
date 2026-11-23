@@ -937,7 +937,9 @@ impl HsMetricsCollector {
         output.push_str(
             "coverage_or_base_quality\thigh_quality_coverage_count\tunfiltered_baseq_count\n",
         );
-        for coverage_or_quality in 0..=126 {
+        for (coverage_or_quality, unfiltered) in
+            self.uncapped_baseq_histogram.iter().enumerate().take(127)
+        {
             let _ = writeln!(
                 output,
                 "{}\t{}\t{}",
@@ -946,7 +948,7 @@ impl HsMetricsCollector {
                     .get(coverage_or_quality)
                     .copied()
                     .unwrap_or(0),
-                self.uncapped_baseq_histogram[coverage_or_quality]
+                unfiltered
             );
         }
         output

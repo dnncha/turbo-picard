@@ -10,3 +10,4 @@ __pycache__/
 
 # Local documentation virtualenv
 /.venv-docs/
+benchmarks/duel/runs/
