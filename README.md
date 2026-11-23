@@ -74,13 +74,13 @@ Paired warm-cache medians (1 warmup + 3 repeats) on Apple M5 comparing [`main`](
 Install from PyPI (Linux x86_64, macOS Intel & Apple Silicon, or source build):
 
 ```bash
-python3 -m pip install turbo-picard==0.1.19
+python3 -m pip install turbo-picard==0.1.20
 ```
 
 Or run the container:
 
 ```bash
-docker run --rm ghcr.io/dnncha/turbo-picard:0.1.19 --version
+docker run --rm ghcr.io/dnncha/turbo-picard:0.1.20 --version
 ```
 
 Or build from source:
@@ -237,7 +237,7 @@ Real-data evidence lives in `benchmarks/real-data/` and records pinned input sou
 
 ## Packaging Status & Citation
 
-- **Release:** The current source release is `0.1.19` on [GitHub Releases](https://github.com/dnncha/turbo-picard/releases/tag/v0.1.19) and [PyPI](https://pypi.org/project/turbo-picard/0.1.19/) (Linux x86_64, macOS Intel & Apple Silicon wheels, plus sdist for Linux ARM64 with a Rust toolchain). See [`CHANGELOG.md`](CHANGELOG.md) for release notes and [`website/assets/distribution-status.json`](website/assets/distribution-status.json) for observed build checksums.
+- **Release:** The current source release is `0.1.20` on [GitHub Releases](https://github.com/dnncha/turbo-picard/releases/tag/v0.1.20) and [PyPI](https://pypi.org/project/turbo-picard/0.1.20/) (Linux x86_64, macOS Intel & Apple Silicon wheels, plus sdist for Linux ARM64 with a Rust toolchain). See [`CHANGELOG.md`](CHANGELOG.md) for release notes and [`website/assets/distribution-status.json`](website/assets/distribution-status.json) for observed build checksums.
 - **Bioconda:** Accepted [initial recipes](https://github.com/bioconda/bioconda-recipes/pull/65922) on 4 October 2026 (`0.1.15` in Bioconda indexes on 25 October; [0.1.16 main](https://github.com/bioconda/bioconda-recipes/pull/69890) and [shim](https://github.com/bioconda/bioconda-recipes/pull/69891) updates open upstream). [`turbo-picard-full`](packaging/bioconda/turbo-picard-full/README.md) documents the combined `turbo-picard + picard + openjdk` recipe.
 - **Citation:** Cite the archived `turbo-picard` release you used via [`CITATION.cff`](CITATION.cff) (DOI `10.5281/zenodo.20541927`). Cite benchmark and validation inputs separately with immutable source URLs, commits or accessions, and input SHA-256 hashes. Docs live in [`docs/`](docs/); JOSS submission notes are in [`docs/joss-submission.rst`](docs/joss-submission.rst).
 

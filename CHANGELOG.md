@@ -1,5 +1,78 @@
 # Changelog
 
+## 0.1.20 — 2026-11-23
+
+### New native commands
+
+- `CollectRnaSeqMetrics` runs natively on coordinate-sorted BAM and CRAM with
+  a UCSC refFlat file: core RNA-seq metrics, ALL_READS, SAMPLE, LIBRARY and
+  READ_GROUP accumulation, ribosomal interval counting, strand specificity and
+  the normalized transcript coverage histogram. Text SAM input and other
+  options still go to upstream Picard.
+- `CollectSamErrorMetrics` runs natively on reference-backed, coordinate-sorted
+  BAM and CRAM: the error, indel-error and overlapping-read calculators across
+  Picard's 26 default stratifiers, custom `ERROR_METRICS`, `INTERVALS`,
+  `MAX_LOCI`, `PRIOR_Q`, `LONG_HOMOPOLYMER` and `FILE_EXTENSION`. VCF
+  known-variant filtering, `PROBABILITY` below 1.0 and text SAM input still go
+  to upstream Picard.
+- Both commands have Picard parity scripts in `tools/parity_gate.sh`. Native
+  coverage is now 35 Picard commands plus 6 Turbo Picard utilities; 86 commands
+  are delegated to Picard.
+
+### Performance
+
+- Indexed BAM inputs to the QC collectors (`CollectAlignmentSummaryMetrics`,
+  `CollectGcBiasMetrics`, `CollectInsertSizeMetrics`,
+  `CollectBaseDistributionByCycle`, `QualityScoreDistribution`,
+  `MeanQualityByCycle`, `CollectMultipleMetrics` and `CollectHsMetrics`) are
+  read per contig on several threads and the partial results merged.
+- `CollectGcBiasMetrics` builds its GC-window histogram in a parallel sliding
+  pass over the reference instead of recounting every window. On chr20 of
+  HG02675 on an 8-core VM it went from 98 s to 25.5 s, and the 7-program
+  `CollectMultipleMetrics` bundle from 153 s to 90 s, with byte-identical
+  output.
+- External sorting uses an arena layout, parallel chunk sorting and a k-way
+  merge tree. `SortSam`, `MergeSamFiles`, `RevertSam` and `SamToFastq` use it;
+  `SamToFastq` no longer stages a temporary BAM.
+- Bounded `MarkDuplicates` drops its preflight passes on larger inputs, interns
+  read-group IDs, evicts distant mates from a compact cache and stores pass-2
+  decisions in a bitset.
+- `CollectWgsMetrics` reprocesses only the capped clusters that reach
+  `LOCUS_ACCUMULATION_CAP` instead of a whole contig, and the het-sensitivity
+  calculation in `CollectWgsMetrics` and `CollectHsMetrics` is rewritten to
+  give the same values faster.
+- Region workers and `CollectMultipleMetrics` collectors are no longer capped
+  at 16 threads and scale to every core.
+- On one Apple M5 host, 3 repeats after a warm-up, PR #76 reported against
+  0.1.19: `MarkDuplicates` on 1.2M paired reads 0.627 s to 0.303 s,
+  `SortSam` coordinate 1.223 s to 0.520 s, `SamToFastq` 0.988 s to 0.577 s and
+  `MergeSamFiles` 0.288 s to 0.166 s.
+
+### Parity checks
+
+- The generic metrics comparator now requires values to match at Picard's
+  printed precision and names the row, field and both values on a mismatch. It
+  previously accepted any difference up to 1e-5.
+- JVM log lines no longer reach stdout in the Picard fallback or the parity
+  scripts. A container cgroup warning had been corrupting Picard `ViewSam`
+  output.
+
+### Benchmarks and docs
+
+- `tools/duel.py` races turbo-picard against Picard, riker, dupblaster,
+  FastDup and samtools on the same host and records time, memory, CPU and
+  accuracy against Picard into `benchmarks/duel/`.
+- The README, site and competitor card claim only what the benchmark evidence
+  shows. The 15x and 30x WGS rows say "Not compared" where no Picard output
+  exists.
+- Research links point to Bunsen (https://bunsen.science).
+
+### Known issues
+
+- At equal cores (8) on a 4x genome, FastDup finishes `MarkDuplicates` in
+  185 s and turbo-picard in 270 s. turbo-picard's first pass uses about two
+  cores. It uses 231 MiB against FastDup's 3.8 GiB. Tracked in #9.
+
 ## 0.1.19 — 2026-11-14
 
 ### Scientific correctness
