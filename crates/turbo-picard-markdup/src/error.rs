@@ -71,6 +71,10 @@ impl From<ExternalPlanError> for SortError {
 pub enum MarkDuplicatesError {
     #[error("unsupported MarkDuplicates input format for {0}; expected SAM, BAM, or CRAM input")]
     UnsupportedInputFormat(String),
+    #[error(
+        "MarkDuplicates input that is not coordinate sorted would need more than {budget_bytes} bytes in memory (half the available memory); delegating to Picard"
+    )]
+    InMemoryPlanTooLarge { budget_bytes: u64 },
     #[error(transparent)]
     Io(#[from] std::io::Error),
     #[error(transparent)]
