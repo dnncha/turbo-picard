@@ -6,6 +6,7 @@ mod cmm_pipeline;
 mod command_catalog;
 mod command_error;
 mod mcp;
+mod mcp_verify;
 
 use agent_contract::declared_outputs;
 use command_catalog::{trial_fit_for, trial_why_for};
@@ -276,7 +277,7 @@ Available commands:
   capabilities      Lists the complete native/fallback and benchmark evidence contract
   explain COMMAND   Explains whether a command is native, partial-native, or fallback-only
   trial COMMAND     Prints a side-by-side Picard/turbo-picard trial contract
-  mcp               Serves capabilities, explain, trial, doctor and run over MCP stdio
+  mcp               Serves capabilities, explain, trial, doctor, run and verify over MCP stdio
   AddOrReplaceReadGroups
                     Adds or replaces a single read group in SAM/BAM/CRAM files
   AccelerationStatus
@@ -354,8 +355,10 @@ Usage: {program_name} mcp
 Runs a Model Context Protocol server on stdin/stdout for coding agents. Tools:
 capabilities, explain, trial and doctor return the same JSON as the CLI reports;
 run executes a Picard command without a shell and refuses outputs that name an
-input or an existing file unless overwrite is true. Register it with, for
-example: claude mcp add turbo-picard -- {program_name} mcp"
+input or an existing file unless overwrite is true; verify runs turbo-picard
+(native only) and upstream Picard in isolated temporary directories and reports
+output parity. Register it with, for example:
+claude mcp add turbo-picard -- {program_name} mcp"
     );
 }
 
@@ -761,7 +764,7 @@ fn fallback_readiness() -> FallbackReadiness {
     }
 }
 
-fn fallback_program_available(command: &str) -> bool {
+pub(crate) fn fallback_program_available(command: &str) -> bool {
     let Ok(parts) = split_fallback_command(command) else {
         return false;
     };
@@ -776,7 +779,7 @@ fn fallback_program_available(command: &str) -> bool {
     })
 }
 
-fn fallback_install_hint() -> String {
+pub(crate) fn fallback_install_hint() -> String {
     format!(
         "install upstream Picard beside turbo-picard, for example: mamba install -c conda-forge -c bioconda turbo-picard picard={} openjdk; or set PICARD_JAR or TURBO_PICARD_FALLBACK_COMMAND",
         picard_reference_version()
@@ -18231,10 +18234,7 @@ fn require_native() -> bool {
     env::var_os("TURBO_PICARD_REQUIRE_NATIVE").is_some()
 }
 
-fn resolve_fallback_command() -> Option<String> {
-    if require_native() {
-        return None;
-    }
+pub(crate) fn resolve_upstream_picard_for_verification() -> Option<String> {
     if let Ok(command) = env::var("TURBO_PICARD_FALLBACK_COMMAND") {
         let trimmed = command.trim();
         if !trimmed.is_empty() {
@@ -18242,6 +18242,13 @@ fn resolve_fallback_command() -> Option<String> {
         }
     }
     discover_upstream_picard_command()
+}
+
+fn resolve_fallback_command() -> Option<String> {
+    if require_native() {
+        return None;
+    }
+    resolve_upstream_picard_for_verification()
 }
 
 fn discover_upstream_picard_command() -> Option<String> {
@@ -18412,7 +18419,7 @@ fn fallback_status(fallback_command: &str, args: &[String]) -> Result<i32, Strin
 
 const JVM_LOGS_TO_STDERR: &str = "-Xlog:disable -Xlog:all=warning:stderr";
 
-fn jvm_options_with_logs_on_stderr(existing: Option<&str>) -> String {
+pub(crate) fn jvm_options_with_logs_on_stderr(existing: Option<&str>) -> String {
     match existing.map(str::trim) {
         Some(options) if options.contains("-Xlog") => options.to_string(),
         Some(options) if !options.is_empty() => format!("{options} {JVM_LOGS_TO_STDERR}"),
@@ -18420,7 +18427,7 @@ fn jvm_options_with_logs_on_stderr(existing: Option<&str>) -> String {
     }
 }
 
-fn split_fallback_command(command: &str) -> Result<Vec<String>, String> {
+pub(crate) fn split_fallback_command(command: &str) -> Result<Vec<String>, String> {
     if command.trim().is_empty() {
         return Err("fallback command is empty".to_string());
     }

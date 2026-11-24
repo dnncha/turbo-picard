@@ -127,6 +127,7 @@ mod tests {
         ("lib.rs", include_str!("lib.rs")),
         ("main.rs", include_str!("main.rs")),
         ("mcp.rs", include_str!("mcp.rs")),
+        ("mcp_verify.rs", include_str!("mcp_verify.rs")),
         ("reference_cache.rs", include_str!("reference_cache.rs")),
         ("rna_seq_metrics.rs", include_str!("rna_seq_metrics.rs")),
         ("sam_error_metrics.rs", include_str!("sam_error_metrics.rs")),

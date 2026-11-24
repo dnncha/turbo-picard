@@ -28,7 +28,7 @@ fn is_input_argument(command: &str, key: &str) -> bool {
         )
 }
 
-fn is_output_argument(command: &str, key: &str) -> bool {
+pub(crate) fn is_output_argument(command: &str, key: &str) -> bool {
     key == "OUTPUT"
         || matches!(
             (command, key),

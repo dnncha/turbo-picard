@@ -4,20 +4,22 @@ mod mcp_session {
     use serde_json::{Value, json};
     use std::path::Path;
 
-    fn session(messages: &[Value], cwd: &Path) -> Vec<Value> {
+    fn session_with_env(messages: &[Value], cwd: &Path, extra_env: &[(&str, &str)]) -> Vec<Value> {
         let input = messages
             .iter()
             .map(Value::to_string)
             .collect::<Vec<_>>()
             .join("\n");
-        let output = Command::cargo_bin("turbo-picard")
-            .expect("binary exists")
+        let mut command = Command::cargo_bin("turbo-picard").expect("binary exists");
+        command
             .arg("mcp")
             .current_dir(cwd)
             .env_remove("TURBO_PICARD_REQUIRE_NATIVE")
-            .write_stdin(format!("{input}\n"))
-            .output()
-            .expect("mcp server runs");
+            .write_stdin(format!("{input}\n"));
+        for (key, value) in extra_env {
+            command.env(key, value);
+        }
+        let output = command.output().expect("mcp server runs");
         assert!(
             output.status.success(),
             "{}",
@@ -28,6 +30,10 @@ mod mcp_session {
             .lines()
             .map(|line| serde_json::from_str(line).expect("each line is JSON-RPC"))
             .collect()
+    }
+
+    fn session(messages: &[Value], cwd: &Path) -> Vec<Value> {
+        session_with_env(messages, cwd, &[])
     }
 
     fn call(id: u64, name: &str, arguments: &Value) -> Value {
@@ -80,7 +86,7 @@ mod mcp_session {
         let tools = responses[1]["result"]["tools"]
             .as_array()
             .expect("tools array");
-        assert_eq!(tools.len(), 5);
+        assert_eq!(tools.len(), 6);
 
         let explain = &responses[2]["result"];
         assert_eq!(explain["isError"], false);
@@ -118,5 +124,81 @@ mod mcp_session {
             json!(["sorted_gatk.sam"])
         );
         assert!(dir.path().join("sorted_gatk.sam").is_file());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn mcp_verify_reports_pass_and_catches_alignment_mismatch_without_writing_workspace() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().expect("tempdir exists");
+        let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../fixtures/markduplicates/basic/input.sam");
+        std::fs::copy(&fixture, dir.path().join("input.sam")).expect("fixture copied");
+
+        let turbo_bin = assert_cmd::cargo::cargo_bin!("turbo-picard");
+        let matching_picard = dir.path().join("mock-picard-match.sh");
+        std::fs::write(
+            &matching_picard,
+            format!("#!/bin/sh\nexec \"{}\" \"$@\"\n", turbo_bin.display()),
+        )
+        .expect("matching mock written");
+        std::fs::set_permissions(&matching_picard, std::fs::Permissions::from_mode(0o755))
+            .expect("chmod ok");
+
+        let pass_responses = session_with_env(
+            &[call(
+                1,
+                "verify",
+                &json!({
+                    "command": "SortSam",
+                    "args": ["-I", "input.sam", "--output", "should_not_exist.sam", "--sort-order", "queryname", "--quiet"]
+                }),
+            )],
+            dir.path(),
+            &[(
+                "TURBO_PICARD_FALLBACK_COMMAND",
+                matching_picard.to_str().expect("utf8 path"),
+            )],
+        );
+        let pass = &pass_responses[0]["result"];
+        assert_eq!(pass["isError"], false, "{pass}");
+        assert_eq!(pass["structuredContent"]["verdict"], "pass");
+        assert_eq!(pass["structuredContent"]["outputs"][0]["kind"], "alignment");
+        assert_eq!(pass["structuredContent"]["outputs"][0]["matched"], true);
+        assert!(!dir.path().join("should_not_exist.sam").exists());
+
+        let differing_picard = dir.path().join("mock-picard-diff.sh");
+        std::fs::write(
+            &differing_picard,
+            "#!/bin/sh\nout=''\nfor arg in \"$@\"; do\n  case \"$arg\" in OUTPUT=*) out=\"${arg#OUTPUT=}\" ;; esac\ndone\ncp input.sam \"$out\"\n",
+        )
+        .expect("differing mock written");
+        std::fs::set_permissions(&differing_picard, std::fs::Permissions::from_mode(0o755))
+            .expect("chmod ok");
+
+        let mismatch_responses = session_with_env(
+            &[call(
+                1,
+                "verify",
+                &json!({
+                    "command": "SortSam",
+                    "args": ["-I", "input.sam", "--output", "never_created.sam", "--sort-order", "queryname"]
+                }),
+            )],
+            dir.path(),
+            &[(
+                "TURBO_PICARD_FALLBACK_COMMAND",
+                differing_picard.to_str().expect("utf8 path"),
+            )],
+        );
+        let mismatch = &mismatch_responses[0]["result"];
+        assert_eq!(mismatch["isError"], false, "{mismatch}");
+        assert_eq!(mismatch["structuredContent"]["verdict"], "mismatch");
+        assert_eq!(
+            mismatch["structuredContent"]["outputs"][0]["matched"],
+            false
+        );
+        assert!(!dir.path().join("never_created.sam").exists());
     }
 }
