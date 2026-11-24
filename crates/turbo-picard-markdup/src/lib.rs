@@ -270,6 +270,8 @@ fn run_hts_container(
             summary: &mut summary,
             compact_plan: false,
             program_groups_seen: &mut program_groups_seen,
+            resident_bytes: 0,
+            memory_budget: in_memory_plan_budget_bytes(),
         };
         read_state.read(&mut reader, &first_library_lookup, &mut library_registry)?;
         for input in config.inputs.iter().skip(1) {
@@ -2780,6 +2782,8 @@ fn try_run_single_bam_compact_plan(
             summary: &mut summary,
             compact_plan: true,
             program_groups_seen: &mut program_groups_seen,
+            resident_bytes: 0,
+            memory_budget: in_memory_plan_budget_bytes(),
         };
         read_state.read(&mut reader, &first_library_lookup, &mut library_registry)?;
     }
@@ -3387,6 +3391,8 @@ struct BamRecordReadState<'a> {
     summary: &'a mut MarkDuplicatesSummary,
     compact_plan: bool,
     program_groups_seen: &'a mut ProgramGroupsSeen,
+    resident_bytes: u64,
+    memory_budget: u64,
 }
 
 impl BamRecordReadState<'_> {
@@ -3415,7 +3421,7 @@ impl BamRecordReadState<'_> {
                     quality_score: UNCOMPUTED_QUALITY_SCORE,
                     barcode_id: None,
                 });
-                self.store_record(record);
+                self.store_record(record)?;
                 continue;
             }
             if flag & SECONDARY_OR_SUPPLEMENTARY_FLAGS != 0 {
@@ -3429,7 +3435,7 @@ impl BamRecordReadState<'_> {
                     quality_score: UNCOMPUTED_QUALITY_SCORE,
                     barcode_id: None,
                 });
-                self.store_record(record);
+                self.store_record(record)?;
                 continue;
             }
 
@@ -3458,19 +3464,25 @@ impl BamRecordReadState<'_> {
             };
             self.eligible_indices.push(record_index);
             self.read_ends.push(read_end);
-            self.store_record(record);
+            self.store_record(record)?;
         }
 
         Ok(())
     }
 
-    fn store_record(&mut self, record: bam::Record) {
+    fn store_record(&mut self, record: bam::Record) -> Result<(), MarkDuplicatesError> {
         let stored_record = if self.compact_plan {
             compact_plan_record(&record)
         } else {
             record
         };
+        self.resident_bytes = self
+            .resident_bytes
+            .saturating_add(u64::try_from(stored_record.inner().l_data).unwrap_or(0))
+            .saturating_add(IN_MEMORY_RECORD_OVERHEAD_BYTES);
+        check_in_memory_budget(self.resident_bytes, self.memory_budget)?;
         self.records.push(stored_record);
+        Ok(())
     }
 }
 
@@ -4010,6 +4022,35 @@ fn replace_i32_aux(
         record.remove_aux(tag)?;
     }
     record.push_aux(tag, Aux::I32(value))?;
+    Ok(())
+}
+
+const IN_MEMORY_RECORD_OVERHEAD_BYTES: u64 = 96;
+
+fn in_memory_plan_budget_bytes() -> u64 {
+    fs::read_to_string("/proc/meminfo")
+        .ok()
+        .and_then(|text| mem_available_bytes(&text))
+        .map_or(u64::MAX, |available| available / 2)
+}
+
+fn mem_available_bytes(meminfo: &str) -> Option<u64> {
+    meminfo.lines().find_map(|line| {
+        let kilobytes = line
+            .strip_prefix("MemAvailable:")?
+            .split_whitespace()
+            .next()?;
+        kilobytes.parse::<u64>().ok()?.checked_mul(1024)
+    })
+}
+
+fn check_in_memory_budget(
+    resident_bytes: u64,
+    budget_bytes: u64,
+) -> Result<(), MarkDuplicatesError> {
+    if resident_bytes > budget_bytes {
+        return Err(MarkDuplicatesError::InMemoryPlanTooLarge { budget_bytes });
+    }
     Ok(())
 }
 
@@ -5992,6 +6033,20 @@ mod optical_hot_path_tests {
         let duplicates = find_optical_duplicate_names(&reads, b"read0", 0);
         assert_eq!(duplicates.len(), 2);
         assert!(!duplicates.contains(b"read0".as_slice()));
+    }
+
+    #[test]
+    fn in_memory_plan_refuses_before_exhausting_memory() {
+        assert_eq!(
+            mem_available_bytes("MemTotal:  100 kB\nMemAvailable:   2048 kB\n"),
+            Some(2048 * 1024)
+        );
+        assert_eq!(mem_available_bytes("MemTotal: 1 kB\n"), None);
+        assert!(check_in_memory_budget(10, 10).is_ok());
+        assert!(matches!(
+            check_in_memory_budget(11, 10),
+            Err(MarkDuplicatesError::InMemoryPlanTooLarge { budget_bytes: 10 })
+        ));
     }
 
     #[test]

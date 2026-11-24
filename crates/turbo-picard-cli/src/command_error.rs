@@ -84,7 +84,10 @@ impl From<HtsIoError> for CommandError {
 impl From<MarkDuplicatesError> for CommandError {
     fn from(error: MarkDuplicatesError) -> Self {
         match error {
-            MarkDuplicatesError::UnsupportedInputFormat(_) => Self::Unsupported(error.to_string()),
+            MarkDuplicatesError::UnsupportedInputFormat(_)
+            | MarkDuplicatesError::InMemoryPlanTooLarge { .. } => {
+                Self::Unsupported(error.to_string())
+            }
             MarkDuplicatesError::HtsIo(inner) => inner.into(),
             other => Self::Failed(other.to_string()),
         }
