@@ -116,7 +116,7 @@ impl From<CommandArgError> for CommandError {
 
 #[cfg(test)]
 mod tests {
-    const SOURCES: [(&str, &str); 16] = [
+    const SOURCES: [(&str, &str); 17] = [
         ("agent_contract.rs", include_str!("agent_contract.rs")),
         ("bam_parallel.rs", include_str!("bam_parallel.rs")),
         ("cmm_pipeline.rs", include_str!("cmm_pipeline.rs")),
@@ -126,6 +126,7 @@ mod tests {
         ("lib.rs", include_str!("lib.rs")),
         ("main.rs", include_str!("main.rs")),
         ("mcp.rs", include_str!("mcp.rs")),
+        ("reference_cache.rs", include_str!("reference_cache.rs")),
         ("rna_seq_metrics.rs", include_str!("rna_seq_metrics.rs")),
         ("sam_error_metrics.rs", include_str!("sam_error_metrics.rs")),
         ("sam_sort.rs", include_str!("sam_sort.rs")),

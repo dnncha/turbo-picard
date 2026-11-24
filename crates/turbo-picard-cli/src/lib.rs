@@ -10,6 +10,7 @@ use agent_contract::declared_outputs;
 use command_error::{CommandError, unsupported};
 mod het_sensitivity;
 mod hs_metrics;
+mod reference_cache;
 mod rna_seq_metrics;
 mod sam_error_metrics;
 mod sam_sort;
@@ -17,6 +18,12 @@ mod sam_structure;
 mod vcf_headers;
 mod wgs_metrics;
 mod wgs_regions;
+
+use reference_cache::{
+    ContigReferenceCache, MAX_PRELOAD_BASES, load_fasta_contig_sequence,
+    preload_reference_contigs_for_tids, read_fasta_sequences, read_reference_contigs,
+    reference_sequences_by_name,
+};
 
 const PICARD_REFERENCE_COMMANDS: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
@@ -4144,7 +4151,7 @@ fn run_collectalignmentsummarymetrics(args: &[String]) -> Result<(), CommandErro
                 Ok((
                     AlignmentSummaryCollection::new(accumulation),
                     reference.as_deref().map(|path| {
-                        AlignmentReferenceCache::new_with_preloaded(
+                        ContigReferenceCache::new_with_preloaded(
                             path,
                             preloaded_ref.as_ref().map(Arc::clone),
                         )
@@ -4193,7 +4200,7 @@ fn run_collectalignmentsummarymetrics(args: &[String]) -> Result<(), CommandErro
         .flatten();
     let mut reference_cache = reference
         .as_deref()
-        .map(|path| AlignmentReferenceCache::new_with_preloaded(path, preloaded_ref));
+        .map(|path| ContigReferenceCache::new_with_preloaded(path, preloaded_ref));
     let mut metrics = AlignmentSummaryCollection::new(accumulation);
     let mut record = bam::Record::new();
     let mut observed = 0_u32;
@@ -4573,7 +4580,7 @@ fn run_collecthsmetrics(args: &[String]) -> Result<(), CommandError> {
     let minimum_base_quality = u8::try_from(minimum_base_quality)
         .map_err(|_| unsupported("unsupported CollectHsMetrics MINIMUM_BASE_QUALITY above 255"))?;
 
-    let reference_contigs = read_reference_contigs_for_wgs(&reference)?;
+    let reference_contigs = read_reference_contigs(&reference)?;
     let contig_order = reference_contigs
         .iter()
         .enumerate()
@@ -5014,7 +5021,7 @@ fn run_collectmultiplemetrics_single_pass(
         drop(probe);
         if probe_header.target_count() > 1 || wgs.is_none() {
             struct CmmWorkerState {
-                alignment: Option<(AlignmentSummaryCollection, Option<AlignmentReferenceCache>)>,
+                alignment: Option<(AlignmentSummaryCollection, Option<ContigReferenceCache>)>,
                 insert_size: Option<(InsertSizeCollection, bool)>,
                 base_distribution: Option<(BaseDistributionByCycleSummary, bool, bool)>,
                 quality_distribution: Option<(QualityScoreDistributionSummary, bool, bool, bool)>,
@@ -5085,7 +5092,7 @@ fn run_collectmultiplemetrics_single_pass(
                             (
                                 AlignmentSummaryCollection::new(acc),
                                 reference.as_deref().map(|path| {
-                                    AlignmentReferenceCache::new_with_preloaded(
+                                    ContigReferenceCache::new_with_preloaded(
                                         path,
                                         preloaded_ref.as_ref().map(Arc::clone),
                                     )
@@ -5277,7 +5284,7 @@ fn run_collectmultiplemetrics_single_pass(
         let mut alignment_reference_cache = reference
             .as_deref()
             .filter(|_| alignment.is_some())
-            .map(|path| AlignmentReferenceCache::new_with_preloaded(path, preloaded_ref));
+            .map(|path| ContigReferenceCache::new_with_preloaded(path, preloaded_ref));
 
         let active_collectors = [
             alignment.is_some(),
@@ -5490,7 +5497,7 @@ fn run_collectmultiplemetrics_single_pass(
             let alignment_reference_cache = reference
                 .as_deref()
                 .filter(|_| alignment_worker.is_some())
-                .map(|path| Arc::new(Mutex::new(AlignmentReferenceCache::new(path))));
+                .map(|path| Arc::new(Mutex::new(ContigReferenceCache::new(path))));
             let mut handlers: Vec<cmm_pipeline::CmmBatchHandler> = Vec::new();
             let mut handler_names = Vec::<&'static str>::new();
             let combine_alignment_and_insert_size =
@@ -6372,7 +6379,7 @@ fn run_collectwgsmetrics(args: &[String]) -> Result<(), CommandError> {
         optional_u32(&args, "SAMPLE_SIZE")?.unwrap_or(if use_fast_algorithm { 0 } else { 10_000 });
     let include_bq_histogram = optional_bool(&args, "INCLUDE_BQ_HISTOGRAM")?.unwrap_or(false);
 
-    let reference_contigs = read_reference_contigs_for_wgs(&reference)?;
+    let reference_contigs = read_reference_contigs(&reference)?;
     let interval_masks = collectwgs_interval_masks(args.get("INTERVALS"), &reference_contigs)?;
     let scan_threads = bgzf_threads_for(HtsThreadRole::RegionWorker).unwrap_or(1);
     let mut wgs_reference = wgs_metrics::WgsReference::load_with_contigs(
@@ -10036,198 +10043,6 @@ fn reject_unsupported_validatesamfile_args(args: &PicardArgs) -> Result<(), Comm
     Ok(())
 }
 
-#[derive(Debug)]
-struct FastaSequence {
-    name: String,
-    sequence: Vec<u8>,
-}
-
-fn read_fai_contig_lengths(path: &str) -> Result<Vec<(String, usize)>, String> {
-    let text = fs::read_to_string(path).map_err(|error| error.to_string())?;
-    let mut contigs = Vec::new();
-    for line in text.lines() {
-        if line.trim().is_empty() {
-            continue;
-        }
-        let mut fields = line.split('\t');
-        let Some(name) = fields.next() else {
-            continue;
-        };
-        let Some(length_text) = fields.next() else {
-            return Err(format!("invalid FAI entry in {path}"));
-        };
-        let length = length_text
-            .parse::<usize>()
-            .map_err(|error| format!("invalid FAI length in {path}: {error}"))?;
-        contigs.push((name.to_string(), length));
-    }
-    if contigs.is_empty() {
-        return Err(format!("FAI index {path} contains no contigs"));
-    }
-    Ok(contigs)
-}
-
-fn read_fasta_contig_lengths(
-    path: &str,
-    truncate_names: bool,
-) -> Result<Vec<(String, usize)>, String> {
-    let text = read_text_or_gzip(path)?;
-    let mut contigs = Vec::new();
-    let mut current_name: Option<String> = None;
-    let mut current_length = 0usize;
-
-    for line in text.lines() {
-        if let Some(header) = line.strip_prefix('>') {
-            if let Some(name) = current_name.take() {
-                contigs.push((name, current_length));
-            }
-            current_length = 0;
-            let name = if truncate_names {
-                header.split_whitespace().next().unwrap_or_default()
-            } else {
-                header
-            };
-            if name.is_empty() {
-                return Err("empty FASTA sequence name".to_string());
-            }
-            current_name = Some(name.to_string());
-        } else if current_name.is_some() {
-            current_length += line.trim().len();
-        } else if !line.trim().is_empty() {
-            return Err("FASTA sequence data before first header".to_string());
-        }
-    }
-
-    if let Some(name) = current_name {
-        contigs.push((name, current_length));
-    }
-    if contigs.is_empty() {
-        return Err("FASTA contains no sequences".to_string());
-    }
-    Ok(contigs)
-}
-
-fn read_reference_contigs_for_wgs(path: &str) -> Result<Vec<(String, usize)>, String> {
-    let fai_path = format!("{path}.fai");
-    if Path::new(&fai_path).is_file() {
-        return read_fai_contig_lengths(&fai_path);
-    }
-    read_fasta_contig_lengths(path, true)
-}
-
-#[derive(Debug, Clone, Copy)]
-struct FaiEntry {
-    length: usize,
-    offset: u64,
-}
-
-fn read_fai_entry(fai_path: &str, contig: &str) -> Result<FaiEntry, String> {
-    let text = fs::read_to_string(fai_path).map_err(|error| error.to_string())?;
-    for line in text.lines() {
-        let mut fields = line.split('\t');
-        let Some(name) = fields.next() else {
-            continue;
-        };
-        if name != contig {
-            continue;
-        }
-        let length = fields
-            .next()
-            .ok_or_else(|| format!("invalid FAI entry for {contig} in {fai_path}"))?
-            .parse::<usize>()
-            .map_err(|error| format!("invalid FAI length for {contig}: {error}"))?;
-        let offset = fields
-            .next()
-            .ok_or_else(|| format!("invalid FAI entry for {contig} in {fai_path}"))?
-            .parse::<u64>()
-            .map_err(|error| format!("invalid FAI offset for {contig}: {error}"))?;
-        fields
-            .next()
-            .ok_or_else(|| format!("invalid FAI entry for {contig} in {fai_path}"))?
-            .parse::<usize>()
-            .map_err(|error| format!("invalid FAI bases-per-line for {contig}: {error}"))?;
-        fields
-            .next()
-            .ok_or_else(|| format!("invalid FAI entry for {contig} in {fai_path}"))?
-            .parse::<usize>()
-            .map_err(|error| format!("invalid FAI line width for {contig}: {error}"))?;
-        return Ok(FaiEntry { length, offset });
-    }
-    Err(format!("FAI index {fai_path} missing contig {contig}"))
-}
-
-fn load_fasta_contig_sequence_scan(path: &str, contig: &str) -> Result<Vec<u8>, String> {
-    let text = read_text_or_gzip(path)?;
-    let mut current_name: Option<String> = None;
-    let mut sequence = Vec::new();
-    for line in text.lines() {
-        if let Some(header) = line.strip_prefix('>') {
-            if let Some(name) = current_name.take() {
-                if name == contig {
-                    return Ok(sequence);
-                }
-                sequence.clear();
-            }
-            let name = header.split_whitespace().next().unwrap_or_default();
-            if name == contig {
-                current_name = Some(name.to_string());
-            }
-        } else if current_name.is_some() {
-            sequence.extend(line.trim().as_bytes().iter().map(u8::to_ascii_uppercase));
-        }
-    }
-    if current_name.as_deref() == Some(contig) {
-        return Ok(sequence);
-    }
-    Err(format!("FASTA {path} missing contig {contig}"))
-}
-
-fn load_fasta_contig_sequence_indexed(
-    path: &str,
-    contig: &str,
-    entry: FaiEntry,
-) -> Result<Vec<u8>, String> {
-    let mut file = fs::File::open(path).map_err(|error| error.to_string())?;
-    file.seek(SeekFrom::Start(entry.offset))
-        .map_err(|error| error.to_string())?;
-    let mut reader = BufReader::new(file);
-    let mut sequence = Vec::with_capacity(entry.length);
-    let mut remaining = entry.length;
-    while remaining > 0 {
-        let mut line = String::new();
-        let read = reader
-            .read_line(&mut line)
-            .map_err(|error| error.to_string())?;
-        if read == 0 {
-            break;
-        }
-        let line = line.trim_end_matches(['\r', '\n']);
-        if line.is_empty() || line.starts_with('>') {
-            continue;
-        }
-        let take = remaining.min(line.len());
-        sequence.extend(line.as_bytes()[..take].iter().map(u8::to_ascii_uppercase));
-        remaining -= take;
-    }
-    if sequence.len() != entry.length {
-        return Err(format!(
-            "FASTA {path} contig {contig} truncated: expected {} bases, read {}",
-            entry.length,
-            sequence.len()
-        ));
-    }
-    Ok(sequence)
-}
-
-fn load_fasta_contig_sequence(path: &str, contig: &str) -> Result<Vec<u8>, String> {
-    let fai_path = format!("{path}.fai");
-    if Path::new(&fai_path).is_file() {
-        let entry = read_fai_entry(&fai_path, contig)?;
-        return load_fasta_contig_sequence_indexed(path, contig, entry);
-    }
-    load_fasta_contig_sequence_scan(path, contig)
-}
-
 fn count_gc_bias_windows(reference_path: &str, window_size: usize) -> Result<[u64; 101], String> {
     if !has_gzip_extension(reference_path) {
         if window_size > 0
@@ -10251,7 +10066,7 @@ fn count_gc_bias_windows_per_contig(
     window_size: usize,
 ) -> Result<[u64; 101], String> {
     let mut windows = [0u64; 101];
-    for (name, length) in read_reference_contigs_for_wgs(reference_path)? {
+    for (name, length) in read_reference_contigs(reference_path)? {
         if length < window_size {
             continue;
         }
@@ -10560,55 +10375,6 @@ fn count_gc_windows_by_contig_in_parallel(
         partial?.merge_into(&mut windows);
     }
     Ok(windows)
-}
-
-fn read_fasta_sequences(path: &str, truncate_names: bool) -> Result<Vec<FastaSequence>, String> {
-    let text = read_text_or_gzip(path)?;
-    let mut records = Vec::new();
-    let mut current_name: Option<String> = None;
-    let mut current_sequence = Vec::new();
-
-    for line in text.lines() {
-        if let Some(header) = line.strip_prefix('>') {
-            if let Some(name) = current_name.take() {
-                records.push(FastaSequence {
-                    name,
-                    sequence: std::mem::take(&mut current_sequence),
-                });
-            }
-            let name = if truncate_names {
-                header.split_whitespace().next().unwrap_or_default()
-            } else {
-                header
-            };
-            if name.is_empty() {
-                return Err("empty FASTA sequence name".to_string());
-            }
-            current_name = Some(name.to_string());
-        } else if current_name.is_some() {
-            current_sequence.extend(line.trim().as_bytes().iter().map(u8::to_ascii_uppercase));
-        } else if !line.trim().is_empty() {
-            return Err("FASTA sequence data before first header".to_string());
-        }
-    }
-
-    if let Some(name) = current_name {
-        records.push(FastaSequence {
-            name,
-            sequence: current_sequence,
-        });
-    }
-    if records.is_empty() {
-        return Err("FASTA contains no sequences".to_string());
-    }
-    Ok(records)
-}
-
-fn reference_sequences_by_name(path: &str) -> Result<BTreeMap<String, Vec<u8>>, String> {
-    Ok(read_fasta_sequences(path, true)?
-        .into_iter()
-        .map(|record| (record.name, record.sequence.to_ascii_uppercase()))
-        .collect())
 }
 
 #[derive(Debug, Default)]
@@ -13587,108 +13353,29 @@ fn q20_match_bases_raw(raw_cigar: &[u32], qualities: &[u8]) -> u64 {
     q20
 }
 
-fn preload_reference_contigs_for_tids(
-    reference_path: &str,
-    target_names: &[String],
-) -> Result<Option<PreloadedContigs>, String> {
-    const MAX_PRELOAD_BASES: usize = 256_000_000;
-    let contigs = read_reference_contigs_for_wgs(reference_path)?;
-    let total_bases = contigs.iter().map(|(_, len)| *len).sum::<usize>();
-    if total_bases > MAX_PRELOAD_BASES {
-        return Ok(None);
-    }
-    let needed: BTreeSet<&str> = target_names.iter().map(String::as_str).collect();
-    let mut by_name = FxHashMap::default();
-    for fasta in read_fasta_sequences(reference_path, true)? {
-        if needed.contains(fasta.name.as_str()) {
-            by_name.insert(fasta.name, fasta.sequence);
-        }
-    }
-    let slots = target_names
-        .iter()
-        .map(|name| by_name.remove(name))
-        .collect::<Vec<_>>();
-    Ok(Some(Arc::new(slots)))
-}
-
-type PreloadedContigs = Arc<Vec<Option<Vec<u8>>>>;
-
-#[derive(Debug)]
-struct AlignmentReferenceCache {
-    reference_path: String,
-    active_contig: Option<String>,
-    active_sequence: Vec<u8>,
-    preloaded: Option<PreloadedContigs>,
-}
-
-impl AlignmentReferenceCache {
-    fn new(reference_path: &str) -> Self {
-        Self::new_with_preloaded(reference_path, None)
-    }
-
-    fn new_with_preloaded(reference_path: &str, preloaded: Option<PreloadedContigs>) -> Self {
-        Self {
-            reference_path: reference_path.to_string(),
-            active_contig: None,
-            active_sequence: Vec::new(),
-            preloaded,
-        }
-    }
-
-    fn ensure_contig(&mut self, contig: &str) -> Result<(), String> {
-        if self.active_contig.as_deref() == Some(contig) {
-            return Ok(());
-        }
-        self.active_sequence = load_fasta_contig_sequence(&self.reference_path, contig)?;
-        self.active_contig = Some(contig.to_string());
-        Ok(())
-    }
-
-    fn mismatch_bases(
-        &mut self,
-        record: &bam::Record,
-        target_names: &[String],
-    ) -> Result<Option<u64>, String> {
-        if record.is_unmapped() || record.tid() < 0 {
-            return Ok(None);
-        }
-        let tid_idx = usize_or_max(record.tid());
-        if let Some(preloaded) = &self.preloaded {
-            if let Some(Some(sequence)) = preloaded.get(tid_idx) {
-                return record_reference_mismatch_bases(record, sequence).map(Some);
-            }
-            if target_names.get(tid_idx).is_some() {
-                let contig = &target_names[tid_idx];
-                self.ensure_contig(contig)?;
-                return record_reference_mismatch_bases(record, &self.active_sequence).map(Some);
-            }
-            return Err(
-                "CollectAlignmentSummaryMetrics record references unknown target".to_string(),
-            );
-        }
-        let contig = target_names.get(tid_idx).ok_or_else(|| {
-            "CollectAlignmentSummaryMetrics record references unknown target".to_string()
-        })?;
-        self.ensure_contig(contig)?;
-        record_reference_mismatch_bases(record, &self.active_sequence).map(Some)
-    }
-}
-
 fn alignment_reference_mismatch_bases(
     record: &bam::Record,
     target_names: &[String],
-    reference_cache: Option<&mut AlignmentReferenceCache>,
+    reference_cache: Option<&mut ContigReferenceCache>,
 ) -> Result<Option<u64>, String> {
     let Some(reference_cache) = reference_cache else {
         return Ok(None);
     };
-    reference_cache.mismatch_bases(record, target_names)
+    if record.is_unmapped() || record.tid() < 0 {
+        return Ok(None);
+    }
+    let sequence = reference_cache.contig_sequence(
+        usize_or_max(record.tid()),
+        target_names,
+        "CollectAlignmentSummaryMetrics",
+    )?;
+    record_reference_mismatch_bases(record, sequence).map(Some)
 }
 
 fn alignment_reference_mismatch_bases_locked(
     record: &bam::Record,
     target_names: &[String],
-    reference_cache: Option<&Mutex<AlignmentReferenceCache>>,
+    reference_cache: Option<&Mutex<ContigReferenceCache>>,
 ) -> Result<Option<u64>, String> {
     let Some(reference_cache) = reference_cache else {
         return Ok(None);
@@ -15493,8 +15180,7 @@ fn load_gc_preloaded_reference(
     reference_path: &str,
     window_size: usize,
 ) -> Result<([u64; 101], Option<Arc<GcPreloadedReference>>), String> {
-    const MAX_PRELOAD_BASES: usize = 256_000_000;
-    let contigs = read_reference_contigs_for_wgs(reference_path)?;
+    let contigs = read_reference_contigs(reference_path)?;
     let total_bases = contigs.iter().map(|(_, len)| *len).sum::<usize>();
     if total_bases > MAX_PRELOAD_BASES {
         return Ok((count_gc_bias_windows(reference_path, window_size)?, None));
