@@ -1,8 +1,9 @@
+use super::reference_cache::read_reference_contigs;
 use super::{
     f64_to_u64, fold_base_penalty, format_float, het_sensitivity::wgs_het_snp_sensitivity,
     is_adapter_read, mad_f64_from_histogram_u64, mean_from_histogram_u32,
-    median_f64_from_histogram_u64, pct_at_least, read_reference_contigs_for_wgs,
-    sample_standard_deviation_from_histogram_u32, u16_or_max, usize_or_max,
+    median_f64_from_histogram_u64, pct_at_least, sample_standard_deviation_from_histogram_u32,
+    u16_or_max, usize_or_max,
 };
 use flate2::read::MultiGzDecoder;
 use rust_htslib::bam;
@@ -67,7 +68,7 @@ impl WgsReference {
         interval_masks: Option<BTreeMap<String, Vec<bool>>>,
         scan_threads: usize,
     ) -> Result<Self, String> {
-        let lengths = read_reference_contigs_for_wgs(reference)?;
+        let lengths = read_reference_contigs(reference)?;
         Self::load_with_contigs(reference, lengths, interval_masks, scan_threads)
     }
 
