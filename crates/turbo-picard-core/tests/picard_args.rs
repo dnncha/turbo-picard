@@ -1,5 +1,6 @@
 use turbo_picard_core::picard_args::{
-    PicardArgError, SortOrder, normalize_picard_args, normalize_picard_args_for_command,
+    ParsedPicardArg, PicardArgError, SortOrder, normalize_picard_args,
+    normalize_picard_args_for_command, parse_picard_args_for_command,
 };
 
 #[test]
@@ -483,6 +484,65 @@ fn typed_reader_rejects_unknown_keys_with_the_command_name() {
     assert!(
         args.reject_unknown(&["INPUT", "OUTPUT", "UNEXPECTED"])
             .is_ok()
+    );
+}
+
+#[test]
+fn normalizes_gatk_kebab_case_long_options() {
+    let args = vec![
+        "-I".to_string(),
+        "in.bam".to_string(),
+        "--output".to_string(),
+        "out.bam".to_string(),
+        "--metrics-file=metrics.txt".to_string(),
+        "--create-index".to_string(),
+        "true".to_string(),
+        "--assume-sort-order".to_string(),
+        "coordinate".to_string(),
+        "--validation-stringency".to_string(),
+        "SILENT".to_string(),
+    ];
+
+    let parsed =
+        normalize_picard_args_for_command("MarkDuplicates", &args).expect("arguments parse");
+
+    assert_eq!(parsed["INPUT"], vec!["in.bam"]);
+    assert_eq!(parsed["OUTPUT"], vec!["out.bam"]);
+    assert_eq!(parsed["METRICS_FILE"], vec!["metrics.txt"]);
+    assert_eq!(parsed["CREATE_INDEX"], vec!["true"]);
+    assert_eq!(parsed["ASSUME_SORT_ORDER"], vec!["coordinate"]);
+    assert_eq!(parsed["VALIDATION_STRINGENCY"], vec!["SILENT"]);
+
+    let tokens = parse_picard_args_for_command(
+        "SamToFastq",
+        &[
+            "--r1-max-bases".to_string(),
+            "90".to_string(),
+            "--second-end-fastq=r2.fq".to_string(),
+        ],
+    )
+    .expect("tokens parse");
+    assert_eq!(
+        tokens,
+        vec![
+            ParsedPicardArg {
+                raw_key: "r1-max-bases".to_string(),
+                canonical_key: "READ1_MAX_BASES_TO_WRITE".to_string(),
+                value: "90".to_string(),
+            },
+            ParsedPicardArg {
+                raw_key: "second-end-fastq".to_string(),
+                canonical_key: "SECOND_END_FASTQ".to_string(),
+                value: "r2.fq".to_string(),
+            },
+        ]
+    );
+
+    let err = normalize_picard_args_for_command("MarkDuplicates", &["--create-index".to_string()])
+        .expect_err("kebab option without value fails");
+    assert_eq!(
+        err,
+        PicardArgError::MissingValue("CREATE_INDEX".to_string())
     );
 }
 

@@ -16,7 +16,7 @@ const REPORT_SUBCOMMANDS: [&str; 6] = [
     "AccelerationStatus",
 ];
 
-const INSTRUCTIONS: &str = "turbo-picard runs selected Picard commands natively and delegates the rest to upstream Picard when fallback_ready is true. For any Picard-shaped task: call explain with the exact command and KEY=VALUE arguments first. Use run when status is native, or partial-native with options inside native_scope, or when fallback_ready is true. Otherwise install upstream Picard (doctor gives the hint) or call Picard directly. run refuses to overwrite inputs or existing outputs unless overwrite is true.";
+const INSTRUCTIONS: &str = "turbo-picard runs selected Picard commands natively (including MarkDuplicates, SortSam, MergeSamFiles, CollectWgsMetrics, CollectHsMetrics, CollectRnaSeqMetrics, CollectMultipleMetrics, FixMateInformation, SamToFastq, FastqToSam, ValidateSamFile, and LiftoverVcf) and delegates the rest to upstream Picard when fallback_ready is true. Use it for any Picard or GATK-wrapped Picard task (picard, picard.jar, gatk MarkDuplicates, gatk CollectWgsMetrics, and similar). Call explain with the exact command and arguments (KEY=VALUE, --kebab-case, or -I style) first. Use run when status is native, or partial-native with options inside native_scope, or when fallback_ready is true. Otherwise install upstream Picard (doctor gives the hint) or call Picard directly. run refuses to overwrite inputs or existing outputs unless overwrite is true.";
 
 pub(crate) fn serve() -> i32 {
     let stdin = io::stdin();
@@ -112,15 +112,15 @@ fn tool_definitions() -> Value {
         {
             "name": "explain",
             "title": "Explain the execution path for one Picard call",
-            "description": "Call first for any Picard-shaped task. Returns explain --json for the exact command and KEY=VALUE arguments: status, native_scope, fallback_scope, execution_path, fallback_ready and declared outputs. Read-only; it does not open inputs or check option support.",
-            "inputSchema": command_args_schema("Picard KEY=VALUE arguments, one per item."),
+            "description": "Call first for any Picard or GATK-wrapped Picard task (such as MarkDuplicates, SortSam, CollectWgsMetrics, CollectHsMetrics, CollectRnaSeqMetrics, or MergeSamFiles). Returns explain --json for the exact command and arguments: status, native_scope, fallback_scope, execution_path, fallback_ready and declared outputs. Read-only; it does not open inputs or check option support.",
+            "inputSchema": command_args_schema("Picard or GATK4-style arguments, one token per item (for example I=in.bam or -I, in.bam, --create-index, true)."),
             "annotations": { "readOnlyHint": true, "openWorldHint": false },
         },
         {
             "name": "trial",
             "title": "Print a side-by-side Picard trial contract",
             "description": "Returns trial --json: picard_argv and turbo_argv arrays, declared outputs and what to compare when evaluating turbo-picard beside upstream Picard. Read-only.",
-            "inputSchema": command_args_schema("Picard KEY=VALUE arguments, one per item."),
+            "inputSchema": command_args_schema("Picard or GATK4-style arguments, one token per item."),
             "annotations": { "readOnlyHint": true, "openWorldHint": false },
         },
         {
@@ -133,12 +133,12 @@ fn tool_definitions() -> Value {
         {
             "name": "run",
             "title": "Run a Picard command with turbo-picard",
-            "description": "Runs turbo-picard <command> <args> without a shell. Native work runs natively; anything outside native scope delegates to upstream Picard when fallback_ready is true. Refuses when an output argument names an input or an existing file unless overwrite is true. Set require_native to fail instead of delegating.",
+            "description": "Runs turbo-picard <command> <args> without a shell. Accepts Picard KEY=VALUE and GATK4-style -I / --kebab-case flags. Native work runs natively; anything outside native scope delegates to upstream Picard when fallback_ready is true. Refuses when an output argument names an input or an existing file unless overwrite is true. Set require_native to fail instead of delegating.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "command": { "type": "string", "description": "Picard command name, for example SortSam." },
-                    "args": { "type": "array", "items": { "type": "string" }, "description": "Picard KEY=VALUE arguments, one per item." },
+                    "command": { "type": "string", "description": "Picard command name, for example MarkDuplicates, SortSam, or CollectWgsMetrics." },
+                    "args": { "type": "array", "items": { "type": "string" }, "description": "Picard or GATK4-style arguments, one token per item." },
                     "cwd": { "type": "string", "description": "Working directory for relative paths. Defaults to the server's working directory." },
                     "require_native": { "type": "boolean", "description": "Fail instead of delegating to upstream Picard." },
                     "overwrite": { "type": "boolean", "description": "Allow outputs that already exist." },
@@ -349,7 +349,7 @@ fn guard_outputs(
     overwrite: bool,
 ) -> Result<Vec<String>, String> {
     let declared = crate::agent_contract::declared_outputs(command, args)?;
-    let inputs = argument_values(args, &["I", "INPUT"]);
+    let inputs = crate::agent_contract::declared_inputs(command, args)?;
     let mut outputs = Vec::new();
     for declared_output in &declared {
         let Some((_, value)) = declared_output.split_once('=') else {
@@ -373,33 +373,6 @@ fn guard_outputs(
         outputs.push(value.to_string());
     }
     Ok(outputs)
-}
-
-fn argument_values(args: &[String], keys: &[&str]) -> Vec<String> {
-    let mut values = Vec::new();
-    let mut index = 0;
-    while index < args.len() {
-        let arg = &args[index];
-        let flag = arg.strip_prefix("--").or_else(|| arg.strip_prefix('-'));
-        if let Some(flag) = flag {
-            if let Some((key, value)) = flag.split_once('=') {
-                if keys.contains(&key) {
-                    values.push(value.to_string());
-                }
-            } else if keys.contains(&flag) {
-                if let Some(value) = args.get(index + 1) {
-                    values.push(value.clone());
-                }
-                index += 1;
-            }
-        } else if let Some((key, value)) = arg.split_once('=')
-            && keys.contains(&key)
-        {
-            values.push(value.to_string());
-        }
-        index += 1;
-    }
-    values
 }
 
 fn same_path(left: &Path, right: &Path) -> bool {
@@ -536,21 +509,45 @@ mod tests {
     }
 
     #[test]
-    fn argument_values_reads_every_supported_syntax() {
+    fn run_guard_blocks_case_insensitive_kebab_and_fastq_input_overwrites() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("in.bam"), b"x").unwrap();
+        for args in [
+            vec!["-i", "in.bam", "-o", "in.bam"],
+            vec!["--input", "in.bam", "--output", "in.bam"],
+            vec!["i=in.bam", "--metrics-file=in.bam"],
+        ] {
+            let error =
+                guard_outputs("MarkDuplicates", &strings(&args), dir.path(), true).unwrap_err();
+            assert!(error.contains("also an input"), "{args:?}: {error}");
+        }
+        std::fs::write(dir.path().join("r1.fq"), b"@r1\nACGT\n+\nIIII\n").unwrap();
+        let error = guard_outputs(
+            "FastqToSam",
+            &strings(&["--fastq", "r1.fq", "--output", "r1.fq"]),
+            dir.path(),
+            true,
+        )
+        .unwrap_err();
+        assert!(error.contains("also an input"), "{error}");
         assert_eq!(
-            argument_values(
+            guard_outputs(
+                "MarkDuplicates",
                 &strings(&[
-                    "I=a.bam",
-                    "--INPUT",
-                    "b.bam",
-                    "--I=c.bam",
                     "-I",
-                    "d.bam",
-                    "O=x"
+                    "in.bam",
+                    "--output",
+                    "marked.bam",
+                    "--metrics-file",
+                    "metrics.txt",
+                    "--create-index",
+                    "true",
                 ]),
-                &["I", "INPUT"]
-            ),
-            ["a.bam", "b.bam", "c.bam", "d.bam"]
+                dir.path(),
+                false,
+            )
+            .unwrap(),
+            ["marked.bam", "metrics.txt"]
         );
     }
 

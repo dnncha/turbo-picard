@@ -64,6 +64,13 @@ impl Deref for PicardArgs {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParsedPicardArg {
+    pub raw_key: String,
+    pub canonical_key: String,
+    pub value: String,
+}
+
 pub fn normalize_picard_args(args: &[String]) -> Result<PicardArgs, PicardArgError> {
     normalize_picard_args_with_aliases("Picard", args, canonical_key)
 }
@@ -75,12 +82,38 @@ pub fn normalize_picard_args_for_command(
     normalize_picard_args_with_aliases(command, args, |key| canonical_key_for_command(command, key))
 }
 
+pub fn parse_picard_args_for_command(
+    command: &str,
+    args: &[String],
+) -> Result<Vec<ParsedPicardArg>, PicardArgError> {
+    parse_picard_args_with_aliases(args, |key| canonical_key_for_command(command, key))
+}
+
 fn normalize_picard_args_with_aliases(
     command: &str,
     args: &[String],
     canonicalize: impl Fn(&str) -> Result<String, PicardArgError>,
 ) -> Result<PicardArgs, PicardArgError> {
-    let mut normalized = BTreeMap::new();
+    let parsed = parse_picard_args_with_aliases(args, canonicalize)?;
+    let mut normalized: PicardArgMap = BTreeMap::new();
+    for item in parsed {
+        normalized
+            .entry(item.canonical_key)
+            .or_default()
+            .push(item.value);
+    }
+
+    Ok(PicardArgs {
+        command: command.to_string(),
+        values: normalized,
+    })
+}
+
+fn parse_picard_args_with_aliases(
+    args: &[String],
+    canonicalize: impl Fn(&str) -> Result<String, PicardArgError>,
+) -> Result<Vec<ParsedPicardArg>, PicardArgError> {
+    let mut parsed = Vec::new();
     let mut index = 0;
 
     while index < args.len() {
@@ -91,22 +124,31 @@ fn normalize_picard_args_with_aliases(
                 return Err(PicardArgError::EmptyKey(arg.clone()));
             }
 
-            if let Some((key, value)) = long.split_once('=') {
-                push_arg_with_aliases(&mut normalized, key, value, &canonicalize)?;
+            if let Some((raw_key, value)) = long.split_once('=') {
+                let canonical_key = canonicalize(&normalize_long_key(raw_key))?;
+                parsed.push(ParsedPicardArg {
+                    raw_key: raw_key.to_string(),
+                    canonical_key,
+                    value: value.to_string(),
+                });
                 index += 1;
                 continue;
             }
 
-            let key = canonicalize(long)?;
+            let canonical_key = canonicalize(&normalize_long_key(long))?;
             let value = args
                 .get(index + 1)
-                .ok_or_else(|| PicardArgError::MissingValue(key.clone()))?;
+                .ok_or_else(|| PicardArgError::MissingValue(canonical_key.clone()))?;
 
             if looks_like_flag_value(value) || (value.contains('=') && !value.starts_with('=')) {
-                return Err(PicardArgError::MissingValue(key));
+                return Err(PicardArgError::MissingValue(canonical_key));
             }
 
-            normalized.entry(key).or_default().push(value.clone());
+            parsed.push(ParsedPicardArg {
+                raw_key: long.to_string(),
+                canonical_key,
+                value: value.clone(),
+            });
             index += 2;
             continue;
         }
@@ -116,22 +158,31 @@ fn normalize_picard_args_with_aliases(
                 return Err(PicardArgError::EmptyKey(arg.clone()));
             }
 
-            let key = canonicalize(short)?;
+            let canonical_key = canonicalize(short)?;
             let value = args
                 .get(index + 1)
-                .ok_or_else(|| PicardArgError::MissingValue(key.clone()))?;
+                .ok_or_else(|| PicardArgError::MissingValue(canonical_key.clone()))?;
 
             if looks_like_flag_value(value) || (value.contains('=') && !value.starts_with('=')) {
-                return Err(PicardArgError::MissingValue(key));
+                return Err(PicardArgError::MissingValue(canonical_key));
             }
 
-            normalized.entry(key).or_default().push(value.clone());
+            parsed.push(ParsedPicardArg {
+                raw_key: short.to_string(),
+                canonical_key,
+                value: value.clone(),
+            });
             index += 2;
             continue;
         }
 
-        if let Some((key, value)) = arg.split_once('=') {
-            push_arg_with_aliases(&mut normalized, key, value, &canonicalize)?;
+        if let Some((raw_key, value)) = arg.split_once('=') {
+            let canonical_key = canonicalize(raw_key)?;
+            parsed.push(ParsedPicardArg {
+                raw_key: raw_key.to_string(),
+                canonical_key,
+                value: value.to_string(),
+            });
             index += 1;
             continue;
         }
@@ -139,25 +190,23 @@ fn normalize_picard_args_with_aliases(
         return Err(PicardArgError::UnexpectedPositional(arg.clone()));
     }
 
-    Ok(PicardArgs {
-        command: command.to_string(),
-        values: normalized,
-    })
+    Ok(parsed)
+}
+
+fn normalize_long_key(key: &str) -> String {
+    if key
+        .as_bytes()
+        .first()
+        .is_some_and(u8::is_ascii_alphanumeric)
+    {
+        key.replace('-', "_")
+    } else {
+        key.to_string()
+    }
 }
 
 fn looks_like_flag_value(value: &str) -> bool {
     value.len() > 1 && value.starts_with('-') && !matches!(value.as_bytes()[1], b'.' | b'0'..=b'9')
-}
-
-fn push_arg_with_aliases(
-    args: &mut PicardArgMap,
-    key: &str,
-    value: &str,
-    canonicalize: &impl Fn(&str) -> Result<String, PicardArgError>,
-) -> Result<(), PicardArgError> {
-    let key = canonicalize(key)?;
-    args.entry(key).or_default().push(value.to_string());
-    Ok(())
 }
 
 fn canonical_key(key: &str) -> Result<String, PicardArgError> {
