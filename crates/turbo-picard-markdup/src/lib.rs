@@ -237,6 +237,10 @@ fn run_hts_container(
     if let Some(summary) = try_run_external_plan(config)? {
         return Ok(summary);
     }
+    let budget_bytes = in_memory_plan_budget_bytes();
+    if projected_in_memory_bytes(config) > budget_bytes {
+        return Err(MarkDuplicatesError::InMemoryPlanTooLarge { budget_bytes });
+    }
     if let Some(summary) = try_run_single_bam_compact_plan(config)? {
         return Ok(summary);
     }
@@ -2688,7 +2692,11 @@ impl BamRecordReadState<'_> {
             record
         };
         self.records.push(stored_record);
-        if self.records.len() % RESIDENT_CHECK_INTERVAL_RECORDS == 0 {
+        if self
+            .records
+            .len()
+            .is_multiple_of(RESIDENT_CHECK_INTERVAL_RECORDS)
+        {
             check_in_memory_budget(process_resident_bytes(), self.memory_budget)?;
         }
         Ok(())
@@ -3235,6 +3243,17 @@ fn replace_i32_aux(
 }
 
 const RESIDENT_CHECK_INTERVAL_RECORDS: usize = 1 << 16;
+const IN_MEMORY_BYTES_PER_INPUT_BYTE: u64 = 6;
+
+fn projected_in_memory_bytes(config: &MarkDuplicatesConfig) -> u64 {
+    config
+        .inputs
+        .iter()
+        .filter_map(|input| fs::metadata(input).ok())
+        .map(|metadata| metadata.len())
+        .fold(0_u64, u64::saturating_add)
+        .saturating_mul(IN_MEMORY_BYTES_PER_INPUT_BYTE)
+}
 const PROC_PAGE_BYTES: u64 = 4096;
 
 fn in_memory_plan_budget_bytes() -> u64 {
