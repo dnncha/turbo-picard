@@ -495,6 +495,7 @@ def clean_outputs(trial: Trial) -> None:
         for candidate in Path(path).parent.glob(Path(path).name + "*"):
             if candidate.is_file():
                 candidate.unlink()
+    empty_scratch(Path(next(iter(trial.outputs.values()))).parent)
 
 
 PERF_LINE = re.compile(r"^\s*([0-9.]+)%\s+(\S+)\s+(\S+)\s+\[[.k]\]\s+(.+?)\s*$")
@@ -777,12 +778,21 @@ def accuracy_for_group(trials: list[Trial], *, samtools: str, repo: Path) -> lis
     return []
 
 
+def empty_scratch(out_dir: Path) -> None:
+    scratch = out_dir / "scratch"
+    if scratch.is_dir():
+        shutil.rmtree(scratch, ignore_errors=True)
+    scratch.mkdir(parents=True, exist_ok=True)
+
+
 def drop_bulky_outputs(trials: list[Trial]) -> None:
     for trial in trials:
         for path in trial.outputs.values():
-            for candidate in Path(path).parent.glob("*"):
+            out_dir = Path(path).parent
+            for candidate in out_dir.glob("*"):
                 if candidate.suffix in {".bam", ".bai", ".dupkeys"} and candidate.is_file():
                     candidate.unlink()
+            empty_scratch(out_dir)
 
 
 def load_records(paths: list[Path]) -> list[dict[str, Any]]:

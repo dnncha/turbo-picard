@@ -216,6 +216,32 @@ class ReportTests(unittest.TestCase):
         _, losses = duel.render_scoreboard(slower, "20261124T000000Z-c")
         assert [loss["kind"] for loss in losses] == ["speed"]
 
+    def test_scratch_is_emptied_between_rounds_and_after_a_task(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp) / "4x" / "markdup-coord"
+            (out / "scratch" / "st-sort").mkdir(parents=True)
+            (out / "scratch" / "st-sort" / "leftover.tmp").write_bytes(b"x" * 64)
+            (out / "turbo.md.bam").write_bytes(b"bam")
+            trial = duel.Trial(
+                "markdup-coord",
+                "4x",
+                "turbo-picard",
+                "default",
+                "true",
+                {},
+                {"bam": str(out / "turbo.md.bam")},
+                1,
+                False,
+                "true",
+            )
+            duel.clean_outputs(trial)
+            assert list((out / "scratch").iterdir()) == []
+            (out / "scratch" / "again.tmp").write_bytes(b"y")
+            (out / "turbo.md.bam").write_bytes(b"bam")
+            duel.drop_bulky_outputs([trial])
+            assert list((out / "scratch").iterdir()) == []
+            assert not (out / "turbo.md.bam").exists()
+
     def test_ledger_rejects_unknown_records(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "l.jsonl"
