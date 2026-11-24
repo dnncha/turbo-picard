@@ -32,7 +32,14 @@ class AgentKitTests(unittest.TestCase):
         assert fields.get("name") == "turbo-picard"
         description = fields.get("description", "")
         assert len(description) <= 1024
-        for needle in ("Picard", "MarkDuplicates", "explain --json"):
+        for needle in (
+            "Picard",
+            "MarkDuplicates",
+            "CollectWgsMetrics",
+            "CollectRnaSeqMetrics",
+            "gatk",
+            "explain --json",
+        ):
             assert needle in description
 
     def test_every_snippet_carries_the_same_decision_rule(self) -> None:
@@ -46,6 +53,9 @@ class AgentKitTests(unittest.TestCase):
                     "fallback_install_hint",
                     "python3 -m pip install turbo-picard",
                     "-Xmx",
+                    "CollectWgsMetrics",
+                    "CollectRnaSeqMetrics",
+                    "gatk",
                 ):
                     assert needle in text
                 lowered = text.lower()
@@ -66,6 +76,9 @@ class AgentKitTests(unittest.TestCase):
         fields = frontmatter((KIT / "cursor" / "turbo-picard.mdc").read_text(encoding="utf-8"))
         assert "description" in fields
         assert fields.get("alwaysApply") == "false"
+        globs = fields.get("globs", "")
+        for pattern in ("**/*.nf", "**/*.wdl", "**/Snakefile", "**/*.py", "**/Dockerfile"):
+            assert pattern in globs
 
 
 if __name__ == "__main__":

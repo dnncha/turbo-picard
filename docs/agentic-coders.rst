@@ -86,16 +86,18 @@ exposes five tools that return the same JSON contracts as the CLI:
 
 * ``capabilities``: ``capabilities --json``, optionally for one ``command``;
 * ``explain`` and ``trial``: the reports for ``command`` and ``args`` (an array
-  of ``KEY=VALUE`` strings);
+  of Picard ``KEY=VALUE`` or GATK4 ``-I`` / ``--kebab-case`` tokens);
 * ``doctor``: the doctor report as a JSON object, including ``fallback_ready``;
 * ``run``: executes ``turbo-picard <command> <args>`` without a shell and
   returns the exit code, declared outputs and output tails.
 
 ``run`` is guarded. It rejects report commands and unknown command names, and
-it refuses an output argument that names an input or an existing file unless
-``overwrite`` is true. ``require_native: true`` sets
-``TURBO_PICARD_REQUIRE_NATIVE=1`` for that call so it fails instead of
-delegating. The MCP Registry listing is prepared in ``packaging/mcp/``.
+it refuses an output argument that names an input (including case-insensitive
+``-i`` / ``--input`` and command-specific inputs such as ``FastqToSam``
+``FASTQ``/``F2``) or an existing file unless ``overwrite`` is true.
+``require_native: true`` sets ``TURBO_PICARD_REQUIRE_NATIVE=1`` for that call
+so it fails instead of delegating. The MCP Registry listing is prepared in
+``packaging/mcp/``.
 
 Agent skill and rules
 ---------------------

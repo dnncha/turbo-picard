@@ -7,5 +7,5 @@
   "homepage": "https://turbo-picard.readthedocs.io/en/latest/agentic-coders.html",
   "repository": "https://github.com/dnncha/turbo-picard",
   "license": "MIT",
-  "keywords": ["bioinformatics", "genomics", "picard", "markduplicates", "bam"]
+  "keywords": ["bioinformatics", "genomics", "picard", "gatk", "markduplicates", "wgs", "wes", "bam", "cram", "qc", "nextflow", "snakemake", "wdl"]
 }
