@@ -1,4 +1,4 @@
-use super::{VcfDocument, VcfRecord, stream_vcf_records};
+use super::vcf::{VcfDocument, VcfRecord, stream_vcf_records};
 use crate::command_error::{CommandError, unsupported};
 use std::collections::{BTreeMap, BTreeSet};
 use thiserror::Error;

@@ -133,6 +133,7 @@ mod tests {
         ("sam_sort.rs", include_str!("sam_sort.rs")),
         ("sam_structure.rs", include_str!("sam_structure.rs")),
         ("validate_sam.rs", include_str!("validate_sam.rs")),
+        ("vcf.rs", include_str!("vcf.rs")),
         ("vcf_headers.rs", include_str!("vcf_headers.rs")),
         ("wgs_metrics.rs", include_str!("wgs_metrics.rs")),
         ("wgs_regions.rs", include_str!("wgs_regions.rs")),
