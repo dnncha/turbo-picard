@@ -3478,7 +3478,7 @@ impl BamRecordReadState<'_> {
         };
         self.resident_bytes = self
             .resident_bytes
-            .saturating_add(u64::try_from(stored_record.data().len()).unwrap_or(u64::MAX))
+            .saturating_add(u64::try_from(stored_record.inner().l_data).unwrap_or(0))
             .saturating_add(IN_MEMORY_RECORD_OVERHEAD_BYTES);
         check_in_memory_budget(self.resident_bytes, self.memory_budget)?;
         self.records.push(stored_record);
@@ -4028,7 +4028,7 @@ fn replace_i32_aux(
 const IN_MEMORY_RECORD_OVERHEAD_BYTES: u64 = 96;
 
 fn in_memory_plan_budget_bytes() -> u64 {
-    std::fs::read_to_string("/proc/meminfo")
+    fs::read_to_string("/proc/meminfo")
         .ok()
         .and_then(|text| mem_available_bytes(&text))
         .map_or(u64::MAX, |available| available / 2)
