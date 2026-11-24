@@ -14,6 +14,7 @@ MATRIX = ROOT / "docs" / "command-matrix.yml"
 PICARD_COMMANDS = ROOT / "docs" / "picard-3.4.0-commands.txt"
 COMMAND_DOCS = ROOT / "docs" / "commands.rst"
 CLI = ROOT / "crates" / "turbo-picard-cli" / "src" / "lib.rs"
+COMMAND_CATALOG = ROOT / "crates" / "turbo-picard-cli" / "src" / "command_catalog.rs"
 PARITY_GATE = ROOT / "tools" / "parity_gate.sh"
 REAL_DATA_MANIFEST = ROOT / "benchmarks" / "real-data" / "manifest.json"
 CRAM_PARITY_SCRIPT = ROOT / "tools" / "verify_basic_cram_parity.sh"
@@ -110,10 +111,23 @@ def matrix_entries() -> list[Entry]:
     return entries
 
 
+def catalog_commands(text: str) -> set[str]:
+    marker = "const NATIVE_COMMANDS"
+    if marker not in text:
+        return set()
+    block = text.split(marker, 1)[1].split("\n];", 1)[0]
+    standard = re.findall(r'NativeCommandSpec::standard\(\s*"([^"]+)"', block)
+    explicit = re.findall(r'name:\s*"([^"]+)"', block)
+    return set(standard) | set(explicit)
+
+
 def dispatcher_commands() -> set[str]:
     text = CLI.read_text(encoding="utf-8")
     text = text.split("fn print_top_level_help", 1)[0]
-    return set(re.findall(r'Some\("([^"]+)"\) =>', text))
+    commands = set(re.findall(r'Some\("([^"]+)"\) =>', text))
+    if COMMAND_CATALOG.is_file():
+        commands |= catalog_commands(COMMAND_CATALOG.read_text(encoding="utf-8"))
+    return commands
 
 
 def validate_scope_notes(entries: Sequence[Entry]) -> list[str]:

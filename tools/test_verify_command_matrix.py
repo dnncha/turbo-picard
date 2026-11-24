@@ -338,6 +338,22 @@ class CommandMatrixTests(unittest.TestCase):
             "commands docs missing delegated command count summary",
         ]
 
+    def test_catalog_commands_extracts_standard_and_explicit_specs(self) -> None:
+        sample = (
+            "pub(crate) const NATIVE_COMMANDS: &[NativeCommandSpec] = &[\n"
+            "    NativeCommandSpec {\n"
+            '        name: "MarkDuplicates",\n'
+            "    },\n"
+            "    NativeCommandSpec::standard(\n"
+            '        "SortSam",\n'
+            "    ),\n"
+            "];\n"
+            'const IGNORED: &str = "NotACommand";\n'
+        )
+        assert verify_command_matrix.catalog_commands(sample) == {"MarkDuplicates", "SortSam"}
+        assert "MarkDuplicates" in verify_command_matrix.dispatcher_commands()
+        assert "SortSam" in verify_command_matrix.dispatcher_commands()
+
 
 if __name__ == "__main__":
     unittest.main()
