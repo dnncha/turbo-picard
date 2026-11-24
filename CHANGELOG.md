@@ -8,19 +8,22 @@
   (#87): stores tile x/y coordinates with signed 16-bit Java `short` wrapping
   and splits mixed-orientation duplicate sets into FR and RF groups before
   optical checks. On 1000 Genomes HG02675 (`ERR3242389`, 740,367,510 records),
-  metrics, duplicate count (79,289,617), and SAM columns 1-11 MD5 matched
-  Picard 3.4.0 exactly.
+  build `93216217` (Host B, 43m 07s / 354 MB RSS, temp disk not sampled)
+  matched Picard 3.4.0 exactly in metrics, duplicate count (79,289,617), and
+  SAM columns 1-11 MD5.
 - `MarkDuplicates` chains `@PG` header IDs and writes record `PG` tags matching
   Picard when the input header already includes `MarkDuplicates` (#88). On
   chr21 of HG02675 (11,405,002 records), `DT`, `DS`, `DI`, and `PG` tags
-  matched Picard with zero differences.
+  matched Picard with zero differences (the whole genome has not been rerun on
+  the #88 build).
 - Recorded the 30x whole-genome GRCh38 comparison against Picard 3.4.0 in
-  `benchmarks/wgs-30x-colab-2026-11-23/README.md` (#89): on an 8-vCPU host,
-  `MarkDuplicates` ran in 59m 01s at 355 MB RSS vs Picard's 3h 30m 07s at
-  34.4 GB RSS (3.6x faster, 97x less memory; 99.2 GB vs 23.3 GB peak temp disk,
-  tracked in #86), and `CollectWgsMetrics` ran in 5m 08s at 352 MB RSS vs
-  Picard's 2h 13m 55s at 4.0 GB RSS (26x faster, 11x less memory, exact field
-  and histogram parity).
+  `benchmarks/wgs-30x-colab-2026-11-23/README.md` (#89): on Host A (8 vCPU),
+  pre-#87 build `9a15db96` ran `MarkDuplicates` in 59m 01s at 355 MB RSS vs
+  Picard's 3h 30m 07s at 34.4 GB RSS (3.6x faster, 97x less memory; 99.2 GB vs
+  23.3 GB peak temp disk tracked in #86; optical count differed by 0.18% before
+  #87), and `CollectWgsMetrics` ran in 5m 08s at 352 MB RSS vs Picard's
+  2h 13m 55s at 4.0 GB RSS (26x faster, 11x less memory, exact field and
+  histogram parity).
 - `MarkDuplicates` refuses oversized non-coordinate inputs up front and hands
   them to upstream Picard instead of exhausting RAM in the in-memory planner
   (#94, #103).

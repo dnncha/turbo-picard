@@ -25,10 +25,13 @@ turbo-picard MarkDuplicates I=input.bam O=marked.bam M=metrics.txt
 Recent 30x GRCh38 whole-genome measurements (1000 Genomes `HG02675`, 740M
 records, 8 vCPU / 50 GB RAM, single run, 23 November 2026):
 
-- `MarkDuplicates`: 59m 01s at 355 MB RSS vs Picard 3.4.0's 3h 30m 07s at
-  34.4 GB RSS (3.6x faster, 97x less memory), matching Picard metrics, duplicate
-  count (79,289,617), and SAM columns 1-11 MD5. Current trade-off: 99.2 GB vs
-  23.3 GB peak temp disk (tracked in #86).
+- `MarkDuplicates`: on Host A, pre-#87 build `9a15db96` ran in 59m 01s at
+  355 MB RSS vs Picard 3.4.0's 3h 30m 07s at 34.4 GB RSS (3.6x faster, 97x less
+  memory; 99.2 GB vs 23.3 GB peak temp disk tracked in #86; optical count
+  differed by 0.18% pre-#87). On Host B, the #87 build `93216217` (43m 07s /
+  354 MB RSS, temp disk not sampled) matched Picard metrics, duplicate count
+  (79,289,617), and SAM columns 1-11 MD5 exactly; #88 matched `PG` tags on
+  chr21 (11.4M records, whole genome not rerun).
 - `CollectWgsMetrics`: 5m 08s at 352 MB RSS vs Picard's 2h 13m 55s at 4.0 GB
   RSS (26x faster, 11x less memory), matching every metric field and histogram
   row.

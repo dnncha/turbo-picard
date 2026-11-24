@@ -10,9 +10,12 @@ GATK4 `--kebab-case` flags:
 https://github.com/dnncha/turbo-picard
 
 On a 30x GRCh38 whole genome (1000 Genomes `HG02675`, 740M reads, 8 vCPU):
-- `MarkDuplicates`: 59m 01s / 355 MB RSS vs Picard 3.4.0's 3h 30m 07s / 34.4 GB
-  (3.6x faster, 97x less RAM, exact metrics & SAM columns 1-11 MD5; trade-off is
-  99.2 GB vs 23.3 GB temp disk, tracked in #86).
+- `MarkDuplicates`: on Host A, pre-#87 build `9a15db96` ran in 59m 01s / 355 MB
+  RSS vs Picard 3.4.0's 3h 30m 07s / 34.4 GB (3.6x faster, 97x less RAM;
+  trade-off is 99.2 GB vs 23.3 GB temp disk tracked in #86; optical count
+  differed by 0.18% pre-#87). The #87 build (`93216217`, Host B at 43m 07s /
+  354 MB RSS) matched Picard metrics & SAM columns 1-11 MD5 exactly; #88
+  matched `PG` tags on chr21 (11.4M records, whole genome not rerun).
 - `CollectWgsMetrics`: 5m 08s / 352 MB RSS vs Picard's 2h 13m 55s / 4.0 GB
   (26x faster, 11x less RAM, exact field/histogram parity).
 

@@ -40,14 +40,15 @@ Most bioinformatics pipelines pay a heavy tax in **JVM startup**, **Java heap bl
 
 1000 Genomes `HG02675` (`ERR3242389`, 740,367,510 records, ~36x GRCh38 BAM) · 8 vCPU / 50 GB RAM · single run per tool ([`benchmarks/wgs-30x-colab-2026-11-23/README.md`](benchmarks/wgs-30x-colab-2026-11-23/README.md)):
 
-| Command | Tool | Wall time | Peak RSS | Peak temp disk | Advantage & trade-off vs Picard | Picard parity |
+| Command | Tool & build | Wall time | Peak RSS | Peak temp disk | Measured comparison vs Picard | Picard parity (measured scope) |
 | :--- | :--- | ---: | ---: | ---: | :--- | :--- |
-| **`MarkDuplicates`** | **Turbo Picard** (Host A) | **59m 01s** | **355 MB** | 99.2 GB | **3.6x faster · 97x less RAM** · 4.3x more temp disk (#86) | **✓ Exact** (#87/#88) |
-| `MarkDuplicates` | Picard 3.4.0 (`-Xmx32g`) | 3h 30m 07s | 34.4 GB | **23.3 GB** | 1.0x reference | ✓ Reference |
-| **`CollectWgsMetrics`** | **Turbo Picard** (Host A) | **5m 08s** | **352 MB** | — | **26x faster · 11x less RAM** | **✓ Exact** |
-| `CollectWgsMetrics` | Picard 3.4.0 (`-Xmx8g`) | 2h 13m 55s | 4.0 GB | — | 1.0x reference | ✓ Reference |
+| **`MarkDuplicates`** | **Turbo Picard** `9a15db96` (Host A) | **59m 01s** | **355 MB** | 99.2 GB | **3.6x faster · 97x less RAM** · 4.3x more temp disk (#86) | Pre-#87: optical count & cols 1–11 differed |
+| **`MarkDuplicates`** | **Turbo Picard** `93216217` (#87, Host B) | **43m 07s** | **354 MB** | not sampled | Different CPU host (AMD EPYC vs Intel Xeon) | **✓ Exact metrics & cols 1–11 MD5** (`PG` tag fixed in #88) |
+| `MarkDuplicates` | Picard 3.4.0 (`-Xmx32g`, Host A) | 3h 30m 07s | 34.4 GB | **23.3 GB** | 1.0x reference | ✓ Reference |
+| **`CollectWgsMetrics`** | **Turbo Picard** `9a15db96` (Host A) | **5m 08s** | **352 MB** | — | **26x faster · 11x less RAM** | **✓ Exact** (every metric & histogram row) |
+| `CollectWgsMetrics` | Picard 3.4.0 (`-Xmx8g`, Host A) | 2h 13m 55s | 4.0 GB | — | 1.0x reference | ✓ Reference |
 
-After #87, `MarkDuplicates` matched Picard 3.4.0 exactly on metrics, duplicate count (`79,289,617`), and SAM columns 1–11 MD5 across all 740M records (43m 07s / 354 MB RSS on Host B); after #88, `DT`, `DS`, `DI`, and `PG` tags matched Picard with zero differences on chr21 (11,405,002 records). Turbo Picard also reads the `.crai`-indexed CRAM directly (`CollectWgsMetrics` 4m 53s / 689 MB, `MarkDuplicates` 41m 44s / 1.06 GB), whereas Picard 3.5.0 throws `CRAMException`.
+On Host A (`9a15db96`), duplicate-flagged counts matched (`79,289,617`), while `READ_PAIR_OPTICAL_DUPLICATES` (`5,631,099` vs `5,620,745`) and SAM columns 1–11 differed prior to #87. Build `93216217` (#87, run on Host B) matched Picard 3.4.0 exactly on metrics, duplicate count, and SAM columns 1–11 MD5 across all 740M records. After #88 (`@PG` chaining), `DT`, `DS`, `DI`, and `PG` tags matched Picard with zero differences on chr21 (`11,405,002` records); the whole genome has not been rerun on the #88 build. Turbo Picard also reads the `.crai`-indexed CRAM directly (`CollectWgsMetrics` 4m 53s / 689 MB, `MarkDuplicates` 41m 44s / 1.06 GB on Host A), whereas Picard 3.5.0 throws `CRAMException`.
 
 ### 2. Duplicate marking vs FastDup, `samtools markdup`, and Picard
 

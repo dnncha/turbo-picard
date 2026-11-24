@@ -52,11 +52,14 @@ Current facts to keep consistent:
   `turbo-picard mcp` (six stdio MCP tools, including isolated `verify`).
 - 30x GRCh38 whole-genome benchmark (`HG02675`, `ERR3242389`, 740,367,510
   records, 8 vCPU / 50 GB RAM, single run, 23 November 2026):
-  - `MarkDuplicates`: 59m 01s / 355 MB RSS vs Picard 3.4.0's 3h 30m 07s /
-    34.4 GB RSS (3.6x faster, 97x less memory), matching Picard metrics,
-    duplicate count (79,289,617), and SAM columns 1-11 MD5 after #87, and
-    matching `DT`, `DS`, `DI`, and `PG` tags across chr21's 11.4M records after
-    #88. Trade-off: 99.2 GB vs 23.3 GB peak temp disk (4.3x more, tracked in #86).
+  - `MarkDuplicates`: on Host A (same Intel Xeon host), pre-#87 build `9a15db96`
+    ran in 59m 01s / 355 MB RSS vs Picard 3.4.0's 3h 30m 07s / 34.4 GB RSS
+    (3.6x faster, 97x less memory; 99.2 GB vs 23.3 GB peak temp disk tracked in
+    #86; optical count differed by 0.18% before #87). On Host B (AMD EPYC),
+    the #87 build `93216217` ran in 43m 07s / 354 MB RSS (temp disk not
+    sampled) and matched Picard metrics, duplicate count (79,289,617), and SAM
+    columns 1-11 MD5 exactly; #88 matched `DT`, `DS`, `DI`, and `PG` tags across
+    chr21's 11.4M records (whole genome not rerun on #88).
   - `CollectWgsMetrics`: 5m 08s / 352 MB RSS vs Picard 3.4.0's 2h 13m 55s /
     4.0 GB RSS (26x faster, 11x less memory), matching every metric field and
     histogram row.

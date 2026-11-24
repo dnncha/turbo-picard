@@ -29,11 +29,15 @@ turbo-picard MarkDuplicates I=input.bam O=marked.bam M=metrics.txt
 On a real 30x GRCh38 whole genome (1000 Genomes `HG02675`, 740M reads, 8 vCPU /
 50 GB RAM, single run, 23 November 2026):
 
-- `MarkDuplicates`: 59m 01s at 355 MB peak RSS vs Picard 3.4.0's 3h 30m 07s at
-  34.4 GB RSS (3.6x faster, 97x less memory). After matching Picard's 16-bit
-  signed tile coordinate wrap and FR/RF optical split, metrics, duplicate count
-  (79,289,617), and SAM columns 1-11 MD5 matched Picard exactly. Honest
-  trade-off: our spill path currently uses 4.3x more temp disk (99.2 GB vs
+- `MarkDuplicates`: on Host A (Intel Xeon), pre-#87 build `9a15db96` ran in
+  59m 01s at 355 MB peak RSS vs Picard 3.4.0's 3h 30m 07s at 34.4 GB RSS
+  (3.6x faster, 97x less memory; optical duplicates differed by 0.18% before
+  #87). After matching Picard's 16-bit signed tile coordinate wrap and FR/RF
+  optical split (#87, build `93216217`, run on Host B at 43m 07s / 354 MB RSS,
+  temp disk not sampled), metrics, duplicate count (79,289,617), and SAM
+  columns 1-11 MD5 matched Picard exactly; #88 matched `DT`/`DS`/`DI`/`PG`
+  tags on chr21's 11.4M records (whole genome not rerun on #88). Honest
+  trade-off: our spill path used 4.3x more temp disk on Host A (99.2 GB vs
   23.3 GB, tracked in #86).
 - `CollectWgsMetrics`: 5m 08s at 352 MB RSS vs Picard's 2h 13m 55s at 4.0 GB
   RSS (26x faster, 11x less memory), matching every metric field and histogram

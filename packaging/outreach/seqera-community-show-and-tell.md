@@ -21,12 +21,15 @@ Nextflow, WDL, or Snakemake workflow.
 Measured on a real 30x GRCh38 whole genome (1000 Genomes `HG02675`, 740,367,510
 records, 8 vCPU / 50 GB RAM, single run, 23 November 2026):
 
-- `MarkDuplicates`: **59m 01s / 355 MB peak RSS** vs Picard 3.4.0's
-  **3h 30m 07s / 34.4 GB RSS** (**3.6x faster, 97x less memory**), matching
-  Picard metrics, duplicate count (79,289,617), and SAM columns 1-11 MD5 after
-  fixing Java `short` tile-coordinate wrap and FR/RF optical splitting (and
-  matching `DT`, `DS`, `DI`, and `PG` tags across chr21's 11.4M records).
-  Trade-off: peak temporary disk was 99.2 GB vs Picard's 23.3 GB (4.3x more,
+- `MarkDuplicates`: on Host A (Intel Xeon), pre-#87 build `9a15db96` ran in
+  **59m 01s / 355 MB peak RSS** vs Picard 3.4.0's **3h 30m 07s / 34.4 GB RSS**
+  (**3.6x faster, 97x less memory**; optical count differed by 0.18% pre-#87).
+  After fixing Java `short` tile-coordinate wrap and FR/RF optical splitting,
+  the #87 build (`93216217`, measured on Host B at **43m 07s / 354 MB RSS**,
+  temp disk not sampled) matched Picard metrics, duplicate count (79,289,617),
+  and SAM columns 1-11 MD5 exactly; #88 matched `DT`, `DS`, `DI`, and `PG` tags
+  across chr21's 11.4M records (whole genome not rerun on #88). Trade-off on
+  Host A: peak temporary disk was 99.2 GB vs Picard's 23.3 GB (4.3x more,
   tracked in #86).
 - `CollectWgsMetrics`: **5m 08s / 352 MB peak RSS** vs Picard 3.4.0's
   **2h 13m 55s / 4.0 GB RSS** (**26x faster, 11x less memory**), matching every

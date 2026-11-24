@@ -33,6 +33,8 @@ allocated, or imply that an integration has already been accepted.
 The saved 32-command suite (14 August 2026) reports 84.52x geometric-mean and
 272.12x top speedup on small fixtures; those are not predictions for the
 recipient's workload, so the message does not lead with them. For large files,
-point to the 23 November 2026 30x GRCh38 log (`MarkDuplicates` 59m 01s / 355 MB
-vs 3h 30m 07s / 34.4 GB with 4.3x more temp disk; `CollectWgsMetrics` 5m 08s /
-352 MB vs 2h 13m 55s / 4.0 GB) and be explicit about the temp-disk trade-off.
+point to the 23 November 2026 30x GRCh38 log (`MarkDuplicates` Host A pre-#87
+59m 01s / 355 MB vs 3h 30m 07s / 34.4 GB with 4.3x more temp disk, #87 exact
+metrics & cols 1-11 MD5 on Host B at 43m 07s / 354 MB, #88 `PG` tags checked on
+chr21; `CollectWgsMetrics` 5m 08s / 352 MB vs 2h 13m 55s / 4.0 GB) and be
+explicit about the temp-disk trade-off and per-build parity scope.
