@@ -1,5 +1,5 @@
 use turbo_picard_core::picard_args::{
-    ParsedPicardArg, PicardArgError, SortOrder, normalize_picard_args,
+    ParsedPicardArg, PicardArgError, SortOrder, is_boolean_option, normalize_picard_args,
     normalize_picard_args_for_command, parse_picard_args_for_command,
 };
 
@@ -538,12 +538,55 @@ fn normalizes_gatk_kebab_case_long_options() {
         ]
     );
 
-    let err = normalize_picard_args_for_command("MarkDuplicates", &["--create-index".to_string()])
-        .expect_err("kebab option without value fails");
+    let bare_bools = normalize_picard_args_for_command(
+        "MarkDuplicates",
+        &[
+            "--create-index".to_string(),
+            "-I".to_string(),
+            "in.bam".to_string(),
+            "--remove-duplicates".to_string(),
+            "O=out.bam".to_string(),
+            "--assume-sorted".to_string(),
+            "false".to_string(),
+            "--quiet".to_string(),
+        ],
+    )
+    .expect("bare GATK boolean flags parse");
+    assert_eq!(bare_bools["CREATE_INDEX"], vec!["true"]);
+    assert_eq!(bare_bools["INPUT"], vec!["in.bam"]);
+    assert_eq!(bare_bools["REMOVE_DUPLICATES"], vec!["true"]);
+    assert_eq!(bare_bools["OUTPUT"], vec!["out.bam"]);
+    assert_eq!(bare_bools["ASSUME_SORTED"], vec!["false"]);
+    assert_eq!(bare_bools["QUIET"], vec!["true"]);
+
+    let as_markdup = normalize_picard_args_for_command("MarkDuplicates", &["-AS".to_string()])
+        .expect("short AS is boolean on MarkDuplicates");
+    assert_eq!(as_markdup["ASSUME_SORTED"], vec!["true"]);
+
+    let as_dict_err =
+        normalize_picard_args_for_command("CreateSequenceDictionary", &["-AS".to_string()])
+            .expect_err("short AS is non-boolean GENOME_ASSEMBLY on CreateSequenceDictionary");
     assert_eq!(
-        err,
-        PicardArgError::MissingValue("CREATE_INDEX".to_string())
+        as_dict_err,
+        PicardArgError::MissingValue("GENOME_ASSEMBLY".to_string())
     );
+
+    let invalid_bool = normalize_picard_args_for_command(
+        "MarkDuplicates",
+        &["--create-index".to_string(), "maybe".to_string()],
+    )
+    .expect("value token is preserved for typed validation");
+    assert!(invalid_bool.typed().optional_bool("CREATE_INDEX").is_err());
+
+    let missing_non_bool =
+        normalize_picard_args_for_command("MarkDuplicates", &["--metrics-file".to_string()])
+            .expect_err("non-boolean kebab option without value fails");
+    assert_eq!(
+        missing_non_bool,
+        PicardArgError::MissingValue("METRICS_FILE".to_string())
+    );
+    assert!(is_boolean_option("CREATE_INDEX"));
+    assert!(!is_boolean_option("METRICS_FILE"));
 }
 
 #[test]

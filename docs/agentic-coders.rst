@@ -82,14 +82,21 @@ MCP server
    codex mcp add turbo-picard -- turbo-picard mcp
 
 Other clients use ``{"command": "turbo-picard", "args": ["mcp"]}``. The server
-exposes five tools that return the same JSON contracts as the CLI:
+exposes six tools that return the same JSON contracts as the CLI plus an
+isolated parity verifier:
 
 * ``capabilities``: ``capabilities --json``, optionally for one ``command``;
 * ``explain`` and ``trial``: the reports for ``command`` and ``args`` (an array
-  of Picard ``KEY=VALUE`` or GATK4 ``-I`` / ``--kebab-case`` tokens);
+  of Picard ``KEY=VALUE`` or GATK4 ``-I`` / ``--kebab-case`` / bare boolean
+  tokens);
 * ``doctor``: the doctor report as a JSON object, including ``fallback_ready``;
 * ``run``: executes ``turbo-picard <command> <args>`` without a shell and
-  returns the exit code, declared outputs and output tails.
+  returns the exit code, declared outputs and output tails;
+* ``verify``: runs ``turbo-picard`` with ``TURBO_PICARD_REQUIRE_NATIVE=1`` and
+  upstream Picard side by side in isolated temporary directories without writing
+  to workspace output paths, compares alignments, metrics, indexes, and text
+  outputs, and returns a structured ``pass`` or ``mismatch`` verdict with wall
+  times.
 
 ``run`` is guarded. It rejects report commands and unknown command names, and
 it refuses an output argument that names an input (including case-insensitive

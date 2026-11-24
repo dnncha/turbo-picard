@@ -47,9 +47,11 @@ turbo-picard MarkDuplicates -I data/sample.bam -O out/marked.bam -M out/metrics.
 - `turbo-picard doctor` reports the install, threads and `fallback_ready`.
 
 If the `turbo-picard` MCP server is connected, the same steps are the
-`explain`, `run`, `trial`, `capabilities` and `doctor` tools. `run` takes
-`command` and `args` (one token per item in `KEY=VALUE` or `-I` / `--kebab-case`
-form) and refuses to overwrite inputs or existing outputs.
+`explain`, `verify`, `run`, `trial`, `capabilities` and `doctor` tools. `run`
+takes `command` and `args` (one token per item in `KEY=VALUE` or `-I` /
+`--kebab-case` / bare boolean form) and refuses to overwrite inputs or existing
+outputs. Call `verify` before changing a workflow step to prove native output
+parity against upstream Picard in isolated temporary directories.
 
 ## Change a workflow
 

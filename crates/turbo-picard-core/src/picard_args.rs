@@ -71,6 +71,70 @@ pub struct ParsedPicardArg {
     pub value: String,
 }
 
+const BOOLEAN_OPTIONS: &[&str] = &[
+    "ADD_MATE_CIGAR",
+    "ADD_PG_TAG_TO_READS",
+    "ALIGNED_READS_ONLY",
+    "ALLOW_AND_IGNORE_EMPTY_LINES",
+    "ALLOW_EMPTY_FASTQ",
+    "ALSO_IGNORE_DUPLICATES",
+    "ASSUME_SORTED",
+    "CLEAR_DT",
+    "CLIP_OVERLAPPING_READS",
+    "COLLECT_ALIGNMENT_INFORMATION",
+    "COMPRESS_OUTPUTS_PER_RG",
+    "COUNT_UNPAIRED",
+    "CREATE_INDEX",
+    "CREATE_MD5_FILE",
+    "DONT_MERGE_ABUTTING",
+    "DROP_MISSING_CONTIGS",
+    "EXCLUDE_SUPPLEMENTARY",
+    "HEADER_ONLY",
+    "IGNORE_MISSING_MATES",
+    "INCLUDE_BQ_HISTOGRAM",
+    "INCLUDE_DUPLICATES",
+    "INCLUDE_INDELS",
+    "INCLUDE_NON_PF_READS",
+    "INCLUDE_NON_PRIMARY_ALIGNMENTS",
+    "INCLUDE_NO_CALLS",
+    "INCLUDE_SECONDARY_ALIGNMENTS",
+    "INCLUDE_SUPPLEMENTAL_ALIGNMENTS",
+    "INTERLEAVE",
+    "INTERVAL_ITERATOR",
+    "IS_BISULFITE_SEQUENCE",
+    "IS_BISULFITE_SEQUENCED",
+    "KEEP_LENGTH_ZERO_INTERVALS",
+    "MERGE_SEQUENCE_DICTIONARIES",
+    "OUTPUT_PER_RG",
+    "PF_READS_ONLY",
+    "QUIET",
+    "RECORDS_ONLY",
+    "REMOVE_ALIGNMENT_INFORMATION",
+    "REMOVE_DUPLICATES",
+    "REMOVE_DUPLICATE_INFORMATION",
+    "REMOVE_SEQUENCING_DUPLICATES",
+    "RESTORE_HARDCLIPS",
+    "RESTORE_ORIGINAL_QUALITIES",
+    "RE_REVERSE",
+    "SET_ONLY_UQ",
+    "SKIP_MATE_VALIDATION",
+    "SORT",
+    "TAG_DUPLICATE_SET_MEMBERS",
+    "TRUNCATE_NAMES_AT_WHITESPACE",
+    "TRUNCATE_SEQUENCE_NAMES_AT_WHITESPACE",
+    "UNIQUE",
+    "USE_FAST_ALGORITHM",
+    "USE_JDK_DEFLATER",
+    "USE_JDK_INFLATER",
+    "USE_ORIGINAL_QUALITIES",
+    "USE_SEQUENTIAL_FASTQS",
+    "WARN_ON_MISSING_CONTIG",
+];
+
+pub fn is_boolean_option(canonical_key: &str) -> bool {
+    BOOLEAN_OPTIONS.binary_search(&canonical_key).is_ok()
+}
+
 pub fn normalize_picard_args(args: &[String]) -> Result<PicardArgs, PicardArgError> {
     normalize_picard_args_with_aliases("Picard", args, canonical_key)
 }
@@ -136,20 +200,14 @@ fn parse_picard_args_with_aliases(
             }
 
             let canonical_key = canonicalize(&normalize_long_key(long))?;
-            let value = args
-                .get(index + 1)
-                .ok_or_else(|| PicardArgError::MissingValue(canonical_key.clone()))?;
-
-            if looks_like_flag_value(value) || (value.contains('=') && !value.starts_with('=')) {
-                return Err(PicardArgError::MissingValue(canonical_key));
-            }
+            let (value, step) = consume_flag_value(args, index, &canonical_key)?;
 
             parsed.push(ParsedPicardArg {
                 raw_key: long.to_string(),
                 canonical_key,
-                value: value.clone(),
+                value,
             });
-            index += 2;
+            index += step;
             continue;
         }
 
@@ -159,20 +217,14 @@ fn parse_picard_args_with_aliases(
             }
 
             let canonical_key = canonicalize(short)?;
-            let value = args
-                .get(index + 1)
-                .ok_or_else(|| PicardArgError::MissingValue(canonical_key.clone()))?;
-
-            if looks_like_flag_value(value) || (value.contains('=') && !value.starts_with('=')) {
-                return Err(PicardArgError::MissingValue(canonical_key));
-            }
+            let (value, step) = consume_flag_value(args, index, &canonical_key)?;
 
             parsed.push(ParsedPicardArg {
                 raw_key: short.to_string(),
                 canonical_key,
-                value: value.clone(),
+                value,
             });
-            index += 2;
+            index += step;
             continue;
         }
 
@@ -191,6 +243,24 @@ fn parse_picard_args_with_aliases(
     }
 
     Ok(parsed)
+}
+
+fn consume_flag_value(
+    args: &[String],
+    index: usize,
+    canonical_key: &str,
+) -> Result<(String, usize), PicardArgError> {
+    let next_is_missing_or_flag = match args.get(index + 1) {
+        None => true,
+        Some(next) => looks_like_flag_value(next) || (next.contains('=') && !next.starts_with('=')),
+    };
+    if next_is_missing_or_flag {
+        if is_boolean_option(canonical_key) {
+            return Ok(("true".to_string(), 1));
+        }
+        return Err(PicardArgError::MissingValue(canonical_key.to_string()));
+    }
+    Ok((args[index + 1].clone(), 2))
 }
 
 fn normalize_long_key(key: &str) -> String {
@@ -552,5 +622,15 @@ impl SortOrder {
             Self::QueryName => "queryname",
             Self::Unsorted => "unsorted",
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::BOOLEAN_OPTIONS;
+
+    #[test]
+    fn boolean_options_table_is_strictly_sorted() {
+        assert!(BOOLEAN_OPTIONS.windows(2).all(|pair| pair[0] < pair[1]));
     }
 }

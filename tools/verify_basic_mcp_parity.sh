@@ -14,7 +14,7 @@ output="$(printf '%s\n' "$requests" | cargo run -q -p turbo-picard-cli --bin tur
 
 test "$(printf '%s\n' "$output" | wc -l | tr -d ' ')" = 4
 printf '%s\n' "$output" | grep -q '"protocolVersion":"2025-06-18"'
-for tool in capabilities explain trial doctor run; do
+for tool in capabilities explain trial doctor run verify; do
   printf '%s\n' "$output" | grep -q "\"name\":\"$tool\""
 done
 printf '%s\n' "$output" | grep -q '"command":"MarkDuplicates"'

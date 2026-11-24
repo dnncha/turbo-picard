@@ -7,7 +7,7 @@ use std::process::Command;
 
 const SUPPORTED_PROTOCOL_VERSIONS: [&str; 3] = ["2025-06-18", "2025-03-26", "2024-11-05"];
 const OUTPUT_TAIL_BYTES: usize = 16 * 1024;
-const REPORT_SUBCOMMANDS: [&str; 6] = [
+pub(crate) const REPORT_SUBCOMMANDS: [&str; 6] = [
     "capabilities",
     "doctor",
     "explain",
@@ -16,7 +16,7 @@ const REPORT_SUBCOMMANDS: [&str; 6] = [
     "AccelerationStatus",
 ];
 
-const INSTRUCTIONS: &str = "turbo-picard runs selected Picard commands natively (including MarkDuplicates, SortSam, MergeSamFiles, CollectWgsMetrics, CollectHsMetrics, CollectRnaSeqMetrics, CollectMultipleMetrics, FixMateInformation, SamToFastq, FastqToSam, ValidateSamFile, and LiftoverVcf) and delegates the rest to upstream Picard when fallback_ready is true. Use it for any Picard or GATK-wrapped Picard task (picard, picard.jar, gatk MarkDuplicates, gatk CollectWgsMetrics, and similar). Call explain with the exact command and arguments (KEY=VALUE, --kebab-case, or -I style) first. Use run when status is native, or partial-native with options inside native_scope, or when fallback_ready is true. Otherwise install upstream Picard (doctor gives the hint) or call Picard directly. run refuses to overwrite inputs or existing outputs unless overwrite is true.";
+const INSTRUCTIONS: &str = "turbo-picard runs selected Picard commands natively (including MarkDuplicates, SortSam, MergeSamFiles, CollectWgsMetrics, CollectHsMetrics, CollectRnaSeqMetrics, CollectMultipleMetrics, FixMateInformation, SamToFastq, FastqToSam, ValidateSamFile, and LiftoverVcf) and delegates the rest to upstream Picard when fallback_ready is true. Use it for any Picard or GATK-wrapped Picard task (picard, picard.jar, gatk MarkDuplicates, gatk CollectWgsMetrics, and similar). Call explain with the exact command and arguments (KEY=VALUE, --kebab-case, bare boolean flags, or -I style) first. Call verify before switching a workflow step to prove native output parity against upstream Picard in isolated temporary directories. Use run when status is native, or partial-native with options inside native_scope, or when fallback_ready is true. Otherwise install upstream Picard (doctor gives the hint) or call Picard directly. run refuses to overwrite inputs or existing outputs unless overwrite is true.";
 
 pub(crate) fn serve() -> i32 {
     let stdin = io::stdin();
@@ -133,7 +133,7 @@ fn tool_definitions() -> Value {
         {
             "name": "run",
             "title": "Run a Picard command with turbo-picard",
-            "description": "Runs turbo-picard <command> <args> without a shell. Accepts Picard KEY=VALUE and GATK4-style -I / --kebab-case flags. Native work runs natively; anything outside native scope delegates to upstream Picard when fallback_ready is true. Refuses when an output argument names an input or an existing file unless overwrite is true. Set require_native to fail instead of delegating.",
+            "description": "Runs turbo-picard <command> <args> without a shell. Accepts Picard KEY=VALUE and GATK4-style -I / --kebab-case flags (including bare boolean flags). Native work runs natively; anything outside native scope delegates to upstream Picard when fallback_ready is true. Refuses when an output argument names an input or an existing file unless overwrite is true. Set require_native to fail instead of delegating.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -147,6 +147,22 @@ fn tool_definitions() -> Value {
                 "additionalProperties": false,
             },
             "annotations": { "readOnlyHint": false, "destructiveHint": false, "idempotentHint": false, "openWorldHint": false },
+        },
+        {
+            "name": "verify",
+            "title": "Compare native turbo-picard against upstream Picard",
+            "description": "Runs turbo-picard (with TURBO_PICARD_REQUIRE_NATIVE=1) and upstream Picard side by side in isolated temporary directories without touching workspace outputs, compares alignments, metrics, indexes, and text outputs, and returns a structured pass/mismatch verdict with wall times.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "command": { "type": "string", "description": "Picard command name, for example MarkDuplicates or SortSam." },
+                    "args": { "type": "array", "items": { "type": "string" }, "description": "Picard or GATK4-style arguments, one token per item. Declared output arguments are redirected into temporary directories." },
+                    "cwd": { "type": "string", "description": "Working directory for relative input paths. Defaults to the server's working directory." },
+                },
+                "required": ["command", "args"],
+                "additionalProperties": false,
+            },
+            "annotations": { "readOnlyHint": true, "destructiveHint": false, "idempotentHint": true, "openWorldHint": false },
         },
     ])
 }
@@ -164,6 +180,7 @@ fn call_tool(params: &Value) -> Value {
         "trial" => report_tool("trial", &arguments),
         "doctor" => doctor_tool(),
         "run" => run_tool(&arguments).map_err(|error| error.to_string()),
+        "verify" => crate::mcp_verify::verify_tool(&arguments).map_err(|error| error.to_string()),
         _ => Err(format!("unknown tool: {name}")),
     };
     match outcome {
@@ -179,7 +196,10 @@ fn call_tool(params: &Value) -> Value {
     }
 }
 
-fn string_field(arguments: &Map<String, Value>, key: &str) -> Result<Option<String>, String> {
+pub(crate) fn string_field(
+    arguments: &Map<String, Value>,
+    key: &str,
+) -> Result<Option<String>, String> {
     match arguments.get(key) {
         None | Some(Value::Null) => Ok(None),
         Some(Value::String(value)) => Ok(Some(value.clone())),
@@ -195,7 +215,7 @@ fn bool_field(arguments: &Map<String, Value>, key: &str) -> Result<bool, String>
     }
 }
 
-fn args_field(arguments: &Map<String, Value>) -> Result<Vec<String>, String> {
+pub(crate) fn args_field(arguments: &Map<String, Value>) -> Result<Vec<String>, String> {
     match arguments.get("args") {
         None | Some(Value::Null) => Ok(Vec::new()),
         Some(Value::Array(items)) => items
@@ -210,7 +230,7 @@ fn args_field(arguments: &Map<String, Value>) -> Result<Vec<String>, String> {
     }
 }
 
-fn required_command(arguments: &Map<String, Value>) -> Result<String, String> {
+pub(crate) fn required_command(arguments: &Map<String, Value>) -> Result<String, String> {
     let command = string_field(arguments, "command")?
         .filter(|command| !command.trim().is_empty())
         .ok_or_else(|| "command is required".to_string())?;
@@ -220,13 +240,17 @@ fn required_command(arguments: &Map<String, Value>) -> Result<String, String> {
     Ok(command)
 }
 
-struct Captured {
-    exit_code: i32,
-    stdout: String,
-    stderr: String,
+pub(crate) struct Captured {
+    pub(crate) exit_code: i32,
+    pub(crate) stdout: String,
+    pub(crate) stderr: String,
 }
 
-fn run_self(args: &[String], cwd: Option<&Path>, require_native: bool) -> Result<Captured, String> {
+pub(crate) fn run_self(
+    args: &[String],
+    cwd: Option<&Path>,
+    require_native: bool,
+) -> Result<Captured, String> {
     let exe = env::current_exe().map_err(|error| format!("cannot locate turbo-picard: {error}"))?;
     let mut command = Command::new(exe);
     command.args(args);
@@ -382,7 +406,7 @@ fn same_path(left: &Path, right: &Path) -> bool {
     }
 }
 
-fn tail(text: &str) -> String {
+pub(crate) fn tail(text: &str) -> String {
     if text.len() <= OUTPUT_TAIL_BYTES {
         return text.to_string();
     }
@@ -439,7 +463,17 @@ mod tests {
             .iter()
             .map(|tool| tool["name"].as_str().unwrap().to_string())
             .collect::<Vec<_>>();
-        assert_eq!(names, ["capabilities", "explain", "trial", "doctor", "run"]);
+        assert_eq!(
+            names,
+            [
+                "capabilities",
+                "explain",
+                "trial",
+                "doctor",
+                "run",
+                "verify"
+            ]
+        );
     }
 
     #[test]
