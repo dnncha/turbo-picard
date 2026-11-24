@@ -1,13 +1,18 @@
-use crate::fragment_taint::bloom_positions;
-use crate::{
-    ExternalBarcodeValues, ExternalPlanError, ExternalSorter, FragmentStage, HashMap, LibraryId,
-    MarkDuplicatesConfig, ReadGroupRegistry, append_compact_pair, compact_pair_key_into,
-    decode_pending_mate_into, encode_pending_mate_into, external_barcode_values,
+use crate::codec::{
+    ExternalBarcodeValues, append_compact_pair, compact_pair_key_into, decode_pending_mate_into,
+    encode_pending_mate_into, external_barcode_values,
 };
 #[cfg(test)]
+use crate::codec::{
+    ExternalPlanRecord, decode_external_plan_record, encode_external_pair,
+    encode_external_plan_record, external_pair_key,
+};
+#[cfg(test)]
+use crate::duplicate_candidate_is_pair;
+use crate::fragment_taint::bloom_positions;
 use crate::{
-    ExternalPlanRecord, decode_external_plan_record, duplicate_candidate_is_pair,
-    encode_external_pair, encode_external_plan_record, external_pair_key,
+    ExternalPlanError, ExternalSorter, FragmentStage, HashMap, LibraryId, MarkDuplicatesConfig,
+    ReadGroupRegistry,
 };
 use rust_htslib::bam;
 
@@ -541,10 +546,10 @@ pub(super) fn finish_spilled(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{
-        ExternalBarcodeValues, bounded_plan, decode_borrowed_external_pair, external_fragment_key,
-        external_sorter, push_external_pair_fragments,
+    use crate::codec::{
+        ExternalBarcodeValues, decode_borrowed_external_pair, external_fragment_key,
     };
+    use crate::{bounded_plan, external_sorter, push_external_pair_fragments};
     use tempfile::tempdir;
     use turbo_picard_core::external_sort::ExternalSortConfig;
 
