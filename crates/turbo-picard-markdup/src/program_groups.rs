@@ -7,7 +7,8 @@ pub(crate) const PROGRAM_RECORD_ID: &str = "MarkDuplicates";
 #[derive(Debug, Default)]
 pub(crate) struct ProgramGroupsSeen {
     order: Vec<Option<Vec<u8>>>,
-    seen: HashSet<Option<Vec<u8>>>,
+    seen_values: HashSet<Vec<u8>>,
+    seen_untagged: bool,
 }
 
 impl ProgramGroupsSeen {
@@ -23,14 +24,19 @@ impl ProgramGroupsSeen {
     }
 
     pub(crate) fn observe_value(&mut self, value: Option<&[u8]>) {
-        let already = match value {
-            Some(bytes) => self.seen.contains(&Some(bytes.to_vec())),
-            None => self.seen.contains(&None),
-        };
-        if !already {
-            let owned = value.map(<[u8]>::to_vec);
-            self.seen.insert(owned.clone());
-            self.order.push(owned);
+        match value {
+            Some(bytes) => {
+                if !self.seen_values.contains(bytes) {
+                    self.seen_values.insert(bytes.to_vec());
+                    self.order.push(Some(bytes.to_vec()));
+                }
+            }
+            None => {
+                if !self.seen_untagged {
+                    self.seen_untagged = true;
+                    self.order.push(None);
+                }
+            }
         }
     }
 }

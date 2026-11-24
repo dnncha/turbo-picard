@@ -1,36 +1,106 @@
 {
-  "run_id": "20261122T214838Z-3a9997",
+  "run_id": "20261123T121658Z-68227c",
   "losses": [
     {
+      "kind": "refused",
+      "severity": 100.0,
+      "host": "Intel(R) Xeon(R) CPU @ 2.20GHz x8",
+      "task": "markdup-qgroup",
+      "dataset": "15x",
+      "summary": "turbo-picard failed or refused the native path; competitors ran"
+    },
+    {
       "kind": "speed",
-      "severity": 4.367,
-      "host": "AMD EPYC 7B12 x8",
+      "severity": 4.53,
+      "host": "Intel(R) Xeon(R) CPU @ 2.20GHz x8",
       "task": "multi",
-      "dataset": "10x",
-      "summary": "riker (threads-8) 244.5s beats turbo-picard (default) 1067.7s: 4.37x slower",
-      "diagnosis": "under-parallel: 29% of 8 cores busy; hottest threads turbo-picard 2457s",
+      "dataset": "15x",
+      "summary": "riker (threads-8) 325.6s beats turbo-picard (default) 1475.1s: 4.53x slower",
+      "diagnosis": "under-parallel: 37% of 8 cores busy; hottest threads turbo-picard 4375s",
       "hot": [
-        "19.4% <turbo_picard_cli::GcBiasMetricsSummary>::new",
-        "11.8% <turbo_picard_cli::BaseDistributionByCycleSummary>::observe",
-        "5.9% <turbo_picard_cli::QualityScoreDistributionSummary>::observe",
-        "4.9% <turbo_picard_cli::AlignmentSummary>::observe",
-        "4.9% turbo_picard_cli::gc_bias_error_count"
+        "12.3% <turbo_picard_cli::BaseDistributionByCycleSummary>::observe",
+        "7.6% deflate_decompress_bmi2",
+        "7.3% <turbo_picard_cli::AlignmentSummary>::observe",
+        "6.6% <turbo_picard_cli::QualityScoreDistributionSummary>::observe",
+        "6.2% turbo_picard_cli::alignment_reference_mismatch_bases"
       ]
     },
     {
       "kind": "speed",
-      "severity": 1.67,
-      "host": "AMD EPYC 7B12 x8",
-      "task": "markdup-coord",
-      "dataset": "10x",
-      "summary": "fastdup (threads-8) 285.0s beats turbo-picard (default) 476.0s: 1.67x slower",
-      "diagnosis": "under-parallel: 52% of 8 cores busy; hottest threads turbo-picard 1901s",
+      "severity": 3.963,
+      "host": "Intel(R) Xeon(R) CPU @ 2.20GHz x8",
+      "task": "multi",
+      "dataset": "4x",
+      "summary": "riker (threads-8) 117.3s beats turbo-picard (default) 464.8s: 3.96x slower",
+      "diagnosis": "under-parallel: 37% of 8 cores busy; hottest threads turbo-picard 1381s",
       "hot": [
-        "60.1% deflate_compress_lazy",
-        "8.7% deflate_decompress_bmi2",
-        "2.9% bam_aux_next",
-        "2.7% deflate_flush_block",
+        "12.3% <turbo_picard_cli::BaseDistributionByCycleSummary>::observe",
+        "7.7% deflate_decompress_bmi2",
+        "6.0% <turbo_picard_cli::AlignmentSummary>::observe",
+        "5.7% <turbo_picard_cli::QualityScoreDistributionSummary>::observe",
+        "5.2% turbo_picard_cli::alignment_reference_mismatch_bases"
+      ]
+    },
+    {
+      "kind": "speed",
+      "severity": 1.684,
+      "host": "Intel(R) Xeon(R) CPU @ 2.20GHz x8",
+      "task": "markdup-coord",
+      "dataset": "15x",
+      "summary": "fastdup (threads-8) 707.5s beats turbo-picard (default) 1191.1s: 1.68x slower",
+      "diagnosis": "under-parallel: 47% of 8 cores busy; hottest threads turbo-picard 4434s",
+      "hot": [
+        "60.3% deflate_compress_lazy",
+        "6.8% deflate_decompress_bmi2",
+        "3.3% deflate_flush_block",
+        "3.2% bam_aux_next",
         "1.3% bam_aux_get"
+      ]
+    },
+    {
+      "kind": "speed",
+      "severity": 1.535,
+      "host": "Intel(R) Xeon(R) CPU @ 2.20GHz x8",
+      "task": "markdup-coord",
+      "dataset": "4x",
+      "summary": "fastdup (threads-8) 182.7s beats turbo-picard (default) 280.4s: 1.53x slower",
+      "diagnosis": "under-parallel: 54% of 8 cores busy; hottest threads turbo-picard 1208s",
+      "hot": [
+        "63.5% deflate_compress_lazy",
+        "7.6% deflate_decompress_bmi2",
+        "4.0% deflate_flush_block",
+        "3.1% bam_aux_next",
+        "1.3% bam_aux_get"
+      ]
+    },
+    {
+      "kind": "memory",
+      "severity": 1.171,
+      "host": "Intel(R) Xeon(R) CPU @ 2.20GHz x8",
+      "task": "multi",
+      "dataset": "15x",
+      "summary": "riker peak 1209 MiB vs turbo-picard 1416 MiB: 1.17x more memory",
+      "hot": [
+        "12.3% <turbo_picard_cli::BaseDistributionByCycleSummary>::observe",
+        "7.6% deflate_decompress_bmi2",
+        "7.3% <turbo_picard_cli::AlignmentSummary>::observe",
+        "6.6% <turbo_picard_cli::QualityScoreDistributionSummary>::observe",
+        "6.2% turbo_picard_cli::alignment_reference_mismatch_bases"
+      ]
+    },
+    {
+      "kind": "memory",
+      "severity": 1.122,
+      "host": "Intel(R) Xeon(R) CPU @ 2.20GHz x8",
+      "task": "multi",
+      "dataset": "4x",
+      "summary": "riker peak 1214 MiB vs turbo-picard 1362 MiB: 1.12x more memory",
+      "hot": [
+        "12.3% <turbo_picard_cli::BaseDistributionByCycleSummary>::observe",
+        "7.7% deflate_decompress_bmi2",
+        "6.0% <turbo_picard_cli::AlignmentSummary>::observe",
+        "5.7% <turbo_picard_cli::QualityScoreDistributionSummary>::observe",
+        "5.2% turbo_picard_cli::alignment_reference_mismatch_bases"
       ]
     }
   ]
