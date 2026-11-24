@@ -1,3 +1,4 @@
+use super::bam_parallel::{current_index_for, open_indexed_optional_ref};
 use super::{
     CommandError, PicardArgs, bgzf_threads_for, format_float, has_sam_extension,
     open_bam_reader_for_args, optional_bool, optional_f64, optional_scalar, optional_u32,
@@ -12,7 +13,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as FmtWrite;
 use std::fs::{self, File};
 use std::io::{BufRead, BufReader};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::thread;
 use turbo_picard_core::bgzf_threads::HtsThreadRole;
@@ -816,7 +817,7 @@ pub(crate) fn run_collectrnaseqmetrics(args: &[String]) -> Result<(), CommandErr
     let workers = bgzf_threads_for(HtsThreadRole::RegionWorker).unwrap_or(1);
     if config.stop_after == 0
         && workers > 1
-        && let Some(index_path) = find_bam_index(&config.input)
+        && let Some(index_path) = current_index_for(&config.input)
     {
         drop(reader);
         collect_parallel_indexed(
@@ -903,16 +904,12 @@ fn collect_parallel_indexed(
             let next_task = &next_task;
             handles.push(
                 scope.spawn(move || -> Result<MultiUnitCollector, CommandError> {
-                    let mut reader = bam::IndexedReader::from_path_and_index(
-                        Path::new(&config.input),
+                    let mut reader = open_indexed_optional_ref(
+                        &config.input,
                         index_path,
+                        config.reference.as_deref(),
                     )
                     .map_err(|error| error.to_string())?;
-                    if let Some(ref_path) = config.reference.as_deref() {
-                        reader
-                            .set_reference(Path::new(ref_path))
-                            .map_err(|error| error.to_string())?;
-                    }
                     let mut scratch = ScratchBuffers::default();
                     let mut record = bam::Record::new();
 
@@ -968,19 +965,6 @@ fn collect_parallel_indexed(
         collector.merge(outcome?);
     }
     Ok(())
-}
-
-fn find_bam_index(input: &str) -> Option<PathBuf> {
-    if !input.to_ascii_lowercase().ends_with(".bam") {
-        return None;
-    }
-    [
-        PathBuf::from(format!("{input}.bai")),
-        Path::new(input).with_extension("bai"),
-        PathBuf::from(format!("{input}.csi")),
-    ]
-    .into_iter()
-    .find(|candidate| candidate.is_file())
 }
 
 #[expect(

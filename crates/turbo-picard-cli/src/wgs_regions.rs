@@ -1,13 +1,12 @@
+use super::bam_parallel::{current_index_for, open_indexed_optional_ref};
 use super::wgs_metrics::{WgsCollector, WgsCounts};
 use rust_htslib::bam::{self, Read};
-use rust_htslib::htslib;
 use std::ops::Range;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::thread;
 use turbo_picard_core::bgzf_threads::{HtsThreadRole, bgzf_threads_for};
-use turbo_picard_core::hts_io;
 
 const REGION_SPAN: usize = 4_000_000;
 
@@ -45,7 +44,7 @@ fn collect_by_region_with(
     let Some(index) = current_index_for(input) else {
         return Ok(false);
     };
-    let Ok(probe) = open_indexed(input, &index, reference) else {
+    let Ok(probe) = open_indexed_optional_ref(input, &index, Some(reference)) else {
         return Ok(false);
     };
     let header = probe.header().clone();
@@ -204,8 +203,8 @@ fn reprocess_capped_contigs(
                 let next_contig = &next_contig;
                 let mut worker = summary.cluster_worker();
                 scope.spawn(move || -> Result<CappedContigOutcome, String> {
-                    let mut reader =
-                        open_indexed(input, index, reference).map_err(|e| e.to_string())?;
+                    let mut reader = open_indexed_optional_ref(input, index, Some(reference))
+                        .map_err(|e| e.to_string())?;
                     if capped_contigs.len() == 1
                         && let Some(threads) = bgzf_threads_for(HtsThreadRole::Reader)
                     {
@@ -338,8 +337,8 @@ fn run_worker(
     shared: &SharedProgress,
     worker: &mut WgsCollector,
 ) -> Result<(), (usize, String)> {
-    let mut reader =
-        open_indexed(input, index, reference).map_err(|error| (0, error.to_string()))?;
+    let mut reader = open_indexed_optional_ref(input, index, Some(reference))
+        .map_err(|error| (0, error.to_string()))?;
     let mut record = bam::Record::new();
     loop {
         let position = shared.next_region.fetch_add(1, Ordering::Relaxed);
@@ -391,46 +390,6 @@ fn regions_for(header: &bam::HeaderView, region_span: usize) -> Vec<Region> {
         }
     }
     regions
-}
-
-fn open_indexed(
-    input: &str,
-    index: &Path,
-    reference: &str,
-) -> Result<bam::IndexedReader, hts_io::HtsIoError> {
-    let reference = hts_io::resolve_reference_sequence(input, Some(reference))?;
-    let mut reader = bam::IndexedReader::from_path_and_index(Path::new(input), index)?;
-    if let Some(reference) = reference.as_deref() {
-        reader.set_reference(reference)?;
-    }
-    if hts_io::path_format(input) == Some(bam::Format::Cram) {
-        reader.set_cram_options(htslib::hts_fmt_option_CRAM_OPT_DECODE_MD, 0)?;
-    }
-    Ok(reader)
-}
-
-fn current_index_for(input: &str) -> Option<PathBuf> {
-    let input_path = Path::new(input);
-    let input_modified = input_path.metadata().ok()?.modified().ok()?;
-    let suffixes: &[&str] = if hts_io::path_format(input) == Some(bam::Format::Cram) {
-        &["crai"]
-    } else {
-        &["bai", "csi"]
-    };
-    suffixes
-        .iter()
-        .flat_map(|suffix| {
-            [
-                PathBuf::from(format!("{input}.{suffix}")),
-                input_path.with_extension(suffix),
-            ]
-        })
-        .find(|candidate| {
-            candidate
-                .metadata()
-                .and_then(|metadata| metadata.modified())
-                .is_ok_and(|index_modified| index_modified >= input_modified)
-        })
 }
 
 #[cfg(test)]

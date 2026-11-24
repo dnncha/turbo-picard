@@ -1,4 +1,4 @@
-use super::bam_parallel::BAM_ENC_TO_ASCII;
+use super::bam_parallel::{BAM_ENC_TO_ASCII, current_index_for, open_indexed_optional_ref};
 use super::{
     CommandError, PicardArgs, bgzf_threads_for, format_float, has_sam_extension,
     open_bam_reader_for_args, optional_bool, optional_f64, optional_i64, optional_scalar,
@@ -14,7 +14,7 @@ use std::collections::{BTreeMap, BTreeSet, BinaryHeap, VecDeque};
 use std::fmt::Write as FmtWrite;
 use std::fs::{self, File};
 use std::io::{BufRead, BufReader};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::thread;
 use turbo_picard_core::bgzf_threads::HtsThreadRole;
@@ -1282,7 +1282,7 @@ pub(crate) fn run_collectsamerrormetrics(args: &[String]) -> Result<(), CommandE
     let workers = bgzf_threads_for(HtsThreadRole::RegionWorker).unwrap_or(1);
     if config.max_loci == 0
         && workers > 1
-        && let Some(index_path) = find_bam_index(&config.input)
+        && let Some(index_path) = current_index_for(&config.input)
     {
         drop(reader);
         run_parallel_indexed(
@@ -1465,18 +1465,12 @@ fn run_parallel_indexed(
             let chunks = &chunks;
             handles.push(
                 scope.spawn(move || -> Result<Vec<AggregatorStore>, CommandError> {
-                    let mut reader = bam::IndexedReader::from_path_and_index(
-                        Path::new(&config.input),
+                    let mut reader = open_indexed_optional_ref(
+                        &config.input,
                         index_path,
+                        Some(&config.reference),
                     )
                     .map_err(|e| e.to_string())?;
-                    if config.reference.to_ascii_lowercase().ends_with(".fa")
-                        || config.reference.to_ascii_lowercase().ends_with(".fasta")
-                        || config.reference.to_ascii_lowercase().ends_with(".fna")
-                        || config.reference.to_ascii_lowercase().ends_with(".gz")
-                    {
-                        let _ = reader.set_reference(Path::new(&config.reference));
-                    }
                     let faidx_reader = faidx::Reader::from_path(Path::new(&config.reference))
                         .map_err(|e| e.to_string())?;
 
@@ -2938,19 +2932,6 @@ fn load_intervals(
     }
 
     Ok(per_tid)
-}
-
-fn find_bam_index(input: &str) -> Option<PathBuf> {
-    if !input.to_ascii_lowercase().ends_with(".bam") {
-        return None;
-    }
-    [
-        PathBuf::from(format!("{input}.bai")),
-        Path::new(input).with_extension("bai"),
-        PathBuf::from(format!("{input}.csi")),
-    ]
-    .into_iter()
-    .find(|candidate| candidate.is_file())
 }
 
 fn reject_unsupported_args(args: &PicardArgs) -> Result<(), CommandError> {
