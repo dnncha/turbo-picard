@@ -6,18 +6,19 @@ Suggested tags:
 
 Title:
 
-`turbo-picard`: Rust implementations of selected Picard commands
+`turbo-picard` 0.1.21: native Rust implementations of 35 Picard commands (30x WGS parity tested)
 
 Post:
 
-I have released `turbo-picard`, a command-line tool that reimplements selected
-Picard commands in Rust:
+I am the author of `turbo-picard`, a Rust toolkit that implements 35 selected
+Picard commands natively while keeping Picard `KEY=VALUE` and GATK4
+`--kebab-case` CLI arguments:
 
 https://github.com/dnncha/turbo-picard
 
-It is mainly for people who already have Picard steps in WDL, Nextflow,
-Snakemake, or shell pipelines and want to test whether one of those steps can be
-made faster without changing the command interface.
+It is built for pipelines that already call Picard in WDL, Nextflow, Snakemake,
+or shell scripts and want to speed up one bottleneck step without rewriting the
+surrounding workflow.
 
 Example:
 
@@ -25,44 +26,45 @@ Example:
 turbo-picard MarkDuplicates I=input.bam O=marked.bam M=metrics.txt
 ```
 
-The way I suggest testing it is deliberately small:
+Recent 30x whole-genome measurements on 1000 Genomes `HG02675` (GRCh38,
+740,367,510 records, 8 vCPU / 50 GB RAM, single run, 23 November 2026):
 
-1. pick one slow Picard step from a real workflow;
-2. run Picard and `turbo-picard` on the same input;
-3. compare the files your pipeline actually uses;
-4. only then decide whether that command is worth switching.
+- `MarkDuplicates`: on Host A (same Intel Xeon host), pre-#87 build `9a15db96`
+  ran in 59m 01s and 355 MB peak RSS vs Picard 3.4.0 at 3h 30m 07s and 34.4 GB
+  RSS (3.6x faster, 97x less RAM; trade-off: 99.2 GB vs 23.3 GB peak temporary
+  disk, tracked in #86; optical count differed by 0.18% before #87). On Host B,
+  the #87 build (`93216217`, 43m 07s / 354 MB RSS, temp disk not sampled)
+  matched Picard metrics, duplicate count (79,289,617), and SAM columns 1-11
+  MD5 exactly; #88 matched `DT`/`DS`/`DI`/`PG` tags on chr21's 11.4M records
+  (whole genome not rerun on #88).
+- `CollectWgsMetrics`: 5m 08s and 352 MB peak RSS vs Picard 3.4.0 at 2h 13m 55s
+  and 4.0 GB RSS (26x faster, 11x less RAM), matching every metric field and
+  histogram row.
 
-The historical 14 August 2026 suite covers 32 small-fixture comparisons
-against Picard 3.4.0, with an 84.52x geometric mean and 272.12x maximum
-saved ratio. JVM startup contributes to these short-task results; they
-do not predict a whole-genome or current-release speedup. Required
-outputs and full resource costs need a representative trial.
+The historical 14 August 2026 small-fixture suite also covers 32 parity-checked
+commands against Picard 3.4.0 (84.52x geometric mean, 272.12x maximum saved
+ratio, where JVM startup contributes heavily and does not predict whole-genome
+ratios).
+
+Suggested way to test it:
+
+1. pick one slow or memory-heavy Picard step from your workflow;
+2. run Picard and `turbo-picard` side by side on the same input (or inspect the
+   trial contract with `turbo-picard trial <Command> ...`);
+3. compare the BAM/CRAM, metrics, and sidecar files your pipeline reads;
+4. switch only that command if the outputs and resource profile fit.
 
 Install:
 
 ```bash
-python3 -m pip install turbo-picard==0.1.16
+python3 -m pip install turbo-picard==0.1.21
+# or container:
+docker run --rm ghcr.io/dnncha/turbo-picard:0.1.21 --version
 ```
 
-PyPI publishes platform wheels and a source distribution. Bioconda accepted
-the initial recipes; the 25 October 2026 channel check lists `0.1.15`. The
-`0.1.16` main-package and shim updates are open upstream. Use a pinned
-PyPI wheel or container for `0.1.16`; check the current channel before posting.
+Unsupported commands (86 of 127) and unsupported options fall back cleanly to
+upstream Picard when configured. Full evidence, limits, and command scope:
 
-Docs:
-
-- Quickstart: https://turbo-picard.readthedocs.io/en/latest/quickstart.html
-- Evaluation notes: https://turbo-picard.readthedocs.io/en/latest/evaluation-playbook.html
-- Benchmarks: https://turbo-picard.readthedocs.io/en/latest/benchmarks.html
-- Command coverage: https://turbo-picard.readthedocs.io/en/latest/commands.html
-
-This is not meant to imply that every Picard behavior has been reimplemented.
-Unsupported commands can fall back to upstream Picard when configured, and the
-docs spell out what the parity checks do and do not cover.
-
-I would be interested to hear which Picard commands people would actually want
-to try first on real data.
-
-
-Independent evaluation protocol and report checklist:
-https://turbo-picard.readthedocs.io/en/latest/independent-evaluation.html
+- Evidence & 30x WGS log: https://turbo-picard.readthedocs.io/en/latest/evidence/
+- Command coverage: https://turbo-picard.readthedocs.io/en/latest/commands/
+- Evaluation playbook: https://turbo-picard.readthedocs.io/en/latest/evaluation-playbook.html

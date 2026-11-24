@@ -1,13 +1,12 @@
 {% set name = "turbo-picard-picard-shim" %}
-{% set version = "0.1.20" %}
+{% set version = "0.1.21" %}
 
 package:
   name: {{ name|lower }}
   version: {{ version }}
 
 source:
-  url: https://github.com/dnncha/turbo-picard/archive/refs/tags/v0.1.20.tar.gz
-  sha256: 682540133ed06387d33d88d6623f4e60e87238d0dddbf2bbf904da228bfaf25e
+  path: ../../..
 build:
   number: 0
   skip: true  # [win]

@@ -1,5 +1,60 @@
 # Changelog
 
+## 0.1.21 — 2026-11-24
+
+### Scientific correctness and 30x WGS evidence
+
+- `MarkDuplicates` matches Picard's optical duplicate counts at genome scale
+  (#87): stores tile x/y coordinates with signed 16-bit Java `short` wrapping
+  and splits mixed-orientation duplicate sets into FR and RF groups before
+  optical checks. On 1000 Genomes HG02675 (`ERR3242389`, 740,367,510 records),
+  build `93216217` (Host B, 43m 07s / 354 MB RSS, temp disk not sampled)
+  matched Picard 3.4.0 exactly in metrics, duplicate count (79,289,617), and
+  SAM columns 1-11 MD5.
+- `MarkDuplicates` chains `@PG` header IDs and writes record `PG` tags matching
+  Picard when the input header already includes `MarkDuplicates` (#88). On
+  chr21 of HG02675 (11,405,002 records), `DT`, `DS`, `DI`, and `PG` tags
+  matched Picard with zero differences (the whole genome has not been rerun on
+  the #88 build).
+- Recorded the 30x whole-genome GRCh38 comparison against Picard 3.4.0 in
+  `benchmarks/wgs-30x-colab-2026-11-23/README.md` (#89): on Host A (8 vCPU),
+  pre-#87 build `9a15db96` ran `MarkDuplicates` in 59m 01s at 355 MB RSS vs
+  Picard's 3h 30m 07s at 34.4 GB RSS (3.6x faster, 97x less memory; 99.2 GB vs
+  23.3 GB peak temp disk tracked in #86; optical count differed by 0.18% before
+  #87), and `CollectWgsMetrics` ran in 5m 08s at 352 MB RSS vs Picard's
+  2h 13m 55s at 4.0 GB RSS (26x faster, 11x less memory, exact field and
+  histogram parity).
+- `MarkDuplicates` refuses oversized non-coordinate inputs up front and hands
+  them to upstream Picard instead of exhausting RAM in the in-memory planner
+  (#94, #103).
+
+### GATK4 CLI flags and agent integration
+
+- Argument normalization accepts GATK4 `--kebab-case` flags (such as
+  `--create-index`, `--metrics-file`, `--sort-order`) and bare boolean flags
+  (such as `--remove-duplicates`, `--assume-sorted`, `-AS`) across the
+  canonical Picard option table (#93, #95).
+- `turbo-picard mcp` adds an isolated `verify` tool that runs native
+  `turbo-picard` and upstream Picard side by side in a temporary directory and
+  compares outputs structurally (#95).
+- Unified declared input/output extraction across `agent_contract` and `mcp`
+  (closing case-insensitive input-overwrite bypasses), widened Claude Code,
+  Codex, and Cursor skill triggers, and expanded `benchmarks/agent-selection/`
+  with WGS, GATK4, and shim scenarios (#93).
+
+### Architecture, site, and tooling
+
+- Unified indexed BAM/CRAM discovery in `bam_parallel` and extracted
+  `reference_cache`, `command_catalog`, `validate_sam`, and `vcf` (unifying
+  `SortVcf` and `MergeVcfs`) out of `crates/turbo-picard-cli/src/lib.rs`, plus
+  extracted `crates/turbo-picard-markdup/src/codec.rs` (#96, #97, #98, #99).
+- Named `CollectMultipleMetrics` collector threads (#90) and improved duel
+  scratch cleanup and relaunch marker handling (#100, #101).
+- Overhauled `/evidence/` copy and layout with the 30x GRCh38 proof ledger and
+  replaced the brand mark with a geometric aligned-reads chevron (#92).
+- Updated outreach drafts in `packaging/outreach/` and `packaging/mcp/README.md`
+  to 0.1.21.
+
 ## 0.1.20 — 2026-11-23
 
 ### New native commands
