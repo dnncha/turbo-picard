@@ -1,37 +1,31 @@
-use turbo_picard_core::picard_args::normalize_picard_args_for_command;
+use turbo_picard_core::picard_args::parse_picard_args_for_command;
 
 pub(crate) fn declared_outputs(command: &str, args: &[String]) -> Result<Vec<String>, String> {
-    normalize_picard_args_for_command(command, args).map_err(|error| error.to_string())?;
-    let mut outputs = Vec::new();
-    let mut index = 0;
-    while index < args.len() {
-        let arg = &args[index];
-        let (key, value, width) = if let Some(long) = arg.strip_prefix("--") {
-            if let Some((key, value)) = long.split_once('=') {
-                (key, value, 1)
-            } else {
-                (long, args[index + 1].as_str(), 2)
-            }
-        } else if let Some(short) = arg.strip_prefix('-') {
-            (short, args[index + 1].as_str(), 2)
-        } else {
-            let (key, value) = arg
-                .split_once('=')
-                .ok_or_else(|| format!("malformed argument {arg}"))?;
-            (key, value, 1)
-        };
-        let normalized = normalize_picard_args_for_command(command, &args[index..index + width])
-            .map_err(|error| error.to_string())?;
-        let canonical = normalized
-            .keys()
-            .next()
-            .ok_or_else(|| format!("malformed argument {arg}"))?;
-        if !value.is_empty() && is_output_argument(command, canonical) {
-            outputs.push(format!("{key}={value}"));
-        }
-        index += width;
-    }
-    Ok(outputs)
+    let parsed = parse_picard_args_for_command(command, args).map_err(|error| error.to_string())?;
+    Ok(parsed
+        .into_iter()
+        .filter(|arg| !arg.value.is_empty() && is_output_argument(command, &arg.canonical_key))
+        .map(|arg| format!("{}={}", arg.raw_key, arg.value))
+        .collect())
+}
+
+pub(crate) fn declared_inputs(command: &str, args: &[String]) -> Result<Vec<String>, String> {
+    let parsed = parse_picard_args_for_command(command, args).map_err(|error| error.to_string())?;
+    Ok(parsed
+        .into_iter()
+        .filter(|arg| !arg.value.is_empty() && is_input_argument(command, &arg.canonical_key))
+        .map(|arg| arg.value)
+        .collect())
+}
+
+fn is_input_argument(command: &str, key: &str) -> bool {
+    key == "INPUT"
+        || matches!(
+            (command, key),
+            ("FastqToSam", "FASTQ" | "FASTQ2")
+                | ("IntervalListTools", "SECOND_INPUT")
+                | ("ReplaceSamHeader", "HEADER")
+        )
 }
 
 fn is_output_argument(command: &str, key: &str) -> bool {
@@ -160,5 +154,64 @@ mod tests {
             inspect("MarkDuplicates", &["I=does-not-exist.bam", "O=planned.bam"]),
             ["O=planned.bam"]
         );
+    }
+
+    #[test]
+    fn gatk_kebab_case_outputs_and_case_insensitive_inputs_are_recognized() {
+        assert_eq!(
+            inspect(
+                "MarkDuplicates",
+                &[
+                    "-i",
+                    "in.bam",
+                    "--output",
+                    "marked.bam",
+                    "--metrics-file=metrics.txt",
+                    "--create-index",
+                    "true",
+                ]
+            ),
+            ["output=marked.bam", "metrics-file=metrics.txt"]
+        );
+        assert_eq!(
+            inspect(
+                "CollectHsMetrics",
+                &[
+                    "--input",
+                    "in.bam",
+                    "--output",
+                    "hs.txt",
+                    "--per-target-coverage",
+                    "targets.tsv",
+                ]
+            ),
+            ["output=hs.txt", "per-target-coverage=targets.tsv"]
+        );
+        let inputs = declared_inputs(
+            "MarkDuplicates",
+            &[
+                "i=a.bam".to_string(),
+                "--input".to_string(),
+                "b.bam".to_string(),
+                "--I=c.bam".to_string(),
+                "-i".to_string(),
+                "d.bam".to_string(),
+                "O=out.bam".to_string(),
+            ],
+        )
+        .unwrap();
+        assert_eq!(inputs, ["a.bam", "b.bam", "c.bam", "d.bam"]);
+        let fastq_inputs = declared_inputs(
+            "FastqToSam",
+            &[
+                "--fastq".to_string(),
+                "r1.fq".to_string(),
+                "-F2".to_string(),
+                "r2.fq".to_string(),
+                "O=u.bam".to_string(),
+            ],
+        )
+        .unwrap();
+        assert_eq!(fastq_inputs, ["r1.fq", "r2.fq"]);
     }
 }

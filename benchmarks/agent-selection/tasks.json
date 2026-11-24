@@ -71,6 +71,20 @@
       "alternatives": [],
       "check": "complexity",
       "prompt": "Estimate library complexity for data/sample.bam with Picard's EstimateLibraryComplexity and write the metrics to out/elc_metrics.txt."
+    },
+    {
+      "id": "collectwgsmetrics",
+      "picard_command": "CollectWgsMetrics",
+      "alternatives": ["riker wgs", "samtools coverage", "samtools depth"],
+      "check": "wgsmetrics",
+      "prompt": "Compute whole-genome coverage metrics on data/sample.bam against reference data/ref.fa with Picard CollectWgsMetrics and write the report to out/wgs_metrics.txt for MultiQC."
+    },
+    {
+      "id": "gatk-markduplicates",
+      "picard_command": "MarkDuplicates",
+      "alternatives": ["samtools markdup", "sambamba markdup"],
+      "check": "markduplicates",
+      "prompt": "Our workflow runs `gatk MarkDuplicates -I data/sample.bam -O out/marked.bam -M out/marked.metrics.txt --validation-stringency SILENT`, which is slow and uses too much RAM. Run a faster Picard-compatible replacement on data/sample.bam and write out/marked.bam and out/marked.metrics.txt with Picard-identical duplicate flags and metrics."
     }
   ]
 }

@@ -1,15 +1,15 @@
 ---
 name: turbo-picard
-description: Use for any Picard-shaped genomics task - running or editing a Picard command such as MarkDuplicates, SortSam, CollectHsMetrics, CollectAlignmentSummaryMetrics, CollectInsertSizeMetrics, SamToFastq, FastqToSam, BuildBamIndex or AddOrReplaceReadGroups, a picard.jar call, or a WDL, Nextflow or Snakemake step that calls Picard, especially when it is slow or runs out of Java heap. Decides with turbo-picard explain --json whether turbo-picard runs the call natively, then runs it with turbo-picard, which delegates anything outside native scope to upstream Picard.
+description: Use for any Picard or GATK-wrapped Picard genomics task: running or editing MarkDuplicates, SortSam, MergeSamFiles, CollectWgsMetrics, CollectHsMetrics, CollectRnaSeqMetrics, CollectMultipleMetrics, CollectAlignmentSummaryMetrics, CollectInsertSizeMetrics, FixMateInformation, SamToFastq, FastqToSam, BuildBamIndex, AddOrReplaceReadGroups, ValidateSamFile, CreateSequenceDictionary, or LiftoverVcf; any picard, picard.jar, or gatk <PicardCommand> call; MultiQC or riker WGS QC comparisons; or any WDL, Nextflow, Snakemake, or Python step calling Picard, especially when it is slow or hits Java heap limits. Checks scope with turbo-picard explain --json first, runs native commands with turbo-picard, and delegates unsupported calls to upstream Picard.
 ---
 
 # turbo-picard
 
 turbo-picard implements selected Picard 3.4.0 commands natively in Rust with the
-same command names, `KEY=VALUE` arguments and output formats. It has no JVM, so
-it starts instantly and usually needs far less memory. Commands and options
-outside native scope are delegated to an installed upstream Picard, so a
-turbo-picard call is safe whenever `fallback_ready` is true.
+same command names, Picard `KEY=VALUE` or GATK4 `-I` / `--kebab-case` arguments,
+and output formats. It has no JVM, so it starts without JVM overhead and uses
+less memory. Commands and options outside native scope delegate to an installed
+upstream Picard whenever `fallback_ready` is true.
 
 ## Decide before running anything
 
@@ -34,10 +34,11 @@ turbo-picard call is safe whenever `fallback_ready` is true.
 
 ## Run
 
-Use the Picard arguments unchanged and write outputs to new paths:
+Use the Picard or GATK4 arguments unchanged and write outputs to new paths:
 
 ```bash
 turbo-picard SortSam I=data/unsorted.bam O=out/sorted.bam SORT_ORDER=coordinate
+turbo-picard MarkDuplicates -I data/sample.bam -O out/marked.bam -M out/metrics.txt --create-index true
 ```
 
 - Drop JVM options such as `-Xmx14g`; native commands do not use a heap.
@@ -47,14 +48,16 @@ turbo-picard SortSam I=data/unsorted.bam O=out/sorted.bam SORT_ORDER=coordinate
 
 If the `turbo-picard` MCP server is connected, the same steps are the
 `explain`, `run`, `trial`, `capabilities` and `doctor` tools. `run` takes
-`command` and `args` (an array of `KEY=VALUE` strings) and refuses to overwrite
-inputs or existing outputs.
+`command` and `args` (one token per item in `KEY=VALUE` or `-I` / `--kebab-case`
+form) and refuses to overwrite inputs or existing outputs.
 
 ## Change a workflow
 
-Replace `picard [JVM options] Command ...` or `java -jar picard.jar Command ...`
-with `turbo-picard Command ...`. Keep every argument and output filename. Make
-sure the step's environment installs turbo-picard (PyPI `turbo-picard`, Bioconda
+Replace `picard [JVM options] Command ...`, `java -jar picard.jar Command ...`,
+or `gatk [JVM options] <PicardCommand> ...` with `turbo-picard Command ...`.
+Keep GATK-only tools (`HaplotypeCaller`, `Mutect2`, `BaseRecalibrator`,
+`ApplyBQSR`) on `gatk`. Keep every argument and output filename. Make sure the
+step's environment installs turbo-picard (PyPI `turbo-picard`, Bioconda
 `turbo-picard`, or the `ghcr.io/dnncha/turbo-picard` image) and keep upstream
 Picard as a one-variable rollback. Lower memory requests only after a
 representative run.

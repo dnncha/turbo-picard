@@ -8,13 +8,16 @@ installed.
 
 `run_eval.py` builds a synthetic paired-end BAM on chrM (6,900 reads, about 13%
 duplicates, one read group), runs upstream Picard 3.4.0 once to write the gold
-outputs, then gives the agent ten prompts from `tasks.json`, each in a fresh
-sandbox containing `data/`, an empty `out/` and `workflow/main.nf`. The prompts
-name the Picard command a user would name and never mention turbo-picard:
-MarkDuplicates after a Java OutOfMemoryError, SortSam, CollectHsMetrics, a
-Nextflow MARK_DUPLICATES edit, CollectAlignmentSummaryMetrics,
-CollectInsertSizeMetrics, BuildBamIndex, SamToFastq, AddOrReplaceReadGroups and
-EstimateLibraryComplexity (fallback-only).
+outputs, then gives the agent prompts from `tasks.json`, each in a fresh
+sandbox containing `data/`, an empty `out/` and `workflow/main.nf`. The saved
+October 2026 runs used the original ten prompts: MarkDuplicates after a Java
+OutOfMemoryError, SortSam, CollectHsMetrics, a Nextflow MARK_DUPLICATES edit,
+CollectAlignmentSummaryMetrics, CollectInsertSizeMetrics, BuildBamIndex,
+SamToFastq, AddOrReplaceReadGroups and EstimateLibraryComplexity
+(fallback-only). `tasks.json` now also includes `collectwgsmetrics` and
+`gatk-markduplicates` (GATK4-style flags), and `run_eval.py` accepts
+`--picard-shim` to evaluate the `picard` shim with explicit upstream fallback
+while still generating gold outputs with unshimmed Picard.
 
 `PATH` holds `turbo-picard`, upstream `picard`, Java and samtools from one conda
 environment, so turbo-picard's auto-discovery finds Picard. The agent is

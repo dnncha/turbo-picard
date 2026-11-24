@@ -2,7 +2,7 @@
 
 > Fast Rust implementations of selected Picard-compatible genomics commands for existing WDL, Nextflow, Snakemake, and shell workflows.
 
-Use turbo-picard as a candidate when an existing Picard-shaped preprocessing or QC step is a runtime, memory, or JVM-startup bottleneck. It preserves Picard command names and KEY=VALUE arguments. Native coverage is command- and option-specific; unsupported work can delegate to upstream Picard when fallback is configured.
+Use turbo-picard as a candidate when an existing Picard or GATK-wrapped Picard preprocessing or QC step is a runtime, memory, or JVM-startup bottleneck. It preserves Picard command names and accepts Picard KEY=VALUE as well as GATK4 -I and --kebab-case arguments. Native coverage is command- and option-specific; unsupported work can delegate to upstream Picard when fallback is configured. Keep GATK-only tools such as HaplotypeCaller and Mutect2 on gatk.
 
 Install: `python3 -m pip install turbo-picard`
 

@@ -63,11 +63,19 @@ mod mcp_session {
                 ),
                 call(6, "doctor", &json!({})),
                 call(7, "capabilities", &json!({"command": "MarkDuplicates"})),
+                call(
+                    8,
+                    "run",
+                    &json!({
+                        "command": "SortSam",
+                        "args": ["-I", "input.sam", "--output", "sorted_gatk.sam", "--sort-order", "queryname"]
+                    }),
+                ),
             ],
             dir.path(),
         );
 
-        assert_eq!(responses.len(), 7, "the notification gets no response");
+        assert_eq!(responses.len(), 8, "the notification gets no response");
         assert_eq!(responses[0]["result"]["protocolVersion"], "2025-06-18");
         let tools = responses[1]["result"]["tools"]
             .as_array()
@@ -102,5 +110,13 @@ mod mcp_session {
             responses[6]["result"]["structuredContent"]["commands"][0]["name"],
             "MarkDuplicates"
         );
+        let gatk_run = &responses[7]["result"];
+        assert_eq!(gatk_run["isError"], false, "{gatk_run}");
+        assert_eq!(gatk_run["structuredContent"]["exit_code"], 0);
+        assert_eq!(
+            gatk_run["structuredContent"]["declared_outputs"],
+            json!(["sorted_gatk.sam"])
+        );
+        assert!(dir.path().join("sorted_gatk.sam").is_file());
     }
 }

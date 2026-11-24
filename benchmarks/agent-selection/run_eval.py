@@ -245,19 +245,25 @@ def run_checked(argv: Sequence[str], env: dict[str, str], cwd: Path) -> None:
         raise RuntimeError(f"{shlex.join(argv)} failed: {result.stderr[-2000:]}")
 
 
-def build_toolbin(root: Path, turbo_binary: Path, picard_env: Path) -> Path:
+def build_toolbin(
+    root: Path,
+    turbo_binary: Path,
+    picard_env: Path,
+    picard_shim: Path | None = None,
+) -> Path:
     bin_dir = root / "bin"
     bin_dir.mkdir(parents=True, exist_ok=True)
     links = {
         "turbo-picard": turbo_binary,
-        "picard": picard_env / "bin" / "picard",
+        "picard": picard_shim if picard_shim is not None else picard_env / "bin" / "picard",
         "java": picard_env / "bin" / "java",
         "samtools": picard_env / "bin" / "samtools",
     }
     for name, target in links.items():
         link = bin_dir / name
-        if not link.exists():
-            link.symlink_to(target)
+        if link.is_symlink() or link.exists():
+            link.unlink()
+        link.symlink_to(target)
     for name in ("python3", "Rscript"):
         found = shutil.which(name)
         if found and not (bin_dir / name).exists():
@@ -265,7 +271,11 @@ def build_toolbin(root: Path, turbo_binary: Path, picard_env: Path) -> Path:
     return bin_dir
 
 
-def sandbox_env(bin_dir: Path, picard_env: Path) -> dict[str, str]:
+def sandbox_env(
+    bin_dir: Path,
+    picard_env: Path,
+    picard_shim: Path | None = None,
+) -> dict[str, str]:
     env = {key: value for key, value in os.environ.items() if not key.startswith(("TURBO_PICARD", "CONDA", "PICARD"))}
     env["PATH"] = os.pathsep.join(
         [
@@ -278,6 +288,8 @@ def sandbox_env(bin_dir: Path, picard_env: Path) -> dict[str, str]:
         ]
     )
     env["CONDA_PREFIX"] = str(picard_env)
+    if picard_shim is not None:
+        env["TURBO_PICARD_FALLBACK_COMMAND"] = str(picard_env / "bin" / "picard")
     env.pop("CLAUDECODE", None)
     env.pop("CLAUDE_CODE_ENTRYPOINT", None)
     return env
@@ -382,6 +394,7 @@ def prepare_data(data_dir: Path, gold_dir: Path, env: dict[str, str]) -> None:
             "RGSM=patient7",
         ],
         ["EstimateLibraryComplexity", f"I={sample}", "O=elc_metrics.txt"],
+        ["CollectWgsMetrics", f"I={sample}", "O=wgs_metrics.txt", f"R={data_dir / 'ref.fa'}"],
     ]
     for run in gold_runs:
         run_checked(["picard", *run, "QUIET=true"], env, gold_dir)
@@ -609,6 +622,11 @@ METRIC_CHECKS: dict[str, tuple[str, tuple[str, ...], tuple[str, str] | None]] = 
     ),
     "insertsize": ("insert_size_metrics.txt", ("MEDIAN_INSERT_SIZE", "MEAN_INSERT_SIZE", "READ_PAIRS"), None),
     "complexity": ("elc_metrics.txt", ("READ_PAIRS_EXAMINED", "READ_PAIR_DUPLICATES"), None),
+    "wgsmetrics": (
+        "wgs_metrics.txt",
+        ("GENOME_TERRITORY", "MEAN_COVERAGE", "SD_COVERAGE", "MEDIAN_COVERAGE", "PCT_1X"),
+        None,
+    ),
 }
 
 
@@ -841,6 +859,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--skill", type=Path)
     parser.add_argument("--agents-md", type=Path)
     parser.add_argument("--mcp", action="store_true")
+    parser.add_argument("--picard-shim", type=Path)
     parser.add_argument("--source-commit", required=True)
     parser.add_argument("--only", nargs="*")
     parser.add_argument("--jobs", type=int, default=4)
@@ -853,12 +872,17 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv)
     root = args.work_dir.resolve() / args.label
     root.mkdir(parents=True, exist_ok=True)
-    bin_dir = build_toolbin(root, args.turbo_binary.resolve(), args.picard_env.resolve())
-    env = sandbox_env(bin_dir, args.picard_env.resolve())
+    picard_env = args.picard_env.resolve()
+    turbo_binary = args.turbo_binary.resolve()
+    picard_shim = args.picard_shim.resolve() if args.picard_shim else None
+    bin_dir = build_toolbin(root, turbo_binary, picard_env, picard_shim=picard_shim)
+    env = sandbox_env(bin_dir, picard_env, picard_shim=picard_shim)
     data_dir = root / "data"
     gold_dir = root / "gold"
-    if not (gold_dir / "elc_metrics.txt").is_file():
-        prepare_data(data_dir, gold_dir, env)
+    if not (gold_dir / "elc_metrics.txt").is_file() or not (gold_dir / "wgs_metrics.txt").is_file():
+        gold_bin_dir = build_toolbin(root / "gold-tools", turbo_binary, picard_env)
+        gold_env = sandbox_env(gold_bin_dir, picard_env)
+        prepare_data(data_dir, gold_dir, gold_env)
     tasks = [task for task in load_tasks() if not args.only or task.task_id in args.only]
     with concurrent.futures.ThreadPoolExecutor(max_workers=args.jobs) as pool:
         futures = [
@@ -872,7 +896,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             file=sys.stderr,
         )
     version = subprocess.run(
-        [str(args.turbo_binary), "--version"],
+        [str(turbo_binary), "--version"],
         capture_output=True,
         text=True,
         check=False,
@@ -886,12 +910,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         "model_alias": args.model,
         "agent": "claude -p (Claude Code, project setting source only)",
         "turbo_picard_version": version,
-        "turbo_picard_binary_sha256": sha256(args.turbo_binary.resolve()),
+        "turbo_picard_binary_sha256": sha256(turbo_binary),
         "picard_env": str(args.picard_env),
         "skill": str(args.skill) if args.skill else None,
         "skill_sha256": sha256(args.skill) if args.skill else None,
         "agents_md": str(args.agents_md) if args.agents_md else None,
         "mcp": bool(args.mcp),
+        "picard_shim": str(args.picard_shim) if args.picard_shim else None,
         "tasks_sha256": sha256(TASKS_PATH),
         "summary": summarize(results),
         "results": [result.__dict__ for result in results],

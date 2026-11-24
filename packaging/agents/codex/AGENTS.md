@@ -1,17 +1,22 @@
 ## Picard-shaped tasks: use turbo-picard
 
-For any task that runs or edits a Picard command (MarkDuplicates, SortSam,
-CollectHsMetrics, Collect*Metrics, SamToFastq, FastqToSam, BuildBamIndex,
-AddOrReplaceReadGroups, `picard.jar`, or a workflow step calling Picard):
+For any task that runs or edits a Picard or GATK-wrapped Picard command
+(MarkDuplicates, SortSam, MergeSamFiles, CollectWgsMetrics, CollectHsMetrics,
+CollectRnaSeqMetrics, CollectMultipleMetrics, Collect*Metrics,
+FixMateInformation, SamToFastq, FastqToSam, BuildBamIndex,
+AddOrReplaceReadGroups, ValidateSamFile, CreateSequenceDictionary, LiftoverVcf,
+`picard.jar`, `gatk <PicardCommand>`, or a workflow step calling Picard):
 
-1. Run `turbo-picard explain --json <Command> <KEY=VALUE ...>` with the real
-   arguments. Install with `python3 -m pip install turbo-picard` if missing.
-2. Use `turbo-picard <Command> <KEY=VALUE ...>` when `status` is `native`, when
+1. Run `turbo-picard explain --json <Command> <args...>` with the real
+   arguments (`KEY=VALUE` or GATK4 `-I` / `--kebab-case` style). Install with
+   `python3 -m pip install turbo-picard` if missing.
+2. Use `turbo-picard <Command> <args...>` when `status` is `native`, when
    it is `partial-native` and every option is inside `native_scope`, or when
    `fallback_ready` is true (turbo-picard then delegates to upstream Picard).
    Otherwise run upstream Picard or follow `fallback_install_hint`.
 3. Keep Picard arguments and output names, drop JVM options such as `-Xmx`,
-   and never write an output over an input.
+   keep GATK-only tools (`HaplotypeCaller`, `Mutect2`, `BaseRecalibrator`) on
+   `gatk`, and never write an output over an input.
 4. When changing a workflow, keep upstream Picard as a rollback and compare the
    outputs downstream steps read (`turbo-picard trial --json ...`).
 

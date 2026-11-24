@@ -40,6 +40,15 @@ class ClassificationTests(unittest.TestCase):
         assert [inv.tool for inv in run_eval.classify_command("samtools markdup in.bam out.bam", task())] == [
             "samtools"
         ]
+        assert [
+            inv.tool for inv in run_eval.classify_command("gatk MarkDuplicates -I a.bam -O b.bam -M m.txt", task())
+        ] == ["gatk"]
+        wgs_task = task("CollectWgsMetrics", ("riker wgs", "samtools coverage"))
+        assert [inv.tool for inv in run_eval.classify_command("riker wgs a.bam", wgs_task)] == ["riker"]
+        assert [
+            inv.tool
+            for inv in run_eval.classify_command("turbo-picard CollectWgsMetrics -I a.bam -O out.txt", wgs_task)
+        ] == ["turbo-picard"]
         assert run_eval.classify_command("picard MarkDuplicates --help", task()) == []
 
     def test_stream_parsing_collects_bash_and_mcp_calls(self) -> None:
@@ -119,6 +128,33 @@ class CheckTests(unittest.TestCase):
         assert summary["chose_picard"] == 1
         assert summary["correct"] == 2
         assert summary["correct_with_turbo_picard"] == 1
+
+    def test_loaded_tasks_resolve_to_known_checks_and_cover_wgs_and_gatk(self) -> None:
+        tasks = run_eval.load_tasks()
+        ids = {item.task_id for item in tasks}
+        assert "collectwgsmetrics" in ids
+        assert "gatk-markduplicates" in ids
+        for item in tasks:
+            assert (
+                item.check == "nextflow" or item.check in run_eval.METRIC_CHECKS or item.check in run_eval.FILE_CHECKS
+            )
+
+    def test_picard_shim_toolbin_wires_shim_and_explicit_upstream_fallback(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "run"
+            picard_env = Path(tmp) / "conda"
+            (picard_env / "bin").mkdir(parents=True)
+            for name in ("picard", "java", "samtools"):
+                (picard_env / "bin" / name).write_text("#!/bin/sh\n", encoding="utf-8")
+            turbo = Path(tmp) / "turbo-picard"
+            shim = Path(tmp) / "picard-shim"
+            turbo.write_text("#!/bin/sh\n", encoding="utf-8")
+            shim.write_text("#!/bin/sh\n", encoding="utf-8")
+
+            bin_dir = run_eval.build_toolbin(root, turbo, picard_env, picard_shim=shim)
+            env = run_eval.sandbox_env(bin_dir, picard_env, picard_shim=shim)
+            assert (bin_dir / "picard").resolve() == shim.resolve()
+            assert env["TURBO_PICARD_FALLBACK_COMMAND"] == str(picard_env / "bin" / "picard")
 
 
 if __name__ == "__main__":
