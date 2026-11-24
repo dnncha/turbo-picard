@@ -283,7 +283,6 @@ fn run_hts_container(
             summary: &mut summary,
             compact_plan: false,
             program_groups_seen: &mut program_groups_seen,
-            resident_bytes: 0,
             memory_budget: in_memory_plan_budget_bytes(),
         };
         read_state.read(&mut reader, &first_library_lookup, &mut library_registry)?;
@@ -1996,7 +1995,6 @@ fn try_run_single_bam_compact_plan(
             summary: &mut summary,
             compact_plan: true,
             program_groups_seen: &mut program_groups_seen,
-            resident_bytes: 0,
             memory_budget: in_memory_plan_budget_bytes(),
         };
         read_state.read(&mut reader, &first_library_lookup, &mut library_registry)?;
@@ -2605,7 +2603,6 @@ struct BamRecordReadState<'a> {
     summary: &'a mut MarkDuplicatesSummary,
     compact_plan: bool,
     program_groups_seen: &'a mut ProgramGroupsSeen,
-    resident_bytes: u64,
     memory_budget: u64,
 }
 
@@ -2690,12 +2687,10 @@ impl BamRecordReadState<'_> {
         } else {
             record
         };
-        self.resident_bytes = self
-            .resident_bytes
-            .saturating_add(u64::try_from(stored_record.inner().l_data).unwrap_or(0))
-            .saturating_add(IN_MEMORY_RECORD_OVERHEAD_BYTES);
-        check_in_memory_budget(self.resident_bytes, self.memory_budget)?;
         self.records.push(stored_record);
+        if self.records.len() % RESIDENT_CHECK_INTERVAL_RECORDS == 0 {
+            check_in_memory_budget(process_resident_bytes(), self.memory_budget)?;
+        }
         Ok(())
     }
 }
@@ -3239,13 +3234,32 @@ fn replace_i32_aux(
     Ok(())
 }
 
-const IN_MEMORY_RECORD_OVERHEAD_BYTES: u64 = 96;
+const RESIDENT_CHECK_INTERVAL_RECORDS: usize = 1 << 16;
+const PROC_PAGE_BYTES: u64 = 4096;
 
 fn in_memory_plan_budget_bytes() -> u64 {
     fs::read_to_string("/proc/meminfo")
         .ok()
         .and_then(|text| mem_available_bytes(&text))
-        .map_or(u64::MAX, |available| available / 2)
+        .map_or(u64::MAX, |available| {
+            process_resident_bytes().saturating_add(available / 2)
+        })
+}
+
+fn process_resident_bytes() -> u64 {
+    fs::read_to_string("/proc/self/statm")
+        .ok()
+        .and_then(|text| resident_bytes_from_statm(&text))
+        .unwrap_or(0)
+}
+
+fn resident_bytes_from_statm(statm: &str) -> Option<u64> {
+    statm
+        .split_whitespace()
+        .nth(1)?
+        .parse::<u64>()
+        .ok()?
+        .checked_mul(PROC_PAGE_BYTES)
 }
 
 fn mem_available_bytes(meminfo: &str) -> Option<u64> {
@@ -5256,6 +5270,11 @@ mod optical_hot_path_tests {
             Some(2048 * 1024)
         );
         assert_eq!(mem_available_bytes("MemTotal: 1 kB\n"), None);
+        assert_eq!(
+            resident_bytes_from_statm("1000 250 30 1 0 400 0"),
+            Some(250 * 4096)
+        );
+        assert_eq!(resident_bytes_from_statm(""), None);
         assert!(check_in_memory_budget(10, 10).is_ok());
         assert!(matches!(
             check_in_memory_budget(11, 10),
