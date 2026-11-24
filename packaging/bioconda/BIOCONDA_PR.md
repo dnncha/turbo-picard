@@ -26,9 +26,8 @@ documented, tested against Picard 3.4.0, and kept explicit.
 
 ## Source
 
-**Preparation only.** Do not submit these source.path recipes. After v0.1.21
-is tagged, fetch its immutable archive and run the release helper to insert the
-measured SHA-256; the release-ready verifier must pass before submission.
+Both recipes point at the immutable `v0.1.21` GitHub source archive with its
+measured SHA-256 verified by `tools/verify_bioconda_recipes.py --release-ready`.
 
 - URL: `https://github.com/dnncha/turbo-picard/archive/refs/tags/v0.1.21.tar.gz`
 Archive SHA-256:
