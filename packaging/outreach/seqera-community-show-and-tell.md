@@ -1,64 +1,58 @@
 # Seqera Community - Show & Tell
 
-Category: Show & Tell
-
 Title:
 
-`turbo-picard`: Rust versions of selected Picard commands
+Turbo Picard 0.1.21: testing native Rust replacements for slow Picard steps in Nextflow (30x GRCh38 parity log)
 
 Post:
 
-Hi all,
-
-I have been working on `turbo-picard`, a Rust implementation of selected Picard
-commands:
+Hi everyone - I am the author of `turbo-picard`, an open-source Rust toolkit
+implementing 35 selected Picard commands natively while keeping Picard
+`KEY=VALUE` and GATK4 `--kebab-case` flags (plus automatic fallback to upstream
+Picard for the remaining 86 commands):
 
 https://github.com/dnncha/turbo-picard
 
-The idea is to make a Picard-heavy workflow faster without changing the shape of
-the task. Existing calls like this:
+The goal is practical: let pipeline authors test one slow or memory-heavy
+Picard process (`MarkDuplicates`, `CollectWgsMetrics`, `CollectMultipleMetrics`,
+`SortSam`, `SamToFastq`) side by side without rewriting the surrounding
+Nextflow, WDL, or Snakemake workflow.
+
+Measured on a real 30x GRCh38 whole genome (1000 Genomes `HG02675`, 740,367,510
+records, 8 vCPU / 50 GB RAM, single run, 23 November 2026):
+
+- `MarkDuplicates`: **59m 01s / 355 MB peak RSS** vs Picard 3.4.0's
+  **3h 30m 07s / 34.4 GB RSS** (**3.6x faster, 97x less memory**), matching
+  Picard metrics, duplicate count (79,289,617), and SAM columns 1-11 MD5 after
+  fixing Java `short` tile-coordinate wrap and FR/RF optical splitting (and
+  matching `DT`, `DS`, `DI`, and `PG` tags across chr21's 11.4M records).
+  Trade-off: peak temporary disk was 99.2 GB vs Picard's 23.3 GB (4.3x more,
+  tracked in #86).
+- `CollectWgsMetrics`: **5m 08s / 352 MB peak RSS** vs Picard 3.4.0's
+  **2h 13m 55s / 4.0 GB RSS** (**26x faster, 11x less memory**), matching every
+  metric field and histogram row.
+
+(The historical 14 August 2026 32-command small-fixture suite records 84.52x
+geometric mean and 272.12x maximum saved ratio vs Picard 3.4.0; JVM startup
+contributes heavily there, so use the 30x WGS log for large-file sizing.)
+
+Try one step safely using the versioned container or PyPI package:
 
 ```bash
-picard MarkDuplicates I=input.bam O=marked.bam M=metrics.txt
+docker run --rm ghcr.io/dnncha/turbo-picard:0.1.21 \
+  trial MarkDuplicates I=input.bam O=marked.bam M=metrics.txt
 ```
-
-can be tested as:
 
 ```bash
-turbo-picard MarkDuplicates I=input.bam O=marked.bam M=metrics.txt
+python3 -m pip install turbo-picard==0.1.21
 ```
 
-I would not recommend swapping a whole workflow at once. The better test is one
-slow command on one representative input, then compare the BAM/SAM/metrics files
-against upstream Picard before changing anything larger.
+Starter templates for Nextflow, WDL, Snakemake, and nf-core live in
+`packaging/workflows/` and `packaging/nf-core/`. Full evidence and scope:
 
-The historical 14 August 2026 suite covers 32 small-fixture comparisons
-against Picard 3.4.0, with an 84.52x geometric mean and 272.12x maximum
-saved ratio. JVM startup contributes to these short-task results; they
-do not predict a whole-genome or current-release speedup. Required
-outputs and full resource costs need a representative trial.
+- https://turbo-picard.readthedocs.io/en/latest/evidence/
+- https://turbo-picard.readthedocs.io/en/latest/commands/
+- https://turbo-picard.readthedocs.io/en/latest/evaluation-playbook.html
 
-Useful links:
-
-- Quickstart: https://turbo-picard.readthedocs.io/en/latest/quickstart.html
-- Evaluation notes: https://turbo-picard.readthedocs.io/en/latest/evaluation-playbook.html
-- Benchmarks: https://turbo-picard.readthedocs.io/en/latest/benchmarks.html
-- Workflow examples: https://github.com/dnncha/turbo-picard/tree/main/packaging/workflows
-
-Install:
-
-```bash
-python3 -m pip install turbo-picard==0.1.16
-```
-
-PyPI publishes platform wheels and a source distribution. Bioconda accepted
-the initial recipes; the 25 October 2026 channel check lists `0.1.15`. The
-`0.1.16` main-package and shim updates are open upstream. Use a pinned
-PyPI wheel or container for `0.1.16`; check the current channel before posting.
-
-I would be glad to hear from Nextflow maintainers about which Picard command would be
-worth testing first in a real pipeline.
-
-
-Independent evaluation protocol and report checklist:
-https://turbo-picard.readthedocs.io/en/latest/independent-evaluation.html
+I would love to hear which Picard step costs the most time or memory in your
+Nextflow runs, and whether the temp-disk vs RAM trade-off fits your executor.

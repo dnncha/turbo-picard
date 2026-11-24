@@ -4,7 +4,7 @@
 [![PyPI](https://img.shields.io/pypi/v/turbo-picard.svg)](https://pypi.org/project/turbo-picard/)
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.20541927.svg)](https://doi.org/10.5281/zenodo.20541927)
 
-**Native Rust implementations of 35 Picard commands, plus 6 Turbo Picard utilities, with Picard-checked outputs, `KEY=VALUE` flags, and transparent fallback to upstream Picard for the remaining 86 commands.**
+**Native Rust implementations of 35 Picard commands, plus 6 Turbo Picard utilities, with Picard-checked outputs, `KEY=VALUE` and GATK4 `--kebab-case` flags, and transparent fallback to upstream Picard for the remaining 86 commands.**
 
 <a href="https://turbo-picard.readthedocs.io/en/latest/evidence/"><picture><source media="(max-width: 700px)" srcset="https://raw.githubusercontent.com/dnncha/turbo-picard/main/docs/site/assets/competitor-card-mobile.png"><img src="https://raw.githubusercontent.com/dnncha/turbo-picard/main/docs/site/assets/competitor-card.png" width="100%" alt="Turbo Picard MarkDuplicates and 4x GRCh38 WGS timings and memory against Picard, Riker, FastDup, and samtools." ></picture></a>
 
@@ -35,6 +35,19 @@ Most bioinformatics pipelines pay a heavy tax in **JVM startup**, **Java heap bl
 - On the 4x genome Turbo Picard matches **every metric field and histogram row** of Picard 3.5.0 (the 15x and 30x genomes have no Picard output to compare); `riker wgs` uses simplified TSV output and documented metric differences.
 - On 30x WGS pre-PR #76, hitting `LOCUS_ACCUMULATION_CAP=100,000` forced single-threaded whole-contig reprocessing; PR #76 replaced that with targeted capped-cluster reprocessing (awaiting i7-8700 rerun).
 - On the 2.1 MB `gatk-na12878-mito` smoke check ([`bench_qc_vs_riker.md`](benchmarks/riker-comparison/evidence/bench_qc_vs_riker.md)): Turbo Picard ran `wgs-only` in **0.012 s** (`riker wgs` 0.024 s, **2.10x faster**; Picard 7.302 s, **634x faster**) and `wgs-bundle` in **0.025 s** (`riker multi` 0.053 s, **2.14x faster**; Picard 11.801 s, **477x faster**).
+
+### 1b. 30x whole-genome comparison vs Picard 3.4.0 (`MarkDuplicates` & `CollectWgsMetrics`)
+
+1000 Genomes `HG02675` (`ERR3242389`, 740,367,510 records, ~36x GRCh38 BAM) · 8 vCPU / 50 GB RAM · single run per tool ([`benchmarks/wgs-30x-colab-2026-11-23/README.md`](benchmarks/wgs-30x-colab-2026-11-23/README.md)):
+
+| Command | Tool | Wall time | Peak RSS | Peak temp disk | Advantage & trade-off vs Picard | Picard parity |
+| :--- | :--- | ---: | ---: | ---: | :--- | :--- |
+| **`MarkDuplicates`** | **Turbo Picard** (Host A) | **59m 01s** | **355 MB** | 99.2 GB | **3.6x faster · 97x less RAM** · 4.3x more temp disk (#86) | **✓ Exact** (#87/#88) |
+| `MarkDuplicates` | Picard 3.4.0 (`-Xmx32g`) | 3h 30m 07s | 34.4 GB | **23.3 GB** | 1.0x reference | ✓ Reference |
+| **`CollectWgsMetrics`** | **Turbo Picard** (Host A) | **5m 08s** | **352 MB** | — | **26x faster · 11x less RAM** | **✓ Exact** |
+| `CollectWgsMetrics` | Picard 3.4.0 (`-Xmx8g`) | 2h 13m 55s | 4.0 GB | — | 1.0x reference | ✓ Reference |
+
+After #87, `MarkDuplicates` matched Picard 3.4.0 exactly on metrics, duplicate count (`79,289,617`), and SAM columns 1–11 MD5 across all 740M records (43m 07s / 354 MB RSS on Host B); after #88, `DT`, `DS`, `DI`, and `PG` tags matched Picard with zero differences on chr21 (11,405,002 records). Turbo Picard also reads the `.crai`-indexed CRAM directly (`CollectWgsMetrics` 4m 53s / 689 MB, `MarkDuplicates` 41m 44s / 1.06 GB), whereas Picard 3.5.0 throws `CRAMException`.
 
 ### 2. Duplicate marking vs FastDup, `samtools markdup`, and Picard
 
@@ -74,13 +87,13 @@ Paired warm-cache medians (1 warmup + 3 repeats) on Apple M5 comparing [`main`](
 Install from PyPI (Linux x86_64, macOS Intel & Apple Silicon, or source build):
 
 ```bash
-python3 -m pip install turbo-picard==0.1.20
+python3 -m pip install turbo-picard==0.1.21
 ```
 
 Or run the container:
 
 ```bash
-docker run --rm ghcr.io/dnncha/turbo-picard:0.1.20 --version
+docker run --rm ghcr.io/dnncha/turbo-picard:0.1.21 --version
 ```
 
 Or build from source:
@@ -123,7 +136,7 @@ TURBO_PICARD_REQUIRE_NATIVE=1 turbo-picard MarkDuplicates \
 
 ### Machine-readable discovery and MCP server
 
-For Nextflow/WDL/Snakemake generators and coding agents, inspect command support and trial contracts as JSON without guessing:
+For Nextflow/WDL/Snakemake generators and coding agents, inspect command support, generate trial contracts, or run isolated native-vs-Picard parity verification over MCP stdio (`capabilities`, `explain`, `trial`, `doctor`, `run`, `verify`):
 
 ```bash
 turbo-picard capabilities --json --command MarkDuplicates
@@ -131,7 +144,7 @@ turbo-picard explain --json SortSam I=in.bam O=out.bam SORT_ORDER=coordinate
 claude mcp add turbo-picard -- turbo-picard mcp
 ```
 
-`mcp-name: io.github.dnncha/turbo-picard`. Agent integrations for Claude Code (`/plugin install turbo-picard --marketplace dnncha/turbo-picard`), Codex, and Cursor live in [`packaging/agents/`](packaging/agents/README.md).
+`mcp-name: io.github.dnncha/turbo-picard`. Agent integrations for Claude Code (`/plugin install turbo-picard --marketplace dnncha/turbo-picard`), Codex, and Cursor live in [`packaging/agents/`](packaging/agents/README.md). Both classic Picard `KEY=VALUE` arguments and GATK4 `--kebab-case` / bare boolean flags (`--create-index`, `--remove-duplicates`, `-AS`) are accepted.
 
 ---
 
@@ -237,7 +250,7 @@ Real-data evidence lives in `benchmarks/real-data/` and records pinned input sou
 
 ## Packaging Status & Citation
 
-- **Release:** The current source release is `0.1.20` on [GitHub Releases](https://github.com/dnncha/turbo-picard/releases/tag/v0.1.20) and [PyPI](https://pypi.org/project/turbo-picard/0.1.20/) (Linux x86_64, macOS Intel & Apple Silicon wheels, plus sdist for Linux ARM64 with a Rust toolchain). See [`CHANGELOG.md`](CHANGELOG.md) for release notes and [`website/assets/distribution-status.json`](website/assets/distribution-status.json) for observed build checksums.
+- **Release:** The current source release is `0.1.21` on [GitHub Releases](https://github.com/dnncha/turbo-picard/releases/tag/v0.1.21) and [PyPI](https://pypi.org/project/turbo-picard/0.1.21/) (Linux x86_64, macOS Intel & Apple Silicon wheels, plus sdist for Linux ARM64 with a Rust toolchain). See [`CHANGELOG.md`](CHANGELOG.md) for release notes and [`website/assets/distribution-status.json`](website/assets/distribution-status.json) for observed build checksums.
 - **Bioconda:** Accepted [initial recipes](https://github.com/bioconda/bioconda-recipes/pull/65922) on 4 October 2026 (`0.1.15` in Bioconda indexes on 25 October; [0.1.16 main](https://github.com/bioconda/bioconda-recipes/pull/69890) and [shim](https://github.com/bioconda/bioconda-recipes/pull/69891) updates open upstream). [`turbo-picard-full`](packaging/bioconda/turbo-picard-full/README.md) documents the combined `turbo-picard + picard + openjdk` recipe.
 - **Citation:** Cite the archived `turbo-picard` release you used via [`CITATION.cff`](CITATION.cff) (DOI `10.5281/zenodo.20541927`). Cite benchmark and validation inputs separately with immutable source URLs, commits or accessions, and input SHA-256 hashes. Docs live in [`docs/`](docs/); JOSS submission notes are in [`docs/joss-submission.rst`](docs/joss-submission.rst).
 

@@ -1,61 +1,63 @@
 # r/bioinformatics
 
-Check the pinned "before you post" thread before submitting. If tool-release
-posts are not welcome, skip Reddit or ask the mods first.
-
-Suggested flair:
-
-`programming` or `discussion`, depending on available options.
+Check the subreddit rules and pinned thread before posting. Keep the tone
+matter-of-fact and answer parity and packaging questions directly.
 
 Title:
 
-I released `turbo-picard`, Rust implementations of selected Picard commands
+Turbo Picard 0.1.21: native Rust implementations of 35 Picard commands (tested on a 30x GRCh38 WGS against Picard 3.4.0)
 
 Post:
 
-Hi r/bioinformatics,
-
-I have been working on `turbo-picard`, a Rust command-line tool for selected
-Picard commands:
+I am the maintainer of `turbo-picard`, an open-source Rust toolkit implementing
+35 Picard commands natively with Picard `KEY=VALUE` and GATK4 `--kebab-case`
+flags (and transparent fallback to upstream Picard for the remaining 86):
 
 https://github.com/dnncha/turbo-picard
-
-It is for workflows that already call Picard and have one or two steps where
-runtime or memory are annoying. The command interface is kept close to Picard:
 
 ```bash
 turbo-picard MarkDuplicates I=input.bam O=marked.bam M=metrics.txt
 ```
 
-I would test it one command at a time, not by replacing Picard across a whole
-pipeline. Pick a real input, run both tools, compare the outputs you care about,
-and only switch that command if the comparison is boring.
+Recent 30x GRCh38 whole-genome benchmark (1000 Genomes `HG02675`, 740,367,510
+records, 8 vCPU / 50 GB RAM, single run, 23 November 2026):
 
-The historical 14 August 2026 suite covers 32 small-fixture comparisons
-against Picard 3.4.0, with an 84.52x geometric mean and 272.12x maximum
-saved ratio. JVM startup contributes to these short-task results; they
-do not predict a whole-genome or current-release speedup. Required
-outputs and full resource costs need a representative trial.
+- `MarkDuplicates`: 59m 01s at 355 MB peak RSS vs Picard 3.4.0's 3h 30m 07s at
+  34.4 GB RSS (3.6x faster, 97x less memory). Metrics, duplicate count
+  (79,289,617), and SAM columns 1-11 MD5 matched Picard 3.4.0 after fixing two
+  genome-scale edge cases (Java `short` tile coordinate wrap and FR/RF optical
+  split); `DT`/`DS`/`DI`/`PG` tags matched across chr21's 11.4M records.
+  Trade-off: peak temporary disk was 99.2 GB vs Picard's 23.3 GB (tracked in
+  issue #86).
+- `CollectWgsMetrics`: 5m 08s at 352 MB RSS vs Picard's 2h 13m 55s at 4.0 GB
+  RSS (26x faster, 11x less memory), matching every metric field and histogram
+  row.
+
+For small tasks, the historical 14 August 2026 32-command fixture suite reports
+84.52x geometric mean and 272.12x maximum saved ratio against Picard 3.4.0 (JVM
+startup dominates tiny inputs, so do not extrapolate those ratios to WGS runs).
+
+Recommended way to evaluate it safely:
+
+1. Pick one slow or memory-bound Picard step in a local Nextflow, WDL,
+   Snakemake, or shell script.
+2. Run `turbo-picard trial <Command> ...` (or the `verify` tool in
+   `turbo-picard mcp`) to compare native and upstream Picard outputs side by
+   side on the same read-only input.
+3. Switch only that step if flags, tags, metrics, and resource costs fit.
 
 Install:
 
 ```bash
-python3 -m pip install turbo-picard==0.1.16
+python3 -m pip install turbo-picard==0.1.21
+# or container:
+docker run --rm ghcr.io/dnncha/turbo-picard:0.1.21 --version
 ```
 
-PyPI publishes platform wheels and a source distribution. Bioconda accepted
-the initial recipes; the 25 October 2026 channel check lists `0.1.15`. The
-`0.1.16` main-package and shim updates are open upstream. Use a pinned
-PyPI wheel or container for `0.1.16`; check the current channel before posting.
+Evidence, limits, and full command matrix:
+- https://turbo-picard.readthedocs.io/en/latest/evidence/
+- https://turbo-picard.readthedocs.io/en/latest/commands/
+- https://turbo-picard.readthedocs.io/en/latest/compare/
 
-Docs:
-
-- Quickstart: https://turbo-picard.readthedocs.io/en/latest/quickstart.html
-- Evaluation notes: https://turbo-picard.readthedocs.io/en/latest/evaluation-playbook.html
-- Benchmarks: https://turbo-picard.readthedocs.io/en/latest/benchmarks.html
-- Command coverage: https://turbo-picard.readthedocs.io/en/latest/commands.html
-
-I am interested in practical criticism from people who run Picard in real
-pipelines:
-which command would be worth testing first, and what comparison would you need
-before trusting it?
+Feedback on missing Picard options, temp-disk budgets, or workflow modules is
+very welcome.

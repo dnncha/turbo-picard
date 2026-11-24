@@ -1,7 +1,7 @@
 # MCP server
 
-`turbo-picard mcp` is a Model Context Protocol server on stdio. It exposes five
-tools that wrap the existing JSON contracts:
+`turbo-picard mcp` is a Model Context Protocol server on stdio. It exposes six
+tools that wrap the existing JSON contracts and isolated parity checks:
 
 | Tool | Wraps | Writes files |
 | --- | --- | --- |
@@ -10,10 +10,14 @@ tools that wrap the existing JSON contracts:
 | `trial` | `turbo-picard trial --json C ARGS...` | no |
 | `doctor` | `turbo-picard doctor`, as a JSON object | no |
 | `run` | `turbo-picard C ARGS...`, without a shell | yes |
+| `verify` | isolated native vs upstream Picard side-by-side parity check | temp dir only |
 
 `run` refuses an output argument that names an input or an existing file
 unless `overwrite` is true, and `require_native: true` sets
-`TURBO_PICARD_REQUIRE_NATIVE=1` for that call.
+`TURBO_PICARD_REQUIRE_NATIVE=1` for that call. `verify` rewrites declared
+output paths into a fresh temporary directory, runs native `turbo-picard` and
+upstream Picard on the same read-only inputs, compares outputs structurally,
+and cleans up unless `keep_temp: true` is passed.
 
 Client configuration:
 

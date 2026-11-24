@@ -4,34 +4,33 @@ Use this only in a relevant channel. Keep it short and make the ask concrete.
 
 Message:
 
-Hi all - I am working on `turbo-picard`, Rust implementations of selected Picard
-commands:
+Hi all - I am the author of `turbo-picard` (0.1.21), native Rust
+implementations of 35 selected Picard commands with Picard `KEY=VALUE` and
+GATK4 `--kebab-case` flags:
 https://github.com/dnncha/turbo-picard
 
-It keeps the Picard command style (`MarkDuplicates I=... O=... M=...`), so the
-most sensible test is probably one slow Picard step rather than a broad workflow
-change. The commands I would expect to be most relevant are `MarkDuplicates`,
-`SortSam`, `SamToFastq`, `FastqToSam`, `FixMateInformation`, and
-`BuildBamIndex`.
+On a 30x GRCh38 whole genome (1000 Genomes `HG02675`, 740M reads, 8 vCPU):
+- `MarkDuplicates`: 59m 01s / 355 MB RSS vs Picard 3.4.0's 3h 30m 07s / 34.4 GB
+  (3.6x faster, 97x less RAM, exact metrics & SAM columns 1-11 MD5; trade-off is
+  99.2 GB vs 23.3 GB temp disk, tracked in #86).
+- `CollectWgsMetrics`: 5m 08s / 352 MB RSS vs Picard's 2h 13m 55s / 4.0 GB
+  (26x faster, 11x less RAM, exact field/histogram parity).
 
-The historical 14 August 2026 suite covers 32 small-fixture comparisons
-against Picard 3.4.0, with an 84.52x geometric mean and 272.12x maximum
-saved ratio. JVM startup contributes to these short-task results; they
-do not predict a whole-genome or current-release speedup. Required
-outputs and full resource costs need a representative trial.
+(The historical 14 August 2026 32-command small-fixture suite reports 84.52x
+geometric mean and 272.12x top saved ratio where JVM startup dominates; treat
+the 30x WGS numbers as the realistic large-file reference.)
 
-Evaluation notes and workflow examples:
+There is a draft nf-core module and Nextflow trial starter in the repo:
 
 - https://turbo-picard.readthedocs.io/en/latest/evaluation-playbook.html
+- https://github.com/dnncha/turbo-picard/tree/main/packaging/nf-core
 - https://github.com/dnncha/turbo-picard/tree/main/packaging/workflows
 
-I am trying to work out which nf-core pipeline/module would make the best first
-real-world test case. Any suggestions?
+Install via pinned PyPI wheel (`pip install turbo-picard==0.1.21`) or container
+(`ghcr.io/dnncha/turbo-picard:0.1.21`); verify current Bioconda channel status
+before relying on Conda. Which nf-core module (`picard/markduplicates`,
+`picard/collectwgsmetrics`, `picard/collectmultiplemetrics`) would be the most
+useful first real-world side-by-side comparison?
 
-Packaging note: PyPI has Linux x86_64 and macOS Apple Silicon wheels plus a
-source tarball. Bioconda accepted the initial recipes; the 25 October 2026 channel check lists
-`0.1.15`. Updates to `0.1.16` are open upstream. Use pinned PyPI or the
-container for `0.1.16`, and verify channel status before posting.
-
-Independent evaluation protocol and report checklist:
+Independent evaluation protocol:
 https://turbo-picard.readthedocs.io/en/latest/independent-evaluation.html
