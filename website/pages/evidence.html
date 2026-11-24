@@ -1,22 +1,84 @@
-<header class="page-head"><p class="breadcrumb"><a href="{{ROOT}}">Turbo Picard</a> / Benchmarks, Riker &amp; evidence</p><p class="eyebrow">Benchmarks / methods / boundaries</p><h1>{{HEADING}}</h1><p class="lead">Inspect real whole-genome GRCh38 runs against Picard and Riker, 1-CPU duplicate-marking comparisons against FastDup and samtools, and the 32-command parity suite.</p></header><div class="article-layout"><aside class="article-nav" aria-label="On this page"><p>On this page</p><a href="#status">Evidence overview</a><a href="#competitors">WGS &amp; competitor benchmarks</a><a href="#suite">32-command fixture suite</a><a href="#results">All 32 results</a><a href="#scope">What parity establishes</a><a href="#real-data">Pinned public inputs</a><a href="#gates">Release gates and citations</a><a href="{{ROOT}}evaluate/">Build a comparison →</a></aside><article class="prose">
-<h2 id="status">A clear record of what has been measured.</h2><p>Turbo Picard pairs strict Picard parity gates with direct speed and memory benchmarks across synthetic, matched 1-CPU, and whole-genome GRCh38 inputs. Evaluate a representative shard on your own workflow before switching.</p><div class="table-scroll" role="region" aria-label="Evidence scope and datasets" tabindex="0"><table><thead><tr><th scope="col">Record</th><th scope="col">Scope</th><th scope="col">Decision it supports</th></tr></thead><tbody><tr><th scope="row">Real GRCh38 WGS QC</th><td>1000 Genomes <code>HG02675</code> (4x, 15x, pre-PR #76 30x) vs Riker 0.5.0 &amp; Picard 3.5.0</td><td>Whole-genome <code>CollectWgsMetrics</code> wall time, peak RSS, and Picard metric parity.</td></tr><tr><th scope="row">1-CPU MarkDuplicates</th><td><code>paired-600k</code> &amp; <code>gatk-na12878-mito</code> vs Picard, FastDup, and <code>samtools markdup</code></td><td>Matched-pipeline speed, memory, and exact Picard flag/tag/metric parity.</td></tr><tr><th scope="row">PR #76 core overhaul</th><td>Apple M5 paired runs across <code>MarkDuplicates</code>, <code>SortSam</code>, <code>MergeSamFiles</code>, <code>CollectHsMetrics</code>, <code>SamToFastq</code>, and <code>CleanSam</code></td><td>Reported (raw runs not retained) 1.24x–2.64x improvements vs prior <code>main</code> and 1.92x–12.8x speedups vs Picard 3.4.0.</td></tr><tr><th scope="row">Saved 32-command suite</th><td>Small-fixture suite, {{BENCHMARK_DATE}} (<code>32/32 PASS</code>)</td><td>Regression coverage and absolute short-job timings against Picard 3.4.0.</td></tr><tr><th scope="row">Pinned real inputs</th><td>Mitochondrial BAM/CRAM and SNVQ fixtures (12-command release set)</td><td>Automated CI and release-ready parity verification.</td></tr></tbody></table></div><p><a href="https://github.com/dnncha/turbo-picard/blob/main/docs/releases/v{{VERSION}}.md">Read the v{{VERSION}} release notes</a> and <a href="{{ROOT}}compare/">tool-by-tool workflow comparison →</a>.</p>
+<header class="page-head evidence-head">
+<p class="breadcrumb"><a href="{{ROOT}}">Turbo Picard</a> / Benchmarks &amp; evidence</p>
+<h1>{{HEADING}}</h1>
+<p class="lead">Direct wall-time, memory, and output-parity measurements on real GRCh38 whole-genome BAMs against Picard and Riker, 1-CPU duplicate-marking comparisons against FastDup and samtools, and the 32-command fixture suite.</p>
+<div class="evidence-ledger" role="region" aria-label="Headline benchmark results">
+<div class="ledger-item"><p class="ledger-label">30x WGS CollectWgsMetrics</p><p class="ledger-stat">26× faster <span>· 11× less RAM</span></p><p class="ledger-detail">5 m 08 s and 352 MB vs Picard 3.4.0 (2 h 13 m 55 s, 4.0 GB). Every metric field and histogram row matched.</p></div>
+<div class="ledger-item"><p class="ledger-label">30x WGS MarkDuplicates</p><p class="ledger-stat">3.6× faster <span>· 97× less RAM</span></p><p class="ledger-detail">59 m 01 s and 355 MB vs Picard 3.4.0 (3 h 30 m 07 s, 34.4 GB). Identical MD5 across all 740.4M reads after #87; uses 4.3× more temp disk (#86).</p></div>
+<div class="ledger-item"><p class="ledger-label">4x WGS vs Riker 0.5.0</p><p class="ledger-stat">1.3× faster <span>· 4.0× less RAM</span></p><p class="ledger-detail">21.8–22.6 s and 125 MB vs Riker (29.7 s, 504 MB) on 6 threads. Exact Picard 3.5.0 match; Riker differs.</p></div>
+<div class="ledger-item"><p class="ledger-label">Saved parity gates</p><p class="ledger-stat">32 / 32 <span>PASS</span></p><p class="ledger-detail">32-command fixture suite against Picard 3.4.0 plus 12-command release set on pinned public BAM and CRAM inputs.</p></div>
+</div>
+</header>
 
-<h2 id="competitors">Whole-genome and matched competitor benchmarks.</h2>
+<div class="article-layout evidence-layout">
+<aside class="article-nav" aria-label="On this page">
+<p>On this page</p>
+<a href="#wgs-30x">30x WGS vs Picard</a>
+<a href="#competitors">Riker, FastDup &amp; samtools</a>
+<a href="#status">Dataset scope</a>
+<a href="#suite">32-command fixture suite</a>
+<a href="#results">All 32 timings</a>
+<a href="#scope">Parity boundaries</a>
+<a href="#real-data">Pinned public inputs</a>
+<a href="#gates">Reproduce &amp; cite</a>
+<a class="nav-action" href="{{ROOT}}evaluate/">Test on your own BAM</a>
+</aside>
+
+<article class="prose evidence-prose">
+
+<h2 id="wgs-30x">30x whole-genome GRCh38 against Picard</h2>
+<p>Measured on 23 November 2026 using 1000 Genomes <code>HG02675</code> (<code>ERR3242389</code>, NovaSeq, 740,367,510 records, ~36x depth) against Picard 3.4.0 on Google Colab 8-vCPU / 50 GB RAM VMs (<a href="https://github.com/dnncha/turbo-picard/blob/main/benchmarks/wgs-30x-colab-2026-11-23/README.md">full benchmark log ↗</a>). Single run per row from GNU <code>time -v</code>. This covers one sample on two cloud hosts, not a cohort study.</p>
+
+<h3>MarkDuplicates (740.4M records, GRCh38 BAM)</h3>
+<div class="table-scroll" role="region" aria-label="30x whole-genome MarkDuplicates benchmark against Picard" tabindex="0">
+<table class="bench-table">
+<thead><tr><th scope="col">Host &amp; tool</th><th scope="col" class="num">Wall time</th><th scope="col" class="num">Peak RSS</th><th scope="col" class="num">Peak temp disk</th><th scope="col">Picard parity</th></tr></thead>
+<tbody>
+<tr class="is-winner"><th scope="row">Turbo Picard <code>93216217</code> <span class="meta-tag">Host B · EPYC</span> <span class="win-pill">Exact MD5</span></th><td class="num win">43 m 07 s<span class="bar-track"><span class="bar-fill" style="width:20.5%"></span></span></td><td class="num win">354 MB<span class="bar-track"><span class="bar-fill" style="width:1.5%"></span></span></td><td class="num dim">not sampled</td><td><span class="parity-pass">✓ Exact (#87)</span></td></tr>
+<tr class="is-winner"><th scope="row">Turbo Picard <code>9a15db96</code> <span class="meta-tag">Host A · Xeon</span> <span class="win-pill">3.6× · 97× RAM</span></th><td class="num win">59 m 01 s<span class="bar-track"><span class="bar-fill" style="width:28.1%"></span></span></td><td class="num win">355 MB<span class="bar-track"><span class="bar-fill" style="width:1.5%"></span></span></td><td class="num caveat-cell">99.2 GB <span class="caveat-pill">4.3×</span></td><td><span class="parity-diff">Optical diff*</span></td></tr>
+<tr><th scope="row">Picard 3.4.0 (<code>-Xmx32g</code>) <span class="meta-tag">Host A · Xeon</span></th><td class="num dim">3 h 30 m 07 s<span class="bar-track"><span class="bar-fill bar-muted" style="width:100%"></span></span></td><td class="num dim">34.4 GB<span class="bar-track"><span class="bar-fill bar-muted" style="width:100%"></span></span></td><td class="num leader-other">23.3 GB</td><td><span class="parity-ref">✓ Reference</span></td></tr>
+</tbody></table>
+</div>
+
+<h3>CollectWgsMetrics (<code>INCLUDE_BQ_HISTOGRAM=true COUNT_UNPAIRED=true</code>)</h3>
+<div class="table-scroll" role="region" aria-label="30x whole-genome CollectWgsMetrics benchmark against Picard" tabindex="0">
+<table class="bench-table">
+<thead><tr><th scope="col">Host &amp; tool</th><th scope="col" class="num">Wall time</th><th scope="col" class="num">CPU time</th><th scope="col" class="num">Peak RSS</th><th scope="col">Picard parity</th></tr></thead>
+<tbody>
+<tr class="is-winner"><th scope="row">Turbo Picard <code>9a15db96</code> <span class="meta-tag">Host A · Xeon</span> <span class="win-pill">26× · 11× RAM</span></th><td class="num win">5 m 08 s<span class="bar-track"><span class="bar-fill" style="width:3.8%"></span></span></td><td class="num win">2,027 s</td><td class="num win">352 MB<span class="bar-track"><span class="bar-fill" style="width:8.8%"></span></span></td><td><span class="parity-pass">✓ Exact</span></td></tr>
+<tr><th scope="row">Picard 3.4.0 (<code>-Xmx8g</code>) <span class="meta-tag">Host A · Xeon</span></th><td class="num dim">2 h 13 m 55 s<span class="bar-track"><span class="bar-fill bar-muted" style="width:100%"></span></span></td><td class="num dim">8,141 s</td><td class="num dim">4.0 GB<span class="bar-track"><span class="bar-fill bar-muted" style="width:100%"></span></span></td><td><span class="parity-ref">✓ Reference</span></td></tr>
+</tbody></table>
+</div>
+
+<div class="caveat-box">
+<p><strong>Measured trade-offs and parity notes:</strong> On 30x <code>MarkDuplicates</code>, Turbo Picard used 4.3× more scratch disk than Picard (99.2 GB vs 23.3 GB; tracked in <a href="https://github.com/dnncha/turbo-picard/issues/86">#86 ↗</a>). Build <code>9a15db96</code> differed on optical duplicate counts because Picard stores tile coordinates as 16-bit signed integers and splits mixed-orientation sets before optical detection; PR #87 fixed both, yielding identical metrics and identical MD5 across SAM columns 1–11 for all 79,289,617 duplicate-flagged reads. PR #88 added <code>@PG</code> tag chaining, verified on chr21 (11.4M records); the full 30x BAM awaits a rerun on the #88 build.</p>
+<p><strong>Direct CRAM reading:</strong> Picard 3.5.0 fails to open the original 1000G CRAM with its <code>.crai</code> index (<code>CRAMException</code>). Turbo Picard reads it directly: on Host A, <code>CollectWgsMetrics</code> finished in 4 m 53 s at 689 MB RSS and <code>MarkDuplicates</code> in 41 m 44 s at 1.06 GB RSS. The tables above use the BAM conversion so Picard could run.</p>
+</div>
+
+<h2 id="competitors">Head-to-head against Riker, FastDup, and samtools</h2>
+
 <h3>1. Whole-genome GRCh38 <code>CollectWgsMetrics</code> vs Riker 0.5.0 and Picard 3.5.0</h3>
-<p>Measured on 1000 Genomes <code>HG02675</code> (Intel i7-8700, 6 workers/threads, 16 GB RAM, cold page cache; <a href="https://github.com/dnncha/turbo-picard/blob/main/benchmarks/wgs-coverage-2026-11-13/README.md">benchmark log ↗</a>). Bold green cells mark the winner on each metric.</p>
-<div class="table-scroll" role="region" aria-label="Whole-genome CollectWgsMetrics leaderboard" tabindex="0"><table class="bench-table"><thead><tr><th scope="col">Depth</th><th scope="col">Tool</th><th scope="col" class="num">Wall time</th><th scope="col" class="num">Peak RSS</th><th scope="col">Picard parity</th></tr></thead><tbody>
+<p>Measured on downsampled 1000 Genomes <code>HG02675</code> (Intel i7-8700, 6 threads, 16 GB RAM, cold page cache; <a href="https://github.com/dnncha/turbo-picard/blob/main/benchmarks/wgs-coverage-2026-11-13/README.md">benchmark log ↗</a>). Bold green cells mark the leader on each metric.</p>
+<div class="table-scroll" role="region" aria-label="Whole-genome CollectWgsMetrics leaderboard" tabindex="0">
+<table class="bench-table">
+<thead><tr><th scope="col">Depth</th><th scope="col">Tool</th><th scope="col" class="num">Wall time</th><th scope="col" class="num">Peak RSS</th><th scope="col">Picard parity</th></tr></thead>
+<tbody>
 <tr class="is-winner"><th scope="row" rowspan="3">4x GRCh38 WGS</th><td class="win">Turbo Picard (6T) <span class="win-pill">#1</span></td><td class="num win">21.8–22.6 s</td><td class="num win">125 MB <span class="delta-pill">4.0× vs Riker</span></td><td><span class="parity-pass">✓ Exact</span></td></tr>
 <tr><td><code>riker wgs</code> 0.5.0 (6T)</td><td class="num dim">29.7 s</td><td class="num dim">504 MB</td><td><span class="parity-diff">✗ Differs</span></td></tr>
 <tr><td>Picard 3.5.0 (1T)</td><td class="num dim">1,033.8 s</td><td class="num dim">1,468 MB</td><td><span class="parity-ref">✓ Reference</span></td></tr>
 <tr class="is-winner group-sep"><th scope="row" rowspan="2">15x GRCh38 WGS</th><td class="win">Turbo Picard (6T) <span class="win-pill">Lowest RAM</span></td><td class="num">65.4–82.6 s</td><td class="num win">274 MB</td><td><span class="dim">Not compared</span></td></tr>
 <tr><td><code>riker wgs</code> 0.5.0 (6T)</td><td class="num dim">78.2–79.7 s</td><td class="num dim">518 MB</td><td><span class="parity-diff">✗ Differs</span></td></tr>
-<tr class="group-sep"><th scope="row" rowspan="2">30x GRCh38 WGS *(pre-PR #76)*</th><td>Turbo Picard (6T)</td><td class="num dim">193.5 s</td><td class="num win">412 MB <span class="delta-pill">Lowest RAM</span></td><td><span class="dim">Not compared</span></td></tr>
+<tr class="group-sep"><th scope="row" rowspan="2">30x GRCh38 WGS <span class="meta-tag">pre-PR #76</span></th><td>Turbo Picard (6T)</td><td class="num dim">193.5 s</td><td class="num win">412 MB <span class="delta-pill">Lowest RAM</span></td><td><span class="dim">Not compared</span></td></tr>
 <tr><td><code>riker wgs</code> 0.5.0 (6T)</td><td class="num leader-other">147.4 s</td><td class="num dim">510 MB</td><td><span class="parity-diff">✗ Differs</span></td></tr>
-</tbody></table></div>
+</tbody></table>
+</div>
 
 <h3>2. Duplicate marking on 1 pinned CPU vs Picard, FastDup, and <code>samtools</code></h3>
 <p>Measured on Linux x86_64 with BAM compression level 5 (<a href="https://github.com/dnncha/turbo-picard/tree/main/benchmarks/markduplicates-competitors">raw runs ↗</a>).</p>
-<div class="table-scroll" role="region" aria-label="Matched 1-CPU MarkDuplicates competitor leaderboard" tabindex="0"><table class="bench-table"><thead><tr><th scope="col">Input</th><th scope="col">Tool</th><th scope="col" class="num">Wall time</th><th scope="col" class="num">Peak RSS</th><th scope="col" class="num">vs Picard</th><th scope="col">Picard parity</th></tr></thead><tbody>
+<div class="table-scroll" role="region" aria-label="Matched 1-CPU MarkDuplicates competitor leaderboard" tabindex="0">
+<table class="bench-table">
+<thead><tr><th scope="col">Input</th><th scope="col">Tool</th><th scope="col" class="num">Wall time</th><th scope="col" class="num">Peak RSS</th><th scope="col" class="num">vs Picard</th><th scope="col">Picard parity</th></tr></thead>
+<tbody>
 <tr class="is-winner"><th scope="row" rowspan="4"><code>paired-600k</code></th><td class="win">Turbo Picard <span class="win-pill">#1</span></td><td class="num win">1.054 s</td><td class="num win">94.1 MiB</td><td class="num win">5.15× · 11.2× RAM</td><td><span class="parity-pass">✓ Exact</span></td></tr>
 <tr><td>FastDup</td><td class="num">1.131 s</td><td class="num dim">383.8 MiB</td><td class="num dim">4.79×</td><td><span class="parity-diff">✗ Differs</span></td></tr>
 <tr><td><code>samtools markdup</code></td><td class="num dim">1.982 s</td><td class="num dim">235.7 MiB</td><td class="num dim">2.74×</td><td><span class="parity-diff">✗ Differs</span></td></tr>
@@ -24,17 +86,87 @@
 <tr class="is-winner group-sep"><th scope="row" rowspan="3"><code>gatk-na12878-mito</code></th><td class="win">Turbo Picard <span class="win-pill">#1</span></td><td class="num win">0.141 s</td><td class="num win">9.5 MiB</td><td class="num win">19.0× · 75.9× RAM</td><td><span class="parity-pass">✓ Exact</span></td></tr>
 <tr><td>FastDup</td><td class="num">0.201 s</td><td class="num dim">356.7 MiB</td><td class="num dim">13.3×</td><td><span class="parity-diff">✗ Differs</span></td></tr>
 <tr><td>Picard 3.4.0</td><td class="num dim">2.678 s</td><td class="num dim">721.3 MiB</td><td class="num dim">1.00×</td><td><span class="parity-ref">✓ Reference</span></td></tr>
-</tbody></table></div>
+</tbody></table>
+</div>
 
-<h2 id="suite">Historical small-fixture suite (32/32 PASS).</h2><p>The saved suite dated <strong>{{BENCHMARK_DATE}}</strong> records <strong>32/32 PASS</strong> across 32 commands against Picard 3.4.0. It reports a <strong>{{GM}}</strong> geometric mean, <strong>{{MEDIAN}}</strong> median, <strong>{{FLOOR}}</strong> floor on <code>SetNmMdAndUqTags</code>, and <strong>{{TOP}}</strong> maximum on <code>NormalizeFasta</code>. Because JVM startup dominates tiny inputs, treat the WGS and 1-CPU tables above as the realistic guide for larger files and use this suite to track parity and overhead.</p><p>Absolute medians appear below. “Saved ratio” preserves the suite’s recorded median of run-level ratios; it need not equal the ratio of the two displayed medians.</p><div class="callout"><p><strong>Clarifying memory notes:</strong> The separately measured 77.92% memory reduction cited in changelog notes concerns a Python comparison helper on one million synthetic SAM records—not <code>MarkDuplicates</code> RSS. See the WGS and 1-CPU tables above for native command RSS measurements.</p></div>
-<h2 id="results">All 32 saved fixture results.</h2>{{BENCHMARK_TABLE}}<p><a href="{{ROOT}}assets/benchmark-data.json">Download the machine-readable data</a> · <a href="{{ROOT}}assets/bench-suite-output.txt">Read the raw suite log</a></p><p>Source command: <code>python3 tools/bench_suite.py --repeats 3 --skip-build</code>. Source artifact: <code>docs/site/assets/bench-suite-output.txt</code>. The benchmark JSON retains medians, run counts and workload parameters from the source logs.</p>
-<h2 id="scope">Parity has a defined scope.</h2><p>The synthetic suite checks selected commands, options and fixtures. Separate pinned public real-data evidence covers a <strong>12-command release set</strong> on the documented small inputs, including mitochondrial BAM/CRAM and variant fixtures. This is not a substitute for varied full-scale sequencing data or downstream validation in your pipeline.</p><p>Read the comparison contract for each command. Metrics text is a target for supported collectors; lightweight PDF summaries are not a reproduction of Picard’s charts. Compressed-file bytes and program-header differences require deliberate comparison rules, not a blanket “identical” claim.</p><h3>Saved benchmark exceptions</h3><p><code>AccelerationStatus</code>, <code>capabilities</code>, <code>doctor</code>, <code>explain</code>, <code>mcp</code> and <code>trial</code> are utility or inspection commands, not timed upstream data-processing replacements. <code>CollectHsMetrics</code> has separate parity checks and measured 12.8x faster than Picard 3.4.0 on capture-panel intervals in PR #76; <code>CollectRnaSeqMetrics</code> and <code>CollectSamErrorMetrics</code> also have dedicated Picard parity gates, while suite-integrated benchmarks await representative capture, transcript, and error fixtures in CI.</p><p>Turbo Picard is not a full Picard suite. Unsupported commands and options require upstream Picard when fallback is configured. Switch only the commands where the evidence supports the change.</p>
-<h2 id="real-data">Pinned public-input evidence</h2><p>A scientific release needs a documented comparison portfolio, not one tiny fixture and not proof for every dataset. The current 12-command release set spans the designated <code>release_candidate</code> inputs. Record the full 40-character Git commit SHA and the input SHA-256 when citing or reproducing a case.</p>{{REAL_DATA_PROVENANCE}}
-<p>To add new evidence, use <code>python3 tools/compare_real_data.py</code> with the required input and fresh output arguments described in the evaluation guide. Review its <code>/evidence/manifest-entry.json</code> artifact before using <code>python3 tools/update_real_data_manifest.py</code>, then run <code>python3 tools/verify_real_data_evidence.py --release-ready</code>.</p>
-<h2 id="gates">Reproduce the checks and cite the correct thing.</h2><p>Repository checks tie public claims to logs, coverage and release evidence:</p><div class="codebox"><div class="codebar"><span>Evidence verification · repository checkout</span><button type="button" data-copy data-copy-kind="commands" disabled>Copy commands</button></div><pre tabindex="0"><code>python3 tools/verify_benchmark_log_evidence.py
+<h2 id="status">What each benchmark record proves</h2>
+<p>Different datasets answer different adoption questions. Use whole-genome and 1-CPU runs to estimate runtime and memory; use the 32-command suite and pinned real inputs to check parity coverage.</p>
+<div class="table-scroll" role="region" aria-label="Evidence scope and datasets" tabindex="0">
+<table>
+<thead><tr><th scope="col">Record</th><th scope="col">Inputs &amp; tools</th><th scope="col">Decision it supports</th></tr></thead>
+<tbody>
+<tr><th scope="row">30x GRCh38 WGS vs Picard</th><td>1000 Genomes <code>HG02675</code> (740.4M reads, ~36x) vs Picard 3.4.0 on 8-vCPU cloud VMs</td><td>Full-genome <code>MarkDuplicates</code> and <code>CollectWgsMetrics</code> wall time, RAM, scratch disk, and MD5/metric parity.</td></tr>
+<tr><th scope="row">4x–30x WGS QC vs Riker</th><td>1000 Genomes <code>HG02675</code> (4x, 15x, pre-PR #76 30x) vs Riker 0.5.0 &amp; Picard 3.5.0</td><td>Multi-threaded <code>CollectWgsMetrics</code> throughput, memory ceiling, and exact Picard metric parity.</td></tr>
+<tr><th scope="row">1-CPU MarkDuplicates</th><td><code>paired-600k</code> &amp; <code>gatk-na12878-mito</code> vs Picard 3.4.0, FastDup, and <code>samtools markdup</code></td><td>Single-core duplicate marking speed, memory, and exact Picard flag, tag, and metric parity.</td></tr>
+<tr><th scope="row">PR #76 core overhaul</th><td>Apple M5 paired runs across <code>MarkDuplicates</code>, <code>SortSam</code>, <code>MergeSamFiles</code>, <code>CollectHsMetrics</code>, <code>SamToFastq</code>, and <code>CleanSam</code></td><td>Reported (raw runs not retained) 1.24x–2.64x improvements vs prior <code>main</code> and 1.92x–12.8x speedups vs Picard 3.4.0.</td></tr>
+<tr><th scope="row">Saved 32-command suite</th><td>Small-fixture suite, {{BENCHMARK_DATE}} (<code>32/32 PASS</code>)</td><td>Regression coverage and absolute short-job timings against Picard 3.4.0.</td></tr>
+<tr><th scope="row">Pinned real inputs</th><td>Mitochondrial BAM/CRAM and SNVQ fixtures (12-command release set)</td><td>Automated CI and release-ready parity verification.</td></tr>
+</tbody></table>
+</div>
+<p><a href="https://github.com/dnncha/turbo-picard/blob/main/docs/releases/v{{VERSION}}.md">Read the v{{VERSION}} release notes ↗</a> · <a href="{{ROOT}}compare/">Compare Riker, FastDup &amp; samtools →</a></p>
+
+<h2 id="suite">32-command small-fixture suite (32/32 PASS)</h2>
+<p>The saved suite dated <strong>{{BENCHMARK_DATE}}</strong> runs 32 commands against Picard 3.4.0 with 3 repeats each. Because JVM startup dominates tiny inputs, treat the whole-genome and 1-CPU tables above as your sizing guide for larger files and use this suite to track parity and startup overhead.</p>
+<div class="suite-stats" role="region" aria-label="Small-fixture suite summary">
+<div><strong>{{GM}}</strong><span>Geometric mean</span></div>
+<div><strong>{{MEDIAN}}</strong><span>Median speedup</span></div>
+<div><strong>{{FLOOR}}</strong><span>Floor (<code>SetNmMdAndUqTags</code>)</span></div>
+<div><strong>{{TOP}}</strong><span>Maximum (<code>NormalizeFasta</code>)</span></div>
+</div>
+<div class="callout"><p><strong>Memory note:</strong> The 77.92% memory reduction cited in earlier changelog notes measured a Python comparison helper on one million synthetic SAM records, not <code>MarkDuplicates</code> RSS. Use the WGS and 1-CPU tables above for native command RSS.</p></div>
+
+<h2 id="results">All 32 saved fixture timings</h2>
+<p>Absolute medians appear below. “Saved ratio” preserves the suite’s recorded median of run-level ratios, so it can differ slightly from dividing the two displayed medians.</p>
+{{BENCHMARK_TABLE}}
+<p class="artifact-links"><a href="{{ROOT}}assets/benchmark-data.json">Download benchmark JSON</a> · <a href="{{ROOT}}assets/bench-suite-output.txt">Read raw suite log</a></p>
+<p class="fine">Source command: <code>python3 tools/bench_suite.py --repeats 3 --skip-build</code> · Source artifact: <code>docs/site/assets/bench-suite-output.txt</code>. The JSON file retains medians, run counts, and workload parameters from the source logs.</p>
+
+<h2 id="scope">What parity covers and where it stops</h2>
+<p>The synthetic suite checks selected commands, options, and fixtures. Pinned public real-data evidence covers a <strong>12-command release set</strong> on documented small inputs (mitochondrial BAM/CRAM and SNVQ fixtures). Neither replaces validation on your own sequencing data.</p>
+<p>Check the comparison contract for each command before switching. Metrics text is the parity target for supported collectors; lightweight PDF summaries do not reproduce Picard’s R charts. Compressed-file bytes and <code>@PG</code> program headers require explicit comparison rules rather than a blanket byte-identical claim.</p>
+<h3>Saved benchmark exceptions</h3>
+<p><code>AccelerationStatus</code>, <code>capabilities</code>, <code>doctor</code>, <code>explain</code>, <code>mcp</code>, and <code>trial</code> are utility or inspection commands, not timed upstream replacements. <code>CollectHsMetrics</code> has separate parity checks and measured 12.8x faster than Picard 3.4.0 on capture-panel intervals in PR #76. <code>CollectRnaSeqMetrics</code> and <code>CollectSamErrorMetrics</code> also have dedicated Picard parity gates, while suite-integrated benchmarks await representative capture, transcript, and error fixtures in CI.</p>
+<p>Turbo Picard is not a full Picard suite. Unsupported commands and options require upstream Picard when fallback is configured. Switch only the commands where the evidence supports the change.</p>
+
+<h2 id="real-data">Pinned public inputs</h2>
+<p>A scientific release requires a pinned comparison portfolio beyond one tiny fixture, though these inputs are still not proof for every dataset. The current 12-command release set runs against designated <code>release_candidate</code> inputs alongside lighter <code>public_smoke</code> checks. Record the full 40-character Git commit SHA and the input SHA-256 when citing or reproducing a case.</p>
+{{REAL_DATA_PROVENANCE}}
+<p>To add a new case, run <code>python3 tools/compare_real_data.py</code> with your input and a fresh output directory as described in the <a href="{{ROOT}}evaluate/">evaluation guide</a>. Review the generated <code>/evidence/manifest-entry.json</code> before running <code>python3 tools/update_real_data_manifest.py</code> and <code>python3 tools/verify_real_data_evidence.py --release-ready</code>.</p>
+
+<h2 id="gates">Reproduce checks and cite releases</h2>
+<p>Four repository checks tie public claims on this site to saved logs, command coverage, and release evidence:</p>
+<div class="codebox"><div class="codebar"><span>Evidence verification · repository checkout</span><button type="button" data-copy data-copy-kind="commands" disabled>Copy commands</button></div><pre tabindex="0"><code>python3 tools/verify_benchmark_log_evidence.py
 python3 tools/verify_benchmark_suite_coverage.py
 python3 tools/verify_benchmark_thresholds.py
 python3 tools/verify_real_data_evidence.py --release-ready</code></pre><span class="copy-status" role="status" aria-atomic="true"></span></div>
-<p>The fixture-suite release thresholds are 5.00x floor, 20.00x geometric mean and 50.00x maximum. These are internal saved-suite gates, <strong>not promised speedups for other inputs</strong>.</p><p>For the software citation, consult <a href="https://github.com/dnncha/turbo-picard/blob/main/CITATION.cff">CITATION.cff</a> and cite the archived turbo-picard release you used. Cite benchmark inputs separately, preserving the accession or source revision and input SHA-256. Do not attach a historical archival DOI to a newer release it does not identify.</p><details><summary>Bioconda distribution status and maintainer checks</summary><p>The GitHub v{{VERSION}} release lists platform wheels and a source distribution. Bioconda accepted the initial recipes on 4 October 2026; channel indexes checked on 25 October list 0.1.15, with 0.1.16 updates open upstream. See the <a href="{{ROOT}}install/#bioconda">version-specific install guidance</a> and the <a href="{{ROOT}}assets/distribution-status.json">dated channel receipt</a>. Release preparation and upstream lint are distinct checks:</p><div class="codebox"><div class="codebar"><span>Distribution checks · appropriate repository checkout</span><button type="button" data-copy data-copy-kind="commands" disabled>Copy commands</button></div><pre tabindex="0"><code>python3 tools/bioconda_release_preflight.py
+<p>The fixture-suite release thresholds are 5.00x floor, 20.00x geometric mean, and 50.00x maximum. These are internal saved-suite gates, <strong>not promised speedups for other inputs</strong>.</p>
+<p>For the software citation, consult <a href="https://github.com/dnncha/turbo-picard/blob/main/CITATION.cff">CITATION.cff ↗</a> and cite the archived turbo-picard release you used. Cite benchmark inputs separately, preserving the accession or source revision and input SHA-256. Never attach an older archival DOI to a newer release.</p>
+
+<details class="provenance-card"><summary><span class="provenance-id">Bioconda distribution status &amp; maintainer checks</span><span class="tier-pill tier-smoke">v{{VERSION}}</span></summary>
+<div class="provenance-body">
+<p>The GitHub v{{VERSION}} release publishes platform wheels and a source distribution. Bioconda accepted the initial recipes on 4 October 2026; channel indexes checked on 25 October list 0.1.15, with 0.1.16 updates open upstream. See the <a href="{{ROOT}}install/#bioconda">version-specific install guidance</a> and the <a href="{{ROOT}}assets/distribution-status.json">dated channel receipt</a>. Release preparation and upstream lint are separate checks:</p>
+<div class="codebox"><div class="codebar"><span>Distribution checks · repository checkout</span><button type="button" data-copy data-copy-kind="commands" disabled>Copy commands</button></div><pre tabindex="0"><code>python3 tools/bioconda_release_preflight.py
 bioconda-utils lint recipes config.yml --packages turbo-picard turbo-picard-picard-shim</code></pre><span class="copy-status" role="status" aria-atomic="true"></span></div>
-<p>Do not interpret a preparation-only recipe or an unchecked archive checksum as a completed channel release.</p></details><div class="related"><a href="{{ROOT}}#adopt">Return to the adoption sequence →</a><a href="{{ROOT}}evaluate/">Create evidence for your own workflow →</a><a href="https://github.com/dnncha/turbo-picard/releases/tag/v{{VERSION}}">Inspect release artifacts and verification receipts ↗</a><a href="https://github.com/dnncha/turbo-picard/tree/v{{VERSION}}/benchmarks/real-data">Pinned real-data manifests ↗</a></div></article></div>
+<p>A preparation-only recipe or unchecked archive checksum does not confirm a completed channel release.</p>
+</div>
+</details>
+
+<div class="evidence-cta">
+<div>
+<p class="eyebrow on-dark">Verify on your own data</p>
+<h2>Run the same comparison on your BAM or CRAM.</h2>
+<p>Generate a local side-by-side script with pinned versions, separate outputs, and native-only enforcement before touching a pipeline.</p>
+</div>
+<div class="evidence-cta-actions">
+<a class="button" href="{{ROOT}}evaluate/">Build comparison script →</a>
+<a class="button secondary-dark" href="{{ROOT}}commands/">Check command support</a>
+</div>
+</div>
+
+<div class="related">
+<a href="{{ROOT}}#adopt">Return to the adoption sequence →</a>
+<a href="https://github.com/dnncha/turbo-picard/releases/tag/v{{VERSION}}">Inspect v{{VERSION}} release artifacts and receipts ↗</a>
+<a href="https://github.com/dnncha/turbo-picard/tree/v{{VERSION}}/benchmarks/real-data">Pinned real-data manifests ↗</a>
+</div>
+</article>
+</div>

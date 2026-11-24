@@ -84,7 +84,7 @@ PAGES = [
         "evidence/",
         "Turbo Picard benchmarks, parity and release evidence",
         "Inspect absolute benchmark timings, input sizes, provenance and compatibility limits. Separate small-fixture evidence from production-scale performance claims.",
-        "Evidence you can inspect.",
+        "Benchmarks and parity evidence.",
         "evidence",
     ),
 ]
@@ -136,13 +136,15 @@ def evidence_table(data: dict[str, Any]) -> str:
     rows: list[str] = []
     for b in sorted(data["benchmarks"], key=lambda x: x["command"].lower()):
         workload = b["workload_parameter"]
+        parity = esc(b["parity"])
+        parity_cell = f'<span class="parity-pass">{parity}</span>' if b["parity"] == "PASS" else parity
         rows.append(
-            f'<tr><th scope="row">{esc(b["command"])}</th><td>{b["median_turbo_seconds"]:.6f}</td><td>{b["median_picard_seconds"]:.6f}</td><td>{b["speedup"]:.2f}x</td><td>{b["runs"]}</td><td>{esc(workload["name"])}={workload["value"]:,}</td><td>{esc(b["parity"])}</td></tr>'
+            f'<tr><th scope="row">{esc(b["command"])}</th><td class="num">{b["median_turbo_seconds"]:.6f}</td><td class="num dim">{b["median_picard_seconds"]:.6f}</td><td class="num win-text">{b["speedup"]:.2f}x</td><td class="num">{b["runs"]}</td><td><code>{esc(workload["name"])}={workload["value"]:,}</code></td><td>{parity_cell}</td></tr>'
         )
     return (
-        '<div class="table-scroll" role="region" aria-label="All saved benchmark results" tabindex="0"><table><caption>32 commands · saved small-fixture suite · '
+        '<div class="table-scroll" role="region" aria-label="All saved benchmark results" tabindex="0"><table class="suite-table"><caption>32 commands · saved small-fixture suite · '
         + esc(data["date"])
-        + '</caption><thead><tr><th scope="col">Command</th><th scope="col">Turbo (s)</th><th scope="col">Picard (s)</th><th scope="col">Saved ratio</th><th scope="col">Runs</th><th scope="col">Generator input</th><th scope="col">Parity</th></tr></thead><tbody>'
+        + '</caption><thead><tr><th scope="col">Command</th><th scope="col" class="num">Turbo (s)</th><th scope="col" class="num">Picard (s)</th><th scope="col" class="num">Saved ratio</th><th scope="col" class="num">Runs</th><th scope="col">Generator input</th><th scope="col">Parity</th></tr></thead><tbody>'
         + "".join(rows)
         + "</tbody></table></div>"
     )
@@ -166,21 +168,25 @@ def real_data_provenance(manifest: dict[str, Any]) -> str:
         minimum = dataset.get("minimum_input_bytes")
         threshold = (
             (
-                f"<p>Release input-size guard: <code>{minimum}</code> bytes minimum. "
-                "This guard does not establish production-scale representativeness.</p>"
+                f"<p><strong>Input-size guard:</strong> <code>{minimum}</code> bytes minimum (does not establish cohort-scale representativeness).</p>"
             )
             if minimum
             else ""
         )
-        commands = ", ".join(esc(name) for name in dataset["expected_commands"])
+        commands = ", ".join(f"<code>{esc(name)}</code>" for name in dataset["expected_commands"])
+        tier = dataset["release_tier"]
+        tier_class = "tier-rc" if tier == "release_candidate" else "tier-smoke"
+        scope_line = (
+            f"<p><strong>Scope:</strong> {esc(dataset['scope_caveat'])}</p>"
+            if dataset["scope_caveat"].strip() != dataset["description"].strip()
+            else ""
+        )
         sections.append(
-            f"<details><summary>{esc(dataset['id'])} · {esc(dataset['release_tier'])}</summary>"
-            f"<p>{esc(dataset['description'])}</p><p><strong>Scope:</strong> {esc(dataset['scope_caveat'])}</p>"
-            f"<p><strong>Commands in the saved evidence:</strong> {commands}</p>"
-            f'<p><a href="{esc(dataset["source_url"])}">Pinned input source ↗</a></p>'
-            f"<p>Source commit: <code>{esc(dataset['source_commit'])}</code><br>"
-            f"Input SHA-256: <code>{esc(dataset['sha256'])}</code></p>{threshold}"
-            f'<p><a href="{REPO}/blob/v{{{{VERSION}}}}/{esc(evidence)}">Read {esc(evidence)} ↗</a></p></details>'
+            f'<details class="provenance-card"><summary><span class="provenance-id">{esc(dataset["id"])}</span><span class="tier-pill {tier_class}">{esc(tier)}</span><span class="provenance-count">{len(dataset["expected_commands"])} commands</span></summary>'
+            f'<div class="provenance-body"><p>{esc(dataset["description"])}</p>{scope_line}'
+            f"<p><strong>Commands verified:</strong> {commands}</p>"
+            f'<p class="provenance-hashes"><span>Source commit: <code>{esc(dataset["source_commit"])}</code></span><span>Input SHA-256: <code>{esc(dataset["sha256"])}</code></span></p>{threshold}'
+            f'<p class="provenance-links"><a href="{esc(dataset["source_url"])}">Pinned input source ↗</a><a href="{REPO}/blob/v{{{{VERSION}}}}/{esc(evidence)}">Read {esc(evidence)} ↗</a></p></div></details>'
         )
     return "\n".join(sections)
 

@@ -11,7 +11,7 @@ Native implementations of selected Picard 3.4.0 commands, not the entire upstrea
 - [Create a Picard comparison script](https://turbo-picard.readthedocs.io/en/latest/evaluate/)
 - [One package. A familiar command.](https://turbo-picard.readthedocs.io/en/latest/install/)
 - [Choose the tool for your workflow.](https://turbo-picard.readthedocs.io/en/latest/compare/)
-- [Evidence you can inspect.](https://turbo-picard.readthedocs.io/en/latest/evidence/)
+- [Benchmarks and parity evidence.](https://turbo-picard.readthedocs.io/en/latest/evidence/)
 
 ## Independent evaluation
 
