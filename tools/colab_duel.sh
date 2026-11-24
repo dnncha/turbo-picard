@@ -8,6 +8,7 @@ cfg="${COLAB_STATE:-${TMPDIR:-/tmp}/turbo-picard-colab-state.json}"
 local_dir="$repo/benchmarks/duel/runs/$session"
 case "$cmd" in
   launch)
+    rm -f "$local_dir/out/DONE"
     gpu=(); [ -n "${COLAB_GPU:-}" ] && gpu=(--gpu "$COLAB_GPU")
     colab --config "$cfg" sessions | grep -q "\[$session\]" || colab --config "$cfg" new -s "$session" --high-mem "${gpu[@]}"
     colab --config "$cfg" upload -s "$session" "$repo/tools/duel_vm.sh" /content/duel_vm.sh
