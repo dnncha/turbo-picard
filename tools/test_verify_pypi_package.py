@@ -97,16 +97,14 @@ class VerifyPyPiPackageTests(unittest.TestCase):
             'test "${GITHUB_REF_TYPE}" = "tag"\n'
             'test "${GITHUB_REF_NAME}" = "${expected_ref}"\n'
             "wheels-linux-x86_64\nlinux-aarch64:\nBuild Linux ARM64 wheels\n"
+            "ubuntu-24.04-arm\nmanylinux: 2_28\ndnf install -y perl-core clang-devel\n"
+            "Smoke-test Linux ARM64 wheel\n"
             "wheels-linux-aarch64\nmacos-x86_64:\nBuild macOS Intel wheels\n"
             "macos-15-intel\nwheels-macos-x86_64\n"
             "Smoke-test macOS arm64 wheel\nSmoke-test macOS Intel wheel\n"
             "verify_pypi_wheel_install_smoke.sh\n"
             "needs: [linux, linux-aarch64, macos, macos-x86_64, sdist]\n"
             "manylinux: 2014\nperl-core\n"
-            "apt-get install -y --no-install-recommends perl libclang-dev\n"
-            "find /usr/lib -name libclang.so\n"
-            "BINDGEN_EXTRA_CLANG_ARGS_aarch64_unknown_linux_gnu\n"
-            "--target=aarch64-unknown-linux-gnu --sysroot=$target_sysroot\n"
             "llvm-toolset-7.0-clang-devel\nLIBCLANG_PATH\n"
             "PyO3/maturin-action@v1\n"
             "--compatibility pypi\npypa/gh-action-pypi-publish@release/v1\n"
@@ -119,7 +117,7 @@ class VerifyPyPiPackageTests(unittest.TestCase):
             "turbo-picard-release-manifest\n"
             "Smoke-test Linux x86_64 wheel\n"
             "python3 -m venv\n"
-            "dist/turbo_picard-*-manylinux_2_17_x86_64*.whl\n"
+            "dist/turbo_picard-*manylinux_2_17_x86_64*.whl\n"
             "-m pip install --no-deps\n"
             'turbo-picard" --version\n'
             'turbo-picard" doctor\n'
