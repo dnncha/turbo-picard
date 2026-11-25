@@ -203,7 +203,7 @@ jobs:
           smoke_root="$RUNNER_TEMP/turbo-picard-release-smoke"
           python3 -m venv "$smoke_root"
           smoke_bin="$smoke_root/bin"
-          "$smoke_bin/python" -m pip install --no-deps dist/turbo_picard-*-manylinux_2_17_x86_64*.whl
+          "$smoke_bin/python" -m pip install --no-deps dist/turbo_picard-*manylinux_2_17_x86_64*.whl
           "$smoke_bin/python" -m pip check
           "$smoke_bin/turbo-picard" --version
           "$smoke_bin/turbo-picard" doctor

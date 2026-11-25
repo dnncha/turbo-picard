@@ -302,7 +302,7 @@ def validate_publish_workflow(root: Path = ROOT) -> list[str]:
         ("turbo-picard-release-manifest", "PyPI workflow must name the release handoff manifest artifact"),
         ("Smoke-test Linux x86_64 wheel", "PyPI workflow must execute an installed Linux wheel"),
         ("python3 -m venv", "PyPI workflow must create an isolated install smoke environment"),
-        ("dist/turbo_picard-*-manylinux_2_17_x86_64*.whl", "PyPI workflow must install the Linux x86_64 wheel"),
+        ("dist/turbo_picard-*manylinux_2_17_x86_64*.whl", "PyPI workflow must install the Linux x86_64 wheel"),
         ("-m pip install --no-deps", "PyPI workflow must smoke-test the built wheel without network dependencies"),
         ('turbo-picard" --version', "PyPI workflow must execute the installed turbo-picard entrypoint"),
         ('turbo-picard" doctor', "PyPI workflow must smoke-test the installed doctor command"),

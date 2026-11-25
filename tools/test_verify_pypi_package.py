@@ -117,7 +117,7 @@ class VerifyPyPiPackageTests(unittest.TestCase):
             "turbo-picard-release-manifest\n"
             "Smoke-test Linux x86_64 wheel\n"
             "python3 -m venv\n"
-            "dist/turbo_picard-*-manylinux_2_17_x86_64*.whl\n"
+            "dist/turbo_picard-*manylinux_2_17_x86_64*.whl\n"
             "-m pip install --no-deps\n"
             'turbo-picard" --version\n'
             'turbo-picard" doctor\n'
