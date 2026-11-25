@@ -48,14 +48,14 @@ On small inputs, the historical 14 August 2026 32-command fixture suite reports
 startup dominates tiny inputs, so those ratios are not whole-genome
 predictions).
 
-Version 0.1.21 also ships an MCP stdio server (`turbo-picard mcp`) with an
+Version 0.1.22 also ships an MCP stdio server (`turbo-picard mcp`) with an
 isolated `verify` tool that runs native `turbo-picard` and upstream Picard side
 by side in a temporary directory and checks output parity structurally.
 
 Install:
 
 ```bash
-python3 -m pip install turbo-picard==0.1.21
+python3 -m pip install turbo-picard==0.1.22
 ```
 
 Happy to answer questions on HTSlib/Rust integration, Picard's surprising

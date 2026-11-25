@@ -6,11 +6,11 @@ Announcements
 
 Title:
 
-`turbo-picard` 0.1.21: native Rust implementations of 35 Broad Picard genomics commands
+`turbo-picard` 0.1.22: native Rust implementations of 35 Broad Picard genomics commands
 
 Post:
 
-I have released `turbo-picard` 0.1.21:
+I have released `turbo-picard` 0.1.22:
 
 https://github.com/dnncha/turbo-picard
 
@@ -53,7 +53,7 @@ Architecture notes:
 Install:
 
 ```bash
-python3 -m pip install turbo-picard==0.1.21
+python3 -m pip install turbo-picard==0.1.22
 ```
 
 or from source:
