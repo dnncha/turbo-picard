@@ -26,13 +26,12 @@ documented, tested against Picard 3.4.0, and kept explicit.
 
 ## Source
 
-Preparation only. Do not submit to Bioconda until the `v0.1.22` GitHub release
-tag exists and its archive SHA-256 is verified by
-`tools/prepare_bioconda_release.py --archive ...`.
+Both recipes point at the immutable `v0.1.22` GitHub source archive with its
+measured SHA-256 verified by `tools/verify_bioconda_recipes.py --release-ready`.
 
 - URL: `https://github.com/dnncha/turbo-picard/archive/refs/tags/v0.1.22.tar.gz`
 Archive SHA-256:
-`<github-v0.1.22-source-archive-sha256>`
+`8ea9797c5ea6f8b6378c2131f605e3ff54bebb1f2423373a0d8f8701de5f2b71`
 
 ## Evidence
 
