@@ -4,7 +4,7 @@ Use this only in a relevant channel. Keep it short and make the ask concrete.
 
 Message:
 
-Hi all - I am the author of `turbo-picard` (0.1.21), native Rust
+Hi all - I am the author of `turbo-picard` (0.1.22), native Rust
 implementations of 35 selected Picard commands with Picard `KEY=VALUE` and
 GATK4 `--kebab-case` flags:
 https://github.com/dnncha/turbo-picard
@@ -29,8 +29,8 @@ There is a draft nf-core module and Nextflow trial starter in the repo:
 - https://github.com/dnncha/turbo-picard/tree/main/packaging/nf-core
 - https://github.com/dnncha/turbo-picard/tree/main/packaging/workflows
 
-Install via pinned PyPI wheel (`pip install turbo-picard==0.1.21`) or container
-(`ghcr.io/dnncha/turbo-picard:0.1.21`); verify current Bioconda channel status
+Install via pinned PyPI wheel (`pip install turbo-picard==0.1.22`) or container
+(`ghcr.io/dnncha/turbo-picard:0.1.22`); verify current Bioconda channel status
 before relying on Conda. Which nf-core module (`picard/markduplicates`,
 `picard/collectwgsmetrics`, `picard/collectmultiplemetrics`) would be the most
 useful first real-world side-by-side comparison?

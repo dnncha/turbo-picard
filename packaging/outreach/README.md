@@ -37,17 +37,17 @@ Ground rules:
 
 Current facts to keep consistent:
 
-- Release source and publication target: `turbo-picard` 0.1.21
+- Release source and publication target: `turbo-picard` 0.1.22
 - Native scope: 35 Picard commands plus 6 Turbo Picard utilities; 86 commands
   delegate to upstream Picard when configured. Accepts both classic Picard
   `KEY=VALUE` flags and GATK4 `--kebab-case` / bare boolean flags.
-- Install: `python3 -m pip install turbo-picard==0.1.21` or
-  `docker run --rm ghcr.io/dnncha/turbo-picard:0.1.21 --version`
+- Install: `python3 -m pip install turbo-picard==0.1.22` or
+  `docker run --rm ghcr.io/dnncha/turbo-picard:0.1.22 --version`
 - Target PyPI files: Linux x86_64 wheels, macOS Intel and Apple Silicon wheels,
   and source distribution (Linux ARM64 builds from sdist or Bioconda).
 - Bioconda accepted the initial recipes on 4 October 2026. Check the current
   Bioconda channel index before advertising a Bioconda version; use a pinned
-  PyPI wheel or GHCR container for `0.1.21`.
+  PyPI wheel or GHCR container for `0.1.22`.
 - Trial and verification helpers: `turbo-picard trial <PicardCommand> ...` and
   `turbo-picard mcp` (six stdio MCP tools, including isolated `verify`).
 - 30x GRCh38 whole-genome benchmark (`HG02675`, `ERR3242389`, 740,367,510

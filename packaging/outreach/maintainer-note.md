@@ -4,7 +4,7 @@ Subject: Comparing one slow Picard step in your workflow
 
 Hi,
 
-I maintain Turbo Picard (0.1.21), which runs 35 selected Picard commands
+I maintain Turbo Picard (0.1.22), which runs 35 selected Picard commands
 natively in Rust while keeping Picard `KEY=VALUE` and GATK4 `--kebab-case`
 arguments intact (and falling back to upstream Picard for the remaining 86).
 

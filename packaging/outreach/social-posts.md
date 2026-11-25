@@ -2,7 +2,7 @@
 
 ## LinkedIn
 
-I just released `turbo-picard` 0.1.21 — native Rust implementations of 35 Broad
+I just released `turbo-picard` 0.1.22 — native Rust implementations of 35 Broad
 Picard genomics commands with Picard `KEY=VALUE` and GATK4 `--kebab-case` flags,
 plus transparent fallback to upstream Picard for the remaining 86 commands.
 
@@ -19,14 +19,14 @@ On a real 30x GRCh38 whole genome (1000 Genomes HG02675, 740M records, 8 vCPU):
 (For small jobs, the historical 14 August 2026 32-command fixture suite reports
 84.52x geometric mean and 272.12x top saved ratio where JVM startup dominates.)
 
-Version 0.1.21 also adds bare GATK4 boolean flags and an isolated `verify` tool
+Version 0.1.22 also adds bare GATK4 boolean flags and an isolated `verify` tool
 in `turbo-picard mcp` so coding agents can run native vs Picard parity checks
 in a temporary directory before touching workflow files.
 
 Try one slow Picard step side by side on your own BAM/CRAM:
 
 ```bash
-python3 -m pip install turbo-picard==0.1.21
+python3 -m pip install turbo-picard==0.1.22
 turbo-picard trial MarkDuplicates I=input.bam O=marked.bam M=metrics.txt
 ```
 
@@ -36,7 +36,7 @@ https://turbo-picard.readthedocs.io/en/latest/evidence/
 
 ## Bluesky / Mastodon
 
-Released turbo-picard 0.1.21: 35 Broad Picard genomics commands in native Rust,
+Released turbo-picard 0.1.22: 35 Broad Picard genomics commands in native Rust,
 with Picard KEY=VALUE + GATK4 --kebab-case flags and transparent Picard fallback
 for the other 86.
 
@@ -48,6 +48,6 @@ for the other 86.
   RAM, exact parity)
 (Saved 14 Aug 2026 small-fixture suite: 84.52x geomean, 272.12x top, startup-heavy.)
 
-pip install turbo-picard==0.1.21
+pip install turbo-picard==0.1.22
 https://github.com/dnncha/turbo-picard
 https://turbo-picard.readthedocs.io/en/latest/evidence/

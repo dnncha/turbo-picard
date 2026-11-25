@@ -5,7 +5,7 @@ matter-of-fact and answer parity and packaging questions directly.
 
 Title:
 
-Turbo Picard 0.1.21: native Rust implementations of 35 Picard commands (tested on a 30x GRCh38 WGS against Picard 3.4.0)
+Turbo Picard 0.1.22: native Rust implementations of 35 Picard commands (tested on a 30x GRCh38 WGS against Picard 3.4.0)
 
 Post:
 
@@ -52,9 +52,9 @@ Recommended way to evaluate it safely:
 Install:
 
 ```bash
-python3 -m pip install turbo-picard==0.1.21
+python3 -m pip install turbo-picard==0.1.22
 # or container:
-docker run --rm ghcr.io/dnncha/turbo-picard:0.1.21 --version
+docker run --rm ghcr.io/dnncha/turbo-picard:0.1.22 --version
 ```
 
 Evidence, limits, and full command matrix:

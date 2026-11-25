@@ -2,7 +2,7 @@
 
 Title:
 
-Turbo Picard 0.1.21: testing native Rust replacements for slow Picard steps in Nextflow (30x GRCh38 parity log)
+Turbo Picard 0.1.22: testing native Rust replacements for slow Picard steps in Nextflow (30x GRCh38 parity log)
 
 Post:
 
@@ -42,12 +42,12 @@ contributes heavily there, so use the 30x WGS log for large-file sizing.)
 Try one step safely using the versioned container or PyPI package:
 
 ```bash
-docker run --rm ghcr.io/dnncha/turbo-picard:0.1.21 \
+docker run --rm ghcr.io/dnncha/turbo-picard:0.1.22 \
   trial MarkDuplicates I=input.bam O=marked.bam M=metrics.txt
 ```
 
 ```bash
-python3 -m pip install turbo-picard==0.1.21
+python3 -m pip install turbo-picard==0.1.22
 ```
 
 Starter templates for Nextflow, WDL, Snakemake, and nf-core live in

@@ -6,7 +6,7 @@ Suggested tags:
 
 Title:
 
-`turbo-picard` 0.1.21: native Rust implementations of 35 Picard commands (30x WGS parity tested)
+`turbo-picard` 0.1.22: native Rust implementations of 35 Picard commands (30x WGS parity tested)
 
 Post:
 
@@ -57,9 +57,9 @@ Suggested way to test it:
 Install:
 
 ```bash
-python3 -m pip install turbo-picard==0.1.21
+python3 -m pip install turbo-picard==0.1.22
 # or container:
-docker run --rm ghcr.io/dnncha/turbo-picard:0.1.21 --version
+docker run --rm ghcr.io/dnncha/turbo-picard:0.1.22 --version
 ```
 
 Unsupported commands (86 of 127) and unsupported options fall back cleanly to

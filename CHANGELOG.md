@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.1.22 — 2026-11-25
+
+### Packaging and PyPI distribution
+
+- Fixed Linux ARM64 PyPI wheel builds by building natively on `ubuntu-24.04-arm`
+  with `manylinux_2_28` (resolving the GCC 4.8 `libdeflate` failure in the
+  `manylinux2014` cross image that blocked PyPI publication on `v0.1.21`) and
+  added a native Linux ARM64 wheel install smoke test (#107).
+- Fixed the Linux x86_64 wheel smoke-test glob in
+  `.github/workflows/publish-pypi.yml` to match `maturin`'s
+  `manylinux2014_x86_64.manylinux_2_17_x86_64` tag ordering (#107).
+
 ## 0.1.21 — 2026-11-24
 
 ### Scientific correctness and 30x WGS evidence
