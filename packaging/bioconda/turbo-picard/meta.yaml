@@ -6,7 +6,8 @@ package:
   version: {{ version }}
 
 source:
-  path: ../../..
+  url: https://github.com/dnncha/turbo-picard/archive/refs/tags/v0.1.21.tar.gz
+  sha256: b970dccd1f6c474a578624845995194fedd1c2ec30fa6628a2ef1525b160ba8f
 build:
   number: 0
   skip: true  # [win]
