@@ -1,0 +1,67 @@
+#!/usr/bin/env bash
+set -eu
+
+if [ "${TURBO_PICARD_SKIP_HOOKS:-0}" = "1" ]; then
+  exit 0
+fi
+
+root=$(git rev-parse --show-toplevel)
+cd "$root"
+
+pick_python() {
+  for candidate in "$root/.venv/bin/python" python3.13 python3.12 python3.11 python3; do
+    if [ -x "$candidate" ] || command -v "$candidate" >/dev/null 2>&1; then
+      if "$candidate" -c 'import sys, tomllib, yaml; raise SystemExit(0 if sys.version_info >= (3, 11) else 1)' 2>/dev/null; then
+        printf '%s\n' "$candidate"
+        return 0
+      fi
+    fi
+  done
+  return 1
+}
+
+base=$(git merge-base origin/main HEAD 2>/dev/null || true)
+if [ -n "$base" ]; then
+  changed=$(git diff --name-only "$base" HEAD)
+else
+  changed=$(git diff --name-only HEAD~1 HEAD 2>/dev/null || true)
+fi
+
+check_site=0
+check_card=0
+
+while IFS= read -r file; do
+  case "$file" in
+    website/*|tools/build_marketing_site.py|Cargo.toml|README.md|docs/*|benchmarks/*|paper/*|CHANGELOG.md)
+      check_site=1
+      ;;
+  esac
+  case "$file" in
+    tools/render_competitor_card.py|benchmarks/*)
+      check_card=1
+      ;;
+  esac
+done <<EOF
+$changed
+EOF
+
+if [ "$check_site" = "0" ] && [ "$check_card" = "0" ]; then
+  exit 0
+fi
+
+if py=$(pick_python); then
+  run_py() { "$py" "$@"; }
+elif command -v uv >/dev/null 2>&1; then
+  run_py() { uv run --no-project --with PyYAML python "$@"; }
+else
+  echo "pre-push: need Python 3.11+ with PyYAML or uv to verify generated site artifacts" >&2
+  exit 1
+fi
+
+if [ "$check_site" = "1" ]; then
+  run_py tools/build_marketing_site.py --check
+fi
+
+if [ "$check_card" = "1" ] && [ -f "tools/render_competitor_card.py" ]; then
+  run_py tools/render_competitor_card.py --check
+fi
